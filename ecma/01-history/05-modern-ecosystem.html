@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>A5 · 现代生态 ——「该用什么版本？」 · ECMAScript 深度学习</title>
+    <meta
+      name="description"
+      content="ECMAScript 现代生态实战：TC39 Stage 流程详解、ES2016-ES2025 全特性表、打包器目标版本策略（客户端保守/激进/服务端）、polyfill vs transpile 区别、Stage 3 提案当前快照（Records & Tuples / Temporal / Decorator metadata）。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c84a1f'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EES%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>ECMAScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.16 35); color: #fff">ES</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">ES 首页</a>
+          <a href="index.html">Track A 目录</a>
+          <a href="https://github.com/tc39/proposals" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Track A · 历史脉络与设计</h3>
+        <ul>
+          <li><a href="index.html">Track 概览</a></li>
+          <li><a href="01-standards-history.html">A1 · 标准发展史</a></li>
+          <li><a href="02-design-principles.html">A2 · 设计原则与语言特性</a></li>
+          <li><a href="03-execution-model.html">A3 · 执行模型</a></li>
+          <li><a href="04-async-evolution.html">A4 · 异步演进</a></li>
+          <li><a href="05-modern-ecosystem.html" class="active">A5 · 现代生态</a></li>
+        </ul>
+        <h3>另一轨</h3>
+        <ul>
+          <li><a href="../02-spec/index.html">Track B · 规范精读</a></li>
+        </ul>
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../javascript/index.html">JavaScript 深度学习</a></li>
+          <li><a href="../../typescript/index.html">TypeScript 深度学习</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">ECMAScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Track A · 历史脉络与设计</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>A5 · 现代生态</span>
+        </nav>
+
+        <h1>A5 · 现代生态 ——「我今天该用什么版本？」</h1>
+        <p class="lead">
+          A1-A4 讲了 ECMAScript 的"<strong>历史</strong>"和"<strong>机器</strong>"。本章把它们落到现代工程实战：<strong>TC39 Stage 流程怎么走</strong>、<strong>ES2016-ES2025 各版本加了什么</strong>、<strong>团队该用什么 ES 版本作为 baseline</strong>、<strong>polyfill 和 transpile 各处理什么</strong>、<strong>Stage 3 提案现在卡在哪</strong>。这是一份产品工程师的"<em>把 ECMA 历史用起来</em>"的速查指南——读完就能回答"我们项目该把 tsconfig.target 设成什么"这种实际问题。
+        </p>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 本章是 Track A 的收官</div>
+          <p>
+            前 4 章告诉你 ECMA 是什么、怎么演化、怎么跑。本章告诉你<strong>怎么用</strong>。读完整 Track A 之后，你应该能：① 给 Java/C# 工程师讲清 JS 的设计基因；② 看到一段异步代码能 trace 它的 microtask 调度；③ 给团队定一份合理的 ES baseline 方案。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> <a href="01-standards-history.html">A1 标准发展史</a>（理解 16 版编辑号 + ES4 历史）</span>
+          <span><strong>权威来源</strong>
+            <a href="https://github.com/tc39/proposals" target="_blank" rel="noopener">tc39/proposals</a> +
+            <a href="https://kangax.github.io/compat-table/es6/" target="_blank" rel="noopener">kangax compat-table</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>"目标版本"决策不是技术问题，是产品问题</strong>。它取决于<strong>用户群分布</strong>（caniuse 数据），不是"我喜欢哪个版本"。To B 内部系统可以激进 ES2024；toC 大众产品保守 ES2020。
+          </li>
+          <li>
+            <strong>语法 vs API 是必须分清的两件事</strong>。<code>?.</code> / <code>??</code> / <code>class fields</code> 是<strong>语法</strong>，由 Babel/SWC <strong>transpile</strong> 处理；<code>Array.prototype.includes</code> / <code>Object.fromEntries</code> 是 <strong>API</strong>，必须 <strong>polyfill</strong>（占 bundle 体积）。混淆这两个会做出错的优化。
+          </li>
+          <li>
+            <strong>Stage 3 ≠ 生产可用</strong>。Stage 3 提案可能被回退，可能等 2 年才有第二个引擎实现。Stage 4 才能假设原生支持，<strong>且原生支持还要看你的 baseline 浏览器</strong>。
+          </li>
+        </ol>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>TC39 Stage 流程详解</h3>
+        <p>
+          TC39 自 2014 年起用<strong>Stage 流程</strong>管理提案推进。每个 Stage 有明确的<strong>入口标准</strong>（提案达到什么状态可以晋级）和<strong>产出物</strong>（这个 Stage 必须有什么材料）。这是 ES4 失败之后的"<em>共识驱动</em>"治理机制（A1 详述）：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 90px">Stage</th>
+              <th style="width: 130px">名称</th>
+              <th>入口标准 + 产出物</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Stage 0</strong></td>
+              <td>Strawperson<br>稻草人</td>
+              <td>任何 TC39 成员可提出的"<em>想法</em>"。<strong>无门槛</strong>，可以是 Markdown 草稿。</td>
+            </tr>
+            <tr>
+              <td><strong>Stage 1</strong></td>
+              <td>Proposal<br>正式提案</td>
+              <td>需要 <strong>champion</strong>（推动者）+ 问题描述清楚 + 初版 API 草图 + GitHub 仓库（基于 tc39 模板）</td>
+            </tr>
+            <tr>
+              <td><strong>Stage 2</strong></td>
+              <td>Draft<br>草案</td>
+              <td>初始 <strong>规范文本</strong>（用 ecmarkup 写，跟规范同款语法）+ 关键决策定下 + 至少 1 个 polyfill 验证</td>
+            </tr>
+            <tr>
+              <td><strong>Stage 2.7</strong></td>
+              <td>Candidate<br>候选实现 ⭐ 2024 加</td>
+              <td>完整规范文本 + 全套 Test262 测试案例 + 各引擎可以开始原型实现。<strong>新加的中间 stage</strong>，让"测试覆盖完整"成为强制门槛</td>
+            </tr>
+            <tr>
+              <td><strong>Stage 3</strong></td>
+              <td>推荐实现</td>
+              <td>规范文本无重大变更 + 各引擎全力实现 + 收集 implementer feedback。<strong>但仍可能因 feedback 回退到 Stage 2</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Stage 4</strong></td>
+              <td>Finished</td>
+              <td>≥2 个独立引擎已实现 + Test262 全过 + champion 提交合并请求。<strong>纳入下一年 6 月发布的标准</strong></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>关键点</strong>：Stage 4 不等于"已纳入正式标准"，是"<em>已通过所有门槛、待下个 6 月发布合并</em>"。同时 <strong>Stage 4 ≠ 所有引擎已实现</strong>——只要 ≥2 个引擎实现就行，所以理论上 V8 + JSC 实现了，但 SpiderMonkey 还没——Firefox 用户用不了。这要查 <a href="https://kangax.github.io/compat-table/" target="_blank" rel="noopener">kangax</a> 或 <a href="https://developer.mozilla.org/" target="_blank" rel="noopener">MDN BCD</a>。
+        </p>
+
+        <h3>ES2016-ES2025 全特性表</h3>
+        <p>每年 6 月一版，特性按 Stage 4 时间排进对应年度。下表覆盖 10 个版本的核心特性：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 100px">版本</th>
+              <th>核心特性</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>ES2016</strong><br>第 7 版</td>
+              <td>幂运算 <code>**</code>、<code>Array.prototype.includes</code> —— 改革后第一个"小版本"，仅 2 个特性，象征"<em>每年一版可以很轻</em>"</td>
+            </tr>
+            <tr>
+              <td><strong>ES2017</strong><br>第 8 版</td>
+              <td><strong>async/await</strong>（最重磅）、<strong>SharedArrayBuffer + Atomics</strong>、<code>Object.values</code> / <code>Object.entries</code>、<code>Object.getOwnPropertyDescriptors</code>、<code>String.prototype.padStart/padEnd</code></td>
+            </tr>
+            <tr>
+              <td><strong>ES2018</strong><br>第 9 版</td>
+              <td>对象 Rest/Spread <code>{ ...a }</code>、<strong>异步迭代</strong> <code>for await...of</code> + <code>async function*</code>、Promise.finally、正则 dotAll <code>s</code> flag、命名捕获组、lookbehind</td>
+            </tr>
+            <tr>
+              <td><strong>ES2019</strong><br>第 10 版</td>
+              <td><code>Array.flat/flatMap</code>、<code>Object.fromEntries</code>、<code>String.prototype.trimStart/trimEnd</code>、Optional Catch Binding（<code>catch {}</code> 不写 binding）、<code>Symbol.description</code>、稳定排序保证</td>
+            </tr>
+            <tr>
+              <td><strong>ES2020</strong><br>第 11 版</td>
+              <td><strong>可选链 <code>?.</code></strong>、<strong>空值合并 <code>??</code></strong>、<strong>BigInt</strong>、<strong>dynamic import()</strong>、<code>globalThis</code>、<code>Promise.allSettled</code>、<code>String.prototype.matchAll</code>、<code>import.meta</code>、export <code>* as ns</code></td>
+            </tr>
+            <tr>
+              <td><strong>ES2021</strong><br>第 12 版</td>
+              <td>逻辑赋值 <code>??=</code> <code>||=</code> <code>&amp;&amp;=</code>、<code>String.prototype.replaceAll</code>、<code>Promise.any</code> + <code>AggregateError</code>、<code>WeakRef</code> + <code>FinalizationRegistry</code>、数字分隔符 <code>1_000_000</code></td>
+            </tr>
+            <tr>
+              <td><strong>ES2022</strong><br>第 13 版</td>
+              <td><strong>Class Fields</strong>（含 <code>#private</code> 硬隐私）、<strong>Top-Level Await</strong>、<code>Array.at()</code>、<code>Object.hasOwn</code>、<code>Error.cause</code>、正则 <code>d</code> flag（indices）、private fields <code>in</code> 检查</td>
+            </tr>
+            <tr>
+              <td><strong>ES2023</strong><br>第 14 版</td>
+              <td><code>findLast</code>/<code>findLastIndex</code>、<strong>不可变数组方法</strong>（<code>toSorted</code>/<code>toReversed</code>/<code>toSpliced</code>/<code>with</code>）、Hashbang <code>#!</code>、Symbol 作为 WeakMap 的 key</td>
+            </tr>
+            <tr>
+              <td><strong>ES2024</strong><br>第 15 版</td>
+              <td>RegExp <strong><code>v</code> flag</strong>（Unicode 集合操作）、<strong><code>Promise.withResolvers</code></strong>、<code>ArrayBuffer.transfer</code>、<code>Object.groupBy</code>/<code>Map.groupBy</code>、<code>Atomics.waitAsync</code>、<code>String.prototype.isWellFormed</code>/<code>toWellFormed</code></td>
+            </tr>
+            <tr>
+              <td><strong>ES2025</strong> ⭐<br>第 16 版</td>
+              <td><strong>Iterator Helpers</strong>（<code>.map</code>/<code>.filter</code>/<code>.take</code>/<code>.toArray</code>）、<strong>Set 集合方法</strong>（<code>union</code>/<code>intersection</code>/<code>difference</code>）、<strong>RegExp.escape</strong>、<strong>Promise.try</strong>、<strong>Import Attributes</strong>（<code>import x from './a.json' with { type: 'json' }</code>）、Float16Array</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>读这张表的姿势</strong>：不是按年份记，是按"<em>解决了什么问题</em>"分组。比如"<em>异步</em>"族（ES2017 async/await → ES2018 async iter → ES2020 dynamic import → ES2022 TLA → ES2024 withResolvers / waitAsync → ES2025 Promise.try），每族都对应一个长期演化主线。完整异步主线见 <a href="04-async-evolution.html">A4 异步演进</a>。
+        </p>
+
+        <h3>打包器目标版本策略（PPT 经典页）</h3>
+        <p>
+          PPT 第一章末尾给出过三种"打包器目标版本"策略，覆盖了几乎所有 web 工程场景。本节系统化展开：
+        </p>
+
+        <div class="scenario">
+          <h3 class="scenario-title">策略 1 · 客户端保守 → ES2020</h3>
+          <p>
+            <strong>适用</strong>：面向公众的 Web 应用（电商、媒体、SaaS landing page）、需要长尾覆盖率（>99%）、SEO 重要场景。
+          </p>
+          <p>
+            <strong>为什么是 ES2020</strong>：可选链、空值合并、动态 import、BigInt 已 99.9%+ 普及（caniuse 2026-04 数据）；老 Safari 14、Chrome 80+、Firefox 74+ 都支持。<strong>低于 ES2020 的特性</strong>（如 ES2015 的 Map/Set、ES2017 async/await）也都安全。
+          </p>
+          <p>
+            <strong>配置</strong>：<code>tsconfig.target: "ES2020"</code> + <code>browserslist: "&gt; 0.5%, last 2 versions, not dead, not IE 11"</code> + Babel/SWC 自动 transpile 高版本语法 + core-js 自动 polyfill 高版本 API。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">策略 2 · 客户端激进 / Electron → ES2024</h3>
+          <p>
+            <strong>适用</strong>：To B 内部工具（用户都是公司员工 + 有 IT 控管浏览器版本）、Electron 桌面应用（控制 Chromium 版本）、Tauri 应用、admin dashboard。
+          </p>
+          <p>
+            <strong>为什么是 ES2024</strong>：用户环境可控，<strong>能砍掉 60% 的 polyfill</strong>（不需要降 class fields、TLA、optional chaining 等已成基线的特性）；bundle 显著变小；<code>Top-Level Await</code> 可用，模块级异步初始化更优雅。
+          </p>
+          <p>
+            <strong>配置</strong>：<code>tsconfig.target: "ES2022"</code> 或更高 + <code>browserslist: "Chrome >= 119, last 2 Edge"</code>（按团队约定锁定）+ Vite 默认或 SWC + 几乎不需要 polyfill。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">策略 3 · 服务端 → ES-Next（Node 22+ / Bun）</h3>
+          <p>
+            <strong>适用</strong>：Node.js 后端、Bun 服务、Cloudflare Workers / Vercel Edge / Deno。
+          </p>
+          <p>
+            <strong>为什么是 ES-Next</strong>：你能<strong>完全控制运行时版本</strong>（在 package.json engines 字段或部署配置里锁定 Node 22 LTS / Bun latest），<strong>无需降级</strong>。Node 22 已支持几乎所有 ES2024 特性，Bun 跟进 ES2025。
+          </p>
+          <p>
+            <strong>配置</strong>：<code>tsconfig.target: "ESNext"</code> + <code>tsconfig.module: "NodeNext"</code> + <strong>不用 Babel/SWC</strong>（用 tsc 或 esbuild 仅做类型擦除 + 路径解析）。<strong>不需要 core-js</strong>（运行时已自带所有 API）。
+          </p>
+        </div>
+
+        <h3>polyfill vs transpile —— 必须分清的两件事</h3>
+        <p>
+          很多人把这两个概念混着用，做出错误优化。<strong>它们处理的是不同问题</strong>：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">维度</th>
+              <th>Transpile（语法降级）</th>
+              <th>Polyfill（API 补丁）</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>处理什么</td>
+              <td>新<strong>语法</strong>编译成老语法</td>
+              <td>缺失的<strong>运行时 API</strong> 补回来</td>
+            </tr>
+            <tr>
+              <td>例子</td>
+              <td><code>?.</code> → <code>(x &amp;&amp; x.y)</code><br><code>class</code> → <code>function + prototype</code><br><code>async function</code> → <code>generator + state machine</code></td>
+              <td><code>Array.prototype.includes</code> 没有？补一个<br><code>Object.fromEntries</code> 没有？补一个<br><code>Promise</code> 没有？补一个</td>
+            </tr>
+            <tr>
+              <td>工具</td>
+              <td>Babel / SWC / TypeScript / esbuild</td>
+              <td>core-js / regenerator-runtime / es-shims</td>
+            </tr>
+            <tr>
+              <td>开销</td>
+              <td>编译时（不进 bundle 但产物冗长）</td>
+              <td>运行时（占 bundle 体积，影响首屏）</td>
+            </tr>
+            <tr>
+              <td>无法处理的情况</td>
+              <td>新原始类型（BigInt、Symbol）—— 必须 runtime 支持</td>
+              <td>语法层特性（<code>?.</code>、TLA）—— polyfill 救不了</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>事实标准</strong>：<strong>Babel <code>preset-env</code> + <code>core-js: 3</code></strong> 是"按 browserslist 智能 polyfill"的最成熟方案——你只配 browserslist，preset-env 自动决定哪些语法需要 transpile、哪些 API 需要 polyfill、哪些可以原生跳过。SWC 的 swc-helpers 跟进同样模式。<strong>理解这个机制比改 Babel 配置更重要</strong>——配错了 browserslist 就什么都歪了。
+        </p>
+
+        <h3>Feature Detection 工具</h3>
+        <p>定 baseline 时必查的 3 个权威来源：</p>
+        <ul>
+          <li>
+            <a href="https://caniuse.com/" target="_blank" rel="noopener"><strong>caniuse.com</strong></a> —— 按浏览器市场份额 + 各浏览器版本支持情况。最常用的"<em>这个特性能用吗</em>"工具。支持自定义 browserslist 然后看综合覆盖率。
+          </li>
+          <li>
+            <a href="https://kangax.github.io/compat-table/" target="_blank" rel="noopener"><strong>kangax compat-table</strong></a> —— 各引擎按 ES 版本的实现进度，<strong>最权威的 ES 特性矩阵</strong>。看 V8 / SpiderMonkey / JSC / Bun / Node / Deno 的对比。
+          </li>
+          <li>
+            <a href="https://developer.mozilla.org/" target="_blank" rel="noopener"><strong>MDN Browser Compat Data (BCD)</strong></a> —— MDN 文档每个 API 页面底部的"Browser compatibility" 表，数据来源是社区维护的 <code>@mdn/browser-compat-data</code>。<strong>最细颗粒度</strong>（精确到方法/参数）。
+          </li>
+        </ul>
+
+        <p>
+          这 3 个工具可以<strong>互相验证</strong>。决定一个 baseline 时，至少在两个工具上确认覆盖率，避免单源数据偏差。
+        </p>
+
+        <h3>Stage 3 提案当前快照（写作时点 2026-04）</h3>
+        <p>
+          这一节会随时间过期——但它展示了"<em>当前社区在讨论什么</em>"，能帮你理解 ES2026/ES2027 可能的样子。
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 26%">提案</th>
+              <th style="width: 80px">Stage</th>
+              <th>现状与展望</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><a href="https://github.com/tc39/proposal-temporal" target="_blank" rel="noopener"><strong>Temporal</strong></a></td>
+              <td>Stage 3</td>
+              <td><strong>Date 的替代品</strong>，借鉴 Java <code>java.time</code> 设计。即时（Instant）、日历日期（PlainDate）、带时区时间（ZonedDateTime）、Duration 等正交类型。Firefox 已实现，Safari/Chrome 进度中。<strong>polyfill 体积大（~150KB）</strong>，但解决了 Date 设计糟糕 30 年的痛点。</td>
+            </tr>
+            <tr>
+              <td><a href="https://github.com/tc39/proposal-decorator-metadata" target="_blank" rel="noopener"><strong>Decorator Metadata</strong></a></td>
+              <td>Stage 3</td>
+              <td>给 Stage 3 标准 decorator 加 metadata 反射能力。<strong>NestJS / TypeORM 等 DI 框架等的就是这个</strong>——有了它们才能彻底从 legacy decorator 迁移到标准 decorator。详细 decorator 历史见 <a href="../../typescript/03-reference/14-decorators.html">TS · Decorators</a>。</td>
+            </tr>
+            <tr>
+              <td><a href="https://github.com/tc39/proposal-record-tuple" target="_blank" rel="noopener"><strong>Records &amp; Tuples</strong></a></td>
+              <td>Stage 2</td>
+              <td><strong>深度不可变数据结构</strong> <code>#{ a: 1 }</code> / <code>#[1, 2]</code>，按值相等。<strong>卡 Stage 2 三年</strong>——社区争议未平（GC 实现复杂、和 React useState 心智冲突、相等语义在嵌套时反直觉）。可能永远进不了。</td>
+            </tr>
+            <tr>
+              <td><a href="https://github.com/tc39/proposal-pipeline-operator" target="_blank" rel="noopener"><strong>Pipeline Operator <code>|&gt;</code></strong></a></td>
+              <td>Stage 2</td>
+              <td>类似 F# / Elixir 的管道：<code>x |&gt; f |&gt; g</code> 等价 <code>g(f(x))</code>。<strong>设计反复</strong>——F# style vs Hack style 争论 5 年，目前选 Hack style（带 placeholder <code>%</code>）但仍未通过。中等概率进入未来标准。</td>
+            </tr>
+            <tr>
+              <td><a href="https://github.com/tc39/proposal-async-context" target="_blank" rel="noopener"><strong>AsyncContext</strong></a></td>
+              <td>Stage 2</td>
+              <td>异步上下文跟踪——OpenTelemetry / Sentry 等 APM 工具<strong>等了 5 年的特性</strong>。让"sync 代码 → async 代码"也能传递 trace ID 等隐式上下文。Stage 3 概率较高。</td>
+            </tr>
+            <tr>
+              <td><a href="https://github.com/tc39/proposal-shadowrealm" target="_blank" rel="noopener"><strong>ShadowRealm</strong></a></td>
+              <td>Stage 3</td>
+              <td>用户态创建独立 Realm（A3 讲过 Realm 概念）。<strong>Stage 3 多年</strong>，安全性争议（侧信道攻击）让 Mozilla 反对。可能拆分成 Web 平台 API 而非 ECMA 规范。</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>从这张表能学到的元规律</strong>：① <strong>Stage 卡很久 ≠ 没希望</strong>（async/await 也卡过 2 年）；② <strong>Stage 卡很久 ≠ 必然进</strong>（Records &amp; Tuples 可能永远进不了）；③ <strong>"用户量大 + 实现简单"的提案推进最快</strong>（Optional Chaining 只用 3 年）；④ <strong>"心智冲突大 / 实现复杂 / 安全争议"的提案最可能死</strong>（Records &amp; Tuples / ShadowRealm / Pipeline）。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 团队定 baseline 决策树</h3>
+          <p>
+            新项目启动，要回答三个问题：①  <code>tsconfig.target</code> 用什么？②  <code>browserslist</code> 怎么写？③  <strong>polyfill 工具链怎么配</strong>？决策树：
+          </p>
+          <div class="code-block">
+            <span class="code-label">decision · baseline 选型</span>
+            <pre class="code"><code class="lang-js">// 第 1 步：用户群是什么？
+// → 内部 / B 端控管 → 策略 2（ES2024 激进）
+// → 大众 / 长尾设备 → 策略 1（ES2020 保守）
+// → 仅服务端 → 策略 3（ES-Next）
+
+// 第 2 步：caniuse 验证目标版本覆盖率
+// 把要用的最高版本特性（如 TLA = ES2022）输入 caniuse，
+// 配上自己的 browserslist 看综合覆盖率。
+// 目标：&gt;= 99% （toC）或 &gt;= 95%（toB）
+
+// 第 3 步：tsconfig 写
+{
+  "compilerOptions": {
+    "target": "ES2020",         // ← 决策点 1
+    "module": "ESNext",         // 留给打包器决定
+    "moduleResolution": "bundler",
+    "lib": ["ES2024", "DOM"],   // lib 写最高版本，让 TS 知道你想用什么 API
+    "strict": true
+  }
+}
+
+// 第 4 步：package.json + browserslist
+{
+  "browserslist": [
+    "&gt; 0.5%",
+    "last 2 versions",
+    "not dead",
+    "not IE 11"
+  ]
+}
+
+// 第 5 步：让 Babel/SWC 按 browserslist 自动 transpile + polyfill
+// Babel: useBuiltIns: 'usage' + corejs: 3
+// SWC: env.targets 用 browserslist
+// Vite: build.target 用 browserslist 或 'esnext'</code></pre>
+          </div>
+          <p>
+            注意：<code>target</code>（编译输出版本）和 <code>lib</code>（类型声明可用 API）是两件事。<code>target: "ES2020"</code> 但 <code>lib: ["ES2024", "DOM"]</code>——意思是"<em>我可以用 ES2024 API，但你帮我编译输出降到 ES2020 兼容</em>"。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 老项目升级（ES5 + Webpack 4 → ES2020 + Vite）</h3>
+          <p>
+            一个 5 年前的 React 项目，<code>browserslist: "&gt; 1%, last 2 versions, IE 11"</code>，bundle 800KB（含 200KB core-js）。要升级到 ES2020 + Vite。步骤：
+          </p>
+          <ol>
+            <li><strong>查 caniuse</strong>：你现在的用户里 IE 11 还有多少？低于 0.5% 就直接踢掉（IE 11 已在 2022 EOL）</li>
+            <li><strong>更新 browserslist</strong>：<code>"&gt; 1%, last 2 versions, not dead"</code>——丢 IE 11 + 自动跟新浏览器</li>
+            <li><strong>切到 Vite</strong>：<code>npm create vite@latest</code> + 迁移 webpack 配置（多数 plugin 有对应 vite 插件）</li>
+            <li><strong>升级 core-js</strong>：从 2.x 到 3.x，<code>useBuiltIns: 'usage'</code>，让 Vite 按新 browserslist 重算</li>
+            <li><strong>实测 bundle</strong>：典型砍掉 30-50% polyfill、首屏加载快 40%+</li>
+            <li><strong>监控 SyntaxError</strong>：Sentry / 自建错误监控，看是否有用户跑不起来——有就回退 browserslist</li>
+          </ol>
+          <p>关键点：<strong>升级 baseline 一定要监控线上错误</strong>。理论覆盖率 99% 也意味着 1% 用户白屏，对大流量产品就是几万人。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 写新库决定 dist 目标版本</h3>
+          <p>
+            你写一个 npm 库（如自定义 hooks 集合），要决定 <code>dist/</code> 输出哪个 ES 版本。两个选项：
+          </p>
+          <ul>
+            <li>
+              <strong>输出 ES2020</strong>（保守）—— 最大兼容，但用户的 bundler 还要再处理一次（如果用户 baseline 更高也无法删除）
+            </li>
+            <li>
+              <strong>输出 ES-Next + 不 transpile</strong>（激进）—— 让用户的 bundler 自己降。这是<strong>现代 npm 库的事实标准</strong>（lodash-es、zod、tanstack 等都这样）
+            </li>
+          </ul>
+          <p>
+            建议输出<strong>两份 dist</strong>：① <code>dist/esnext/</code> 给现代 bundler；② <code>dist/legacy/</code> 给老用户。配 <code>package.json</code> 的 <code>exports</code> 字段按条件分发。或者更简单——只输出 ESNext + ESM，老用户自己处理（这是 2025 年的潮流）。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>验证 baseline ——「这段代码我的 baseline 跑得起来吗？」</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 多代特性混用样本</span>
+          <pre class="code"><code class="lang-js">// 这段代码用了 ES2015 - ES2025 多个特性。
+// 看看你的 baseline 能跑哪些。
+
+// ES2015: const, arrow, template literal, destructuring
+const greet = (name) =&gt; `Hello, ${name}`;
+const { x, y } = { x: 1, y: 2 };
+
+// ES2017: async/await
+async function fetchData() {
+  const r = await fetch('/api');
+  return r.json();
+}
+
+// ES2018: 对象 spread
+const merged = { ...a, ...b };
+
+// ES2019: Object.fromEntries
+const obj = Object.fromEntries([['a', 1], ['b', 2]]);
+
+// ES2020: 可选链 + 空值合并
+const age = user?.profile?.age ?? 0;
+
+// ES2021: 逻辑赋值
+config.timeout ??= 5000;
+
+// ES2022: class fields + private + Top-Level Await
+class Counter {
+  #count = 0;
+  get value() { return this.#count; }
+  inc() { this.#count++; }
+}
+// 模块顶层（仅 type="module" 时）
+const data = await import('./data.json', { with: { type: 'json' } });
+
+// ES2023: toSorted（不可变数组）
+const sorted = [3, 1, 2].toSorted();
+
+// ES2024: Promise.withResolvers
+const { promise, resolve, reject } = Promise.withResolvers();
+
+// ES2025: Iterator Helpers + using
+const sum = items.values().filter(i =&gt; i &gt; 0).map(i =&gt; i * 2).take(10).toArray();
+
+await using file = await open(path);</code></pre>
+        </div>
+
+        <p>
+          把这段贴到 <a href="https://kangax.github.io/compat-table/es2016plus/" target="_blank" rel="noopener">kangax compat-table</a> 或 <a href="https://www.typescriptlang.org/play" target="_blank" rel="noopener">TS Playground</a>，能立刻看到每行属于哪一版、当前 target 哪些会被降级、哪些原生支持。
+        </p>
+
+        <h3>用 import maps 做轻量级版本管理</h3>
+
+        <div class="code-block">
+          <span class="code-label">html · ES2023 import maps</span>
+          <pre class="code"><code class="lang-js">&lt;!-- 浏览器原生支持，无需打包 --&gt;
+&lt;script type="importmap"&gt;
+{
+  "imports": {
+    "lodash": "https://esm.sh/lodash@4.17.21",
+    "@/": "/src/"
+  }
+}
+&lt;/script&gt;
+
+&lt;script type="module"&gt;
+  import _ from 'lodash';        // → esm.sh CDN
+  import App from '@/App.js';    // → /src/App.js
+&lt;/script&gt;
+
+// 这是一种「无 bundler 工程」的方向，
+// 现代浏览器（Chrome 89+ / Firefox 108+ / Safari 16.4+）原生支持。
+// 适合：原型、内部工具、后台 dashboard。不适合：长尾兼容场景。</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：把 polyfill 全打进主 bundle</div>
+          <p>
+            老配置：<code>import 'core-js/stable'</code> 写在入口顶部。<strong>这会把 core-js 全量塞进主 bundle</strong>（70-200KB），即使你只用了一两个特性。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：用 <code>useBuiltIns: 'usage'</code>（Babel）或 <code>swc-plugin-helpers</code>（SWC）让工具链<strong>按实际使用</strong>注入 polyfill。或者把 polyfill 拆成动态 import：检测到不支持才加载。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：target 设太高导致老用户白屏</div>
+          <p>
+            团队按"自己机器都没问题"定 ES2024 baseline，部署后一周内 Sentry 收到 <code>SyntaxError: Unexpected token '?'</code>——某些用户用旧 Android 4.4 WebView 或公司分发的老 Chromium。<strong>白屏是用户感知最差的错误</strong>。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：① 按 caniuse 实测目标用户群覆盖率，不凭感觉；② 上线前做"<em>低版本浏览器实测</em>"（BrowserStack / 真机）；③ 部署后<strong>立刻看 Sentry SyntaxError 告警</strong>——这是 baseline 设错的早期信号；④ 备好回退路径（CDN 切回老 bundle 的能力）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：用 Stage 2 提案的语法</div>
+          <p>
+            "<em>Records &amp; Tuples 看起来很棒，先用着</em>"——然后提案被 TC39 改了语义，你的代码全部要重写。Pipeline operator 改了 5 次，每次社区代码都要调整。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：<strong>Stage 3 + 至少 2 个引擎已实现</strong>才考虑生产用，且<strong>必须配 polyfill</strong>。Stage 2 及以下仅做实验代码、技术验证 demo。<strong>永远不要</strong>把"Stage 2 提案"当生产依赖。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：误以为 Node 版本就是 ES 版本</div>
+          <p>
+            "Node 22 = ES2024"—— <strong>不严格成立</strong>。Node 各版本的 V8 内核版本不同，对 ES 特性的支持时间也不同。比如 Node 18 是 V8 10.2（ES2022 完整支持），Node 20 是 V8 11.3（ES2023 大部分），Node 22 是 V8 12.4（ES2024 大部分 + ES2025 部分）。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：用 <a href="https://node.green/" target="_blank" rel="noopener">node.green</a>（kangax compat-table 的 Node 子集）查具体特性的 Node 起始版本。在 <code>package.json.engines.node</code> 里锁版本。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>权威来源</h3>
+        <ul>
+          <li>
+            <a href="https://github.com/tc39/proposals" target="_blank" rel="noopener">tc39/proposals</a> —— 当前所有提案 Stage 状态实时表
+          </li>
+          <li>
+            <a href="https://github.com/tc39/proposals/blob/main/finished-proposals.md" target="_blank" rel="noopener">tc39/proposals · finished-proposals</a> —— 已进入标准的提案归档
+          </li>
+          <li>
+            <a href="https://kangax.github.io/compat-table/es2016plus/" target="_blank" rel="noopener">kangax compat-table</a> —— 各引擎特性矩阵
+          </li>
+          <li>
+            <a href="https://caniuse.com/" target="_blank" rel="noopener">caniuse.com</a> —— 浏览器市场份额 + 特性支持
+          </li>
+          <li>
+            <a href="https://node.green/" target="_blank" rel="noopener">node.green</a> —— Node 版本对 ES 特性支持矩阵
+          </li>
+        </ul>
+
+        <h3>工具链</h3>
+        <ul>
+          <li>
+            <a href="https://github.com/browserslist/browserslist" target="_blank" rel="noopener">browserslist</a> —— 团队共享的浏览器版本列表配置（Babel/SWC/PostCSS/Autoprefixer 都用）
+          </li>
+          <li>
+            <a href="https://github.com/zloirock/core-js" target="_blank" rel="noopener">core-js</a> —— 最完备的 ES polyfill 集合
+          </li>
+          <li>
+            <a href="https://babel.dev/docs/babel-preset-env" target="_blank" rel="noopener">@babel/preset-env</a> —— "智能 polyfill"事实标准
+          </li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="04-async-evolution.html">A4 异步演进</a></li>
+          <li>
+            <strong>🎉 Track A 完结</strong>。下一步可以走 <strong><a href="../02-spec/index.html">Track B · ECMA-262 规范精读</a></strong>（编写中）—— 教你读 800 页规范的元能力
+          </li>
+          <li>
+            或者回到 <a href="../index.html">ECMAScript 主页</a> 看两轨整体结构
+          </li>
+        </ul>
+
+        <h3>跨主题参考（本章引用了这些章节）</h3>
+        <ul>
+          <li><a href="01-standards-history.html">A1 标准发展史</a> —— 16 版编辑号 + ES4 历史</li>
+          <li><a href="04-async-evolution.html">A4 异步演进</a> —— 异步主线特性演化</li>
+          <li><a href="../../typescript/03-reference/14-decorators.html">TS · Decorators</a> —— Stage 3 标准 decorator 与 legacy 对比</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="04-async-evolution.html">
+            <span class="label">← 上一章</span>
+            <span class="title">A4 · 异步演进</span>
+          </a>
+          <a class="next" href="../02-spec/index.html">
+            <span class="label">下一轨 →</span>
+            <span class="title">Track B · ECMA-262 规范精读</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
