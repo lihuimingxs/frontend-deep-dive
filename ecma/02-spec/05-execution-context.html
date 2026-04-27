@@ -1,0 +1,872 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>B5 · 可执行代码与执行上下文（§9）· ECMAScript 深度学习</title>
+    <meta
+      name="description"
+      content="ECMA-262 §9 全章规范层视角精读：5 种 EnvironmentRecord 的方法签名、PrivateEnvironment、Realm 的 Intrinsics 表、Agent / Agent Cluster、Job 与 Host hooks、Source Text Module Records 的 4 阶段算法 + Top-Level Await 死锁检测。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c84a1f'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EES%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>ECMAScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.16 35); color: #fff">ES</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">ES 首页</a>
+          <a href="index.html">Track B 目录</a>
+          <a href="https://262.ecma-international.org/15.0/index.html#sec-executable-code-and-execution-contexts" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Track B · ECMA-262 规范精读</h3>
+        <ul>
+          <li><a href="index.html">Track 概览</a></li>
+          <li><a href="01-how-to-read.html">B1 · 怎么读规范</a></li>
+          <li><a href="02-data-types.html">B2 · 数据类型与值（§6）</a></li>
+          <li><a href="03-abstract-operations.html">B3 · 抽象操作（§5、§7）</a></li>
+          <li><a href="04-internal-slots.html">B4 · 内部槽与方法（§10）</a></li>
+          <li><a href="05-execution-context.html" class="active">B5 · 执行上下文（§9）</a></li>
+          <li><span class="sidebar-pending">B6 · 提案旅程 ⏳</span></li>
+        </ul>
+        <h3>另一轨</h3>
+        <ul>
+          <li><a href="../01-history/index.html">Track A · 历史脉络（已完成）</a></li>
+        </ul>
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../javascript/index.html">JavaScript 深度学习</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">ECMAScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Track B · 规范精读</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>B5 · 执行上下文（§9）</span>
+        </nav>
+
+        <h1>B5 · 可执行代码与执行上下文（§9）</h1>
+        <p class="lead">
+          A3 用"<strong>用户视角</strong>"讲了 ECMAScript 的执行机器（Realm / Agent / Job / ExecutionContext / EnvironmentRecord）。本章用"<strong>规范层数据结构视角</strong>"再讲一遍——把每个概念还原成 ECMA-262 §9 章里的具体记录字段、方法签名、算法步骤。读完后你能照着规范文本<strong>精确复述</strong>引擎做了什么、Host hook 在哪几个点被调用、Module evaluation 的 4 阶段算法怎么处理 cycle。<strong>这是 Track B 最难的一章</strong>——但也是和引擎实现联系最紧密的，读懂之后看 V8 / SpiderMonkey 源码会快很多。
+        </p>
+
+        <div class="callout warn" style="margin: 16px 0">
+          <div class="callout-title">⚠️ 与 A3 的关系：同一台机器的两个视角</div>
+          <p>
+            A3 讲<strong>"机器是什么样的"</strong>（含图、含完整生命周期 trace），适合工程师建立心智模型；本章讲<strong>"规范怎么用数据结构精确建模这台机器"</strong>，适合<strong>写 polyfill / 读引擎源码 / 追踪 TC39 提案</strong>的场景。两章不重复——A3 的图本章不再画，A3 的"完整生命周期 trace"本章不再 trace；本章只补 A3 没展开的<strong>规范字段细节</strong>。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~40 分钟</span>
+          <span><strong>前置</strong> <a href="../01-history/03-execution-model.html">A3 执行模型</a>（必读）+ B1-B4</span>
+          <span><strong>对应 ECMA-262</strong>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-executable-code-and-execution-contexts" target="_blank" rel="noopener">§9 全章（10 个子章节）</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>§9 把"运行时机器"切成 10 个子章节</strong>：§9.1 Environment Records / §9.2 PrivateEnvironment Records / §9.3 Realms / §9.4 Execution Contexts / §9.5 Agents / §9.6 Agent Clusters / §9.7 Forward Progress / §9.8 Jobs / §9.9 InitializeHostDefinedRealm / §9.10 Source Text Module Records。
+          </li>
+          <li>
+            <strong>EnvironmentRecord 是规范的"作用域基类"</strong>，5 种实现（Declarative / Function / Object / Module / Global）共享同一组方法签名（<code>HasBinding</code> / <code>CreateMutableBinding</code> / <code>GetBindingValue</code> / <code>SetMutableBinding</code> 等）。变量查找算法 <code>ResolveBinding</code> 沿 <code>[[OuterEnv]]</code> 链调用这些方法。
+          </li>
+          <li>
+            <strong>Host Hooks 是 ECMA-262 规范暴露给宿主的"<em>插槽</em>"</strong>—— 至少 8 个关键 hook（<code>HostEnqueuePromiseJob</code> / <code>HostMakeJobCallback</code> / <code>HostFinalizeImportMeta</code> / <code>HostResolveImportedModule</code> 等）。<strong>浏览器、Node、Bun 在这些插槽实现各自的行为</strong>，所以同一段 JS 在不同宿主下表现不同。
+          </li>
+        </ol>
+
+        <p>§9 全章一览：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 90px">章节</th>
+              <th>内容</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>§9.1</td>
+              <td><strong>Environment Records</strong> —— 5 种 EnvironmentRecord 的方法签名 + ResolveBinding 算法</td>
+            </tr>
+            <tr>
+              <td>§9.2</td>
+              <td><strong>PrivateEnvironment Records</strong> —— class <code>#field</code> 私有字段的作用域链（ES2022）</td>
+            </tr>
+            <tr>
+              <td>§9.3</td>
+              <td><strong>Realms</strong> —— <code>[[Intrinsics]]</code> / <code>[[GlobalObject]]</code> / <code>[[GlobalEnv]]</code> / <code>[[HostDefined]]</code></td>
+            </tr>
+            <tr>
+              <td>§9.4</td>
+              <td><strong>Execution Contexts</strong> —— stack 数据结构、running execution context、内部槽字段</td>
+            </tr>
+            <tr>
+              <td>§9.5</td>
+              <td><strong>Agents</strong> —— <code>[[CanBlock]]</code> / <code>[[Signifier]]</code> / <code>[[IsLockFree1]]</code> 等</td>
+            </tr>
+            <tr>
+              <td>§9.6</td>
+              <td><strong>Agent Clusters</strong> —— 共享内存边界</td>
+            </tr>
+            <tr>
+              <td>§9.7</td>
+              <td><strong>Forward Progress</strong> —— "<em>每个 Agent 必须周期性取得进展</em>" 的规范保证</td>
+            </tr>
+            <tr>
+              <td>§9.8</td>
+              <td><strong>Jobs and Host Operations</strong> —— Job 抽象 + Host hooks（投递 Promise reaction 等）</td>
+            </tr>
+            <tr>
+              <td>§9.9</td>
+              <td><strong>InitializeHostDefinedRealm</strong> —— 启动时怎么建第一个 Realm</td>
+            </tr>
+            <tr>
+              <td>§9.10</td>
+              <td><strong>Source Text Module Records</strong> —— ESM 4 阶段算法（Parse → Load → Link → Evaluate）+ Top-Level Await</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>§9.1 Environment Records —— 作用域的规范基类</h3>
+        <p>
+          所有 EnvironmentRecord 共享 <strong>9 个方法</strong>（规范层的"接口"）：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 36%">方法</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>HasBinding(N)</code></td>
+              <td>是否有 binding N？返回 boolean</td>
+            </tr>
+            <tr>
+              <td><code>CreateMutableBinding(N, D)</code></td>
+              <td>新建可变 binding（<code>D</code> 表示是否可被 <code>delete</code>）</td>
+            </tr>
+            <tr>
+              <td><code>CreateImmutableBinding(N, S)</code></td>
+              <td>新建不可变 binding（<code>S</code> = strict 标志，<code>const</code> 用这个）</td>
+            </tr>
+            <tr>
+              <td><code>InitializeBinding(N, V)</code></td>
+              <td>把 N 绑到值 V（结束 TDZ 状态）</td>
+            </tr>
+            <tr>
+              <td><code>SetMutableBinding(N, V, S)</code></td>
+              <td>修改 binding 的值（<code>S</code> = strict，影响 readonly 失败行为）</td>
+            </tr>
+            <tr>
+              <td><code>GetBindingValue(N, S)</code></td>
+              <td>取 binding 的值（<strong>未 initialize 时抛 ReferenceError，这就是 TDZ</strong>）</td>
+            </tr>
+            <tr>
+              <td><code>DeleteBinding(N)</code></td>
+              <td>删除 binding（<code>let</code>/<code>const</code> 都不可删）</td>
+            </tr>
+            <tr>
+              <td><code>HasThisBinding()</code></td>
+              <td>是否有 this（仅 Function / Module / Global）</td>
+            </tr>
+            <tr>
+              <td><code>HasSuperBinding()</code></td>
+              <td>是否有 super（仅 method 内的 Function Env）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>5 种实现各自重写部分方法，并扩展独有字段：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 22%">类型</th>
+              <th style="width: 110px">spec §</th>
+              <th>独有字段 / 行为</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Declarative</strong></td>
+              <td>§9.1.1.1</td>
+              <td>最基础。<code>let</code>/<code>const</code>/<code>function</code>/<code>class</code> 在这里。binding 表 + uninitialized 状态</td>
+            </tr>
+            <tr>
+              <td><strong>Function</strong></td>
+              <td>§9.1.1.3</td>
+              <td>Declarative 的子类。多 <code>[[ThisValue]]</code> / <code>[[ThisBindingStatus]]</code>（<em>lexical / initialized / uninitialized</em>）/ <code>[[FunctionObject]]</code> / <code>[[NewTarget]]</code></td>
+            </tr>
+            <tr>
+              <td><strong>Object</strong></td>
+              <td>§9.1.1.2</td>
+              <td>把一个对象当 binding 表（<code>obj.x</code> 即 binding x）。<code>with</code> 用、非 strict global 用</td>
+            </tr>
+            <tr>
+              <td><strong>Module</strong></td>
+              <td>§9.1.1.5</td>
+              <td>多 <code>CreateImportBinding(N, M, N2)</code> —— 把当前 N 绑到模块 M 的导出 N2，实现 <strong>live binding</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Global</strong></td>
+              <td>§9.1.1.4</td>
+              <td>合体：<strong>Object Env</strong>（globalThis 上的属性）+ <strong>Declarative Env</strong>（顶层 <code>let</code>/<code>const</code>）。所以 <code>var x = 1</code> 后 <code>window.x === 1</code> 但 <code>let y = 1</code> 后 <code>window.y === undefined</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h4>ResolveBinding 算法 —— 标识符解析</h4>
+        <p>
+          引擎解析标识符 <code>x</code> 时调 <code>ResolveBinding</code>（§9.4.2）：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">spec · §9.4.2 ResolveBinding ( name [, env] )</span>
+          <pre class="code"><code class="lang-js">// 1. If env is not present or is undefined, then
+//    a. Set env to the running execution context's LexicalEnvironment.
+// 2. Let strict be IsStrict() of running execution context.
+// 3. Return ? GetIdentifierReference(env, name, strict).
+
+// GetIdentifierReference ( env, name, strict ):
+// 1. If env is null, return Reference Record { [[Base]]: unresolvable, ... }.
+// 2. If ? env.HasBinding(name) is true, return Reference Record { [[Base]]: env, [[ReferencedName]]: name, ... }.
+// 3. Else, return ? GetIdentifierReference(env.[[OuterEnv]], name, strict).
+
+// 关键：沿 [[OuterEnv]] 链向上查 —— 这就是词法作用域的实现。
+// 找到 → 产生 Reference Record（B2 讲过）。
+// 找不到 → unresolvable Reference，取值时抛 ReferenceError。</code></pre>
+        </div>
+
+        <h3>§9.2 PrivateEnvironment Records —— class #field 的作用域链</h3>
+        <p>
+          ES2022 加 <code>#field</code> 时引入了一种<strong>独立作用域链</strong>——和 LexicalEnvironment 平行。规范叫 PrivateEnvironment：
+        </p>
+
+        <ul>
+          <li>每个 class declaration 创建一个 PrivateEnvironment</li>
+          <li>含 <strong>PrivateName</strong> 集合（<code>#x</code> / <code>#y</code> / <code>#method</code>）</li>
+          <li>nested class 沿 <code>[[OuterPrivateEnvironment]]</code> 上溯</li>
+          <li>访问 <code>this.#x</code> 触发 <code>PrivateFieldGet</code>，从当前 PrivateEnvironment 解析 <code>#x</code></li>
+          <li>跨 class 访问 <code>#x</code> <strong>parse 阶段就是 SyntaxError</strong>（不是运行时）</li>
+        </ul>
+
+        <p>
+          这就是 B4 讲过的"硬隐私"实现——<strong>PrivateName 不在属性表里，而在独立的 PrivateEnvironment 上</strong>。引擎完全控制访问路径，用户代码无法绕过。
+        </p>
+
+        <h3>§9.3 Realms —— Intrinsics 表</h3>
+        <p>
+          每个 Realm 有 4 个内部槽：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">字段</th>
+              <th>含义</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>[[Intrinsics]]</code></td>
+              <td><strong>Intrinsics 表</strong>——本 Realm 独立的几百个内置对象</td>
+            </tr>
+            <tr>
+              <td><code>[[GlobalObject]]</code></td>
+              <td>本 Realm 的 <code>globalThis</code></td>
+            </tr>
+            <tr>
+              <td><code>[[GlobalEnv]]</code></td>
+              <td>本 Realm 的 Global EnvironmentRecord</td>
+            </tr>
+            <tr>
+              <td><code>[[HostDefined]]</code></td>
+              <td>宿主可附加的额外字段（浏览器存 origin / CSP / cookies 关联等）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>Intrinsics 表是关键</strong>——它含 <code>%Object%</code> / <code>%Array%</code> / <code>%Function.prototype%</code> 等几百个引用，每个都<strong>对应一个独立的对象</strong>。这就是为什么 <code>arr instanceof Array</code> 跨 Realm 失败：每个 Realm 的 <code>%Array.prototype%</code> 都不同（虽然结构相同）。
+        </p>
+
+        <p>
+          规范用<strong><code>%名字%</code> 语法</strong>引用 intrinsics（如 <code>%Promise.prototype.then%</code>）。这个表在 §6.1.7.4 有完整列表（300+ 条目）。
+        </p>
+
+        <h3>§9.4 Execution Contexts</h3>
+        <p>
+          A3 已详述每个 ExecutionContext 的字段。规范层补充几点：
+        </p>
+        <ul>
+          <li><strong>execution context stack</strong>：LIFO 栈，栈顶是 "<strong>running execution context</strong>"</li>
+          <li><strong>3 种类型</strong>：<em>script</em>（脚本顶层）/ <em>module</em>（模块顶层）/ <em>function</em>（函数体）</li>
+          <li><code>[[Function]]</code> 字段：脚本/模块时为 null，函数时指向被调用的函数对象</li>
+          <li>
+            <strong>"suspended" 与 "active"</strong>：generator / async function 暂停时，ExecutionContext 从栈中移除但不销毁，存在 generator/async 对象的内部槽里（A3 详述过）
+          </li>
+        </ul>
+
+        <h3>§9.5-§9.7 Agents / Clusters / Forward Progress</h3>
+
+        <h4>Agent（§9.5）</h4>
+        <p>每个 Agent 有 4 个内部字段：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">字段</th>
+              <th>含义</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>[[LittleEndian]]</code></td>
+              <td>本 Agent 用的字节序（<code>DataView</code> 默认值）</td>
+            </tr>
+            <tr>
+              <td><code>[[CanBlock]]</code></td>
+              <td>是否允许 <code>Atomics.wait</code> 阻塞（主线程通常 false，Worker 通常 true）</td>
+            </tr>
+            <tr>
+              <td><code>[[Signifier]]</code></td>
+              <td>Agent 的"<em>身份证</em>"——一个唯一 ID，在 Atomics 操作中标识"<em>哪个 Agent 在等</em>"</td>
+            </tr>
+            <tr>
+              <td><code>[[IsLockFree1]]</code> / <code>[[IsLockFree2]]</code> / <code>[[IsLockFree8]]</code></td>
+              <td>1/2/8 字节原子操作是否是 lock-free（影响 <code>Atomics.isLockFree</code> 返回值）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h4>Agent Cluster（§9.6）</h4>
+        <p>
+          一组能共享 <code>SharedArrayBuffer</code> 的 Agent。规范要求：
+        </p>
+        <ul>
+          <li>同一 Cluster 内的 Agent 看到 <strong>一致的内存模型</strong>（§29 Memory Model 定义 happens-before 关系）</li>
+          <li>跨 Cluster 不能共享内存（必须用 postMessage 复制）</li>
+          <li>浏览器：同 Tab 主线程 + dedicated Worker 默认在同一 Cluster；跨 Tab / 跨 Origin / SharedWorker 不在</li>
+          <li>Node：每个 <code>worker_threads</code> 默认在主线程同 Cluster</li>
+        </ul>
+
+        <h4>Forward Progress（§9.7）</h4>
+        <p>
+          规范保证：<strong>每个非阻塞 Agent 必须周期性取得进展</strong>。这是规范层的"<em>不能让某个 Agent 永久饿死</em>"承诺——但<strong>没有具体调度公平性要求</strong>。Host 决定调度策略，规范只要求"<em>不能完全停下</em>"。
+        </p>
+
+        <h3>§9.8 Jobs and Host Operations ⭐</h3>
+        <p>
+          <strong>这是 §9 中最实用的子章</strong>——直接定义了 <strong>Host Hooks</strong>，宿主用它们实现 Event Loop / 模块加载 / Promise 调度。
+        </p>
+
+        <p>核心 Host Hooks 一览：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 38%">Host Hook</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>HostEnqueuePromiseJob(job, realm)</code></td>
+              <td>规范说"<em>把 Promise reaction 加入 microtask queue</em>"，宿主决定怎么投递</td>
+            </tr>
+            <tr>
+              <td><code>HostMakeJobCallback(callback)</code></td>
+              <td>包装一个 callback 成 Job。浏览器额外保存 incumbent realm / promise context 等元数据</td>
+            </tr>
+            <tr>
+              <td><code>HostCallJobCallback(jobCallback, V, args)</code></td>
+              <td>实际调用回调。V8 在这里做调试 hook、Sentry 在这里捕获错误</td>
+            </tr>
+            <tr>
+              <td><code>HostPromiseRejectionTracker(promise, operation)</code></td>
+              <td>未处理 reject 怎么报告（浏览器触发 <code>unhandledrejection</code>，Node 写 stderr）</td>
+            </tr>
+            <tr>
+              <td><code>HostFinalizeImportMeta(importMeta, moduleRecord)</code></td>
+              <td>设置 <code>import.meta.url</code> 等。Node 还设 <code>import.meta.resolve</code></td>
+            </tr>
+            <tr>
+              <td><code>HostLoadImportedModule(referrer, specifier, hostDefined, payload)</code></td>
+              <td>处理 <code>import</code> 语句——宿主负责 fetch + parse 模块</td>
+            </tr>
+            <tr>
+              <td><code>HostGetImportMetaProperties(moduleRecord)</code></td>
+              <td><code>import.meta</code> 的初始属性集合</td>
+            </tr>
+            <tr>
+              <td><code>HostEnsureCanCompileStrings(callerRealm, calleeRealm)</code></td>
+              <td><code>eval</code> / <code>new Function</code> 是否被 CSP 允许</td>
+            </tr>
+            <tr>
+              <td><code>HostEnqueueGenericJob(job, realm)</code></td>
+              <td>通用 Job 投递（非 Promise 的）</td>
+            </tr>
+            <tr>
+              <td><code>HostEnqueueTimeoutJob(job, milliseconds)</code></td>
+              <td>带延迟的 Job —— <code>setTimeout</code> 可基于此实现（实际 <code>setTimeout</code> 是 HTML 规范，不是直接 ECMA 的）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout success">
+          <div class="callout-title">📐 一句话总结 Host Hooks</div>
+          <p>
+            ECMA-262 规范层只定义"<strong>什么时候调谁</strong>"，宿主（浏览器、Node、Bun、Deno、Cloudflare Workers、引擎嵌入）决定"<strong>怎么实现</strong>"。所以：
+          </p>
+          <ul style="margin-top: 8px">
+            <li><strong>Promise.then / queueMicrotask 行为在所有宿主一致</strong>——这部分 ECMA-262 锁死语义</li>
+            <li><strong>setTimeout / I/O / 文件系统 行为各 host 不同</strong>——这部分是 host hook + host 自己规范</li>
+            <li><strong>看到不一致行为，先想"这个 API 是不是 Host 实现"</strong>——答案常常解释一切</li>
+          </ul>
+        </div>
+
+        <h3>§9.9 InitializeHostDefinedRealm —— 启动序列</h3>
+        <p>
+          规范层定义"启动一个 ECMAScript 实例"的算法：
+        </p>
+        <ol>
+          <li>创建新 Realm</li>
+          <li>调 <code>CreateIntrinsics(realm)</code> 初始化 300+ 内置对象（每个都是新对象）</li>
+          <li>调 host hook <code>HostDefined</code> 让宿主附加 globalThis（浏览器加 DOM API、Node 加 process / require / Buffer、Bun 加 Bun 等）</li>
+          <li>创建 Global EnvironmentRecord</li>
+          <li>创建 Realm 的执行上下文栈</li>
+          <li>返回 Realm，可以开始跑代码了</li>
+        </ol>
+
+        <p>
+          这个算法解释了为什么<strong>启动一个 V8 isolate 大约要几 ms</strong>——300+ intrinsic 对象的创建 + host bindings 加载是固定成本。Node 的 <code>vm.createContext()</code> 和浏览器的 iframe 各跑一次这个序列。
+        </p>
+
+        <h3>§9.10 Source Text Module Records —— ESM 4 阶段算法</h3>
+        <p>
+          ESM 是 ECMA-262 中<strong>最复杂的算法</strong>。一个 Module Record 含的字段（精选）：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 38%">字段</th>
+              <th>含义</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>[[Realm]]</code></td>
+              <td>所属 Realm</td>
+            </tr>
+            <tr>
+              <td><code>[[Environment]]</code></td>
+              <td>本模块的 Module EnvironmentRecord</td>
+            </tr>
+            <tr>
+              <td><code>[[Namespace]]</code></td>
+              <td>缓存的 Module Namespace exotic（B4 讲过）</td>
+            </tr>
+            <tr>
+              <td><code>[[Status]]</code></td>
+              <td><em>new / unlinked / linking / linked / evaluating / evaluating-async / evaluated</em></td>
+            </tr>
+            <tr>
+              <td><code>[[ImportEntries]]</code></td>
+              <td><code>import</code> 语句产生的 entry 列表</td>
+            </tr>
+            <tr>
+              <td><code>[[LocalExportEntries]]</code></td>
+              <td>本模块声明的 export</td>
+            </tr>
+            <tr>
+              <td><code>[[IndirectExportEntries]]</code></td>
+              <td><code>export { x } from './m'</code> 形式</td>
+            </tr>
+            <tr>
+              <td><code>[[StarExportEntries]]</code></td>
+              <td><code>export * from './m'</code> 形式</td>
+            </tr>
+            <tr>
+              <td><code>[[CycleRoot]]</code></td>
+              <td>循环依赖中"<em>哪个模块作为 cycle 入口</em>"</td>
+            </tr>
+            <tr>
+              <td><code>[[HasTLA]]</code></td>
+              <td>本模块是否含 Top-Level Await</td>
+            </tr>
+            <tr>
+              <td><code>[[AsyncEvaluation]]</code></td>
+              <td>异步求值状态（含一个 <code>[[AsyncEvaluationOrder]]</code> 决定 settle 顺序）</td>
+            </tr>
+            <tr>
+              <td><code>[[TopLevelCapability]]</code></td>
+              <td>本模块顶层 evaluate 返回的 Promise</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h4>4 阶段算法</h4>
+
+        <p>每个模块都按这个顺序处理：</p>
+
+        <p><strong>① Parse（§16.1.4 ParseModule）</strong></p>
+        <ul>
+          <li>解析源码 → AST → 收集 import / export 声明</li>
+          <li>产生 Module Record，状态 <em>new</em></li>
+          <li>失败：throw SyntaxError，模块作废</li>
+        </ul>
+
+        <p><strong>② Load (§16.2.1.5 LoadRequestedModules)</strong></p>
+        <ul>
+          <li>对所有 <code>import</code> 的依赖，调 host hook <code>HostLoadImportedModule</code> 让宿主 fetch 源文件</li>
+          <li>递归对每个依赖也走 Parse + Load</li>
+          <li>构建依赖图，包括 cycle 检测</li>
+          <li>状态：<em>unlinked</em></li>
+        </ul>
+
+        <p><strong>③ Link (§16.2.1.6 InitializeEnvironment + §16.2.1.5)</strong></p>
+        <ul>
+          <li>给每个模块创建 Module EnvironmentRecord</li>
+          <li>对每个 <code>import { x } from './m'</code>，在当前 Env 上 <code>CreateImportBinding(x, m, x)</code>—— 把 x 绑到模块 m 的导出 x，<strong>这就是 live binding 的实现</strong>（导入端 x 实际去 m 的 EnvironmentRecord 取值）</li>
+          <li>对每个 export 声明，在 m 的 LocalExportEntries 注册</li>
+          <li>状态：<em>linked</em></li>
+          <li>失败：linking error</li>
+        </ul>
+
+        <p><strong>④ Evaluate (§16.2.1.5.3 / §16.2.1.7 ExecuteModule)</strong></p>
+        <ul>
+          <li>按拓扑序执行模块顶层代码</li>
+          <li>遇到 cycle 时，按 <code>[[CycleRoot]]</code> 协调（cycle 内的模块可能拿到 uninitialized binding，访问时抛 ReferenceError）</li>
+          <li>含 Top-Level Await 时变成异步过程，详见下面</li>
+          <li>状态：<em>evaluated</em></li>
+        </ul>
+
+        <h4>Top-Level Await 死锁检测</h4>
+        <p>
+          ES2022 引入 TLA 后，模块求值变成<strong>异步过程</strong>。规范层加了：
+        </p>
+        <ul>
+          <li>每个模块的 evaluation 现在返回 Promise（<code>[[TopLevelCapability]]</code>）</li>
+          <li><strong>Async sibling 协调</strong>：cycle 内的多个 async 模块用 <code>[[AsyncEvaluationOrder]]</code> 决定 settle 顺序，避免乱序</li>
+          <li>两个 async 模块互相 <code>await import()</code> 形成 cycle 时——<strong>不会无限挂起</strong>，规范要求宿主直接报错</li>
+          <li>异步评估完成后再开始执行后续 sync 依赖（保持顺序保证）</li>
+        </ul>
+
+        <p>
+          <strong>实际工程教训</strong>：TLA 让模块依赖图变成 Promise 树。一个慢 TLA 拖累所有依赖它的下游模块——<strong>谨慎在共享模块用 TLA</strong>。Vite / Next.js 等工具会警告"<em>未优化的 TLA 阻塞首屏</em>"。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 写 Node loader hook</h3>
+          <p>
+            Node 的 <code>--experimental-loader</code> 让你<strong>钩入 HostLoadImportedModule</strong>——拦截 <code>import</code> 解析，做 alias、动态生成代码、TS on-the-fly 编译等。
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · loader.mjs</span>
+            <pre class="code"><code class="lang-js">// loader.mjs
+export async function resolve(specifier, context, nextResolve) {
+  // 把 #alias/* 解析成 ./src/*
+  if (specifier.startsWith('#alias/')) {
+    return nextResolve(specifier.replace('#alias/', './src/'), context);
+  }
+  return nextResolve(specifier, context);
+}
+
+export async function load(url, context, nextLoad) {
+  // 拦截 .ts 文件，运行时编译
+  if (url.endsWith('.ts')) {
+    const source = await fs.readFile(new URL(url), 'utf8');
+    const compiled = ts.transpile(source, { module: 'esnext' });
+    return { format: 'module', source: compiled, shortCircuit: true };
+  }
+  return nextLoad(url, context);
+}
+
+// 启动：node --experimental-loader ./loader.mjs main.mjs
+// 这就是 ts-node、tsx、@swc-node/register 的工作方式。</code></pre>
+          </div>
+          <p>底层就是 Node 在 <code>HostLoadImportedModule</code> 里调用你的 <code>resolve</code> + <code>load</code>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 调试 Top-Level Await 死锁</h3>
+          <p>
+            两个 async 模块互相 <code>await import()</code> 对方时，规范保证不死锁——但你<strong>会看到 unhandled rejection 而不是预期的成功</strong>。诊断思路：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 死锁示例</span>
+            <pre class="code"><code class="lang-js">// a.mjs
+const b = await import('./b.mjs');
+export const a = 'a value';
+
+// b.mjs
+const a = await import('./a.mjs');
+export const b = 'b value';
+
+// 启动 node --experimental-modules a.mjs：
+// 看到 "Module evaluation cycle could not be resolved"
+// 或者 a 拿到的 b.mjs.b 是 undefined（取决于实现）
+
+// 解法：避免 cycle —— 把共享代码抽到第三个模块
+// 或：用动态 import 在函数里调用，不在顶层</code></pre>
+          </div>
+          <p>
+            诊断工具：Node 的 <code>--trace-module-load</code>、Vite 的 import graph 可视化。理解 <code>[[CycleRoot]]</code> 后这种问题不再玄学。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 给 jsdom / linkedom 写 polyfill</h3>
+          <p>
+            jsdom 模拟浏览器 DOM 环境给 Node 用——它要在 Node 里实现<strong>浏览器 host 的所有 hook</strong>。如：
+          </p>
+          <ul>
+            <li><code>HostFinalizeImportMeta</code>：设 <code>import.meta.url</code> 为 jsdom 模拟 URL</li>
+            <li><code>HostPromiseRejectionTracker</code>：触发 jsdom 的 <code>unhandledrejection</code> 事件给 <code>window</code></li>
+            <li>不同 jsdom Realm 间的 <code>postMessage</code> 包装</li>
+            <li><code>setTimeout</code> 等 timer hook（Node 已有，jsdom 重新包成浏览器 API）</li>
+          </ul>
+          <p>
+            理解 §9.8 的 host hooks 表后，给 DOM 实现做扩展（vue-test-utils、@testing-library 等）就有了"<em>知道我能 hook 哪些点</em>"的全景图。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>用 queueMicrotask 观察 microtask 调度</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · HostEnqueuePromiseJob 路径</span>
+          <pre class="code"><code class="lang-js">// queueMicrotask 是 ECMA-262 标准 API（§27.7.5），
+// 内部直接调 HostEnqueuePromiseJob —— 比 Promise.then 更精简。
+// 也是写"自定义微任务调度"的官方入口。
+
+console.log('1');
+queueMicrotask(() =&gt; console.log('3'));
+Promise.resolve().then(() =&gt; console.log('4'));   // 也走 microtask
+console.log('2');
+
+// 输出：1 → 2 → 3 → 4
+// queueMicrotask 投递的先于 Promise.then 注册的（注册顺序 FIFO）
+
+// 实测注册顺序：
+queueMicrotask(() =&gt; console.log('A'));
+queueMicrotask(() =&gt; console.log('B'));
+Promise.resolve().then(() =&gt; console.log('C'));
+queueMicrotask(() =&gt; console.log('D'));
+// 输出：A → B → C → D（严格 FIFO）
+
+// 工程意义：
+// - 写 React 18 / Vue 3 调度器时，microtask 就是"批量更新"的边界
+// - 一个宏任务 + 多个 microtask 的"批"是渲染颗粒度的下限</code></pre>
+        </div>
+
+        <h3>对照规范理解 var hoisting 的本质</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · var 在 EnvironmentRecord 上的实际行为</span>
+          <pre class="code"><code class="lang-js">// 看似魔法的 hoisting：
+console.log(x);  // undefined（不报错！）
+var x = 1;
+
+// 规范层视角（§10.2.11 FunctionDeclarationInstantiation 和
+// §16.1.7 GlobalDeclarationInstantiation）：
+//
+// 在 ExecutionContext 创建阶段（不是运行阶段）：
+// 1. 收集源码中所有 var 声明的名字
+// 2. 对每个名字，调当前 VariableEnvironment.CreateMutableBinding(name, true)
+// 3. 调 InitializeBinding(name, undefined) —— 直接初始化为 undefined
+//
+// 所以 console.log(x) 时：
+// - HasBinding('x') 返回 true（已在创建阶段建好）
+// - GetBindingValue('x') 返回 undefined（已 initialize 为 undefined）
+// - 不抛 ReferenceError！
+
+// let / const：
+console.log(y);  // ReferenceError: Cannot access 'y' before initialization
+let y = 1;
+
+// 规范层视角：
+// 1. CreateMutableBinding('y', true) —— 创建 binding
+// 2. NOT InitializeBinding('y', ...)  —— 不初始化（保持 uninitialized 状态）
+// 3. 运行到 let y = 1 时才 InitializeBinding('y', 1)
+//
+// 所以前面 console.log(y)：
+// - HasBinding('y') 返回 true（已创建）
+// - GetBindingValue('y') 检查 uninitialized → 抛 ReferenceError
+// - 这就是 TDZ —— "binding 已存在但未初始化"
+
+// 这两段代码的根因差异是 EnvironmentRecord 的"先 init / 不 init"决策。
+// 不是"代码搬运"，是"创建阶段的 init 行为差异"。</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：把 Job 等同于 microtask</div>
+          <p>
+            Job 是规范层抽象，<strong>包含多种类型</strong>——PromiseJob（最常见，对应 microtask）、ScriptJob（脚本初次执行）、其他 host-defined Jobs（setTimeout 回调等）。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：说"microtask"指浏览器/Node 的 microtask queue 实现；说"Job"指规范层抽象。在 spec 讨论里区分清楚。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：以为 Realm 之间共享 Intrinsics</div>
+          <p>
+            "<em>Array.prototype 是单例</em>" 是错的。每个 Realm 都有<strong>独立的</strong> Intrinsics 表——这是为什么跨 iframe 的 <code>arr instanceof Array</code> 失败、<code>arr.constructor === Array</code> 也失败。详见 <a href="../01-history/03-execution-model.html">A3 执行模型</a> + <a href="03-abstract-operations.html">B3 抽象操作</a> 的 IsArray 算法。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：跨 Realm 用 <code>Array.isArray</code>（Realm-aware）、<code>Object.prototype.toString.call</code>、或者结构判断。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：在 Module 顶层写 var 期待 globalThis 上有</div>
+          <p>
+            ES Module 顶层的 <code>var x = 1</code> <strong>不挂在 globalThis 上</strong>——因为 Module 用 <strong>Module EnvironmentRecord</strong>，不是 Global。这与 script 顶层 <code>var</code> 行为不同。
+          </p>
+          <div class="code-block" style="margin-top: 12px">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// script: var x = 1; → window.x === 1
+// module: var x = 1; → window.x === undefined（Module Env 隔离）
+//
+// 同理：function f() {} 在 module 顶层也不挂 globalThis</code></pre>
+          </div>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：要全局变量明确 <code>globalThis.x = ...</code>。Module 应该用 <code>export</code> 而不是污染全局。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：在 Top-Level Await 里阻塞所有依赖加载</div>
+          <p>
+            一个共享 utils 模块的 TLA <code>await fetch(...)</code> 会让<strong>所有 import 它的模块都等</strong>—— 即使下游不需要 fetch 结果。整个应用首屏被阻塞。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：① TLA 仅用于"<em>本模块自己必须的初始化</em>"，不用在共享 utils；② 用 lazy init pattern（<code>const data = (() => { let _; return () => _ ??= fetch(...); })()</code>）按需触发；③ 用 dynamic <code>import()</code> 把异步部分隔离。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：以为 Promise.then 的 microtask 调度是 ECMA-262 定义的</div>
+          <p>
+            <strong>不是</strong>。ECMA-262 只说"<em>调用 HostEnqueuePromiseJob</em>"——具体 microtask queue / Event Loop 是 HTML 规范（浏览器）或 Node 自己定义的。所以"microtask 优先于 macrotask"是 HTML 规范要求，不是 ECMA-262。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：写跨平台代码时，如果某行为不在 ECMA-262 里，<strong>查 HTML 规范或 Node 文档</strong>，不要假设语义统一。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范本体</h3>
+        <ul>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-environment-records" target="_blank" rel="noopener">ECMA-262 §9.1 Environment Records</a>
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-realms" target="_blank" rel="noopener">ECMA-262 §9.3 Realms</a>
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-jobs" target="_blank" rel="noopener">ECMA-262 §9.8 Jobs and Host Operations</a> —— 完整 Host Hook 列表
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-source-text-module-records" target="_blank" rel="noopener">ECMA-262 §16.2.1.5 Source Text Module Records</a> —— 4 阶段算法
+          </li>
+        </ul>
+
+        <h3>宿主侧实现参考</h3>
+        <ul>
+          <li>
+            <a href="https://html.spec.whatwg.org/multipage/webappapis.html#event-loops" target="_blank" rel="noopener">HTML 规范 · Event Loops</a> —— 浏览器侧的 microtask / macrotask / rendering 定义
+          </li>
+          <li>
+            <a href="https://nodejs.org/api/esm.html#loaders" target="_blank" rel="noopener">Node Module Customization Hooks</a> —— resolve / load loader API（HostLoadImportedModule 落地）
+          </li>
+          <li>
+            <a href="https://v8.dev/blog/v8-release-100#shadowrealm" target="_blank" rel="noopener">V8 Blog · ShadowRealm</a> —— V8 实现新 Realm 的内部
+          </li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="04-internal-slots.html">B4 内部槽与方法（§10）</a></li>
+          <li>下一步：<strong>B6 提案旅程</strong>（编写中）—— Track B 收官章，case study：Top-Level Await 跨多 clause 修改 + Records & Tuples 卡 Stage 2 反例</li>
+          <li>另一轨：<a href="../01-history/03-execution-model.html">A3 执行模型</a> 的"用户视角" + 一次函数调用完整生命周期 trace</li>
+        </ul>
+
+        <h3>跨主题参考</h3>
+        <ul>
+          <li><a href="../../javascript/02-advanced/01-scope-tdz.html">JS · 作用域与 TDZ</a></li>
+          <li><a href="../../javascript/03-async/01-event-loop.html">JS · Event Loop</a></li>
+          <li><a href="../../javascript/04-modules/01-esm.html">JS · ES Modules</a></li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="04-internal-slots.html">
+            <span class="label">← 上一章</span>
+            <span class="title">B4 · 内部槽与方法（§10）</span>
+          </a>
+          <a class="next" href="index.html">
+            <span class="label">下一步 →</span>
+            <span class="title">B6 · 提案旅程（🚧 编写中，先看 Track 概览）</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
