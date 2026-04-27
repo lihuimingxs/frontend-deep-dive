@@ -1,0 +1,836 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>A3 · 执行模型 ——「机器怎么跑？」 · ECMAScript 深度学习</title>
+    <meta
+      name="description"
+      content="ECMAScript 运行时机器结构：Realm / Agent / Job 三层容器、Execution Context 与 Environment Record 五种、一次函数调用的完整生命周期。讲清楚规范层怎么定义这台机器、Host 与 ECMA-262 的责任划分。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c84a1f'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EES%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>ECMAScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.16 35); color: #fff">ES</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">ES 首页</a>
+          <a href="index.html">Track A 目录</a>
+          <a href="https://262.ecma-international.org/15.0/index.html#sec-executable-code-and-execution-contexts" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Track A · 历史脉络与设计</h3>
+        <ul>
+          <li><a href="index.html">Track 概览</a></li>
+          <li><a href="01-standards-history.html">A1 · 标准发展史</a></li>
+          <li><a href="02-design-principles.html">A2 · 设计原则与语言特性</a></li>
+          <li><a href="03-execution-model.html" class="active">A3 · 执行模型</a></li>
+          <li><span class="sidebar-pending">A4 · 异步演进 🚧</span></li>
+          <li><span class="sidebar-pending">A5 · 现代生态 🚧</span></li>
+        </ul>
+        <h3>另一轨</h3>
+        <ul>
+          <li><a href="../02-spec/index.html">Track B · 规范精读</a></li>
+        </ul>
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../javascript/index.html">JavaScript 深度学习</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">ECMAScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Track A · 历史脉络与设计</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>A3 · 执行模型</span>
+        </nav>
+
+        <h1>A3 · 执行模型 ——「机器怎么跑？」</h1>
+        <p class="lead">
+          A2 讲了 ECMAScript 的"语言特性"——表层用户能看到的那些。本章把它们翻译成"<strong>运行时机器结构</strong>"：当一段代码真的在跑的时候，规范层定义了哪些数据结构、它们如何嵌套、谁推谁出栈、闭包靠什么活下来、<code>this</code> 从哪来、<code>setTimeout</code> 谁在调度。这是 JS 这台抽象机器的"<strong>VM 架构图</strong>"，比"语言特性"更接近金属，比"V8 实现"更稳定（V8 重写过 4 次，规范没变）。
+        </p>
+
+        <div class="callout warn" style="margin: 16px 0">
+          <div class="callout-title">⚠️ 本章是最难的一章</div>
+          <p>
+            Realm / Agent / Job / ExecutionContext / EnvironmentRecord 是规范的"机器术语"，不是"语言特性"。绝大多数 JS 工程师从没遇到过它们——但它们是后续 <a href="index.html">A4 异步演进</a>、<a href="../02-spec/index.html">B5 §9 上下文</a>、以及一切"<em>为什么 vm 沙箱要这样写、为什么跨 iframe 的 <code>Array</code> 不等</em>"问题的根因。建议至少读两遍，第二遍带着具体场景（如"我写一个 setTimeout 时发生了什么？"）回头对照。
+          </p>
+        </div>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 本章交叉规则</div>
+          <p>
+            作用域、闭包、<code>this</code>、TDZ 在 <a href="../../javascript/index.html">JavaScript 主题</a> 已详述。本章对这些机制做<strong>1-3 句话短重述 + 链回</strong>，正文聚焦"<strong>规范层怎么定义这台机器、Host 与 ECMA-262 的责任划分</strong>"。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~45 分钟</span>
+          <span><strong>前置</strong> <a href="02-design-principles.html">A2 设计原则</a></span>
+          <span><strong>对应 ECMA-262</strong>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-executable-code-and-execution-contexts" target="_blank" rel="noopener">§9 Executable Code and Execution Contexts</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义 ECMAScript 的运行时机器：</p>
+        <ol>
+          <li>
+            <strong>三层嵌套容器</strong>：<strong>Agent</strong>（≈ "线程"，含独立 Heap / Stack / Job Queue）→ 一个 Agent 含多个 <strong>Realm</strong>（每个 Realm 有自己的 <code>globalThis</code> 和 <code>Array.prototype</code> 等 Intrinsics）→ 每个 Realm 上跑多个 <strong>Job</strong>（脚本、Promise reaction、async 函数 step）。
+          </li>
+          <li>
+            <strong>Execution Context</strong>（执行上下文）是函数调用栈的最小单元，含 <code>LexicalEnvironment</code>、<code>VariableEnvironment</code>、<code>PrivateEnvironment</code>、<code>this</code> 绑定、<code>[[Realm]]</code> 等内部槽。栈顶是 "<strong>running execution context</strong>"。
+          </li>
+          <li>
+            <strong>Environment Record</strong>（作用域链节点）是变量绑定的存储单元，<code>[[OuterEnv]]</code> 指针构成词法作用域链。<strong>闭包就是函数对象在 <code>[[Environment]]</code> 内部槽里记住的那个 Environment Record。</strong>
+          </li>
+        </ol>
+
+        <p>一张极简的"机器架构图"（文字版）：</p>
+
+        <div class="code-block">
+          <span class="code-label">ECMAScript 运行时机器结构</span>
+          <pre class="code"><code class="lang-js">┌─────────────────────────────────────────────────────────┐
+│  Agent Cluster（共享 SharedArrayBuffer 的一组 Agent）  │
+│ ┌─────────────────────┐  ┌─────────────────────┐        │
+│ │  Agent (主线程)     │  │  Agent (Worker)     │  ...   │
+│ │ ┌─────────────────┐ │  │ ┌─────────────────┐ │        │
+│ │ │ Heap (对象池)   │ │  │ │ Heap            │ │        │
+│ │ │ Stack           │ │  │ │ Stack           │ │        │
+│ │ │ Job Queue       │ │  │ │ Job Queue       │ │        │
+│ │ │  - PromiseJobs  │ │  │ │  - PromiseJobs  │ │        │
+│ │ │  - ScriptJobs   │ │  │ │  - ScriptJobs   │ │        │
+│ │ │ ┌─────────────┐ │ │  │ │ ┌─────────────┐ │ │        │
+│ │ │ │ Realm A     │ │ │  │ │ │ Realm W     │ │ │        │
+│ │ │ │ globalThis  │ │ │  │ │ │ globalThis  │ │ │        │
+│ │ │ │ Intrinsics  │ │ │  │ │ │ Intrinsics  │ │ │        │
+│ │ │ │ globalEnv   │ │ │  │ │ │ globalEnv   │ │ │        │
+│ │ │ └─────────────┘ │ │  │ │ └─────────────┘ │ │        │
+│ │ │ ┌─────────────┐ │ │  │ │                 │ │        │
+│ │ │ │ Realm B     │ │ │  │ │ (Worker 通常    │ │        │
+│ │ │ │ (iframe)    │ │ │  │ │  只有 1 个 Realm)│ │       │
+│ │ │ └─────────────┘ │ │  │ │                 │ │        │
+│ │ └─────────────────┘ │  │ └─────────────────┘ │        │
+│ └─────────────────────┘  └─────────────────────┘        │
+└─────────────────────────────────────────────────────────┘
+
+  执行上下文栈（每个 Agent 独立一个）：
+  ┌─────────────────────────────────┐
+  │ ExecutionContext (栈顶 = running)│ ← inner()
+  │  LexicalEnvironment ───────────┐│
+  │  VariableEnvironment           ││
+  │  this binding                  ││
+  │  [[Realm]] = Realm A           ││
+  ├────────────────────────────────┼┤
+  │ ExecutionContext               ││ ← outer()
+  │  LexicalEnvironment ─────────┐ ││
+  ├──────────────────────────────┼─┼┤
+  │ ExecutionContext             │ ││ ← global script
+  │  LexicalEnvironment = globalE│v ││
+  └──────────────────────────────┴─┴┘
+                                 │  │
+                ──── [[OuterEnv]] 链（词法作用域）────</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>三层嵌套容器</h3>
+
+        <h4>Agent（≈ "线程"）</h4>
+        <p>
+          <strong>Agent</strong> 是 ECMA-262 §9.7 定义的执行容器。一个 Agent 含：<strong>独立的 Heap</strong>（对象池）、<strong>独立的执行上下文栈</strong>、<strong>独立的 Job Queue</strong>（PromiseJobs + ScriptJobs + 其他 host-defined jobs）、<strong>独立的 GC</strong>。
+        </p>
+
+        <p>实际映射：</p>
+        <ul>
+          <li><strong>浏览器主线程</strong> = 1 个 Agent</li>
+          <li><strong>每个 Web Worker</strong> = 1 个 Agent</li>
+          <li><strong>每个 ServiceWorker / SharedWorker</strong> = 1 个 Agent</li>
+          <li><strong>Node 主线程</strong> = 1 个 Agent</li>
+          <li><strong>每个 worker_threads.Worker</strong> = 1 个 Agent</li>
+        </ul>
+
+        <p>
+          Agent 之间<strong>默认完全隔离</strong>——独立堆，无共享变量，只能通过结构化克隆的 <code>postMessage</code> 通信。这就是"<strong>JS 是单线程</strong>"这句话的精确含义：<strong>单 Agent 默认</strong>，不是"全局只能有一个 Agent"。
+        </p>
+
+        <h4>Agent Cluster（共享内存的一组 Agent）</h4>
+        <p>
+          <strong>Agent Cluster</strong> 是<strong>能共享 SharedArrayBuffer 的一组 Agent</strong>（§9.8）。同一个 Tab 的主线程 + 所有 dedicated Worker 默认在同一 Cluster；跨 Tab、跨 Origin、ServiceWorker、SharedWorker 通常不在同一 Cluster。
+        </p>
+
+        <p>
+          <strong>这是 JS 第一次真正引入"共享内存"</strong>（ES2017）。配合 <code>Atomics.wait</code> / <code>Atomics.notify</code>，可以做出真正的多线程并发——但要付出 Spectre 攻击面 + 必须 <code>COOP</code>+<code>COEP</code> 头才在浏览器可用的代价。详细异步与并发在 A4 展开。
+        </p>
+
+        <h4>Realm（≈ "全局环境"）</h4>
+        <p>
+          <strong>Realm</strong> 是 ECMA-262 §9.3 定义的<strong>"独立的全局环境"</strong>。每个 Realm 包含：
+        </p>
+        <ul>
+          <li><strong><code>[[Intrinsics]]</code></strong>：一份独立的 <code>Array.prototype</code> / <code>Object.prototype</code> / <code>Function.prototype</code> 等所有内置原型对象（数百个）</li>
+          <li><strong><code>[[GlobalObject]]</code></strong>：本 Realm 的 <code>globalThis</code>（浏览器是 <code>window</code>，Node 是 <code>global</code>）</li>
+          <li><strong><code>[[GlobalEnv]]</code></strong>：本 Realm 的全局 EnvironmentRecord</li>
+          <li><strong><code>[[HostDefined]]</code></strong>：宿主可附加的额外字段（浏览器存 origin、CSP 等）</li>
+        </ul>
+
+        <p>实际映射：</p>
+        <ul>
+          <li><strong>每个 iframe</strong> = 一个独立 Realm（同 Agent，主线程）</li>
+          <li><strong>每个 <code>vm.createContext()</code></strong>（Node）= 一个独立 Realm</li>
+          <li><strong>每个 Worker</strong> = 一个独立 Realm（也独立 Agent）</li>
+          <li><strong>同一文档的 main script + module</strong> = 共享一个 Realm</li>
+        </ul>
+
+        <div class="callout warn">
+          <div class="callout-title">⚠️ Realm 隔离 = 跨边界 instanceof 失败</div>
+          <p>
+            因为每个 Realm 有<strong>独立的 <code>Array.prototype</code></strong>，跨 Realm 创建的数组的 <code>[[Prototype]]</code> 链指向另一个对象。所以：
+          </p>
+          <div class="code-block" style="margin-top: 12px">
+            <span class="code-label">javascript · 跨 iframe 的 instanceof</span>
+            <pre class="code"><code class="lang-js">// 主页面
+const iframe = document.createElement('iframe');
+document.body.appendChild(iframe);
+const arrFromFrame = new iframe.contentWindow.Array(1, 2, 3);
+
+arrFromFrame instanceof Array;  // false! 因为 iframe 有自己的 Array
+Array.isArray(arrFromFrame);    // true（这个 API 是 Realm-aware 的）
+
+// lodash _.isArray 内部就是 Array.isArray，故能正确识别。
+// 自己写代码遇到跨 Realm 时也应该用 Array.isArray，不用 instanceof Array。</code></pre>
+          </div>
+        </div>
+
+        <h4>Job（执行单元）</h4>
+        <p>
+          <strong>Job</strong> 是 ECMA-262 §9.5 定义的<strong>异步执行单元</strong>——某段代码"<em>稍后</em>"在某个 Agent 上跑的最小调度单位。Job 的种类：
+        </p>
+        <ul>
+          <li><strong>PromiseJobs</strong>（微任务）：<code>Promise.then</code> 回调、<code>queueMicrotask</code>、<code>MutationObserver</code> 回调、async 函数恢复点</li>
+          <li><strong>ScriptJobs</strong>（脚本初次加载）：每个 <code>&lt;script&gt;</code> 标签的解析+执行被包装成一个 Job</li>
+          <li><strong>HostDefined Jobs</strong>（宿主定义）：<code>setTimeout</code>、<code>setImmediate</code>、I/O 回调、UI 渲染——<strong>这些不在 ECMA-262 规范里</strong>，由 HTML 规范 / Node 各自定义</li>
+        </ul>
+
+        <p>
+          每个 Agent 跑完当前 Job 后会<strong>清空 PromiseJobs 队列</strong>（这就是"微任务"在每个宏任务后被批量执行），然后从其他 Job 队列取下一个。详细的 Event Loop 规则在 <a href="index.html">A4 异步演进</a> 展开（PPT 经典页"Event Loop：宏任务与微任务"）。
+        </p>
+
+        <h3>Execution Context（执行上下文）</h3>
+        <p>
+          <strong>ExecutionContext</strong> 是 ECMA-262 §9.4 定义的<strong>函数调用栈的最小单元</strong>。每次函数调用、每段脚本/模块求值、每次 <code>eval</code> 调用，引擎创建一个新的 ExecutionContext 压入栈；返回时弹出。
+        </p>
+
+        <p>每个 ExecutionContext 含以下内部槽（关键字段）：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 40%">字段</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>code evaluation state</code></td>
+              <td>当前执行到代码哪一步（生成器/异步函数恢复时回到此）</td>
+            </tr>
+            <tr>
+              <td><code>Function</code></td>
+              <td>正在调用的函数对象（脚本/模块时为 <code>null</code>）</td>
+            </tr>
+            <tr>
+              <td><code>[[Realm]]</code></td>
+              <td>当前 Realm（决定使用哪份 Intrinsics）</td>
+            </tr>
+            <tr>
+              <td><code>[[ScriptOrModule]]</code></td>
+              <td>当前所在的脚本或模块记录（用于 <code>import.meta</code> 等）</td>
+            </tr>
+            <tr>
+              <td><code>LexicalEnvironment</code></td>
+              <td><strong>词法作用域链顶</strong>——标识符解析从这里开始沿 <code>[[OuterEnv]]</code> 上溯</td>
+            </tr>
+            <tr>
+              <td><code>VariableEnvironment</code></td>
+              <td><strong><code>var</code> 声明的存放点</strong>。函数顶层 = <code>LexicalEnvironment</code>；<code>eval</code> 在非 strict 时不同</td>
+            </tr>
+            <tr>
+              <td><code>PrivateEnvironment</code></td>
+              <td>class <code>#field</code> 私有字段的环境（ES2022 新加）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          注意：<strong><code>this</code> 不在 LexicalEnvironment 里</strong>。<code>this</code> 由 ExecutionContext 自己持有的 <strong>"this binding"</strong> 提供（具体存在 Function Environment Record 上）——这就是为什么"箭头函数没有自己的 <code>this</code>"——它根本没创建 Function Environment，<code>this</code> 沿外层 ExecutionContext 找。
+        </p>
+
+        <p>
+          栈顶的 ExecutionContext 叫 "<strong>running execution context</strong>"，所有"当前 this"、"当前 Realm"、"当前作用域"的查询都基于它。
+        </p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 "call stack" vs "execution context stack"</div>
+          <p>
+            日常说的"call stack"（V8 / Chrome DevTools 用的术语）和规范的"execution context stack"基本是同一个东西，但<strong>视角不同</strong>：
+          </p>
+          <ul style="margin-top: 8px">
+            <li><strong>call stack</strong>：V8 实现层的栈帧（含 register / 临时变量 / 栈指针等运行时数据）</li>
+            <li><strong>execution context stack</strong>：规范层的抽象栈（含 LexicalEnvironment 等"逻辑信息"）</li>
+          </ul>
+          <p style="margin-top: 8px">
+            两者一一对应，但栈帧含的数据不完全相同。读 V8 源码用 call stack；读 ECMA-262 用 execution context stack。
+          </p>
+        </div>
+
+        <h3>Environment Record（作用域链节点）</h3>
+        <p>
+          <strong>EnvironmentRecord</strong>（ECMA-262 §9.1）是<strong>变量绑定的存储单元</strong>。一个 EnvironmentRecord 含：
+        </p>
+        <ul>
+          <li>一组 <strong>binding</strong>（变量名 → 值 + 元数据如 strict/initialized/mutable）</li>
+          <li>一个 <code>[[OuterEnv]]</code> 指针，指向外层 EnvironmentRecord（构成词法作用域链）</li>
+        </ul>
+
+        <p>规范定义了 5 种 EnvironmentRecord：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">类型</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Declarative</strong></td>
+              <td><code>let</code> / <code>const</code> / <code>function</code> / <code>class</code> 等声明的存放点。<strong>大部分情况下用这种</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Function</strong></td>
+              <td>Declarative 的子类，额外存 <code>this</code> binding、<code>NewTarget</code>、<code>SuperBase</code></td>
+            </tr>
+            <tr>
+              <td><strong>Object</strong></td>
+              <td>把一个普通对象当作 binding 表（<code>with</code> 语句使用，不推荐；非 strict 全局也用）</td>
+            </tr>
+            <tr>
+              <td><strong>Module</strong></td>
+              <td>ES Module 顶层。比 Declarative 多了"立即冻结的 import bindings"机制（live binding）</td>
+            </tr>
+            <tr>
+              <td><strong>Global</strong></td>
+              <td>合体：Object Environment（globalThis 上的属性）+ Declarative Environment（<code>let</code>/<code>const</code> 全局声明）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>标识符解析算法</strong>（<code>ResolveBinding</code>，§9.4.2）：从当前 ExecutionContext 的 LexicalEnvironment 开始，调 <code>HasBinding(name)</code>；找不到沿 <code>[[OuterEnv]]</code> 上溯；最终到全局环境仍找不到，返回 <code>undefined</code>（取值时抛 <code>ReferenceError</code>）。
+        </p>
+
+        <p>
+          <strong>这就是闭包的实现</strong>：函数对象在<strong>创建时</strong>，把当时的 LexicalEnvironment 存到自己的 <code>[[Environment]]</code> 内部槽。函数<strong>调用时</strong>，把这个 <code>[[Environment]]</code> 作为新 ExecutionContext 的外层环境。即使外层函数已经返回（栈帧被弹出），这个 EnvironmentRecord 仍被函数对象引用——<strong>因此不会被 GC</strong>，闭包就这样"活下来"。
+        </p>
+
+        <p>
+          <strong>详细机制请参考</strong> <a href="../../javascript/02-advanced/01-scope-tdz.html">JS · 作用域与 TDZ</a> 和 <a href="../../javascript/02-advanced/02-closures.html">02-closures</a>。本章只回答规范层视角。
+        </p>
+
+        <h3>一次函数调用的完整生命周期 ⭐</h3>
+        <p>
+          这是 PPT 第三章的精华页，也是本章<strong>必须啃下来</strong>的核心。下面用一段简单代码，<strong>逐行 trace</strong> 规范层发生了什么：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 待 trace 的代码</span>
+          <pre class="code"><code class="lang-js">'use strict';
+
+let counter = 0;
+
+function makeAdder(x) {
+  return function add(y) {
+    counter += 1;
+    return x + y;
+  };
+}
+
+const add5 = makeAdder(5);
+setTimeout(() =&gt; {
+  console.log(add5(3));   // 8
+  console.log(counter);    // 1
+}, 0);</code></pre>
+        </div>
+
+        <p><strong>第 1 步：Agent + Realm 建立</strong>（脚本加载之前）</p>
+        <ul>
+          <li>浏览器进程为本 Tab 的 V8 实例创建<strong>新的 Agent</strong>（含独立 Heap、Stack、Job Queue）</li>
+          <li>本页面的 main frame 创建<strong>一个 Realm</strong>：分配独立的 Intrinsics（Array.prototype、Object.prototype 等数百个对象）、创建 globalThis（浏览器是 <code>window</code>，自动挂 DOM API）、创建 Global EnvironmentRecord</li>
+          <li>把 <code>setTimeout</code> / <code>console</code> 等宿主 API 挂到 globalThis（HTML 规范定义，不在 ECMA-262 里）</li>
+        </ul>
+
+        <p><strong>第 2 步：脚本解析与全局执行</strong></p>
+        <ul>
+          <li>引擎 parse 脚本源码 → 生成 AST → 包装成<strong>ScriptJob</strong> 投入 Job Queue</li>
+          <li>事件循环取出 ScriptJob 开始执行：</li>
+          <li>- 创建 <strong>Script ExecutionContext</strong> 压栈，<code>LexicalEnvironment = VariableEnvironment = Global EnvironmentRecord</code></li>
+          <li>- 执行 <code>'use strict'</code>：当前 ExecutionContext 标 strict</li>
+          <li>- 处理 <code>let counter = 0</code>：在 Global EnvironmentRecord 的 Declarative 部分新建 binding <code>counter</code>，初始 uninitialized；执行赋值后变 0</li>
+          <li>- 处理 <code>function makeAdder(x) {...}</code>：创建函数对象，<code>[[Environment]]</code> 设为当前 LexicalEnvironment（即 Global Env）；新建 binding <code>makeAdder</code> 指向它</li>
+          <li>- 处理 <code>const add5 = makeAdder(5)</code>：开始函数调用——见下一步</li>
+        </ul>
+
+        <p><strong>第 3 步：调用 makeAdder(5)</strong></p>
+        <ul>
+          <li>创建 <strong>新 ExecutionContext</strong>（Function 类型），压栈</li>
+          <li>新建 <strong>Function EnvironmentRecord</strong>，<code>[[OuterEnv]] = makeAdder.[[Environment]] = Global Env</code>；this binding 因 strict 设为 <code>undefined</code></li>
+          <li>新 ExecutionContext 的 <code>LexicalEnvironment = VariableEnvironment</code> = 这个 Function Env</li>
+          <li>把参数 <code>x = 5</code> 写入 binding</li>
+          <li>开始执行函数体</li>
+        </ul>
+
+        <p><strong>第 4 步：创建内层函数 add（关键 —— 闭包形成）</strong></p>
+        <ul>
+          <li>遇到 <code>function add(y) {...}</code> 表达式 → 创建函数对象</li>
+          <li><strong>关键</strong>：<code>add.[[Environment]] = </code> 当前 LexicalEnvironment（即 makeAdder 的 Function Env）</li>
+          <li>这一步把 <code>{ x: 5 }</code> 这份 EnvironmentRecord <strong>钉</strong>在 add 函数对象上——<strong>闭包形成</strong></li>
+          <li><code>return add</code> 把函数对象返回给调用方</li>
+        </ul>
+
+        <p><strong>第 5 步：makeAdder 返回，但闭包没死</strong></p>
+        <ul>
+          <li>makeAdder 的 ExecutionContext 弹出栈</li>
+          <li><strong>但 makeAdder 的 Function EnvironmentRecord 不被 GC</strong>——因为 <code>add5</code>（作为 add 函数对象）的 <code>[[Environment]]</code> 仍引用它</li>
+          <li>新建全局 binding <code>add5 = </code> 这个 add 函数对象</li>
+        </ul>
+
+        <p><strong>第 6 步：setTimeout 调度（Host Job 投递）</strong></p>
+        <ul>
+          <li>遇到 <code>setTimeout(callback, 0)</code> —— 这是 Host API，不是 ECMA-262 的</li>
+          <li>HTML 规范的 setTimeout：把 callback 包装成一个 <strong>HostDefined Job</strong>（task source = "DOM manipulation" 或 "timer"），延迟 0ms 后投入 Agent 的 Job Queue（实际最小延迟 ~4ms）</li>
+          <li>callback 函数本身的 <code>[[Environment]]</code> 设为当前 Lexical Environment（Global Env）</li>
+          <li>立即返回 timer ID（一个数字）；<strong>callback 还没执行</strong></li>
+        </ul>
+
+        <p><strong>第 7 步：当前脚本结束，事件循环取下一个 Job</strong></p>
+        <ul>
+          <li>Script ExecutionContext 弹出栈，栈空</li>
+          <li>事件循环检查微任务队列（PromiseJobs）—— 空</li>
+          <li>事件循环取出刚才投递的 setTimeout Job（已到时间），开始执行</li>
+        </ul>
+
+        <p><strong>第 8 步：执行 setTimeout 回调（箭头函数）</strong></p>
+        <ul>
+          <li>创建新 ExecutionContext，但<strong>箭头函数不创建 Function Env</strong>——它直接复用外层环境（Global Env）</li>
+          <li>this binding 沿外层找，得到 Global 的 <code>this</code>（strict 下是 <code>undefined</code>）</li>
+          <li>执行 <code>add5(3)</code>：</li>
+          <li>- 创建新 ExecutionContext + 新 Function Env，<code>[[OuterEnv]] = add5.[[Environment]]</code>（指向第 4 步钉住的那份）</li>
+          <li>- <code>y = 3</code>；执行 <code>counter += 1</code>：<strong>沿 OuterEnv 链上溯</strong>，在 makeAdder Function Env 找不到 <code>counter</code>，继续上溯到 Global Env 找到，写回 1</li>
+          <li>- 执行 <code>return x + y</code>：<code>x = 5</code>（在 makeAdder Function Env 找到），<code>y = 3</code>（当前 Function Env），返回 <code>8</code></li>
+          <li>- ExecutionContext 弹出</li>
+          <li>console.log 打印 8</li>
+          <li>类似地打印 counter = 1</li>
+        </ul>
+
+        <p>
+          <strong>这一段就是 PPT 经典页"一次函数调用的完整生命周期"的文字版</strong>。把每一步内化之后，几乎所有"闭包/this/this 丢失/异步执行顺序"的疑问都能用同一套机器语言推理出来。
+        </p>
+
+        <h3>strict mode 机制（PPT 未覆盖，规范层补全）</h3>
+        <p>
+          <code>'use strict'</code>（ES5 引入）不是表面的"严格模式"标志，规范层把 <strong>strict 信息</strong>同时存在多处：
+        </p>
+        <ul>
+          <li><strong>ExecutionContext.[[Strict]]</strong>：当前是否在 strict 代码里</li>
+          <li><strong>Reference Record.[[Strict]]</strong>：每个引用记录自己是否 strict（影响赋值时是否抛错）</li>
+          <li><strong>Function.[[ECMAScriptCode]].[[Strict]]</strong>：函数自己的 strict（继承自定义点）</li>
+        </ul>
+
+        <p>strict 影响的语言行为：</p>
+        <ul>
+          <li><code>this</code> 在普通函数调用时为 <code>undefined</code>（非 strict 是 globalThis）</li>
+          <li><code>delete x</code>（变量）抛 <code>SyntaxError</code></li>
+          <li><code>with</code> 语句禁用</li>
+          <li><code>arguments</code> 不再与命名参数同步（mapped arguments → unmapped）</li>
+          <li>赋值给 readonly / non-writable 抛错（非 strict 静默失败）</li>
+          <li><code>eval</code> / <code>arguments</code> / 保留字不能作变量名</li>
+          <li>八进制字面量 <code>0o</code> 必须写新语法（<code>0123</code> 禁用）</li>
+        </ul>
+
+        <p>
+          <strong>自动 strict 的位置</strong>：
+        </p>
+        <ul>
+          <li>所有 ES Module（含 <code>&lt;script type="module"&gt;</code>）—— 不需要 <code>'use strict'</code></li>
+          <li>所有 class body —— 内部默认 strict</li>
+          <li>使用 <code>new Function()</code> 创建函数时不自动 strict（需在源码里加）</li>
+        </ul>
+
+        <p>
+          自 ES2015 开始，几乎所有现代代码都在 strict 上下文里跑——但<strong>非 strict 的"sloppy mode"仍然存在</strong>，因为老网页脚本必须保持向后兼容。这是 ES1-ES2025 的"双轨制"。
+        </p>
+
+        <h3>生成器与协程的暂停机制（PPT 未覆盖）</h3>
+        <p>
+          <code>function*</code> 生成器是怎么"暂停"的？规范用一种叫 <strong>"suspended ExecutionContext"</strong> 的技巧：
+        </p>
+        <ol>
+          <li>调用生成器函数<strong>不立即执行</strong>，而是创建一个 Generator 对象（含 <code>[[GeneratorContext]]</code> 内部槽，存当前 ExecutionContext）</li>
+          <li>调用 <code>gen.next()</code>：<strong>恢复</strong> <code>[[GeneratorContext]]</code> 压回栈顶</li>
+          <li>遇到 <code>yield expr</code>：<strong>暂停</strong>当前 ExecutionContext —— 把它从栈顶移除但<strong>不销毁</strong>，控制权返回给 <code>gen.next()</code> 的调用方</li>
+          <li>下次 <code>gen.next(value)</code>：再次把它压回栈顶，从 yield 处继续，<code>value</code> 成为 yield 表达式的值</li>
+        </ol>
+
+        <p>
+          这就是<strong>协程（coroutine）</strong>的实现——ExecutionContext 作为"<strong>可挂起的栈帧</strong>"。<code>async function</code> 也是基于这个机制（含 await 时挂起 ExecutionContext，Promise resolve 后恢复）。详细见 <a href="index.html">A4 异步演进</a>。
+        </p>
+
+        <h3>模块加载与求值顺序（PPT 未覆盖，规范层补全）</h3>
+        <p>
+          ES Module 是 ECMA-262 中<strong>最复杂的算法之一</strong>，规范用 <strong>Source Text Module Record</strong>（§16.2）建模。每个模块有 4 个生命周期阶段：
+        </p>
+        <ol>
+          <li>
+            <strong>Parse</strong>：解析源码 → 收集所有 <code>import</code> / <code>export</code> 声明 → 生成 Module Record（含 <code>[[ImportEntries]]</code> / <code>[[LocalExportEntries]]</code> / <code>[[IndirectExportEntries]]</code> 等字段）
+          </li>
+          <li>
+            <strong>Load (Linking)</strong>：递归 fetch 所有依赖模块 → 通过 <code>HostResolveImportedModule</code> hook 让宿主决定怎么找文件 → 构建依赖图
+          </li>
+          <li>
+            <strong>Link</strong>：建立 <strong>Module EnvironmentRecord</strong>，把 <code>import</code> 的 binding 连接到对应导出方的 binding（这就是 <strong>live binding</strong>——导入端不是值复制，是引用同一个 binding）
+          </li>
+          <li>
+            <strong>Evaluate</strong>：按拓扑序执行模块顶层代码 → 模块 namespace object 被冻结
+          </li>
+        </ol>
+
+        <p>
+          <strong>循环依赖处理</strong>：规范用 <code>[[CycleRoot]]</code> 字段标识循环模块的"根"——cycle 中所有模块共享一个 <code>[[CycleRoot]]</code>，evaluate 时<strong>先深度优先</strong>把非循环依赖跑完，遇到 cycle 就接受"<em>当前能拿到什么就拿什么</em>"（未初始化的 binding 暂时是 uninitialized）。这比 CommonJS 的 cycle 处理（拿到截至当前的 <code>module.exports</code>）<strong>更严格但更可预期</strong>——你能 import 一个 binding 但访问时仍可能抛 <code>ReferenceError</code>（TDZ-like）。
+        </p>
+
+        <p>
+          <strong>Top-Level Await（ES2022）</strong> 让模块求值变成<strong>异步过程</strong>。规范层加了：
+        </p>
+        <ul>
+          <li><code>[[CycleRoot]]</code> + <code>[[AsyncEvaluation]]</code> 字段共同决定 cycle 中谁等谁</li>
+          <li><strong>死锁检测</strong>：cycle 中两个模块互相 <code>await import()</code> 对方时，规范要求宿主直接 reject 而不是无限挂起</li>
+          <li><strong>顶层 promise</strong>：每个模块 evaluation 现在返回 Promise，整个 import 树是一棵 Promise 依赖树</li>
+        </ul>
+
+        <p>
+          <strong>详细机制请参考</strong> <a href="../../javascript/04-modules/01-esm.html">JS · ES Modules</a>（导入/导出语法、live binding 行为）。模块系统的<strong>设计决策</strong>（为什么是静态结构 vs 运行时函数）已在 <a href="02-design-principles.html#internals">A2 设计原则</a> 讨论。
+        </p>
+
+        <h3>Host 与 ECMA-262 的责任划分</h3>
+        <p>
+          ECMA-262 不管<strong>很多事</strong>。它只定义"语言核心 + 抽象 Job 调度框架"，具体的 I/O、定时器、UI 渲染、网络、文件——全部由<strong>宿主</strong>（Host）实现。划分点叫 <strong>Host Hook</strong>：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 40%">Host Hook</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>HostEnqueuePromiseJob</code></td>
+              <td>规范说"<em>把这个 Promise reaction 投递到 microtask queue</em>"，宿主决定怎么投</td>
+            </tr>
+            <tr>
+              <td><code>HostMakeJobCallback</code></td>
+              <td>包装一个回调成 Job（浏览器额外保存"正在等待的 promise" / "脚本来源"等元数据）</td>
+            </tr>
+            <tr>
+              <td><code>HostPromiseRejectionTracker</code></td>
+              <td>未处理的 reject 怎么报告（浏览器触发 <code>unhandledrejection</code> 事件，Node 输出到 stderr）</td>
+            </tr>
+            <tr>
+              <td><code>HostFinalizeImportMeta</code></td>
+              <td>设置 <code>import.meta.url</code> / <code>import.meta.resolve</code> 等</td>
+            </tr>
+            <tr>
+              <td><code>HostResolveImportedModule</code></td>
+              <td>处理 <code>import</code> 语句，宿主负责 fetch + parse 模块</td>
+            </tr>
+            <tr>
+              <td><code>HostCallJobCallback</code></td>
+              <td>实际调用回调（V8 在这里做调试 hook、Sentry 在这里捕获错误）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>这就是为什么浏览器和 Node 行为不一样</strong>。同样一段 <code>setTimeout(f, 0)</code>，浏览器 4ms 最小延迟、Node 1ms 最小延迟、Bun 立即；同样一段 <code>queueMicrotask(f)</code>，三者行为一致（因为这是 ECMA-262 规范的，不是 host）。看到不一致行为先想"这个 API 是 ECMA-262 还是 HTML/Node 自己的"——答案常常解释一切。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 调试闭包内存泄漏</h3>
+          <p>
+            React 项目里 <code>useEffect(() => { someBigArray; }, [])</code> 让 <code>someBigArray</code> 一直被持有，明明组件已 unmount。<strong>根因</strong>：useEffect 的回调函数对象 <code>[[Environment]]</code> 引用了 closure 中的 <code>someBigArray</code>，只要 React 还持有这个回调（如 cleanup 队列），EnvironmentRecord 就不被 GC。
+          </p>
+          <p>
+            <strong>排查方法</strong>：Chrome DevTools → Memory → Take Heap Snapshot → 搜索这个变量的 retainers，会看到一条 <code>(closure)</code> 引用链回到 React 内部数据结构——这就是 <code>[[Environment]]</code> 在 GC graph 上的实际表现。
+          </p>
+          <p>
+            <strong>修复</strong>：useEffect 不引用大对象，或在 cleanup 里显式置 null，或用 useRef 间接引用。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · Node vm 模块写沙箱</h3>
+          <p>
+            Node 的 <code>vm.createContext()</code> + <code>vm.runInContext()</code> 是<strong>创建独立 Realm</strong> 的官方 API，常用于：① 多租户运行用户脚本（serverless / lowcode 平台）② 隔离测试代码 ③ Edge runtime（Vercel Edge、Cloudflare Workers 内部都依赖类似机制）。
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · vm 创建独立 Realm</span>
+            <pre class="code"><code class="lang-js">const vm = require('node:vm');
+
+const sandbox = { x: 1 };
+vm.createContext(sandbox);   // sandbox 变成新 Realm 的 globalThis
+vm.runInContext('y = x + 1; arr = [1, 2, 3];', sandbox);
+
+console.log(sandbox.y);                // 2
+console.log(sandbox.arr);              // [1, 2, 3]
+console.log(sandbox.arr instanceof Array);  // false! 跨 Realm
+console.log(Array.isArray(sandbox.arr));    // true（Realm-aware）
+
+// 沙箱里能否访问 process / require？取决于 contextify 配置。
+// 默认不能，但用户脚本若构造 Function 仍可能逃逸——真正生产隔离要用 isolated-vm 等。</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · jsdom / happy-dom 的 Realm 隔离</h3>
+          <p>
+            Jest / Vitest 的测试环境用 jsdom 或 happy-dom 模拟浏览器 DOM。每个 test file <strong>跑在独立的 jsdom Realm 里</strong>——这就是为什么不同 test 的 <code>document</code> 不互相污染。
+          </p>
+          <p>
+            理解 Realm 之后，"<code>jest.useFakeTimers()</code> 为什么能拦 setTimeout"也好懂了——Jest 把 jsdom Realm 的 globalThis.setTimeout 替换成自己的实现。这是 Realm 隔离 + Host hook 替换的工程组合。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>用 Generator 演示 ExecutionContext 暂停</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 协程式生成器</span>
+          <pre class="code"><code class="lang-js">function* counter() {
+  console.log('  [gen] start');
+  let i = 0;
+  while (true) {
+    const reset = yield i++;   // ← 这里 ExecutionContext 暂停
+    if (reset) i = 0;
+    console.log('  [gen] resumed, i=', i);
+  }
+}
+
+const g = counter();           // 不执行函数体，仅创建 Generator 对象
+console.log(g.next());         //   [gen] start  | { value: 0, done: false }
+console.log(g.next());         //   [gen] resumed, i= 1 | { value: 1, done: false }
+console.log(g.next(true));     //   [gen] resumed, i= 0 | { value: 0, done: false }
+//                                  ↑ 注意：i 被 reset 了，因为 yield 的"返回值"是 next 传入的 true
+
+// 整个过程中，counter 的 ExecutionContext 反复被压回栈、暂停、压回栈。
+// 同一个 ExecutionContext，含同一个 LexicalEnvironment，含 i 这个 binding。
+// 这就是协程：一个能挂起/恢复的"栈帧"。</code></pre>
+        </div>
+
+        <h3>实战观察 Realm 隔离</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 浏览器中跨 iframe 的 Realm 边界</span>
+          <pre class="code"><code class="lang-js">// 主页面
+const iframe = document.createElement('iframe');
+document.body.appendChild(iframe);
+const iWin = iframe.contentWindow;
+
+// 1. globalThis 不同
+console.log(window === iWin);        // false
+console.log(globalThis === iWin);    // false
+
+// 2. Intrinsics 不同（关键）
+console.log(Array === iWin.Array);                     // false
+console.log(Array.prototype === iWin.Array.prototype); // false
+
+// 3. 跨 Realm 的对象 instanceof 失败
+const arr = new iWin.Array(1, 2, 3);
+console.log(arr instanceof Array);     // false（!!）
+console.log(arr instanceof iWin.Array); // true（Realm-correct）
+console.log(Array.isArray(arr));        // true（Realm-aware API）
+
+// 4. 但 Realm 之间共享 Agent —— 同步执行，单线程
+//    iWin 的脚本和主页面脚本在同一个 ExecutionContext 栈上交替运行。
+//    所以才会有"iframe 卡死整个 Tab"的现象。
+
+// 5. 跨 Realm 的对象 typeof 仍然正常
+console.log(typeof arr);  // 'object'（typeof 不依赖 Intrinsics）</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：以为 this 在 LexicalEnvironment 里</div>
+          <p>
+            <strong>不在</strong>。<code>this</code> 由 ExecutionContext 自己持有的"this binding"提供，存在 <strong>Function EnvironmentRecord</strong> 上（不是 Declarative）。这就是<strong>箭头函数没有自己的 <code>this</code></strong> 的本质——箭头函数不创建 Function Env，故没有 this binding 字段，<code>this</code> 沿外层找。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：理解 <code>this</code> 是"调用现场决定"的，不是"声明位置决定"的。详细 4 规则见 <a href="../../javascript/02-advanced/03-this.html">JS · this 四规则</a>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：以为闭包"复制"了变量</div>
+          <p>
+            <strong>不复制</strong>。闭包共享同一份 EnvironmentRecord 的 binding。经典坑：
+          </p>
+          <div class="code-block" style="margin-top: 12px">
+            <span class="code-label">javascript · 闭包循环捕获</span>
+            <pre class="code"><code class="lang-js">// 错的——所有闭包共享同一个 i
+const fns = [];
+for (var i = 0; i &lt; 3; i++) {
+  fns.push(() =&gt; console.log(i));
+}
+fns.forEach(f =&gt; f());  // 3 3 3（var 的 i 是函数级，所有闭包指向同一 binding）
+
+// 对的——每次循环创建新 binding
+for (let i = 0; i &lt; 3; i++) {
+  fns.push(() =&gt; console.log(i));
+}
+fns.forEach(f =&gt; f());  // 0 1 2（let 在每次迭代创建新 EnvironmentRecord）</code></pre>
+          </div>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：用 <code>let</code> / <code>const</code>（块作用域 + 每次迭代独立 binding），不用 <code>var</code>。详见 <a href="../../javascript/02-advanced/02-closures.html">JS · 闭包</a>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：跨 Realm 用 instanceof</div>
+          <p>
+            如上面"典型代码"所示，跨 iframe / vm / Worker 的对象 <code>instanceof</code> 会失败，因为每个 Realm 有自己的 Intrinsics。常见踩坑：
+          </p>
+          <ul>
+            <li>主页面写 <code>arr instanceof Array</code> 检查从 iframe 传来的数组</li>
+            <li>Node 测试中跨 vm context 检查 Error 类型</li>
+            <li>Web Worker postMessage 传回的对象再做 instanceof 判断</li>
+          </ul>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：用 <strong>Realm-aware</strong> API：<code>Array.isArray</code>、<code>typeof x === 'function'</code>、<code>Object.prototype.toString.call(x)</code>（返回 <code>"[object Array]"</code>、<code>"[object Date]"</code> 等，跨 Realm 一致）。或者用结构判断（鸭子类型，看有没有 <code>then</code> 方法判 thenable 等）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：把 setTimeout(fn, 0) 当"立即执行"</div>
+          <p>
+            <strong>不是立即</strong>。<code>setTimeout(fn, 0)</code> 走 Host Job 调度路径，至少要等：① 当前 ExecutionContext 栈清空；② 微任务队列清空；③ 浏览器最小延迟（4ms）。所以下面代码：
+          </p>
+          <div class="code-block" style="margin-top: 12px">
+            <span class="code-label">javascript · 任务调度顺序</span>
+            <pre class="code"><code class="lang-js">setTimeout(() =&gt; console.log('macro'), 0);
+Promise.resolve().then(() =&gt; console.log('micro'));
+console.log('sync');
+
+// 输出：sync → micro → macro
+// 因为：① 同步代码先跑完
+//       ② 微任务（PromiseJobs）在每个宏任务后批量清空
+//       ③ 宏任务（HostDefined Jobs）下个 tick 才执行</code></pre>
+          </div>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：要"下个微任务"用 <code>queueMicrotask</code> 或 <code>Promise.resolve().then</code>，不用 <code>setTimeout(fn, 0)</code>。详见 <a href="../../javascript/03-async/01-event-loop.html">JS · Event Loop</a>。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范</h3>
+        <ul>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-executable-code-and-execution-contexts" target="_blank" rel="noopener">ECMA-262 §9 Executable Code and Execution Contexts</a> —— 全章定义本文涉及的所有结构
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-environment-records" target="_blank" rel="noopener">ECMA-262 §9.1 Environment Records</a> —— 5 种 EnvironmentRecord 的方法签名
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-realms" target="_blank" rel="noopener">ECMA-262 §9.3 Realms</a> —— Realm 与 Intrinsics 表
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-agents" target="_blank" rel="noopener">ECMA-262 §9.7 Agents</a> + <a href="https://262.ecma-international.org/15.0/index.html#sec-agent-clusters" target="_blank" rel="noopener">§9.8 Agent Clusters</a> —— Agent 与 Cluster
+          </li>
+          <li>
+            <a href="https://html.spec.whatwg.org/multipage/webappapis.html#event-loops" target="_blank" rel="noopener">HTML 规范 · Event Loops</a> —— Host 侧的事件循环和 task source 定义（与 ECMA-262 Job 的关系）
+          </li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="02-design-principles.html">A2 设计原则与语言特性</a></li>
+          <li>下一步：<strong>A4 异步演进</strong>（编写中）—— Job Queue 在 Agent 上的调度、Promise 状态机、async/await 如何用 ExecutionContext 暂停机制实现</li>
+          <li>规范侧：<strong><a href="../02-spec/index.html">Track B · 规范精读</a></strong>—— B5 §9 上下文从规范层视角再讲一遍这些数据结构</li>
+        </ul>
+
+        <h3>跨主题参考（本章引用了这些 JS 章节做"短重述链回"）</h3>
+        <ul>
+          <li><a href="../../javascript/02-advanced/01-scope-tdz.html">JS · 作用域与 TDZ</a></li>
+          <li><a href="../../javascript/02-advanced/02-closures.html">JS · 闭包内存模型</a></li>
+          <li><a href="../../javascript/02-advanced/03-this.html">JS · this 四规则</a></li>
+          <li><a href="../../javascript/03-async/01-event-loop.html">JS · Event Loop</a></li>
+          <li><a href="../../javascript/01-fundamentals/13-iterators.html">JS · 迭代器与 Generator</a></li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="02-design-principles.html">
+            <span class="label">← 上一章</span>
+            <span class="title">A2 · 设计原则与语言特性</span>
+          </a>
+          <a class="next" href="index.html">
+            <span class="label">下一步 →</span>
+            <span class="title">A4 · 异步演进（🚧 编写中，先看 Track 概览）</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
