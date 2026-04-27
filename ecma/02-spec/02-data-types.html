@@ -1,0 +1,839 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>B2 · 数据类型与值（§6）· ECMAScript 深度学习</title>
+    <meta
+      name="description"
+      content="ECMA-262 §6 数据类型与值精读：8 个 Language Types（用户可见）+ Reference Record / Completion Record / Property Descriptor 等 Specification Types（规范内部）。讲清楚 (0, obj.x)() 为什么丢 this、String.length 为什么是 UTF-16 单元数、+0 与 -0 怎么区分。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c84a1f'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EES%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>ECMAScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.16 35); color: #fff">ES</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">ES 首页</a>
+          <a href="index.html">Track B 目录</a>
+          <a href="https://262.ecma-international.org/15.0/index.html#sec-ecmascript-data-types-and-values" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Track B · ECMA-262 规范精读</h3>
+        <ul>
+          <li><a href="index.html">Track 概览</a></li>
+          <li><a href="01-how-to-read.html">B1 · 怎么读规范</a></li>
+          <li><a href="02-data-types.html" class="active">B2 · 数据类型与值（§6）</a></li>
+          <li><span class="sidebar-pending">B3 · 抽象操作（§5、§7）⏳</span></li>
+          <li><span class="sidebar-pending">B4 · 内部槽与方法（§10）⏳</span></li>
+          <li><span class="sidebar-pending">B5 · 执行上下文（§9）⏳</span></li>
+          <li><span class="sidebar-pending">B6 · 提案旅程 ⏳</span></li>
+        </ul>
+        <h3>另一轨</h3>
+        <ul>
+          <li><a href="../01-history/index.html">Track A · 历史脉络（已完成）</a></li>
+        </ul>
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../javascript/index.html">JavaScript 深度学习</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">ECMAScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Track B · 规范精读</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>B2 · 数据类型与值</span>
+        </nav>
+
+        <h1>B2 · 数据类型与值（§6）</h1>
+        <p class="lead">
+          ECMA-262 §6 把"<strong>类型</strong>"分为两大类：<strong>Language Types</strong>（用户可见的 8 种：Undefined / Null / Boolean / String / Number / BigInt / Symbol / Object）和 <strong>Specification Types</strong>（规范内部的：Reference Record / Completion Record / Property Descriptor / Environment Record / Data Block / Abstract Closure 等）。Specification Types <strong>不是 JS 值</strong>——你写不出 <code>typeof x === 'CompletionRecord'</code>——但它们是<strong>规范文本里反复出现的"参数 / 返回值 / 中间结果"</strong>，不理解它们就读不懂 <code>(0, obj.x)()</code> 为什么丢 <code>this</code>，也读不懂 <code>?</code> 简写的真正含义。
+        </p>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 本章交叉规则</div>
+          <p>
+            8 个 Language Types 在 <a href="../../javascript/01-fundamentals/01-types.html">JS · 数据类型系统</a> 已详述（含装箱/拆箱、ToPrimitive 完整链路）。本章对 Language Types 做<strong>1-3 句话短重述 + 链回</strong>，正文聚焦 <strong>Specification Types</strong>——这些是 JS 主题没有覆盖的"规范层数据结构"。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> <a href="01-how-to-read.html">B1 · 怎么读规范</a>（必读 ?  /  ! 简写）</span>
+          <span><strong>对应 ECMA-262</strong>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-ecmascript-data-types-and-values" target="_blank" rel="noopener">§6 ECMAScript Data Types and Values</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>Language Types 8 种</strong>：Undefined / Null / Boolean / String / Number / BigInt / Symbol（7 个原始）+ Object（1 个引用）。这是 <code>typeof</code> 看到的那些（不过 <code>typeof null === 'object'</code> 是历史 bug，<code>typeof function</code> 是 'function' 是规范选择）。
+          </li>
+          <li>
+            <strong>Specification Types 是"规范的内部脚手架"</strong>——你看不到，但每个表达式都用到。最重要的两个：<strong>Reference Record</strong>（描述"<em>引用一个 binding</em>"，是 <code>obj.x</code> 的中间结果，决定 <code>this</code> 推断和左值赋值）和 <strong>Completion Record</strong>（所有抽象操作的<strong>返回值</strong>，是规范的"异常机制"）。
+          </li>
+          <li>
+            <strong>String 在规范里是 UTF-16 code unit 序列，不是 Unicode 序列</strong>。所以 <code>"💩".length === 2</code>、<code>"💩"[0]</code> 是孤立 surrogate；要正确处理 emoji 必须用 <code>Intl.Segmenter</code> 或 <code>Array.from(str)</code>（基于 code point 迭代）。
+          </li>
+        </ol>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>§6.1 Language Types（8 种）</h3>
+        <p>
+          每种类型在规范里有一节专门定义其取值集合 + 内部表示。<strong>短重述 + 链回</strong>：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 18%">类型</th>
+              <th style="width: 100px">spec §</th>
+              <th>核心要点</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Undefined</strong></td>
+              <td>§6.1.1</td>
+              <td>唯一值 <code>undefined</code>。表示"<em>未初始化</em>" / "<em>缺省值</em>"</td>
+            </tr>
+            <tr>
+              <td><strong>Null</strong></td>
+              <td>§6.1.2</td>
+              <td>唯一值 <code>null</code>。"<em>故意为空</em>"。<code>typeof null === 'object'</code> 是 1995 年实现 bug，向后兼容无法修复</td>
+            </tr>
+            <tr>
+              <td><strong>Boolean</strong></td>
+              <td>§6.1.3</td>
+              <td><code>true</code> / <code>false</code>。简单</td>
+            </tr>
+            <tr>
+              <td><strong>String</strong></td>
+              <td>§6.1.4</td>
+              <td><strong>UTF-16 code unit 序列</strong>（关键），不是 Unicode 字符串。详见下文专节</td>
+            </tr>
+            <tr>
+              <td><strong>Symbol</strong></td>
+              <td>§6.1.5</td>
+              <td>唯一不可重复的值。Well-known Symbols 在 §6.1.5.1（详见下文）</td>
+            </tr>
+            <tr>
+              <td><strong>Number</strong></td>
+              <td>§6.1.6.1</td>
+              <td><strong>IEEE-754 双精度浮点</strong>。+0 / -0 / NaN / ±∞ 是规范级别的特殊值（详见下文）</td>
+            </tr>
+            <tr>
+              <td><strong>BigInt</strong></td>
+              <td>§6.1.6.2</td>
+              <td>任意精度整数（ES2020）。和 Number 不能混算，<code>1n + 1</code> TypeError</td>
+            </tr>
+            <tr>
+              <td><strong>Object</strong></td>
+              <td>§6.1.7</td>
+              <td>属性集合 + 11 个 essential internal methods（详见 B4）+ 内部槽集合</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>详细机制请参考</strong> <a href="../../javascript/01-fundamentals/01-types.html">JS · 01-fundamentals/01-types</a>（含装箱/拆箱完整链路、ToPrimitive 用法）。下面 3 节系统补全 JS 主题没展开的"规范层细节"。
+        </p>
+
+        <h3>Number 内部 —— IEEE-754 的细节</h3>
+        <p>
+          ECMA-262 §6.1.6.1 把 Number 类型精确定义为 <strong>IEEE 754-2019 binary64</strong>（双精度浮点），加上规范层的几个特殊值：
+        </p>
+        <ul>
+          <li><strong><code>+0</code> 与 <code>-0</code></strong> —— IEEE-754 区分这两个值，但 <code>===</code> 视它们相等。<code>Object.is(+0, -0)</code> 返回 <code>false</code>。规范里很多算法会区分（如 <code>Math.atan2</code>、<code>1/x</code> 在 +0 是 +∞ 在 -0 是 -∞）。
+          </li>
+          <li><strong><code>NaN</code></strong> —— 唯一一个不等于自己的值（<code>NaN === NaN</code> 是 <code>false</code>）。规范要求所有 NaN bit pattern 视为同一值（IEEE-754 允许多个 NaN bit pattern 但 ECMAScript 认为它们都是 <code>NaN</code>）。
+          </li>
+          <li><strong><code>+∞</code> 与 <code>-∞</code></strong> —— 算术运算溢出时产生（<code>1/0</code>、<code>Math.exp(1000)</code>）。
+          </li>
+          <li><strong>safe integer 范围</strong>：<code>Number.MAX_SAFE_INTEGER === 2^53 - 1 === 9007199254740991</code>。超过这个范围的整数<strong>无法精确表示</strong>（<code>2^53 + 1 === 2^53</code>），需要用 BigInt。
+          </li>
+          <li><strong>EPSILON</strong>：<code>Number.EPSILON ≈ 2.22e-16</code>，是 1 与下一个可表示的双精度浮点数之间的差。比较浮点相等用 <code>Math.abs(a - b) &lt; Number.EPSILON</code>（仅小数值附近精确）。
+          </li>
+        </ul>
+
+        <p>
+          <strong>对应不同相等比较算法</strong>：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">算法</th>
+              <th style="width: 100px">用在</th>
+              <th>+0 vs -0</th>
+              <th>NaN vs NaN</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>===</code> (IsStrictlyEqual)</td>
+              <td>大部分场景</td>
+              <td><strong>相等</strong></td>
+              <td>不等</td>
+            </tr>
+            <tr>
+              <td><code>Object.is</code> (SameValue)</td>
+              <td>需精确区分</td>
+              <td>不等</td>
+              <td><strong>相等</strong></td>
+            </tr>
+            <tr>
+              <td>SameValueZero</td>
+              <td><code>Map</code>/<code>Set</code> 的 key 比较、<code>Array.includes</code></td>
+              <td><strong>相等</strong></td>
+              <td><strong>相等</strong></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          这就是为什么 <code>[NaN].includes(NaN)</code> 是 <code>true</code>（用 SameValueZero）但 <code>[NaN].indexOf(NaN)</code> 是 <code>-1</code>（用 IsStrictlyEqual）。<strong>历史包袱</strong>。
+        </p>
+
+        <h3>String 内部 —— UTF-16 而非 Unicode ⚠️</h3>
+        <p>
+          这是 JS 字符串<strong>最常被误解的事实</strong>。ECMA-262 §6.1.4 规定：
+        </p>
+
+        <div class="callout warn">
+          <div class="callout-title">⚠️ "JavaScript String 是 UTF-16 code unit 序列"</div>
+          <p>
+            不是 Unicode 字符序列，不是 UTF-8 字节序列。每个 String 是一个<strong>不可变的 16-bit code unit 数组</strong>。<code>str.length</code> 返回 code unit 数，<code>str[i]</code> 返回单个 code unit（字符串）。
+          </p>
+        </div>
+
+        <p>
+          <strong>code unit vs code point</strong>：Unicode 把每个字符（grapheme）映射到一个 <strong>code point</strong>（U+0000 到 U+10FFFF 共 1114112 个）。UTF-16 用 16 bit 编码：
+        </p>
+        <ul>
+          <li><strong>BMP 内字符</strong>（U+0000 - U+FFFF，65536 个）：1 个 code unit 表示，<code>str.length === 1</code> ✅</li>
+          <li><strong>BMP 外字符</strong>（U+10000 - U+10FFFF，emoji / 罕见汉字 / 部分 CJK 扩展）：用一对 <strong>surrogate pair</strong>（高代理 + 低代理），<strong>2 个 code unit</strong>，<code>str.length === 2</code> ⚠️</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">javascript · code unit 陷阱</span>
+          <pre class="code"><code class="lang-js">"a".length;             // 1（BMP）
+"中".length;            // 1（BMP）
+"💩".length;            // 2（surrogate pair！）
+"👨‍👩‍👧".length;       // 8（家庭 emoji 是 4 字符 + 3 个零宽连接符）
+
+"💩"[0];                // '\uD83D'（孤立的高代理，无意义）
+"💩".charCodeAt(0);     // 55357（高代理）
+"💩".codePointAt(0);    // 128169（完整 code point）✅
+
+// 切割 emoji 的不同方式
+[..."💩"];               // ['💩']  ← spread/iterator 按 code point
+Array.from("💩");        // ['💩']  ← 也是按 code point
+"💩".split("");          // ['\uD83D', '\uDCA9']  ← 按 code unit ⚠️
+
+// 复杂 emoji 仍要用 Intl.Segmenter（grapheme cluster 级别）
+const seg = new Intl.Segmenter("en", { granularity: "grapheme" });
+[...seg.segment("👨‍👩‍👧")];   // [{ segment: "👨‍👩‍👧", index: 0, ... }]  ← 1 个！</code></pre>
+        </div>
+
+        <p>
+          <strong>历史原因</strong>：JavaScript 1995 年起就用 UCS-2（16-bit 固定宽度），UCS-2 在 1996 年被 UTF-16 取代——但 ECMA-262 规范<strong>没有跟着升级</strong>，至今 String 类型本质仍是"<em>UCS-2 + 程序员自己处理 surrogate pair</em>"。这是 30 年来无法弥补的设计债务。
+        </p>
+
+        <p>
+          <strong>规范层补救</strong>：
+        </p>
+        <ul>
+          <li><strong>ES2015</strong>：<code>codePointAt</code>、<code>String.fromCodePoint</code>、<code>for...of</code> 按 code point 迭代、正则 <code>u</code> flag</li>
+          <li><strong>ES2018</strong>：正则命名捕获 + Unicode property escape（<code>\p{Emoji}</code>）</li>
+          <li><strong>ES2024</strong>：正则 <code>v</code> flag（Unicode 集合操作，更强的 emoji 支持）</li>
+          <li><strong>ES2024</strong>：<code>String.prototype.isWellFormed()</code> / <code>toWellFormed()</code> 检测/修复孤立 surrogate</li>
+        </ul>
+
+        <h3>Symbol & Well-known Symbols</h3>
+        <p>
+          <strong>短重述</strong>：Symbol 是唯一不可重复的原始值，每次 <code>Symbol()</code> 调用产生新 Symbol。Well-known Symbols 是规范预定义的"协议钩子"，让用户对象参与语言行为（如 <code>Symbol.iterator</code> 让对象可被 <code>for...of</code> 迭代）。
+        </p>
+
+        <p>
+          ECMA-262 §6.1.5.1 列出 14 个 Well-known Symbols：<code>asyncIterator</code> / <code>hasInstance</code> / <code>isConcatSpreadable</code> / <code>iterator</code> / <code>match</code> / <code>matchAll</code> / <code>replace</code> / <code>search</code> / <code>species</code> / <code>split</code> / <code>toPrimitive</code> / <code>toStringTag</code> / <code>unscopables</code> / <code>dispose</code>（ES2025）/ <code>asyncDispose</code>（ES2025）。
+        </p>
+
+        <p>
+          <strong>详细用法请参考</strong> <a href="../../javascript/01-fundamentals/11-symbol.html">JS · 01-fundamentals/11-symbol</a>。<a href="../01-history/02-design-principles.html#internals">A2 设计原则</a> 也讲了 Symbol 作为"扩展点"的设计哲学。
+        </p>
+
+        <h3>§6.2 Specification Types ⭐</h3>
+        <p>
+          这是本章<strong>最关键的部分</strong>。Specification Types 不是 JS 值，是规范用来描述算法的"<strong>内部数据结构</strong>"。规范定义了 7 种：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">类型</th>
+              <th style="width: 100px">spec §</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>List</strong></td>
+              <td>§6.2.2</td>
+              <td>有序的值序列。规范层的"数组"</td>
+            </tr>
+            <tr>
+              <td><strong>Record</strong></td>
+              <td>§6.2.3</td>
+              <td>命名字段的集合。"数据类"。<code>[[Field]]</code> 双方括号访问</td>
+            </tr>
+            <tr>
+              <td><strong>Completion Record</strong> ⭐</td>
+              <td>§6.2.4</td>
+              <td><strong>所有抽象操作的返回类型</strong>。规范的"异常机制"</td>
+            </tr>
+            <tr>
+              <td><strong>Reference Record</strong> ⭐</td>
+              <td>§6.2.5</td>
+              <td>表达式的"<em>未求值的引用</em>"中间结果。决定 this 推断、左值赋值</td>
+            </tr>
+            <tr>
+              <td><strong>Property Descriptor</strong></td>
+              <td>§6.2.6</td>
+              <td>对象属性的元信息（writable / enumerable / configurable / value 或 get/set）</td>
+            </tr>
+            <tr>
+              <td><strong>Environment Record</strong></td>
+              <td>§9.1</td>
+              <td>变量绑定的存储单元（详见 A3 / B5）</td>
+            </tr>
+            <tr>
+              <td><strong>Abstract Closure</strong></td>
+              <td>§6.2.7</td>
+              <td>规范层的"匿名函数"，捕获若干规范层变量</td>
+            </tr>
+            <tr>
+              <td><strong>Data Block / Shared Data Block</strong></td>
+              <td>§6.2.9</td>
+              <td>ArrayBuffer / SharedArrayBuffer 的规范表达（连续字节序列）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>下面专门拆 Reference Record 和 Completion Record——这两个是规范文本里出现频率最高的。</p>
+
+        <h3>Reference Record（最重要的"看不见类型"）⭐</h3>
+        <p>
+          <strong>问题</strong>：当你写 <code>obj.x</code>，规范是怎么处理的？答：<code>obj.x</code> <strong>不是值</strong>，是一个 <strong>Reference Record</strong>——它"<em>记录了一个指向某 binding 的引用</em>"，必须通过 <code>GetValue</code> 才能拿到实际值。
+        </p>
+
+        <p>Reference Record 含 4 个字段（§6.2.5）：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">字段</th>
+              <th>含义</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>[[Base]]</code></td>
+              <td>引用的目标对象（或 <em>unresolvable</em> / Environment Record）</td>
+            </tr>
+            <tr>
+              <td><code>[[ReferencedName]]</code></td>
+              <td>属性名（字符串或 Symbol）</td>
+            </tr>
+            <tr>
+              <td><code>[[Strict]]</code></td>
+              <td>当前引用是否在 strict 代码里</td>
+            </tr>
+            <tr>
+              <td><code>[[ThisValue]]</code></td>
+              <td>"<em>super.x</em>" 引用时的 this 绑定（普通引用为 <em>empty</em>）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>关键概念</strong>：表达式 <code>obj.x</code> 求值时<strong>不立刻取值</strong>，先产生 Reference Record { Base: obj, ReferencedName: "x", ... }。然后取决于<strong>怎么用它</strong>：
+        </p>
+        <ul>
+          <li><strong>读取场景</strong>：<code>let v = obj.x</code> → 调 <code>GetValue(ref)</code> → 返回 <code>obj.[[Get]]("x", obj)</code></li>
+          <li><strong>赋值场景</strong>：<code>obj.x = 1</code> → 调 <code>PutValue(ref, 1)</code> → <code>obj.[[Set]]("x", 1, obj)</code>。<strong>左值赋值之所以可能，就是因为 Reference Record 保留了 base + name</strong></li>
+          <li><strong>方法调用场景</strong>：<code>obj.x()</code> → <strong>关键</strong>：调用规范知道 <code>obj.x</code> 是 Reference Record 且 Base 是对象 → 调用时自动把 <code>this</code> 设为 <code>ref.[[Base]]</code>（即 obj）</li>
+          <li><strong>普通调用场景</strong>：<code>const f = obj.x; f()</code> → <code>const f = obj.x</code> 时已 <code>GetValue</code>，f 是普通值 → 调用时 <code>this</code> 是 undefined（strict）或 globalThis（sloppy）</li>
+        </ul>
+
+        <div class="callout danger">
+          <div class="callout-title">🎯 经典之谜：(0, obj.x)() 为什么丢 this</div>
+          <p>
+            理解 Reference Record 之后这个谜题秒解：
+          </p>
+          <div class="code-block" style="margin-top: 12px">
+            <span class="code-label">javascript · Reference Record 的语义</span>
+            <pre class="code"><code class="lang-js">const obj = {
+  name: 'Alice',
+  greet() { console.log('Hi, ' + this.name); }
+};
+
+obj.greet();           // Hi, Alice
+//   ↑ obj.greet 是 Reference Record { Base: obj, Name: 'greet' }
+//     调用时检测到是 Reference 且 Base 是对象 → this = obj
+
+(0, obj.greet)();      // Hi, undefined （strict 模式抛错）
+//   ↑ 逗号表达式：先求值 0（丢弃），再求值 obj.greet（这一步对 Reference 调 GetValue）
+//     → 逗号表达式的结果是 GetValue 后的"普通函数值"，不再是 Reference
+//     → 调用时 this = undefined（strict）
+
+const f = obj.greet;
+f();                   // 同样丢 this（赋值时 GetValue）
+
+// 这是 minifier 的常用技巧 —— "(0, fn)()" 强制丢 this，
+// 在某些场景比 fn.call(undefined) 更紧凑。</code></pre>
+          </div>
+          <p style="margin-top: 8px">
+            <strong>核心规则</strong>：<strong>this 来自 Reference Record 的 [[Base]]</strong>。任何让表达式从"Reference"退化成"值"的操作（赋值、传参、逗号、解构）都会丢 this。这就是为什么 React 函数组件用 <code>const onClick = this.handleClick</code> 然后传给 <code>onClick</code> 时丢 this（class 组件经典坑）。
+          </p>
+        </div>
+
+        <h3>Completion Record（异常机制的规范化）</h3>
+        <p>
+          <strong>每个抽象操作的返回值都是 Completion Record</strong>——规范用它统一表达"<em>正常完成 + 中断（异常）</em>"。
+        </p>
+
+        <p>Completion Record 含 3 个字段（§6.2.4）：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">字段</th>
+              <th>含义</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>[[Type]]</code></td>
+              <td>5 种之一：<strong>normal</strong>（正常）/ <strong>throw</strong>（抛错）/ <strong>break</strong>（循环跳出）/ <strong>continue</strong>（循环继续）/ <strong>return</strong>（函数返回）</td>
+            </tr>
+            <tr>
+              <td><code>[[Value]]</code></td>
+              <td>携带的值（normal 是返回值，throw 是异常对象，return 是返回值，break/continue 通常是 empty）</td>
+            </tr>
+            <tr>
+              <td><code>[[Target]]</code></td>
+              <td>break/continue 的标签（用于跳出多层循环），其他类型为 empty</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>"abrupt completion"</strong>：除 <code>normal</code> 之外的 4 种统称。<strong>这就是 B1 讲的 <code>?</code> 简写处理的对象</strong>——<code>?</code> 检查返回的 Completion Record，如果是 abrupt（throw/break/continue/return）就把它原样向上传播。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">规范记法 vs Completion Record 完整展开</span>
+          <pre class="code"><code class="lang-js">// 规范写：
+// 1. Let _v_ be ? Get(_O_, "x").
+
+// 完整展开：
+const completion = Get(O, "x");
+//   completion 类型是 Completion Record { [[Type]], [[Value]], [[Target]] }
+if (completion.[[Type]] !== 'normal') {
+  return completion;  // ← abrupt 直接传出去
+}
+const v = completion.[[Value]];
+
+// "?" 简写省掉了 Completion Record 的 wrap/unwrap 样板，
+// 直接对成功值取 [[Value]]，失败时整个抽象操作 return 这个 Completion。
+
+// 这就是为什么 try/throw 的传播是"自动的" —— 规范层每一步都在传 Completion。</code></pre>
+        </div>
+
+        <p>
+          <strong>break / continue / return 的特殊性</strong>：它们是 abrupt completion 但<strong>不是异常</strong>——规范用同一个机制把"<em>循环跳转</em>"和"<em>函数返回</em>"也建模成 abrupt。<code>break</code> 沿语法节点向上传播，遇到对应的循环就停；<code>return</code> 遇到函数边界就停。这是规范<strong>统一"非线性控制流"</strong>的做法。
+        </p>
+
+        <h3>Property Descriptor（4 种形态）</h3>
+        <p>
+          <strong>Property Descriptor</strong> 是<strong>对象属性的元信息</strong>——你写 <code>obj.x = 1</code> 时，规范层在 obj 内部存储一个 PropertyDescriptor 描述这个属性。<code>Object.getOwnPropertyDescriptor(obj, "x")</code> 暴露的就是它（部分字段）。
+        </p>
+
+        <p>4 种形态（§6.2.6）：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 22%">形态</th>
+              <th>含字段</th>
+              <th style="width: 30%">用例</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Data Descriptor</strong></td>
+              <td><code>[[Value]]</code> + <code>[[Writable]]</code> + <code>[[Enumerable]]</code> + <code>[[Configurable]]</code></td>
+              <td>普通属性 <code>obj.x = 1</code></td>
+            </tr>
+            <tr>
+              <td><strong>Accessor Descriptor</strong></td>
+              <td><code>[[Get]]</code> + <code>[[Set]]</code> + <code>[[Enumerable]]</code> + <code>[[Configurable]]</code></td>
+              <td><code>get x() {}</code> / <code>set x(v) {}</code></td>
+            </tr>
+            <tr>
+              <td><strong>Generic Descriptor</strong></td>
+              <td>仅 <code>[[Enumerable]]</code> + <code>[[Configurable]]</code>，不指定 value 或 get/set</td>
+              <td>"<em>只改可枚举性，不改值</em>" 场景</td>
+            </tr>
+            <tr>
+              <td><strong>Fully Populated</strong></td>
+              <td>Data 或 Accessor 之一，<strong>所有字段都填</strong>（无 absent）</td>
+              <td>规范内部产生的"完整描述符"</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>"absent" 字段</strong>：descriptor 字段可以是 absent（缺省），不等于 <code>undefined</code>。<code>Object.defineProperty(obj, "x", { writable: false })</code> 时 <code>value</code> 是 absent，意思是"<em>保留原 value 不变，只改 writable</em>"。<code>{ value: undefined, writable: false }</code> 是不同的——明确把 value 设为 undefined。
+        </p>
+
+        <h3>Data Block / Shared Data Block</h3>
+        <p>
+          <strong>ArrayBuffer / SharedArrayBuffer 的规范层表达</strong>——一段连续的字节序列，长度不可变。
+        </p>
+        <ul>
+          <li><strong>Data Block</strong>（§6.2.9）：单 Agent 内的字节数组，<code>ArrayBuffer</code> 的内部</li>
+          <li><strong>Shared Data Block</strong>：多 Agent 共享的字节数组，<code>SharedArrayBuffer</code> 的内部。访问需要 <code>Atomics</code> 保证原子性（详见 <a href="../01-history/04-async-evolution.html#internals">A4 异步演进</a>）</li>
+        </ul>
+
+        <p>
+          这两个类型支撑 <code>TypedArray</code>（<code>Int32Array</code> 等）在规范层的实现——TypedArray 是 Exotic Object（详见 B4），它的 <code>[[GetOwnProperty]]</code> 等内部方法直接操作底层 Data Block。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 写 emoji-safe 字符串切割</h3>
+          <p>
+            做截断显示（如 <em>username 最长 8 字符</em>）时，<code>str.slice(0, 8)</code> 在 emoji 上会切坏（切到 surrogate pair 中间）。正确做法：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 三种粒度的截断</span>
+            <pre class="code"><code class="lang-js">const s = "Hello 👨‍👩‍👧 World";
+
+// ❌ code unit 级（错的）
+s.slice(0, 9);                            // "Hello 👨‍👩"  会切坏家庭 emoji
+
+// ✅ code point 级（适合大多数 emoji）
+[...s].slice(0, 8).join("");              // "Hello 👨‍👩‍👧"（部分情况）
+Array.from(s).slice(0, 8).join("");
+
+// ✅ grapheme cluster 级（最准确，但需要 Intl.Segmenter）
+const seg = new Intl.Segmenter("zh-CN", { granularity: "grapheme" });
+const graphemes = [...seg.segment(s)].map(x =&gt; x.segment);
+graphemes.slice(0, 7).join("");           // "Hello 👨‍👩‍👧"
+
+// 何时用哪个：
+// - 简单 ASCII / 中文 → slice 够用
+// - 一般 emoji → spread / Array.from
+// - 复杂 emoji（家庭、肤色变种、国旗）→ Intl.Segmenter</code></pre>
+          </div>
+          <p>这背后就是"<em>String 是 UTF-16 序列</em>"的代价。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 实现 deep clone 处理 PropertyDescriptor</h3>
+          <p>
+            写一个 <code>deepClone</code>，要保留 getter/setter、不可枚举属性、Symbol key。这就要求<strong>逐属性复制 Descriptor</strong>，不能只用 <code>Object.assign</code> 或 spread（它们只复制可枚举的 Data 属性）。
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · descriptor-aware deep clone</span>
+            <pre class="code"><code class="lang-js">function deepClone(obj, seen = new WeakMap()) {
+  if (obj === null || typeof obj !== 'object') return obj;
+  if (seen.has(obj)) return seen.get(obj);
+
+  const proto = Object.getPrototypeOf(obj);
+  const clone = Object.create(proto);
+  seen.set(obj, clone);
+
+  // 拿到所有自有属性（含不可枚举 + Symbol key）
+  const keys = [...Object.getOwnPropertyNames(obj), ...Object.getOwnPropertySymbols(obj)];
+
+  for (const key of keys) {
+    const desc = Object.getOwnPropertyDescriptor(obj, key);
+    // desc 是 Data 还是 Accessor？
+    if ('value' in desc) {
+      desc.value = deepClone(desc.value, seen);   // 递归复制值
+    }
+    // get/set 不递归（函数不深克隆）
+    Object.defineProperty(clone, key, desc);
+  }
+  return clone;
+}
+
+// 这就是 lodash _.cloneDeep / structuredClone 内部的简化版（实际更复杂）。</code></pre>
+          </div>
+          <p>
+            理解 Property Descriptor 4 种形态后，能解释为什么浅 clone 会丢 getter、为什么 freeze 不可逆——它们都在操作 descriptor。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 调试"this 丢失"</h3>
+          <p>
+            React class 组件经典坑："<em>事件 handler 里的 this 是 undefined</em>"。根因是 Reference Record 退化：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 三种 this 丢失场景</span>
+            <pre class="code"><code class="lang-js">class Button extends React.Component {
+  handleClick() {
+    console.log(this.props);
+  }
+
+  render() {
+    // ❌ 1. 赋值丢 this：onClick 拿到的是 GetValue(ref) 的普通值
+    return &lt;button onClick={this.handleClick} /&gt;;
+
+    // ✅ 2. bind 显式绑：返回新函数，this 锁死
+    return &lt;button onClick={this.handleClick.bind(this)} /&gt;;
+
+    // ✅ 3. 箭头函数包：this 沿外层 lexical 找
+    return &lt;button onClick={() =&gt; this.handleClick()} /&gt;;
+    // 这里 onClick 收到的是箭头函数，调用时 this 是箭头函数定义时的外层 this（即 Button 实例）
+
+    // ✅ 4. class field（最优）：直接定义箭头方法
+    // handleClick = () =&gt; { console.log(this.props); }
+  }
+}</code></pre>
+          </div>
+          <p>
+            理解了 Reference Record 后这些场景都有清晰的解释：① 是 GetValue 退化；② 是手动重建一个绑定 this 的函数；③/④ 是箭头函数没自己的 this。<strong>诊断 this 丢失的根问题就是"<em>这里有没有把 Reference 转成 value</em>"</strong>。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>用 Object.is 区分 +0 和 -0 的实战</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 容易被忽略的浮点细节</span>
+          <pre class="code"><code class="lang-js">+0 === -0;                  // true（IsStrictlyEqual 视为相等）
+Object.is(+0, -0);          // false（SameValue 区分）
+
+// 实际意义：1 / x 在 +0 是 +∞，在 -0 是 -∞
+1 / +0;                     // Infinity
+1 / -0;                     // -Infinity
+
+// Math.atan2 也区分
+Math.atan2(0, +0);          // 0
+Math.atan2(0, -0);          // π （3.14159...）
+
+// 写归一化函数处理用户传入的 -0
+function normalize(n) {
+  return Object.is(n, -0) ? 0 : n;
+}
+
+// 写 deep equal 时处理 NaN
+function dataEquals(a, b) {
+  // === 处理大部分 case，但 NaN 失败
+  if (a === b) return true;
+  // SameValueZero 处理 NaN
+  return Number.isNaN(a) &amp;&amp; Number.isNaN(b);
+}
+
+// Map / Set 用 SameValueZero 比较 key
+const m = new Map();
+m.set(NaN, 'a');
+m.set(NaN, 'b');             // 覆盖（NaN === NaN under SameValueZero）
+m.size;                      // 1
+m.get(NaN);                  // 'b'</code></pre>
+        </div>
+
+        <h3>对照规范读 ToObject 算法</h3>
+
+        <div class="code-block">
+          <span class="code-label">spec · §7.1.18 ToObject ( argument )</span>
+          <pre class="code"><code class="lang-js">// 规范文本：
+// "1. If argument is undefined or null, throw a TypeError exception.
+//  2. If argument is a Boolean, return a new Boolean object whose [[BooleanData]] internal slot is set to argument.
+//  3. If argument is a Number, return a new Number object whose [[NumberData]] internal slot is set to argument.
+//  4. If argument is a String, return a new String object whose [[StringData]] internal slot is set to argument.
+//  5. If argument is a Symbol, return a new Symbol object whose [[SymbolData]] internal slot is set to argument.
+//  6. If argument is a BigInt, return a new BigInt object whose [[BigIntData]] internal slot is set to argument.
+//  7. Assert: argument is an Object.
+//  8. Return argument."
+
+// 用 B1 + B2 学到的能力解读：
+// - 步骤 1 throw 一个 Completion Record { Type: throw, Value: TypeError }
+// - 步骤 2-6 创建一个 Object 类型值，含一个内部槽存储原始值（装箱）
+// - 步骤 7 是 Assert（不变量）—— 经过前 6 步，剩下的必然是 Object
+// - 步骤 8 直接 return（已经是 Object 不需要包装）
+
+// JS 等价：
+function ToObject(argument) {
+  if (argument == null) throw new TypeError('Cannot convert undefined or null to object');
+  if (typeof argument === 'boolean') return new Boolean(argument);
+  if (typeof argument === 'number') return new Number(argument);
+  if (typeof argument === 'string') return new String(argument);
+  if (typeof argument === 'symbol') return Object(argument);
+  if (typeof argument === 'bigint') return Object(argument);
+  // assert(typeof argument === 'object' || typeof argument === 'function')
+  return argument;
+}
+
+// 这就是 obj.x 中"obj 是原始值时怎么取属性"的桥梁
+// "abc".length 工作：内部先 ToObject("abc") → new String("abc") → 拿 .length</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：以为 String.length 是字符数</div>
+          <p>
+            <code>"💩".length === 2</code>，<code>"𠮷".length === 2</code>（罕见汉字也是 surrogate pair）。这是常见的"字数限制"实现错误——后端按字符校验、前端按 length 校验，导致用户能输入但提交失败。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：要数字符用 <code>[...str].length</code>（code point 计数）或 <code>Intl.Segmenter</code>（grapheme 计数）。前后端校验对齐到同一个粒度。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：用 === 区分 +0 / -0</div>
+          <p>
+            <code>+0 === -0</code> 是 <code>true</code>，区分要用 <code>Object.is</code>。常见错误：归一化代码 <code>if (n === -0) return 0;</code> 永远不进。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：明确知道这两个相等比较算法的差异——大部分场景用 <code>===</code>，有特殊需求（区分 +0 / -0、把 NaN 视为相等）用 <code>Object.is</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：不知道 Reference Record，看不懂 (0, fn)() 的语义</div>
+          <p>
+            读 minifier 输出会看到大量 <code>(0, m.fn)()</code>、<code>(void 0, fn).call(...)</code> 等模式，不理解就觉得是混淆。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：理解 Reference Record——任何让表达式从 Reference 退化成 value 的操作都会丢 this。<strong>读源码看到这种模式时，直接判断为"<em>明确丢 this</em>"</strong>。这在某些场景比 <code>fn.call(undefined)</code> 更紧凑（少一次调用）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：以为 Property Descriptor 没有 absent 字段</div>
+          <p>
+            <code>Object.defineProperty(obj, "x", { writable: false })</code>——这里没传 <code>value</code>，意思是"<em>保持 value 不变</em>"。如果你以为 absent === undefined，会以为它把 value 设为 undefined。<strong>结果是你看不到的 absent 状态</strong>。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：写 PropertyDescriptor 操作时，区分 absent（缺省）和 undefined（明确设为 undefined）。<code>Reflect.getOwnPropertyDescriptor</code> 返回的 descriptor 总是"完整"的（无 absent），是排查时的黄金工具。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：把 Number 范围当无限大整数</div>
+          <p>
+            <code>2 ** 53 + 1 === 2 ** 53</code> —— 超过 <code>Number.MAX_SAFE_INTEGER</code> 的整数会丢精度。<strong>常见踩坑场景</strong>：后端返回 64-bit 整数 ID（如 Twitter snowflake、银行账号、订单号），前端 <code>JSON.parse</code> 后已经丢了精度。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：① 后端返回大整数时用 string；② 或前端用 BigInt 处理（<code>JSON.parse</code> 不会自动转，需自定义 reviver）；③ Postgres / MySQL 的 BIGINT 类型务必序列化为字符串发给前端。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范本体</h3>
+        <ul>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-ecmascript-language-types" target="_blank" rel="noopener">ECMA-262 §6.1 ECMAScript Language Types</a>
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-ecmascript-specification-types" target="_blank" rel="noopener">ECMA-262 §6.2 ECMAScript Specification Types</a>
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-reference-record-specification-type" target="_blank" rel="noopener">ECMA-262 §6.2.5 Reference Record</a>
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-completion-record-specification-type" target="_blank" rel="noopener">ECMA-262 §6.2.4 Completion Record</a>
+          </li>
+        </ul>
+
+        <h3>Unicode &amp; 字符串</h3>
+        <ul>
+          <li>
+            <a href="https://mathiasbynens.be/notes/javascript-unicode" target="_blank" rel="noopener">Mathias Bynens · JavaScript has a Unicode problem</a> —— UTF-16 历史包袱最权威的解读
+          </li>
+          <li>
+            <a href="https://www.unicode.org/reports/tr29/" target="_blank" rel="noopener">UAX #29 · Text Segmentation</a> —— grapheme cluster 的官方定义
+          </li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="01-how-to-read.html">B1 怎么读规范</a></li>
+          <li>下一步：<strong>B3 抽象操作（§5、§7）</strong>（编写中）—— ToPrimitive 11 步、ToObject、SameValueZero、IsLooselyEqual</li>
+          <li>另一轨：<a href="../01-history/index.html">Track A · 历史脉络（已完成）</a> —— A2 设计原则讲了"为什么"，本章讲"规范怎么写它们"</li>
+        </ul>
+
+        <h3>跨主题参考</h3>
+        <ul>
+          <li><a href="../../javascript/01-fundamentals/01-types.html">JS · 数据类型系统</a></li>
+          <li><a href="../../javascript/01-fundamentals/07-strings.html">JS · 字符串与 Unicode</a></li>
+          <li><a href="../../javascript/01-fundamentals/08-numbers.html">JS · Number 与 BigInt</a></li>
+          <li><a href="../../javascript/01-fundamentals/11-symbol.html">JS · Symbol</a></li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-how-to-read.html">
+            <span class="label">← 上一章</span>
+            <span class="title">B1 · 怎么读规范</span>
+          </a>
+          <a class="next" href="index.html">
+            <span class="label">下一步 →</span>
+            <span class="title">B3 · 抽象操作（🚧 编写中，先看 Track 概览）</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
