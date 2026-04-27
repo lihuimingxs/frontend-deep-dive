@@ -1,0 +1,802 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>A4 · 异步演进 ——「单线程怎么并发？」 · ECMAScript 深度学习</title>
+    <meta
+      name="description"
+      content="ECMAScript 异步模型 30 年演化：回调 → Promise → async/await → 多线程。Event Loop 责任划分、Promise 状态机、async/await 用 ExecutionContext 暂停机制实现、SharedArrayBuffer + Atomics、ES2025 using/await using。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c84a1f'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EES%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>ECMAScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.16 35); color: #fff">ES</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">ES 首页</a>
+          <a href="index.html">Track A 目录</a>
+          <a href="https://262.ecma-international.org/15.0/index.html#sec-control-abstraction-objects" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Track A · 历史脉络与设计</h3>
+        <ul>
+          <li><a href="index.html">Track 概览</a></li>
+          <li><a href="01-standards-history.html">A1 · 标准发展史</a></li>
+          <li><a href="02-design-principles.html">A2 · 设计原则与语言特性</a></li>
+          <li><a href="03-execution-model.html">A3 · 执行模型</a></li>
+          <li><a href="04-async-evolution.html" class="active">A4 · 异步演进</a></li>
+          <li><span class="sidebar-pending">A5 · 现代生态 🚧</span></li>
+        </ul>
+        <h3>另一轨</h3>
+        <ul>
+          <li><a href="../02-spec/index.html">Track B · 规范精读</a></li>
+        </ul>
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../javascript/index.html">JavaScript 深度学习</a></li>
+          <li><a href="../../javascript/03-async/index.html">JS · P3 异步 & 错误</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">ECMAScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Track A · 历史脉络与设计</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>A4 · 异步演进</span>
+        </nav>
+
+        <h1>A4 · 异步演进 ——「单线程怎么并发？」</h1>
+        <p class="lead">
+          JS 是单 Agent 默认（A3 已讲），但 30 年里它把"单线程"做出了相当丰富的并发表达力：<strong>回调地狱</strong>（ES1-2014）→ <strong>Promise</strong>（ES2015）→ <strong>async/await</strong>（ES2017）→ <strong>异步迭代器 + AbortController</strong>（ES2018+）→ <strong>Top-Level Await + 真共享内存</strong>（ES2017+ 2022）→ <strong>资源管理 <code>await using</code></strong>（ES2025）。每一步都是"<em>不打破单线程心智，但让异步代码看起来更像同步</em>"的折中。本章串起这条演化路径，并补足 PPT 没讲的 6 个现代特性。
+        </p>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 本章交叉规则</div>
+          <p>
+            Promise 机制、Event Loop 调度细节、async/await 错误传播在 <a href="../../javascript/03-async/index.html">JS · P3 异步 & 错误</a> 全 8 章已详述。本章对每个机制做<strong>1-3 句话短重述 + 链回</strong>，正文聚焦"<strong>为什么这样演进、规范层怎么改、Host 与 ECMA-262 的责任划分</strong>"。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~40 分钟</span>
+          <span><strong>前置</strong> <a href="03-execution-model.html">A3 执行模型</a>（必读，本章建立在 ExecutionContext / Job 概念上）</span>
+          <span><strong>对应 ECMA-262</strong>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-control-abstraction-objects" target="_blank" rel="noopener">§27 Control Abstraction Objects</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义 ECMAScript 的异步基础：</p>
+        <ol>
+          <li>
+            <strong>JS 单线程的根因不是 ECMA-262，是 HTML/DOM 设计</strong>。DOM 不是线程安全的；如果 JS 多线程，UI 就要锁。Worker 是"用 message passing 绕过共享状态"的折中，<code>SharedArrayBuffer</code> 是后来开的"共享内存逃生舱"。
+          </li>
+          <li>
+            <strong>Event Loop 是 HTML 规范定义的，不是 ECMA-262 定义的</strong>。ECMA-262 只定义"Job 抽象"，HTML 规范用 Job 实现"宏任务/微任务/rendering steps"。这就是浏览器和 Node 行为不同的根因。
+          </li>
+          <li>
+            <strong>async/await 不是"暂停函数"，是 Generator 的语法糖</strong>。底层用 A3 讲的 ExecutionContext 暂停机制——await 处把 ExecutionContext 挂起，Promise resolve 后通过 microtask 恢复。这就是为什么 async 函数 stack trace 不连续。
+          </li>
+        </ol>
+
+        <p>5 代异步模型对比：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 90px">代</th>
+              <th style="width: 110px">ES 版本</th>
+              <th style="width: 130px">代表 API</th>
+              <th>核心抽象</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>第 1 代</td>
+              <td>ES1-ES5（1997-2009）</td>
+              <td><code>setTimeout</code> / Node callback</td>
+              <td>"<strong>callback hell</strong>"——错误处理靠约定，组合靠嵌套</td>
+            </tr>
+            <tr>
+              <td>第 2 代</td>
+              <td>ES2015</td>
+              <td><code>Promise</code></td>
+              <td>"<strong>延迟值的容器</strong>"——状态机 + 链式 then + 错误冒泡</td>
+            </tr>
+            <tr>
+              <td>第 3 代</td>
+              <td>ES2017-2018</td>
+              <td><code>async/await</code> + <code>for await...of</code></td>
+              <td>"<strong>同步看起来的异步代码</strong>"——Generator 状态机 + 异步迭代</td>
+            </tr>
+            <tr>
+              <td>第 4 代</td>
+              <td>ES2017-2022</td>
+              <td><code>SharedArrayBuffer</code> + <code>Atomics</code> + Top-Level Await</td>
+              <td>"<strong>真并发突破口</strong>"——共享内存 + 模块级异步</td>
+            </tr>
+            <tr>
+              <td>第 5 代</td>
+              <td>ES2025</td>
+              <td><code>using</code> / <code>await using</code> + <code>Promise.try</code></td>
+              <td>"<strong>资源管理 + 异步同步桥</strong>"——栈式资源释放、统一同步异步入口</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>第 1 代 · 回调时代（ES1-2014）</h3>
+        <p>
+          1995-2014 年 JS 的异步只有一种姿势：<strong>把回调函数传给宿主 API</strong>，等事件触发时被调用。<code>setTimeout</code>（ES1 时代就有但不在规范里，HTML 规范才加）、<code>XMLHttpRequest.onload</code>、Node 的 <code>fs.readFile(path, callback)</code>。
+        </p>
+
+        <p>致命问题不是"难看"，是<strong>错误处理与组合极差</strong>：</p>
+        <ul>
+          <li><strong>错误传播靠约定</strong>：Node 的 "<code>(err, result) =&gt; ...</code>" 第一参数是 error，但<strong>没有强制</strong>——你忘了检查 err，错误就静默丢失</li>
+          <li><strong>组合靠嵌套</strong>：3 个串行异步 = 3 层嵌套，5 个就是金字塔。社区方案 async.js / Step.js 长期未能成为事实标准</li>
+          <li><strong>没有取消机制</strong>：<code>setTimeout</code> 可以 <code>clearTimeout</code>，但其他异步操作各自有各自的取消方式（XHR.abort、流的 destroy）</li>
+        </ul>
+
+        <p>
+          这个时代留下的遗产：<strong>Node 内置 API 至今保留 callback 形式</strong>（<code>fs.readFile</code> + <code>fs.promises.readFile</code> 双轨制），<strong>所有底层 host API 仍然是 callback</strong>（DOM 事件、定时器）。Promise 是<strong>包在它们之上</strong>的，不是替代。
+        </p>
+
+        <h3>Event Loop 的责任划分（HTML 规范 vs ECMA-262）</h3>
+        <p>
+          这是<strong>整个异步话题最关键的一刀</strong>。<strong>Event Loop 不在 ECMA-262 里</strong>——ECMA-262 §9.5 只定义抽象的 "Job" 概念。具体的 Event Loop（含宏任务/微任务/渲染时机）由<strong>HTML 规范</strong>（WHATWG）定义，Node 自己也有一份不同的 Event Loop 实现。
+        </p>
+
+        <p>责任划分清单：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">职责</th>
+              <th style="width: 30%">谁定义的</th>
+              <th>具体内容</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Job 抽象</td>
+              <td><strong>ECMA-262 §9.5</strong></td>
+              <td>"Job 是 Agent 上的执行单元"——纯抽象，无具体队列</td>
+            </tr>
+            <tr>
+              <td>HostEnqueuePromiseJob</td>
+              <td><strong>ECMA-262 + Host</strong></td>
+              <td>规范说"调用 Host hook 投递 PromiseJob"，<strong>具体投递方式</strong>由 Host 决定</td>
+            </tr>
+            <tr>
+              <td>microtask queue</td>
+              <td><strong>HTML 规范</strong></td>
+              <td>定义 microtask 是 "<em>HostEnqueuePromiseJob 投递 + queueMicrotask + MutationObserver</em>" 的统称</td>
+            </tr>
+            <tr>
+              <td>macrotask（task source）</td>
+              <td><strong>HTML 规范</strong></td>
+              <td>定义 task source（"DOM manipulation"、"timer"、"network"...），各自独立队列</td>
+            </tr>
+            <tr>
+              <td>rendering steps</td>
+              <td><strong>HTML 规范</strong></td>
+              <td>每个 task 后清空 microtask → 然后浏览器决定是否 reflow/paint（约 60fps 一次）</td>
+            </tr>
+            <tr>
+              <td>setTimeout / setInterval</td>
+              <td><strong>HTML 规范</strong></td>
+              <td>"timer" task source；最小延迟（浏览器 4ms、Node 1ms、Bun &lt; 1ms）</td>
+            </tr>
+            <tr>
+              <td>process.nextTick</td>
+              <td><strong>Node 专属</strong></td>
+              <td>不在任何规范里——是 Node 自己的"比 microtask 更早"队列</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>这就是为什么 <code>process.nextTick</code> 在浏览器里是 <code>undefined</code></strong>，<strong>为什么 Node 18 之前 setTimeout 在某些场景比浏览器快</strong>，<strong>为什么 Bun 的 setTimeout 几乎立即执行</strong>——它们各自实现 Host 部分。<strong>但 Promise.then / queueMicrotask 行为在三者一致</strong>，因为这部分 ECMA-262 锁死了语义。
+        </p>
+
+        <p>
+          <strong>详细 Event Loop 调度规则请参考</strong>：
+        </p>
+        <ul>
+          <li><a href="../../javascript/03-async/01-event-loop.html">JS · 03-async/01-event-loop</a> —— Event Loop 完整 6 步循环</li>
+          <li><a href="../../javascript/03-async/02-microtask-macrotask.html">JS · 02-microtask-macrotask</a> —— 宏任务/微任务的精确调度顺序</li>
+          <li><a href="../../javascript/03-async/08-node-eventloop-errors.html">JS · 08-node-eventloop-errors</a> —— Node 的 6 阶段 Event Loop 与浏览器差异</li>
+        </ul>
+
+        <h3>第 2 代 · Promise（ES2015）</h3>
+        <p>
+          <strong>短重述</strong>：Promise 是<strong>状态机</strong>——<code>pending</code> 不可逆地迁移到 <code>fulfilled</code> 或 <code>rejected</code>。<code>.then(onFulfilled, onRejected)</code> 注册回调，错误自动沿链冒泡到最近的 <code>onRejected</code>。规范用 <strong>PromiseReaction Records</strong>（ECMA-262 §27.2.1.1.1）存储待执行的 reaction，settle 时通过 <code>HostEnqueuePromiseJob</code> 投递到 microtask queue。
+        </p>
+
+        <p>
+          <strong>详细机制请参考</strong> <a href="../../javascript/03-async/03-promise.html">JS · 03-async/03-promise</a>。本章只回答规范设计的"为什么"：
+        </p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 Promise 不是"异步"，是"延迟值的容器"</div>
+          <p>
+            常见误解："Promise 让代码异步"。<strong>不对</strong>——Promise 包<strong>同步值</strong>仍然合法（<code>Promise.resolve(42)</code>），<code>then</code> 仍然异步执行（通过 HostEnqueuePromiseJob 投递到下个 microtask）。Promise 的核心抽象是"<strong>表达一个还没拿到的值</strong>"，<strong>异步只是这个抽象最常见的用法</strong>。
+          </p>
+          <p style="margin-top: 8px">
+            这个区分很重要——理解之后就懂了为什么 <code>Promise.resolve().then(f)</code> 比 <code>setTimeout(f, 0)</code> 快（前者是 microtask，后者是 macrotask + 最小延迟），为什么"<em>包同步代码进 Promise 也是有用的</em>"（统一错误处理路径）。
+          </p>
+        </div>
+
+        <p>
+          <strong>"Resolved ≠ Settled"陷阱</strong>：<code>resolve(p)</code> 时，如果 <code>p</code> 是另一个 Promise，外层 promise 进入 "<strong>resolved</strong>" 状态（已绑定到 p）但<strong>不是 settled</strong>——它要等 p settle 后才 settle。这是规范层精确区分的术语，PPT 第四章专门点出。
+        </p>
+
+        <h3>Promise 组合器</h3>
+        <p>
+          <strong>短重述</strong>：5 个标准组合器，按"短路策略"区分：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">组合器</th>
+              <th style="width: 100px">ES 版本</th>
+              <th>短路策略</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>Promise.all</code></td>
+              <td>ES2015</td>
+              <td>任一 reject 立刻 reject；全部 fulfill 才 fulfill（结果数组）</td>
+            </tr>
+            <tr>
+              <td><code>Promise.race</code></td>
+              <td>ES2015</td>
+              <td>任一 settle 立刻同状态 settle（最快者胜）</td>
+            </tr>
+            <tr>
+              <td><code>Promise.allSettled</code></td>
+              <td>ES2020</td>
+              <td>不短路；全部 settle 后 fulfill（结果是 <code>{status, value | reason}</code> 数组）</td>
+            </tr>
+            <tr>
+              <td><code>Promise.any</code></td>
+              <td>ES2021</td>
+              <td>任一 fulfill 立刻 fulfill；全部 reject 才 reject（<code>AggregateError</code>）</td>
+            </tr>
+            <tr>
+              <td><code>Promise.withResolvers</code></td>
+              <td>ES2024</td>
+              <td>不是组合器，是<strong>构造工具</strong>：返回 <code>{ promise, resolve, reject }</code>，避免在 executor 里捕获作用域</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>设计上的微妙点</strong>：<code>Promise.all</code> "一个失败短路其他还在跑"——<strong>未完成的 promise 不会被取消</strong>，它们的 fetch / 计算继续消耗资源直到自然完成。Promise 设计时<strong>故意没加取消机制</strong>（不可逆性是核心保证），这后来催生了 <code>AbortController</code>（详见下面）。
+        </p>
+
+        <p>
+          <strong>详细机制与配方请参考</strong> <a href="../../javascript/03-async/04-promise-combinators.html">JS · 03-async/04-promise-combinators</a>。
+        </p>
+
+        <h3>第 3 代 · async/await（ES2017）—— Generator 的语法糖</h3>
+        <p>
+          <strong>关键事实</strong>：<code>async function</code> <strong>不是"新的暂停机制"</strong>，是 ES2015 的 Generator 加 Promise 的<strong>语法糖</strong>。底层用 A3 讲的 ExecutionContext 暂停机制实现：
+        </p>
+
+        <ol>
+          <li>调用 async 函数 → 创建 ExecutionContext + 立即返回一个 pending Promise</li>
+          <li>同步执行函数体直到遇到 <code>await expr</code></li>
+          <li>对 <code>expr</code> 求值 → 用 <code>Await</code> 抽象操作（§27.7.5.3）：把 ExecutionContext <strong>挂起</strong>（如 Generator 那样）</li>
+          <li>给这个值（如果是 Promise）注册一个 reaction："<em>resolve 时恢复 ExecutionContext，rejected 时让 await 抛错</em>"</li>
+          <li>reaction 在 microtask queue 被处理时 → 把 ExecutionContext 压回栈、继续执行</li>
+        </ol>
+
+        <p>
+          这就是为什么<strong>每个 await 都至少花一个 microtask</strong>，即使 <code>await Promise.resolve(1)</code>——因为恢复必须走 reaction 调度。也是为什么 <strong>async 函数的 stack trace 不连续</strong>——await 后续代码作为新 microtask 执行，新栈帧没了之前的调用上下文（V8 后来加了"async stack traces"补救，但本质上是 V8 实现的 hack，不是 JS 规范的）。
+        </p>
+
+        <p>
+          <strong>错误传播规则</strong>：
+        </p>
+        <ul>
+          <li>async 函数体抛错 → <strong>转成 reject</strong>，函数返回的 Promise rejected</li>
+          <li><code>await</code> 一个 rejected Promise → 抛错，可被外层 <code>try/catch</code> 捕获</li>
+          <li>在 async 函数里抛错<strong>不会冒泡到调用方的 try/catch</strong>——必须 await 调用</li>
+          <li><code>finally</code> 在 async 函数里<strong>异步执行</strong>——它在最后一个 await 之后的 microtask 里跑</li>
+        </ul>
+
+        <p>
+          <strong>详细机制与陷阱请参考</strong> <a href="../../javascript/03-async/05-async-await.html">JS · 03-async/05-async-await</a>。
+        </p>
+
+        <h3>异步迭代器（ES2018，PPT 未覆盖）</h3>
+        <p>
+          ES2015 的迭代协议（A2 讲过）解决了"同步取下一个"。ES2018 加 <strong>异步迭代协议</strong>——本质是把"取下一个"返回的值改成 Promise：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 同步 vs 异步迭代器签名</span>
+          <pre class="code"><code class="lang-js">// 同步迭代器（ES2015）
+interface Iterator&lt;T&gt; {
+  next(): { value: T, done: boolean };
+}
+
+// 异步迭代器（ES2018）
+interface AsyncIterator&lt;T&gt; {
+  next(): Promise&lt;{ value: T, done: boolean }&gt;;
+}
+
+// 用 Symbol.asyncIterator 标识可异步迭代
+// 用 for await...of 消费
+for await (const chunk of stream) {
+  // 每次循环 await 一次 next()
+}</code></pre>
+        </div>
+
+        <p>
+          ES2018 还引入<strong>async generator</strong>（<code>async function*</code>），可以同时用 <code>yield</code>（产出值）和 <code>await</code>（等异步资源）。这是 ECMAScript 第一次把<strong>两个独立的暂停机制（generator + async）组合在一起</strong>，规范层非常复杂（<code>[[GeneratorContext]]</code> + Promise reaction 双重挂起）。
+        </p>
+
+        <p>
+          <strong>典型用途</strong>：处理 SSE（Server-Sent Events）、HTTP/2 streams、数据库 cursor、文件分块读取、分页 API（A2 已演示）。配合 <code>node:stream/web</code> 的 <code>ReadableStream</code> 可直接做 <code>for await</code>。
+        </p>
+
+        <h3>AbortController 与 Promise 不可逆性的张力（PPT 未覆盖）</h3>
+        <p>
+          Promise 设计时<strong>故意没加取消</strong>——状态不可逆是它的核心保证。但实际工程中"<em>用户切到下一页，把上一页的请求都取消</em>"是高频需求。社区先用各种 hack 解决（<code>Promise.race + 超时 promise</code>、<code>cancelable wrapper</code>），最终方案是<strong>外加一个独立的取消信号机制</strong>：<code>AbortController</code>（DOM 规范，2017 引入；ES 没有，但被 Node 在 2021 也实现）。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · AbortController 的核心 API</span>
+          <pre class="code"><code class="lang-js">const ctrl = new AbortController();
+
+// signal 是一个事件源：触发 'abort' 事件
+fetch('/api/data', { signal: ctrl.signal })
+  .then(r =&gt; r.json())
+  .catch(err =&gt; {
+    if (err.name === 'AbortError') {
+      // 被取消了
+    }
+  });
+
+// 调用 abort() → signal 触发 'abort' → fetch 内部检测到，reject 返回 Promise
+ctrl.abort();
+
+// 多个操作共享一个 signal（取消传播）
+function doWork(signal) {
+  return fetch('/a', { signal })
+    .then(() =&gt; fetch('/b', { signal }))
+    .then(() =&gt; processData(signal));   // 自定义函数也要支持 signal
+}</code></pre>
+        </div>
+
+        <p>
+          <strong>设计上的微妙点</strong>：
+        </p>
+        <ul>
+          <li><strong>取消是"信号"，不是"动作"</strong>——AbortController 不主动 reject Promise；它发信号，<strong>Promise 的执行方</strong>（fetch 内部、自定义函数）<strong>必须主动监听 signal 并 reject</strong>。这保留了 Promise 不可逆性。
+          </li>
+          <li><strong>取消会变成 reject，不是 cancel</strong>——抛 <code>AbortError</code>（DOMException）。所以 <code>try/catch</code> 必须区分"取消"和"真正失败"。</li>
+          <li><strong>ES2024 加 <code>AbortSignal.any([...])</code></strong>——多个 signal 任一 abort 就 abort，方便组合超时 + 用户取消。</li>
+        </ul>
+
+        <p>
+          <strong>详细用法请参考</strong> <a href="../../javascript/03-async/06-abort-controller.html">JS · 03-async/06-abort-controller</a>。
+        </p>
+
+        <h3>第 4 代 · Top-Level Await + 共享内存</h3>
+
+        <h4>Top-Level Await（ES2022）</h4>
+        <p>
+          ES Module 的<strong>顶层</strong>可以直接 <code>await</code>，模块求值变成异步过程：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Top-Level Await</span>
+          <pre class="code"><code class="lang-js">// db-config.mjs
+const config = await fetch('/api/config').then(r =&gt; r.json());
+export default config;
+
+// app.mjs
+import config from './db-config.mjs';   // ← 这里隐式等待 config 模块求值完
+console.log(config);</code></pre>
+        </div>
+
+        <p>
+          规范层的代价（A3 模块加载部分提过）：
+        </p>
+        <ul>
+          <li>每个模块的 evaluation 现在返回 Promise</li>
+          <li><strong>整个 import 树是一棵 Promise 依赖树</strong>——某个模块的 TLA 阻塞所有依赖它的下游模块</li>
+          <li><strong>cycle + async 模块组合 → 死锁检测</strong>：规范用 <code>[[CycleRoot]]</code> + <code>[[AsyncEvaluation]]</code> 检测两个互相 await 的循环模块，宿主直接 reject 而不是无限挂</li>
+          <li><strong>不能在普通 script 里用</strong>（必须 <code>type="module"</code>）；<strong>瀑布加载风险</strong>——一个慢 TLA 拖累整棵树
+          </li>
+        </ul>
+
+        <h4>SharedArrayBuffer + Atomics（ES2017）</h4>
+        <p>
+          这是 JS <strong>第一次</strong>真正引入"共享内存"——多个 Agent（主线程 + Worker）能<strong>同时读写同一段内存</strong>，不是 postMessage 的复制语义。配合 <code>Atomics.add/sub/load/store</code>（保证原子性）和 <code>Atomics.wait/notify</code>（多线程信号量），可以做出真正的多线程并发。
+        </p>
+
+        <p>
+          <strong>但 2018 年 Spectre 攻击</strong>让所有浏览器<strong>禁用</strong>了 SharedArrayBuffer——因为它配合高精度 timer 能用来构造侧信道。2020 年才回归，要求页面发送 <strong>COOP（Cross-Origin-Opener-Policy）</strong> + <strong>COEP（Cross-Origin-Embedder-Policy）</strong> 头才解锁。Node 没这个限制（不在浏览器沙箱里）。
+        </p>
+
+        <p>
+          <strong>实际用途</strong>：WebGPU compute shader 与 JS 通信、FFmpeg.wasm（视频转码）、Squoosh（图片压缩）、SQLite WASM、像素级图像处理。<strong>是计算密集型 Web 应用的关键基础设施</strong>。
+        </p>
+
+        <h3>第 5 代 · 资源管理 <code>using</code> / <code>await using</code>（ES2025）</h3>
+        <p>
+          ES2025 加的<strong>资源管理 API</strong>是"异步同步桥"的最新答案。基于 A2 讲过的 Symbol 扩展点机制：
+        </p>
+
+        <ul>
+          <li><code>Symbol.dispose</code> —— 同步资源释放钩子</li>
+          <li><code>Symbol.asyncDispose</code> —— 异步资源释放钩子</li>
+          <li><code>using x = resource()</code> —— 同步声明，离开块作用域时自动调 <code>x[Symbol.dispose]()</code></li>
+          <li><code>await using x = asyncResource()</code> —— 异步声明，离开块作用域时 <code>await x[Symbol.asyncDispose]()</code></li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">javascript · ES2025 await using 简化资源管理</span>
+          <pre class="code"><code class="lang-js">async function processFile(path) {
+  await using file = await open(path);   // 异步打开
+  // ... 用 file 做事
+}                                          // 自动 await file[Symbol.asyncDispose]()，不管成功还是抛错
+                                           // ↑ 替代了 try/finally + await close()
+
+// 标准库已实现：
+// - FileHandle 实现 [Symbol.asyncDispose]
+// - ReadableStream / WritableStream 实现
+// - 数据库连接、HTTP 流、Lock 等都跟进</code></pre>
+        </div>
+
+        <p>
+          <strong>这是 RAII（Resource Acquisition Is Initialization）模式的 JS 版本</strong>，在 C++ / Rust / C# <code>using</code> 已是标配。ECMAScript 等了 30 年才引入——因为单线程心智下"<em>不写 finally 也很少出大问题</em>"，需求积累足够才进规范。
+        </p>
+
+        <p>
+          配套的还有 <strong><code>Promise.try</code></strong>（ES2025）—— 把"可能同步可能异步抛错的函数"统一成 Promise，去掉 <code>new Promise(resolve => resolve(fn()))</code> 的样板：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Promise.try 统一同步异步入口</span>
+          <pre class="code"><code class="lang-js">// 旧写法：要小心 fn 可能同步抛错
+Promise.resolve().then(() =&gt; fn(args));   // 同步错也包成 reject 了，但要写一层
+
+// ES2025 新写法
+Promise.try(fn, args);                     // 同步抛错也变 reject，简洁</code></pre>
+        </div>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 排队 / 限流（手写 PQueue）</h3>
+          <p>
+            前端要批量上传 100 个文件但浏览器只允许同源 6 个并发——用 <code>p-limit</code> 或自己写一个并发控制器。核心是<strong>用 Promise 链把多个 await 串成"令牌池"</strong>：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 极简并发控制</span>
+            <pre class="code"><code class="lang-js">function limit(concurrency) {
+  let running = 0;
+  const queue = [];
+  const next = () =&gt; {
+    if (running &gt;= concurrency || !queue.length) return;
+    running++;
+    const { fn, resolve, reject } = queue.shift();
+    Promise.resolve()
+      .then(fn)
+      .then(resolve, reject)
+      .finally(() =&gt; { running--; next(); });
+  };
+  return (fn) =&gt; new Promise((resolve, reject) =&gt; {
+    queue.push({ fn, resolve, reject });
+    next();
+  });
+}
+
+const limiter = limit(6);
+const results = await Promise.all(
+  files.map(f =&gt; limiter(() =&gt; uploadFile(f)))
+);</code></pre>
+          </div>
+          <p>读懂这段就懂了 p-limit / pQueue 的 80% 实现。详细变体见 <a href="../../javascript/03-async/07-concurrency.html">JS · 07-concurrency</a>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 取消异步（路由切换、组件卸载）</h3>
+          <p>
+            React 组件切走时取消正在请求的 fetch、停止订阅 SSE、撤销长查询。用 <code>AbortController</code>:
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · React 中的 AbortController</span>
+            <pre class="code"><code class="lang-js">function useApi(url) {
+  useEffect(() =&gt; {
+    const ctrl = new AbortController();
+    fetch(url, { signal: ctrl.signal })
+      .then(r =&gt; r.json())
+      .then(setData)
+      .catch(err =&gt; {
+        if (err.name === 'AbortError') return;
+        setError(err);
+      });
+    return () =&gt; ctrl.abort();   // unmount 时取消
+  }, [url]);
+}</code></pre>
+          </div>
+          <p>这个模式是 React Query / SWR / TanStack Router 内部都用的——signal 通过参数透传，每层异步操作都有机会响应取消。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · WebGPU compute（多线程 + 共享内存）</h3>
+          <p>
+            浏览器里跑 ML 推理（Transformers.js、ONNX Runtime Web）—— GPU 计算 + CPU 后处理通过 <code>SharedArrayBuffer</code> 通信，避免每次 GPU→CPU 复制 GB 级张量。需要：
+          </p>
+          <ul>
+            <li>页面发 <code>Cross-Origin-Opener-Policy: same-origin</code> + <code>Cross-Origin-Embedder-Policy: require-corp</code></li>
+            <li>检测 <code>crossOriginIsolated === true</code> 后才 <code>new SharedArrayBuffer(N)</code></li>
+            <li>用 <code>Atomics.wait/notify</code> 实现 worker 间同步</li>
+          </ul>
+          <p>失败回退到普通 ArrayBuffer + postMessage（性能下降 10x 但仍能跑）。</p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>用 await using 简化 try/finally</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · ES2025 vs 老写法</span>
+          <pre class="code"><code class="lang-js">// 旧写法：try/finally + 显式释放
+async function readJSON_old(path) {
+  const file = await open(path, 'r');
+  try {
+    const text = await file.readFile('utf8');
+    return JSON.parse(text);
+  } finally {
+    await file.close();   // 即使抛错也保证关闭
+  }
+}
+
+// ES2025 写法
+async function readJSON_new(path) {
+  await using file = await open(path, 'r');
+  const text = await file.readFile('utf8');
+  return JSON.parse(text);
+  // 离开块时自动 await file[Symbol.asyncDispose]() —— 即使抛错也释放
+}
+
+// 多资源叠加更明显
+async function copy_new(src, dst) {
+  await using src = await open(srcPath, 'r');
+  await using dst = await open(dstPath, 'w');
+  // 自动按 LIFO 顺序 dispose dst, src（栈式释放）
+  await pipeline(src.readable, dst.writable);
+}</code></pre>
+        </div>
+
+        <h3>实测 microtask vs macrotask 调度顺序</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 异步执行顺序经典面试题</span>
+          <pre class="code"><code class="lang-js">console.log('1 · sync');
+
+setTimeout(() =&gt; console.log('5 · macro setTimeout'), 0);
+
+Promise.resolve().then(() =&gt; {
+  console.log('3 · micro promise.then');
+  Promise.resolve().then(() =&gt; console.log('4 · nested micro'));
+});
+
+queueMicrotask(() =&gt; console.log('2 · micro queueMicrotask 但比上面晚注册'));
+
+console.log('? · sync end');
+
+// 输出顺序：
+//   1 · sync
+//   ? · sync end
+//   3 · micro promise.then         ← Promise.then 先注册
+//   2 · micro queueMicrotask 但比上面晚注册   ← 后注册
+//   4 · nested micro                ← 嵌套 microtask 也在这一轮清空
+//   5 · macro setTimeout             ← 所有 microtask 清完才进 macro
+
+// 关键：每轮 macrotask 跑完 → 把 microtask queue 完全清空 → 然后 rendering steps → 下个 macrotask</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：在非 async 函数里用 await</div>
+          <p>
+            <code>await</code> 在以下两种位置之外用都是 <strong>SyntaxError</strong>（解析期，不是运行期）：
+          </p>
+          <ul>
+            <li>async 函数体内</li>
+            <li>ES Module 的顶层（Top-Level Await，要求 <code>type="module"</code>）</li>
+          </ul>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：在 <code>forEach</code> 回调里用 await 不报错但<strong>不生效</strong>（forEach 不等 promise）——改用 <code>for...of</code> + await，或 <code>Promise.all + map</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：Promise.all 短路时未完成请求继续消耗资源</div>
+          <p>
+            <code>Promise.all([a, b, c])</code> 中 <code>a</code> 失败立刻 reject，但 <strong>b 和 c 不会被取消</strong>——它们的 fetch / 计算继续跑到自然完成或失败。这是 Promise 不可逆性的代价。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：要可取消，<strong>必须配 AbortController</strong>。<code>Promise.all([a, b, c])</code> 失败时 <code>ctrl.abort()</code> 取消其他正在跑的。或用 <code>Promise.allSettled</code> 不短路、自己处理结果。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：microtask 死循环把 UI 卡死</div>
+          <p>
+            HTML 规范要求每个 macrotask 后<strong>清空整个 microtask queue</strong> 才进 rendering steps。如果 microtask 互相投递新 microtask，UI 永远不渲染：
+          </p>
+          <div class="code-block" style="margin-top: 12px">
+            <span class="code-label">javascript · UI 永远卡死</span>
+            <pre class="code"><code class="lang-js">function spam() {
+  Promise.resolve().then(spam);   // 每个 microtask 又投递新 microtask
+}
+spam();
+// 浏览器：UI 完全冻结，Tab 必须强制关闭
+// 即使 setInterval(() =&gt; render(), 16) 也跑不到——因为永远清不完 microtask</code></pre>
+          </div>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：递归调度用 <code>setTimeout</code> 或 <code>requestAnimationFrame</code>（macrotask）。如果业务必须用 microtask 链，<strong>每隔 N 次让一次 macrotask</strong>（"yield to event loop"）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：SharedArrayBuffer 跨 origin 必须 COOP/COEP</div>
+          <p>
+            自 2020 年起浏览器默认<strong>不允许</strong>跨 origin 用 SharedArrayBuffer。要解锁必须发 HTTP 头：
+          </p>
+          <ul>
+            <li><code>Cross-Origin-Opener-Policy: same-origin</code></li>
+            <li><code>Cross-Origin-Embedder-Policy: require-corp</code> 或 <code>credentialless</code></li>
+            <li>所有第三方资源（图片、iframe、脚本）也必须发 <code>Cross-Origin-Resource-Policy</code>，否则页面 break</li>
+          </ul>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：检测 <code>crossOriginIsolated === true</code> 决定走 SAB 还是回退路径。如果你的应用有大量第三方嵌入（广告、Tab 等），COOP/COEP 改造成本可能比预期高。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：async 函数里抛错不冒泡到调用方 try/catch</div>
+          <p>
+            async 函数<strong>总是返回 Promise</strong>，函数体抛错变成 reject。所以这样写无效：
+          </p>
+          <div class="code-block" style="margin-top: 12px">
+            <span class="code-label">javascript · 错误丢失</span>
+            <pre class="code"><code class="lang-js">async function fetchData() {
+  throw new Error('boom');
+}
+
+try {
+  fetchData();   // 没 await！函数返回 rejected Promise，但 try 不知道
+} catch (e) {
+  // 永远不会进这里
+}
+// 控制台：UnhandledPromiseRejection: Error: boom
+
+// 正确：必须 await 或显式 .catch
+try {
+  await fetchData();
+} catch (e) {
+  console.log(e.message);  // "boom"
+}</code></pre>
+          </div>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：调用 async 函数要么 <code>await</code>，要么 <code>.catch</code>。"<em>fire-and-forget</em>" 也要至少 <code>.catch(console.error)</code> 兜底。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范</h3>
+        <ul>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-promise-objects" target="_blank" rel="noopener">ECMA-262 §27.2 Promise Objects</a> —— PromiseReaction Records 等内部数据结构
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-async-function-objects" target="_blank" rel="noopener">ECMA-262 §27.7 Async Function Objects</a> —— Await 抽象操作的算法
+          </li>
+          <li>
+            <a href="https://html.spec.whatwg.org/multipage/webappapis.html#event-loops" target="_blank" rel="noopener">HTML 规范 · Event Loops</a> —— 宏任务/微任务/rendering steps 的精确定义
+          </li>
+          <li>
+            <a href="https://github.com/tc39/proposal-async-iteration" target="_blank" rel="noopener">tc39/proposal-async-iteration</a> —— 异步迭代协议提案
+          </li>
+        </ul>
+
+        <h3>提案与近期变化</h3>
+        <ul>
+          <li>
+            <a href="https://github.com/tc39/proposal-explicit-resource-management" target="_blank" rel="noopener">tc39/proposal-explicit-resource-management</a> —— ES2025 <code>using</code> / <code>await using</code> 提案
+          </li>
+          <li>
+            <a href="https://github.com/tc39/proposal-promise-try" target="_blank" rel="noopener">tc39/proposal-promise-try</a> —— ES2025 <code>Promise.try</code>
+          </li>
+          <li>
+            <a href="https://web.dev/articles/coop-coep" target="_blank" rel="noopener">web.dev · COOP/COEP</a> —— 跨 origin 隔离配置实战
+          </li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="03-execution-model.html">A3 执行模型</a></li>
+          <li>下一步：<strong>A5 现代生态</strong>（编写中）—— TC39 Stage 流程详解、ES2016-ES2025 全特性表、打包器目标版本策略</li>
+          <li>规范侧：<strong><a href="../02-spec/index.html">Track B · 规范精读</a></strong>—— B5 §9 上下文从规范层视角再讲 Job / HostEnqueuePromiseJob</li>
+        </ul>
+
+        <h3>跨主题参考（本章引用了这些 JS 章节做"短重述链回"）</h3>
+        <ul>
+          <li><a href="../../javascript/03-async/01-event-loop.html">JS · Event Loop</a></li>
+          <li><a href="../../javascript/03-async/02-microtask-macrotask.html">JS · 宏任务/微任务</a></li>
+          <li><a href="../../javascript/03-async/03-promise.html">JS · Promise</a></li>
+          <li><a href="../../javascript/03-async/04-promise-combinators.html">JS · Promise 组合器</a></li>
+          <li><a href="../../javascript/03-async/05-async-await.html">JS · async/await</a></li>
+          <li><a href="../../javascript/03-async/06-abort-controller.html">JS · AbortController</a></li>
+          <li><a href="../../javascript/03-async/07-concurrency.html">JS · 并发控制</a></li>
+          <li><a href="../../javascript/03-async/08-node-eventloop-errors.html">JS · Node Event Loop 与错误</a></li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="03-execution-model.html">
+            <span class="label">← 上一章</span>
+            <span class="title">A3 · 执行模型</span>
+          </a>
+          <a class="next" href="index.html">
+            <span class="label">下一步 →</span>
+            <span class="title">A5 · 现代生态（🚧 编写中，先看 Track 概览）</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
