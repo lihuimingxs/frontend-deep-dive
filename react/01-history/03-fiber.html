@@ -1,0 +1,928 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>A3 · Fiber 架构 ——「机器怎么跑？」 · React 深度学习</title>
+    <meta
+      name="description"
+      content="React Fiber 架构内部机制：Fiber 节点结构、双缓冲（current vs workInProgress）、Work loop（performUnitOfWork / beginWork / completeUnitOfWork）、Lane 模型 31 位 bitmask、Render / Commit 阶段、Hooks linked list 解释 Rules of Hooks 根因、Reconciliation diff 算法。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2361dafb'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23000000'%3EReact%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>React 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.13 220); color: #fff">R</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">React 首页</a>
+          <a href="index.html">Track A 目录</a>
+          <a href="https://github.com/acdlite/react-fiber-architecture" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Track A · 历史脉络与设计</h3>
+        <ul>
+          <li><a href="index.html">Track 概览</a></li>
+          <li><a href="01-origin.html">A1 · 起源与演化</a></li>
+          <li><a href="02-design-philosophy.html">A2 · 设计哲学</a></li>
+          <li><a href="03-fiber.html" class="active">A3 · Fiber 架构 ⭐</a></li>
+          <li><span class="sidebar-pending">A4 · Concurrent 与异步 🚧</span></li>
+          <li><span class="sidebar-pending">A5 · 生态与工程化 🚧</span></li>
+        </ul>
+        <h3>另一轨</h3>
+        <ul>
+          <li><a href="../02-reference/index.html">Track B · 官网知识精读</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">React</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Track A · 历史脉络与设计</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>A3 · Fiber 架构 ⭐</span>
+        </nav>
+
+        <h1>A3 · Fiber 架构 ——「机器怎么跑？」</h1>
+        <p class="lead">
+          A1 讲了 2017 年 React 16 Fiber 重写是 React 的"<em>创世事件</em>"。A2 讲了"<em>UI = f(state)</em>" 等 4 个设计决策。本章把这些<strong>翻译成具体的运行时机器结构</strong>—— Fiber 节点是什么、Work loop 怎么循环、双缓冲怎么实现"<em>原子提交</em>"、Lane 模型怎么调度优先级、Hooks linked list 为什么决定了 Rules of Hooks。这是 React 主题的"<strong>引擎章</strong>"，对应 ECMAScript 主题的 <a href="../../ecma/01-history/03-execution-model.html">A3 执行模型</a>。
+        </p>
+
+        <div class="callout warn" style="margin: 16px 0">
+          <div class="callout-title">⚠️ 这是 React 主题最难的一章</div>
+          <p>
+            Fiber 节点 / 双缓冲 / Work loop / Lane 模型 / Hooks linked list 是 React 内部的"<em>5 件套</em>"，互相依赖。绝大多数 React 工程师从没碰到过它们——但它们是后续"<em>Concurrent 怎么做时间切片</em>" / "<em>Suspense 怎么 throw promise</em>" / "<em>useEffect 顺序为什么必须固定</em>" 等问题的根因。建议至少读两遍，第二遍带着具体场景（如"<em>调用 setState 时引擎做了什么</em>"）回头对照。
+          </p>
+        </div>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 本章是唯一引用 React 源码的章节</div>
+          <p>
+            按 outline 约定，<strong>仅本章读 React 源码</strong>（<code>react-reconciler</code> + <code>scheduler</code> 包），其他章节以 react.dev + RFCs 为限，避免实现细节稀释心智。本章的代码片段是<strong>简化伪代码</strong>，结构准确、字段名与源码一致，但去除了 dev / debug / 性能优化等细节。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~50 分钟</span>
+          <span><strong>前置</strong> <a href="02-design-philosophy.html">A2 设计哲学</a>（必读）+ JS 链表心智 + 可选 <a href="../../ecma/01-history/03-execution-model.html">ECMA · A3 执行模型</a></span>
+          <span><strong>权威来源</strong>
+            <a href="https://github.com/acdlite/react-fiber-architecture" target="_blank" rel="noopener">Andrew Clark · React Fiber Architecture</a> ·
+            <a href="https://github.com/facebook/react" target="_blank" rel="noopener">facebook/react 源码</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义 React Fiber 架构：</p>
+        <ol>
+          <li>
+            <strong>Fiber 节点 = 工作单元</strong>。每个 React 元素对应一个 Fiber 节点，含 <code>child</code> / <code>sibling</code> / <code>return</code>（parent）指针。<strong>Fiber tree 实际是链表而非树</strong>—— 这就是可中断遍历的关键。同时含 <code>memoizedState</code>（hooks 链表）/ <code>flags</code>（要做什么 DOM 操作）/ <code>lanes</code>（优先级）等字段。
+          </li>
+          <li>
+            <strong>渲染分两阶段</strong>：① <strong>Render 阶段</strong>（可中断）—— 沿 Fiber tree 遍历，<code>beginWork</code> 走下、<code>completeUnitOfWork</code> 走上，构建 workInProgress tree；② <strong>Commit 阶段</strong>（不可中断）—— 应用 DOM 变更（3 个子阶段：BeforeMutation / Mutation / Layout）+ 异步 Passive effects（useEffect）。<strong>双缓冲</strong> 让 commit 能"<em>原子切换</em>"两棵树。
+          </li>
+          <li>
+            <strong>Lane 模型 = 31 位 bitmask 表达优先级</strong>。每个 lane 是一个 bit（SyncLane / DefaultLane / TransitionLane / IdleLane 等）。多个更新合并到同 lane → batching；高优先级 lane 打断低优先级 → 时间切片。<strong>Hooks linked list 存在每个 Fiber 节点的 <code>memoizedState</code> 字段</strong>—— 这就是"<em>useState/useEffect 必须按相同顺序调用</em>" 的引擎根因。
+          </li>
+        </ol>
+
+        <p>一张极简的 React Fiber 架构图（文字版）：</p>
+
+        <div class="code-block">
+          <span class="code-label">React Fiber 运行时机器结构</span>
+          <pre class="code"><code class="lang-js">┌──────────────────────────────────────────────────────────┐
+│ FiberRoot（应用根）                                       │
+│   current ──────────────┐                                │
+│   pendingLanes          │                                │
+│   finishedLanes         │                                │
+└─────────────────────────┼────────────────────────────────┘
+                          │
+        ┌─────────────────┴────────────────┐
+        │                                  │
+        ▼                                  ▼
+┌────────────────────┐           ┌────────────────────┐
+│ current tree       │           │ workInProgress tree│
+│ （屏幕上的 Fiber）  │  alternate│ （正在构建的）     │
+│                    │  ◄──────► │                    │
+│   App ─child──┐    │           │   App' ─child──┐   │
+│   ▼           ▼    │           │   ▼            ▼   │
+│   Header      Body │           │   Header'     Body'│
+│   ▲ sibling ──►    │           │   ▲ sibling ──►    │
+└────────────────────┘           └────────────────────┘
+
+每个 Fiber 节点含：
+  type / stateNode（DOM 节点 / class 实例）
+  child / sibling / return（链表指针）
+  memoizedState（hooks 链表的头）
+  memoizedProps / pendingProps
+  flags（要做的 DOM 操作位标记）
+  lanes（这个节点的待更新优先级）
+  alternate（指向另一棵树的对应节点）
+
+Work Loop 主循环：
+  while (workInProgress !== null && !shouldYield()) {
+    performUnitOfWork(workInProgress);
+    // beginWork 走下 / completeUnitOfWork 走上
+  }
+  // 循环结束 → 让出主线程 5ms → 浏览器渲染 → 继续</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Fiber 节点结构 —— 链表式工作单元</h3>
+        <p>
+          每个 React 元素（无论 <code>&lt;div&gt;</code> / 函数组件 / class 组件 / Fragment / Suspense）都对应一个 <strong>Fiber 节点</strong>。Fiber 节点的关键字段（简化版）：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">字段</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>type</code></td>
+              <td>组件 / 元素类型（'div' / 函数 / class / Symbol）</td>
+            </tr>
+            <tr>
+              <td><code>stateNode</code></td>
+              <td>对应的实例：DOM 节点（host）/ class 实例 / FiberRoot</td>
+            </tr>
+            <tr>
+              <td><code>child</code></td>
+              <td>第一个子 Fiber（链表头）</td>
+            </tr>
+            <tr>
+              <td><code>sibling</code></td>
+              <td>下一个兄弟 Fiber</td>
+            </tr>
+            <tr>
+              <td><code>return</code></td>
+              <td>父 Fiber（命名为 return 是因为 completeUnitOfWork 完成后"<em>返回</em>" 给它）</td>
+            </tr>
+            <tr>
+              <td><code>memoizedState</code></td>
+              <td>函数组件：<strong>Hooks linked list 的头</strong>。class 组件：上次的 state</td>
+            </tr>
+            <tr>
+              <td><code>memoizedProps</code></td>
+              <td>上次提交后的 props</td>
+            </tr>
+            <tr>
+              <td><code>pendingProps</code></td>
+              <td>本次渲染待应用的 props</td>
+            </tr>
+            <tr>
+              <td><code>flags</code></td>
+              <td><strong>位标记</strong>，表示这个 Fiber 需要做什么操作：<code>Placement</code>（插入新节点）/ <code>Update</code>（更新）/ <code>Deletion</code>（删除）/ <code>Passive</code>（有 useEffect）/ <code>Layout</code>（有 useLayoutEffect）等</td>
+            </tr>
+            <tr>
+              <td><code>subtreeFlags</code></td>
+              <td>子树是否有任何 flag —— 用于"<em>跳过没有变化的子树</em>" 优化</td>
+            </tr>
+            <tr>
+              <td><code>lanes</code></td>
+              <td>这个节点的待处理优先级（lane bitmask）</td>
+            </tr>
+            <tr>
+              <td><code>childLanes</code></td>
+              <td>整个子树合并的 lanes —— 用于跳过低优先级子树</td>
+            </tr>
+            <tr>
+              <td><code>alternate</code></td>
+              <td>指向另一棵树（current ↔ workInProgress）的对应 Fiber</td>
+            </tr>
+            <tr>
+              <td><code>updateQueue</code></td>
+              <td>待处理的 state 更新队列（class component / useReducer）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>关键洞察</strong>：Fiber tree 看起来是树（有 parent / child 关系），但<strong>实际遍历用的是链表 + 指针</strong>。这就是"<em>可中断</em>" 的物质基础——遍历到任意 Fiber，把指针记下，下次从这个指针继续。如果是 React 15 的递归实现，"<em>暂停</em>" 意味着把整个 JS 调用栈保存下来，根本做不到。
+        </p>
+
+        <h3>双缓冲（Double Buffering）—— 原子提交的关键</h3>
+        <p>
+          React 始终维护<strong>两棵 Fiber tree</strong>：
+        </p>
+        <ul>
+          <li><strong>current tree</strong>：当前屏幕上看到的（已 commit 的）</li>
+          <li><strong>workInProgress tree</strong>（简称 wip）：正在构建中的下一版本</li>
+        </ul>
+
+        <p>
+          每个 Fiber 节点的 <code>alternate</code> 字段<strong>指向另一棵树的对应节点</strong>—— current 节点的 alternate 是 wip 节点，反之亦然。这让 React 能复用 Fiber 对象（避免 GC 压力）：每次新一轮渲染，wip 树<strong>克隆</strong> current 树（用 alternate 指针快速找到对应节点），然后修改 wip 节点的 props / state。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 双缓冲伪代码</span>
+          <pre class="code"><code class="lang-js">// 简化版 createWorkInProgress
+function createWorkInProgress(current, pendingProps) {
+  let workInProgress = current.alternate;
+
+  if (workInProgress === null) {
+    // 第一次渲染：创建新 Fiber，建立 alternate 关联
+    workInProgress = createFiber(current.tag, pendingProps, current.key);
+    workInProgress.stateNode = current.stateNode;
+    workInProgress.alternate = current;
+    current.alternate = workInProgress;
+  } else {
+    // 复用：从 alternate 拿，重置必要字段
+    workInProgress.pendingProps = pendingProps;
+    workInProgress.flags = NoFlags;
+    workInProgress.subtreeFlags = NoFlags;
+  }
+
+  // 复制 current 的状态（state / hooks 链表 / 子节点引用）
+  workInProgress.child = current.child;
+  workInProgress.memoizedProps = current.memoizedProps;
+  workInProgress.memoizedState = current.memoizedState;
+  workInProgress.updateQueue = current.updateQueue;
+  return workInProgress;
+}
+
+// Commit 阶段最后一步：原子切换两棵树
+function commitRoot(root) {
+  // ... 各种 effects 处理 ...
+  root.current = finishedWork;  // ⚡ 一行代码切换 —— 这就是"原子提交"
+}</code></pre>
+        </div>
+
+        <p>
+          <strong>双缓冲的工程意义</strong>：commit 阶段必须把 wip 的所有 DOM 变更<strong>一次性应用</strong>，中间不能有"<em>渲染了一半</em>" 的中间态。如果只用一棵树，render 时直接修改它，render 中途让出主线程，浏览器看到的就是"<em>半成品</em>"（一些 div 已更新、一些没更新）。双缓冲让 render 在<strong>独立的 wip 树</strong>上工作，commit 时切换 root.current 指针——浏览器永远只看到"<em>已完成</em>" 的 current tree。
+        </p>
+
+        <p>
+          这个机制和图形学的 double buffer（屏幕缓冲与后台缓冲）是同一思想，也是<strong>所有"<em>支持时间切片</em>" 框架（Solid 用相同模式，Vue 3 不需要因为它的 reactivity 是细颗粒度）</strong>的必备技巧。
+        </p>
+
+        <h3>Work Loop —— 可中断的遍历</h3>
+        <p>
+          React 把"<em>渲染整棵树</em>" 拆成"<em>遍历每个 Fiber 节点</em>" 的循环，每个节点叫一个 <strong>work unit</strong>：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Work Loop 主循环（简化）</span>
+          <pre class="code"><code class="lang-js">// 同步模式（不可中断）—— 旧版本 / 强制同步更新
+function workLoopSync() {
+  while (workInProgress !== null) {
+    performUnitOfWork(workInProgress);
+  }
+}
+
+// Concurrent 模式（可中断）—— React 18+
+function workLoopConcurrent() {
+  while (workInProgress !== null &amp;&amp; !shouldYield()) {
+    performUnitOfWork(workInProgress);
+  }
+  // shouldYield() 用 scheduler 包检查是否超过 5ms 时间片
+  // 超过 → return → 让出主线程 → 浏览器响应输入 / 渲染 / 动画
+}
+
+// 单个工作单元的处理
+function performUnitOfWork(unitOfWork) {
+  const current = unitOfWork.alternate;
+
+  // ① beginWork：处理当前节点，决定是否继续往下走
+  let next = beginWork(current, unitOfWork, renderLanes);
+
+  unitOfWork.memoizedProps = unitOfWork.pendingProps;
+
+  if (next === null) {
+    // 没有子节点 → 进入 complete 阶段，往上"unwind"
+    completeUnitOfWork(unitOfWork);
+  } else {
+    // 有子节点 → 继续往下深度优先遍历
+    workInProgress = next;
+  }
+}
+
+// shouldYield 简化版（实际在 scheduler 包）
+const FRAME_INTERVAL = 5;  // ms
+let deadline = performance.now() + FRAME_INTERVAL;
+function shouldYield() {
+  return performance.now() &gt;= deadline;
+}</code></pre>
+        </div>
+
+        <p>
+          <strong><code>beginWork</code> 阶段</strong>（<em>render 阶段的"<em>下行</em>"</em>）：
+        </p>
+        <ul>
+          <li>对函数组件：<strong>调用组件函数</strong>（"<em>render</em>"），处理 hooks，返回 children JSX</li>
+          <li>对 class 组件：调用 render 方法</li>
+          <li>对 host 组件（DOM）：处理 props，返回 children</li>
+          <li>对 Fragment / Provider / Context：转发 children</li>
+          <li>返回第一个子 Fiber，遍历继续往下；或返回 null 进入 complete 阶段</li>
+        </ul>
+
+        <p>
+          <strong><code>completeUnitOfWork</code> 阶段</strong>（<em>render 阶段的"<em>上行</em>"</em>）：
+        </p>
+        <ul>
+          <li>对 host 组件：创建 / 更新 DOM 节点（但还<strong>不</strong> append 到屏幕——只是准备好），收集 effects</li>
+          <li>合并子树的 effects 到当前节点的 <code>subtreeFlags</code></li>
+          <li>检查 sibling，有就走 sibling 的 beginWork；没有就 return（往上回到 parent 的 complete）</li>
+        </ul>
+
+        <p>
+          整个遍历是<strong>深度优先 + 后序</strong>：先 beginWork 走到最深的叶子，然后 completeUnitOfWork 一路 unwind 上来。这是经典的"<em>iterative tree traversal</em>" 模式，但用<strong>linked list 实现而非递归</strong>，所以可以中断。
+        </p>
+
+        <h3>Scheduler 包 —— 怎么"让出主线程"</h3>
+        <p>
+          <code>shouldYield()</code> 是关键——它怎么实现"<em>让浏览器先响应用户输入再继续</em>"？React 18+ 用<strong>独立的 <code>scheduler</code> 包</strong>，机制是：
+        </p>
+        <ul>
+          <li>
+            <strong>不用 <code>requestIdleCallback</code></strong>—— 部分浏览器实现太慢（如 Safari），fps 不稳定
+          </li>
+          <li>
+            <strong>用 <code>MessageChannel</code> 投递宏任务</strong>—— 比 setTimeout(0) 更快，浏览器能在每个宏任务后做 UI 渲染。详见 <a href="../../javascript/03-async/02-microtask-macrotask.html">JS · 宏任务/微任务</a>
+          </li>
+          <li>
+            <strong>5ms 时间片</strong>—— 经验值：人眼对 16.67ms（60fps）以下卡顿不敏感，留 11.67ms 给浏览器渲染
+          </li>
+          <li>
+            <strong>动态调整</strong>：如果上一帧渲染时间长，下一帧时间片缩短（让出更多）
+          </li>
+        </ul>
+
+        <h3>Lane 模型 —— 31 位 bitmask 表达优先级</h3>
+        <p>
+          React 18 引入 <strong>Lane 模型</strong>—— 用 31 位 bitmask（不用 32 位是为了避免 JavaScript 把 32 位整数转成负数）表达优先级。每个 lane 是一个 bit：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Lane 定义（简化）</span>
+          <pre class="code"><code class="lang-js">const TotalLanes = 31;
+
+// 单 lane（每个是一个 bit）
+const NoLane                  = 0b0000000000000000000000000000000;
+const SyncHydrationLane       = 0b0000000000000000000000000000001;
+const SyncLane                = 0b0000000000000000000000000000010;
+const InputContinuousLane     = 0b0000000000000000000000000001000;
+const DefaultLane             = 0b0000000000000000000000000100000;
+const TransitionLane1         = 0b0000000000000000000000010000000;
+const TransitionLane2         = 0b0000000000000000000000100000000;
+// ... 共 16 个 TransitionLanes ...
+const RetryLane1              = 0b0000000000010000000000000000000;
+// ... 4 个 RetryLanes ...
+const SelectiveHydrationLane  = 0b0000010000000000000000000000000;
+const IdleHydrationLane       = 0b0000100000000000000000000000000;
+const IdleLane                = 0b0001000000000000000000000000000;
+const OffscreenLane           = 0b0010000000000000000000000000000;
+const DeferredLane            = 0b0100000000000000000000000000000;
+
+// 多 lane 合并（bitwise OR）
+const lanes = SyncLane | DefaultLane | TransitionLane1;
+
+// 检查 lane 包含
+const includesSyncLane = (lanes &amp; SyncLane) !== NoLane;
+
+// 取最高优先级 lane（最低 bit）
+function getHighestPriorityLane(lanes) {
+  return lanes &amp; -lanes;  // 经典 bitwise 技巧
+}</code></pre>
+        </div>
+
+        <p>
+          <strong>Lane 模型的设计精髓</strong>：
+        </p>
+        <ul>
+          <li><strong>多个更新合并</strong>：同一 event handler 的多个 setState 合并到同一 lane bitmask（用 OR），一次渲染处理</li>
+          <li><strong>优先级抢占</strong>：高优先级 lane 在低优先级 lane 渲染中途到达时，丢弃低优先级 wip tree，重新从高优先级开始</li>
+          <li><strong>位运算极快</strong>：所有 lane 操作（OR / AND / 找最高位）都是单 CPU 指令</li>
+          <li><strong>同时表达多种状态</strong>：一个 Fiber 可以同时有 SyncLane（urgent 更新）和 TransitionLane1（transition 更新），各自独立处理</li>
+        </ul>
+
+        <p>
+          <strong>典型 lane 分配</strong>：
+        </p>
+        <ul>
+          <li><code>setState</code> 在 click handler 内 → <strong>SyncLane</strong>（同步、最高优先级）</li>
+          <li><code>setState</code> 在 useEffect / Promise.then → <strong>DefaultLane</strong>（默认）</li>
+          <li><code>startTransition(() =&gt; setState(...))</code> → <strong>TransitionLane1-16</strong>（低优先级，可被打断）</li>
+          <li><code>useDeferredValue</code> 内部 → <strong>DeferredLane</strong></li>
+          <li>render 错误 retry → <strong>RetryLane1-4</strong></li>
+        </ul>
+
+        <h3>Render 阶段 vs Commit 阶段</h3>
+
+        <h4>Render 阶段（可中断）</h4>
+        <p>
+          上面 Work Loop 描述的全部过程都是 Render 阶段——构建 wip tree、决定有哪些 effects。<strong>render 阶段不修改 DOM</strong>，只在内存里准备数据结构。所以<strong>可以中断</strong>，中间让出主线程没有问题。
+        </p>
+
+        <p>
+          因此 React 18+ 加了一些约定：<strong>render 阶段执行的代码（组件函数体）应该是纯函数</strong>，因为它<strong>可能被多次调用</strong>（被中断后从头重试）。这就是 StrictMode 双重渲染的目的——开发环境主动多调用一次，帮你检测渲染期副作用。
+        </p>
+
+        <h4>Commit 阶段（不可中断）⭐</h4>
+        <p>
+          render 完成后进入 commit—— <strong>同步、不可中断、必须一次性完成</strong>。分 3 个子阶段：
+        </p>
+
+        <ol>
+          <li>
+            <strong>BeforeMutation</strong>（变更前）：调 <code>getSnapshotBeforeUpdate</code>（class component），保存即将变更前的 DOM 状态。极少使用。
+          </li>
+          <li>
+            <strong>Mutation</strong>（变更）：实际操作 DOM —— 创建 / 更新 / 删除节点 + 处理 ref（先 detach 老 ref，再 attach 新 ref）。<strong>这是用户最终看到的"<em>页面变化</em>" 时刻</strong>。
+          </li>
+          <li>
+            <strong>Layout</strong>（布局后）：调 <code>useLayoutEffect</code> 回调 + class 的 <code>componentDidMount</code> / <code>componentDidUpdate</code>。<strong>同步执行，阻塞浏览器渲染</strong>—— 所以 useLayoutEffect 内的 DOM 测量能"<em>看到准确尺寸但用户还没看到</em>" 的中间态，可在这里调整布局而不闪烁。
+          </li>
+        </ol>
+
+        <p>
+          <strong>之后异步</strong>：<strong>Passive Effects</strong>（<code>useEffect</code> 回调）—— 在 commit 完成后<strong>下一个 microtask 或 macrotask</strong> 跑（不阻塞屏幕渲染）。这是 useEffect vs useLayoutEffect 的核心区别。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · commit 阶段时序</span>
+          <pre class="code"><code class="lang-js">// commit 同步部分（不可中断）：
+// 1. BeforeMutation 子阶段
+//    → 遍历 effect list，调 getSnapshotBeforeUpdate
+// 2. Mutation 子阶段
+//    → DOM 节点 placement / update / deletion
+//    → ref detach（旧 ref 设为 null）
+// 3. Layout 子阶段
+//    → ref attach（新 ref 赋值）
+//    → useLayoutEffect 回调（同步！）
+//    → componentDidMount / componentDidUpdate（同步！）
+//
+// commit 同步部分结束 ──── 浏览器渲染屏幕 ────
+//
+// 之后异步：
+// 4. Passive Effects（useEffect）
+//    → flushPassiveEffects 在下一个 macrotask 执行
+//    → 不阻塞屏幕渲染，对性能更友好</code></pre>
+        </div>
+
+        <h3>Hooks Linked List ⭐ —— Rules of Hooks 的引擎根因</h3>
+        <p>
+          这是<strong>本章最重要的部分</strong>—— 解释为什么"<em>useState/useEffect 必须按相同顺序调用</em>"是规范级要求，不是约定。
+        </p>
+
+        <p>
+          每个函数组件 Fiber 的 <code>memoizedState</code> 字段是一个<strong>单链表</strong>。每次组件函数执行时，每个 <code>useXxx</code> 调用<strong>按调用顺序</strong>对应链表的一个节点：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Hooks linked list 结构</span>
+          <pre class="code"><code class="lang-js">function Counter() {
+  const [count, setCount] = useState(0);     // ← Hook 节点 #1
+  const [name, setName] = useState('Alice'); // ← Hook 节点 #2
+  useEffect(() =&gt; {                          // ← Hook 节点 #3
+    document.title = name;
+  }, [name]);
+  const ref = useRef(null);                  // ← Hook 节点 #4
+  return /* JSX */;
+}
+
+// fiber.memoizedState 链表：
+// {                          // Hook #1: useState
+//   memoizedState: 0,        //   当前值
+//   queue: { ... },          //   pending updates
+//   next: ─────────────►     {                   // Hook #2: useState
+//                              memoizedState: 'Alice',
+//                              queue: { ... },
+//                              next: ─────────────►   {                  // Hook #3: useEffect
+//                                                       memoizedState: { tag, create, destroy, deps },
+//                                                       next: ─────────► {              // Hook #4: useRef
+//                                                                          memoizedState: { current: null },
+//                                                                          next: null
+//                                                                        }
+//                                                     }
+//                            }
+// }
+
+// 第一次 render：依次调用 useState/useEffect/useRef，
+//                每个 hook 创建新节点 append 到链表尾部
+// 第二次 render：组件函数重新执行，
+//                每个 hook 按"调用次序"取对应节点
+//                useState() 第一次调 → 取 #1，第二次 → 取 #2
+//                完全靠"位置"对应，不靠"名字"！</code></pre>
+        </div>
+
+        <p>
+          <strong>这就是 Rules of Hooks 的根因</strong>：
+        </p>
+
+        <ul>
+          <li>
+            <strong>规则 1：Hooks 必须在顶层调用</strong>—— 因为 React 完全靠"<em>调用顺序</em>" 找对应链表节点。如果你把 useState 放在 if 里，<strong>下次渲染条件不同</strong>，第 N 个 hook 的链表节点对应的可能是另一个 hook，<strong>类型 / 数据完全错位</strong>。
+          </li>
+          <li>
+            <strong>规则 2：只在 React 函数内调用</strong>—— 因为 hooks 实现依赖 fiber.memoizedState 字段，普通函数不在 React 调度上下文里，没有 fiber 可写。
+          </li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 违反 Rules of Hooks 的危害</span>
+          <pre class="code"><code class="lang-js">function Counter({ shouldTrack }) {
+  const [count, setCount] = useState(0);
+
+  // ❌ Conditional Hooks
+  if (shouldTrack) {
+    const [name, setName] = useState('Alice');  // 有时跑、有时不跑
+  }
+
+  useEffect(() =&gt; {  // 这个 hook 的"调用次序号"会变！
+    console.log(count);
+  }, [count]);
+
+  // 第一次 render（shouldTrack=true）：3 个 hooks 调用
+  //   #1 useState(0) → memoizedState = 0
+  //   #2 useState('Alice') → memoizedState = 'Alice'
+  //   #3 useEffect → memoizedState = effect 描述符
+  //
+  // 第二次 render（shouldTrack=false）：2 个 hooks 调用
+  //   #1 useState(0) → 取链表第 1 个 → OK
+  //   #2 useEffect → 取链表第 2 个 → 但第 2 个是 'Alice' 的 useState 节点！
+  //   类型错位 → React 报错或行为完全不可预期 ⚠️
+}
+
+// ESLint plugin react-hooks/rules-of-hooks 在 lint 时拦截
+// React 运行时也会检测到 hook 数量变化并 warn</code></pre>
+        </div>
+
+        <p>
+          <strong>对比 Vue 3 Composition API</strong>：Vue 的 <code>setup()</code> 函数<strong>每个组件实例只跑一次</strong>，<code>ref()</code> / <code>reactive()</code> 调用次数和位置都不影响（因为没有"重新渲染时按顺序对齐"的需求—— Vue 用 Proxy 自动追踪）。React 选了"<em>每次重新跑函数体 + 按顺序对齐</em>" 这个简单模型，代价就是 Rules of Hooks。
+        </p>
+
+        <h3>Reconciliation Diff 算法 —— 怎么决定复用 / 销毁 / 创建</h3>
+        <p>
+          beginWork 处理一个 Fiber 时，对比 current children 和新 children（JSX 返回值），<strong>决定每个 child 是 reuse / unmount / mount</strong>。算法核心：
+        </p>
+
+        <ul>
+          <li><strong>同 type + 同 key → 复用</strong>：保留 current Fiber，更新 props，可能继续 reuse 子树（如果 props 没变 + memo）</li>
+          <li><strong>不同 type 或不同 key → 销毁 + 创建</strong>：unmount 老 Fiber（含其子树），mount 新 Fiber</li>
+          <li><strong>列表（多 child）</strong>：用 key 配对——key 相同视为同一个，按顺序变化时仅<strong>移动</strong>而非重建</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 列表 diff 关键场景</span>
+          <pre class="code"><code class="lang-js">// 旧 children: [&lt;li key="a"&gt;A&lt;/li&gt;, &lt;li key="b"&gt;B&lt;/li&gt;, &lt;li key="c"&gt;C&lt;/li&gt;]
+// 新 children: [&lt;li key="b"&gt;B&lt;/li&gt;, &lt;li key="a"&gt;A&lt;/li&gt;, &lt;li key="c"&gt;C&lt;/li&gt;]
+// → React 识别到 key=a 仍存在，仅"移动"—— 不销毁重建（保留 DOM 节点状态）
+
+// 不用 key（用 index）：
+// 旧 children: [&lt;li&gt;A&lt;/li&gt;, &lt;li&gt;B&lt;/li&gt;, &lt;li&gt;C&lt;/li&gt;]
+// 新 children: [&lt;li&gt;B&lt;/li&gt;, &lt;li&gt;A&lt;/li&gt;, &lt;li&gt;C&lt;/li&gt;]
+// → React 按 index 配对：position 0 的 'A' 改成 'B'（实际是更新文本），
+//   position 1 的 'B' 改成 'A' —— 看起来正确但实际是"覆写"，
+//   原 li 的内部状态（如 input 焦点）会跑到错误位置 ⚠️
+
+// 这就是为什么 list 必须用稳定 key：
+// 1. key 必须唯一（同一 list 内）
+// 2. key 必须稳定（重新渲染时同一逻辑项 key 不变）
+// 3. 不要用 array index 作 key（除非 list 永不重排序）
+
+// 详见 B5 / B12 —— 用户视角的 reconciliation</code></pre>
+        </div>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 调试"useEffect 顺序异常"</h3>
+          <p>
+            生产环境收到 React Error: "Rendered more hooks than during the previous render" —— 知道是 hook 数量变化引发的。从 Fiber 视角看：
+          </p>
+          <ul>
+            <li>第一次 render 函数组件调用了 3 个 hook → 链表 3 个节点</li>
+            <li>第二次 render 调用了 4 个 hook → React 检测到 hook 数量变化 → 报错</li>
+          </ul>
+          <p>
+            <strong>排查</strong>：① 搜索组件代码所有 <code>use*</code> 调用 ② 检查每个 hook 是否在<strong>顶层</strong>无条件调用（不在 if / for / try-catch / 函数嵌套里）③ ESLint <code>react-hooks/rules-of-hooks</code> 应该 lint 阶段就发现，配 CI 拦截
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 理解 React DevTools Profiler 输出</h3>
+          <p>
+            DevTools Profiler 录一段交互后，看到 commit phase 的 flame graph。每个矩形条对应一个 Fiber 节点的 render 时间。从 Fiber 视角解读：
+          </p>
+          <ul>
+            <li><strong>"Why did this render?"</strong> 列：显示触发本组件 render 的原因——state changed / props changed / parent re-rendered / context changed
+            </li>
+            <li><strong>commit 时间</strong>：所有 mutation + Layout phase 同步执行的总时间
+            </li>
+            <li><strong>passive effects 时间</strong>：useEffect 回调异步执行时间
+            </li>
+            <li><strong>flag 颜色</strong>：橘色 / 黄色 / 绿色对应不同 lane 优先级
+            </li>
+          </ul>
+          <p>
+            理解 Fiber 内部后，Profiler 不再是"<em>看不懂的图</em>"，而是 "<em>每个 Fiber 节点 work loop 中的开销可视化</em>"。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 写自定义 host（react-reconciler）</h3>
+          <p>
+            <code>react-reconciler</code> 是 React 的"<em>核心引擎</em>" 包，给 react-dom / react-native / Ink（终端 UI）/ react-three-fiber（3D）/ Remotion（视频生成）等使用。如果要给自己的渲染目标写 host（如把 React tree 渲染到 PDF / canvas / 自家原生平台）：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · react-reconciler host 接口（节选）</span>
+            <pre class="code"><code class="lang-js">import Reconciler from 'react-reconciler';
+
+const reconciler = Reconciler({
+  // 必须实现的 host config
+  createInstance(type, props, rootContainer, hostContext, internalHandle) {
+    // 创建一个原生 instance（如 PDF 节点 / canvas 形状）
+  },
+  appendInitialChild(parentInstance, child) { /* ... */ },
+  appendChild(parentInstance, child) { /* ... */ },
+  removeChild(parentInstance, child) { /* ... */ },
+  insertBefore(parentInstance, child, beforeChild) { /* ... */ },
+
+  // commit 阶段的 mutation
+  commitUpdate(instance, updatePayload, type, oldProps, newProps) { /* ... */ },
+  commitTextUpdate(textInstance, oldText, newText) { /* ... */ },
+
+  // 配置选项
+  supportsMutation: true,
+  supportsPersistence: false,
+  isPrimaryRenderer: true,
+});
+
+// 使用：
+const root = reconciler.createContainer(rootInstance, ...);
+reconciler.updateContainer(reactElement, root);
+
+// 整个 React Fiber + Hooks + Concurrent 系统都能跑在你的自定义 host 上！</code></pre>
+          </div>
+          <p>
+            写过 react-reconciler host 的工程师对 Fiber 的理解会上一个台阶——你必须实现 commit 阶段的所有 mutation 操作，这就是 host 与 React 内核的接口。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>追踪一次 setState 在 Fiber 内部的完整路径</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · setState 引发的内部流程</span>
+          <pre class="code"><code class="lang-js">function Counter() {
+  const [count, setCount] = useState(0);
+  return &lt;button onClick={() =&gt; setCount(count + 1)}&gt;{count}&lt;/button&gt;;
+}
+
+// 用户点击 button 后内部发生的事：
+
+// ① 浏览器派发 click 事件 → React 合成事件系统接管
+//    React 把 setCount(count + 1) 包在 batchedUpdates 中
+
+// ② setCount 实质：dispatchSetState(fiber, queue, value)
+//    - 创建一个 update 对象 { lane: SyncLane, value: 1, next: null }
+//    - 把 update 加入 queue.pending（环形链表）
+//    - 在 fiber.lanes 上 OR 这个 lane
+
+// ③ 调度：scheduler 检查 root 的 pendingLanes
+//    - 选最高优先级 lane（这里 SyncLane）
+//    - 创建 wip tree（用 alternate 复制 current）
+
+// ④ Render 阶段（work loop）
+//    - performUnitOfWork(rootFiber)
+//    - beginWork：调用 Counter 函数
+//      - useState 内部：从 hook linked list 取节点 #1
+//      - 处理 update queue：count = 0 + 1 = 1
+//      - 返回 JSX &lt;button onClick={...}&gt;1&lt;/button&gt;
+//    - 创建 button 子 Fiber（diff 老 Fiber）
+//    - completeUnitOfWork(buttonFiber)：
+//      - 准备 DOM 操作 flag = Update（textContent）
+//    - completeUnitOfWork(rootFiber)
+
+// ⑤ Commit 阶段
+//    - BeforeMutation：无操作
+//    - Mutation：button.firstChild.textContent = '1'
+//    - Layout：无 useLayoutEffect
+
+// ⑥ Commit 完成 → root.current = wip tree
+//    - 浏览器渲染屏幕 → 用户看到 1
+
+// ⑦ Passive Effects（无）
+//    - 如果有 useEffect 依赖 count，会在这里触发
+
+// 整个过程同步完成（SyncLane），用户感知"<em>立即响应</em>"。
+// 如果是 startTransition 包裹，会走 TransitionLane，可被打断。</code></pre>
+        </div>
+
+        <h3>对比 Fiber 时间切片 vs 不切片</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 大列表渲染的时间切片实测</span>
+          <pre class="code"><code class="lang-js">// 假设有一个 10000 项的列表，渲染每个项要 0.1ms
+
+function HugeList({ items }) {
+  return (
+    &lt;ul&gt;
+      {items.map(item =&gt; &lt;Item key={item.id} {...item} /&gt;)}
+    &lt;/ul&gt;
+  );
+}
+
+// 场景：用户在搜索框输入文字过滤列表
+const [query, setQuery] = useState('');
+const [items, setItems] = useState(allItems);
+
+const handleChange = (e) =&gt; {
+  setQuery(e.target.value);              // SyncLane（用户输入）
+  setItems(filter(allItems, e.target.value));  // 默认 DefaultLane
+};
+
+// 没有 useTransition：
+// - 每次输入触发完整 work loop 渲染 10000 个 Item
+// - work loop 占用主线程 ~1000ms
+// - 期间用户输入完全卡顿
+
+// 有 useTransition：
+const [isPending, startTransition] = useTransition();
+const handleChange = (e) =&gt; {
+  setQuery(e.target.value);              // SyncLane（输入框立即响应）
+  startTransition(() =&gt; {
+    setItems(filter(allItems, e.target.value));  // TransitionLane（低优先级）
+  });
+};
+
+// React 内部：
+// 1. 输入框 setQuery → SyncLane → 完整渲染输入框（5ms 内完成）
+// 2. setItems 走 TransitionLane → work loop 跑 5ms → shouldYield → 让出
+// 3. 浏览器响应下一次输入 → 再次进入 SyncLane → ...
+// 4. TransitionLane 一直被打断到用户停止输入 → 最后渲染完整列表
+//
+// 用户感知：输入框丝滑，列表在最终输入完成后~100ms 出现</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：把"render"等同于"DOM 渲染"</div>
+          <p>
+            React 的 "<em>render</em>" 是<strong>Render 阶段</strong>—— 调用组件函数 + 构建 wip Fiber tree，<strong>不修改 DOM</strong>。Commit 阶段的 Mutation 子阶段才动 DOM。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：精确用语：①"<em>组件 render</em>"指调用组件函数 ②"<em>commit</em>"指 DOM 实际更新 ③"<em>页面渲染</em>"指浏览器 paint。术语混淆 = 沟通成本上升。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：把 useLayoutEffect 当 useEffect 用</div>
+          <p>
+            <code>useLayoutEffect</code> 在 Layout 子阶段<strong>同步执行</strong>，<strong>阻塞</strong>浏览器渲染；<code>useEffect</code> 在 commit 之后<strong>异步执行</strong>，不阻塞。把昂贵操作放 useLayoutEffect 会让用户看到"<em>延迟一帧</em>" 才显示。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：useLayoutEffect 仅用于<strong>必须在浏览器 paint 前完成的 DOM 测量 / 同步调整</strong>（如调整工具提示位置避免闪烁）。其他全部用 useEffect。详见 <a href="../02-reference/07-use-effect.html">B7 useEffect</a>（编写中）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：Conditional Hooks（最严重）</div>
+          <p>
+            <code>if (cond) useState()</code> / <code>for (...) useState()</code> / <code>useState() 在 try-catch 里</code> 都是违反 Rules of Hooks。引擎根因如本章 Hooks linked list 部分讲过——按调用顺序对应链表节点，条件调用导致错位。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：① ESLint <code>react-hooks/rules-of-hooks</code> CI 拦截 ② 改写：把条件移到 hook 内部（<code>useEffect(() =&gt; { if (cond) ... }, [cond])</code>）③ 用早返回前确保所有 hooks 已调用
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：用 index 当 list key</div>
+          <p>
+            如果 list 排序 / 过滤 / 增删，index 当 key 会让 React 错误"<em>复用</em>" 错位的 Fiber——内部 input 的焦点 / 滚动状态 / 自定义 component state 全部跑到错误的 li 上。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：① 用业务 ID 作为 key（<code>todo.id</code>、<code>user.email</code> 等稳定唯一）② 实在没有 ID，用 <code>crypto.randomUUID()</code> 在数据生成时分配 ③ 仅"<em>list 永不重排序</em>" 的特殊场景才能用 index
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：在 render 期间产生副作用破坏并发</div>
+          <p>
+            React 18 的 Concurrent rendering 让 render 阶段可能<strong>被中断后从头重试</strong>。如果你在组件函数体中修改了外部变量 / 全局状态 / DOM，重试时副作用会跑两次。
+          </p>
+          <div class="code-block" style="margin-top: 12px">
+            <span class="code-label">javascript · 并发不安全代码</span>
+            <pre class="code"><code class="lang-js">let externalCounter = 0;
+
+function Component() {
+  externalCounter++;  // ❌ render 期间修改外部 —— Concurrent 下会跑多次
+  return &lt;div&gt;{externalCounter}&lt;/div&gt;;
+}
+
+// StrictMode 双重渲染会让 externalCounter 永远是 2、4、6（双倍）
+// 真正的 Concurrent 中断重试会让计数完全不可预测</code></pre>
+          </div>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：组件函数体只做"<em>给定 props/state 计算 JSX</em>"，所有副作用进 useEffect。Strict Mode 帮你检测——开发环境双重渲染暴露这种 bug。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>权威架构文档</h3>
+        <ul>
+          <li>
+            <a href="https://github.com/acdlite/react-fiber-architecture" target="_blank" rel="noopener">Andrew Clark · React Fiber Architecture</a> —— Fiber 主导者的官方架构文档
+          </li>
+          <li>
+            <a href="https://www.youtube.com/watch?v=ZCuYPiUIONs" target="_blank" rel="noopener">Lin Clark · "A Cartoon Intro to Fiber" (React Conf 2017)</a> —— Fiber 架构的可视化解释（最易懂的入门）
+          </li>
+          <li>
+            <a href="https://overreacted.io/react-as-a-ui-runtime/" target="_blank" rel="noopener">Dan Abramov · React as a UI Runtime</a> —— 用 runtime 视角看 Fiber 的全貌
+          </li>
+        </ul>
+
+        <h3>Lane 模型 / Concurrent</h3>
+        <ul>
+          <li>
+            <a href="https://github.com/reactwg/react-18/discussions/27" target="_blank" rel="noopener">React 18 Working Group · Concurrent Rendering</a> —— Lane 模型设计动机
+          </li>
+          <li>
+            <a href="https://github.com/facebook/react/blob/main/packages/scheduler/" target="_blank" rel="noopener">facebook/react · scheduler 包源码</a> —— 时间切片与 5ms 时间片实现
+          </li>
+        </ul>
+
+        <h3>react-reconciler</h3>
+        <ul>
+          <li>
+            <a href="https://github.com/facebook/react/tree/main/packages/react-reconciler" target="_blank" rel="noopener">facebook/react · react-reconciler 包</a>
+          </li>
+          <li>
+            <a href="https://github.com/vadimdemedes/ink" target="_blank" rel="noopener">Ink</a> —— 用 React 写终端 UI 的库（react-reconciler 的好范本）
+          </li>
+          <li>
+            <a href="https://github.com/pmndrs/react-three-fiber" target="_blank" rel="noopener">react-three-fiber</a> —— 用 React 写 Three.js 3D 场景
+          </li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="02-design-philosophy.html">A2 设计哲学</a></li>
+          <li>下一步：<strong>A4 Concurrent 与异步</strong>（编写中）—— 把 Fiber 能力翻译成用户可见的特性（时间切片 / Suspense / Transition / RSC）</li>
+          <li>另一轨：<a href="../02-reference/index.html">Track B · 官网知识精读</a></li>
+        </ul>
+
+        <h3>跨主题参考</h3>
+        <ul>
+          <li><a href="../../ecma/01-history/03-execution-model.html">ECMA · A3 执行模型</a> —— ECMAScript 主题的"<em>引擎章</em>"，与本章对应（用户视角的 Realm / Agent / Job）</li>
+          <li><a href="../../ecma/01-history/04-async-evolution.html">ECMA · A4 异步演进</a> —— microtask / macrotask 调度（scheduler 包用 MessageChannel）</li>
+          <li><a href="../../javascript/03-async/02-microtask-macrotask.html">JS · 宏任务/微任务</a> —— 5ms 时间片 + MessageChannel 投递机制</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="02-design-philosophy.html">
+            <span class="label">← 上一章</span>
+            <span class="title">A2 · 设计哲学</span>
+          </a>
+          <a class="next" href="index.html">
+            <span class="label">下一步 →</span>
+            <span class="title">A4 · Concurrent 与异步（🚧 编写中，先看 Track 概览）</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
