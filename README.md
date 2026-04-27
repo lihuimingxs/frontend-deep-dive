@@ -135,7 +135,7 @@ docs/learning/deep-dive/
 - ✅ JavaScript（62 章，2026-04 完成）
 - ✅ TypeScript（20 章 / 4 Part 完成）
 - ✅ ECMAScript（11 章 / 2 轨完成 · Track A 历史脉络 5 章 + Track B 规范精读 6 章）
-- 🚧 React（24 章 / 2 轨：A1-A4 已写完 · Track A 仅剩 A5 生态 · Track B 19 章未写）
+- 🚧 React（24 章 / 2 轨：✅ Track A 历史脉络 5 章完成 · 🚧 Track B 19 章待写）
 - ⏳ Tailwind CSS / V8（规划中，需后续单独研究）
 
 ## 与 Mira 项目的关系
