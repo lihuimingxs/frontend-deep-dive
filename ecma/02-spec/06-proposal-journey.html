@@ -1,0 +1,764 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>B6 · 提案 → 标准的旅程 · ECMAScript 深度学习</title>
+    <meta
+      name="description"
+      content="TC39 提案 case study：Top-Level Await 成功案例（跨 §9.10 + §27 多 clause 修改）、Records & Tuples 卡 Stage 2 反例（GC / 相等语义 / 心智冲突 / tooling 4 大阻碍）、Iterator Helpers 顺畅推进案例。展示提案如何从想法走到标准。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c84a1f'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EES%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>ECMAScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.16 35); color: #fff">ES</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">ES 首页</a>
+          <a href="index.html">Track B 目录</a>
+          <a href="https://github.com/tc39/proposals" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Track B · ECMA-262 规范精读</h3>
+        <ul>
+          <li><a href="index.html">Track 概览</a></li>
+          <li><a href="01-how-to-read.html">B1 · 怎么读规范</a></li>
+          <li><a href="02-data-types.html">B2 · 数据类型与值（§6）</a></li>
+          <li><a href="03-abstract-operations.html">B3 · 抽象操作（§5、§7）</a></li>
+          <li><a href="04-internal-slots.html">B4 · 内部槽与方法（§10）</a></li>
+          <li><a href="05-execution-context.html">B5 · 执行上下文（§9）</a></li>
+          <li><a href="06-proposal-journey.html" class="active">B6 · 提案旅程</a></li>
+        </ul>
+        <h3>另一轨</h3>
+        <ul>
+          <li><a href="../01-history/index.html">Track A · 历史脉络（已完成）</a></li>
+        </ul>
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../javascript/index.html">JavaScript 深度学习</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">ECMAScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Track B · 规范精读</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>B6 · 提案旅程</span>
+        </nav>
+
+        <h1>B6 · 提案 → 标准的旅程（Case Study）</h1>
+        <p class="lead">
+          B1-B5 是"<strong>读规范的工具</strong>"。本章是<strong>综合实战</strong>——把这些工具用在三个真实提案上，看一个特性如何从"<em>GitHub 上一个 markdown 想法</em>"走到"<em>ECMA-262 §X.Y.Z 写入正文</em>"。本章选三个 case：① <strong>Top-Level Await</strong>（成功案例，跨 §9.10 + §27 多 clause 修改的复杂提案）② <strong>Records &amp; Tuples</strong>（卡 Stage 2 三年的反例，揭示提案"<em>进不去</em>"的真实阻碍）③ <strong>Iterator Helpers</strong>（ES2025 顺畅推进的最近案例）。读完这章，你既能<strong>评估"要不要用 Stage 3 特性"</strong>，也能<strong>给 TC39 提 PR</strong>，更能<strong>读懂 polyfill 为什么这样写</strong>。
+        </p>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 这是 ECMAScript 主题 Track B 的收官章</div>
+          <p>
+            读到这里你已经掌握：① B1 算法记法 ② B2 内部数据类型 ③ B3 抽象操作 ④ B4 内部槽与方法 ⑤ B5 执行上下文模型。本章是把这些 mental model <strong>用在真实历史</strong>上——从一个个具体的 Stage 0 → Stage 4 路径中印证你已经学到的概念。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~35 分钟</span>
+          <span><strong>前置</strong> B1-B5（必读）+ <a href="../01-history/01-standards-history.html">A1</a>（TC39 流程历史）+ <a href="../01-history/05-modern-ecosystem.html">A5</a>（Stage 流程详解）</span>
+          <span><strong>权威来源</strong>
+            <a href="https://github.com/tc39/proposals" target="_blank" rel="noopener">tc39/proposals</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>提案旅程不是"线性流水线"</strong>，是"<em>共识 + 实现验证 + 反复修订</em>"的迭代过程。Stage 卡很久的提案<strong>常常不是技术问题</strong>，是社区分歧（语义、心智、工程影响）。
+          </li>
+          <li>
+            <strong>"成功"和"失败"提案的最大差异不是技术复杂度，是「<em>是否动摇核心心智</em>」</strong>。Top-Level Await 让 Module 求值变成异步——但保持了"<em>import 顺序确定</em>"的核心心智，所以 5 年走完。Records &amp; Tuples 引入"<em>按值相等的对象</em>"——动摇了 ES "<em>对象按引用比较</em>" 的 30 年心智，所以 3 年没进。
+          </li>
+          <li>
+            <strong>实施 timeline 比规范本身更慢</strong>。Stage 4 ≠ 所有引擎已支持。Top-Level Await 进 Stage 4 后，V8 当周支持，SpiderMonkey 用了 3 个月，JSC 用了 6 个月，Node 集成又用了 4 个月。<strong>"原生支持"的实际时间线 ≈ Stage 4 + 6-12 个月</strong>。
+          </li>
+        </ol>
+
+        <p>本章三个 case 速览：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 22%">提案</th>
+              <th style="width: 100px">起点</th>
+              <th style="width: 120px">当前 Stage</th>
+              <th>关键复杂性</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Top-Level Await</strong></td>
+              <td>2014</td>
+              <td>Stage 4 (2022)</td>
+              <td>跨 §9.10 + §27.2 + §16 多 clause 修改、cycle + async 死锁检测</td>
+            </tr>
+            <tr>
+              <td><strong>Records &amp; Tuples</strong></td>
+              <td>2017</td>
+              <td><strong>Stage 2</strong>（卡 7+ 年）</td>
+              <td>新原始类型、按值相等、GC / typeof / === 心智冲突</td>
+            </tr>
+            <tr>
+              <td><strong>Iterator Helpers</strong></td>
+              <td>2017</td>
+              <td>Stage 4 (2024)</td>
+              <td>把 Iterator 升级到一等公民、Lazy evaluation、向后兼容</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>提案旅程的标准模式</h3>
+        <p>
+          每个进 Stage 1+ 的提案都有<strong>同样的仓库结构</strong>（tc39 GitHub 模板）：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">tc39/proposal-* · 标准仓库结构</span>
+          <pre class="code"><code class="lang-js">tc39/proposal-top-level-await/
+├── README.md            ← 高层介绍 + 当前状态 + Champion 列表
+├── EXPLAINER.md         ← 详细的「问题 + 方案」叙事（给非 TC39 成员看）
+├── spec.html            ← ecmarkup 写的 spec text（最终会合并进 ECMA-262）
+├── polyfill/            ← 参考实现（如果可 polyfill）
+├── test/                ← Test262 风格测试用例
+├── meetings/            ← TC39 各次会议讨论记录链接
+└── implementations.md   ← 各引擎实现状态</code></pre>
+        </div>
+
+        <p>
+          <strong>Champion</strong>（推动者）是关键——TC39 成员中有人愿意在每两个月一次的 plenary 会议上反复推动这个提案。没有 champion 的提案永远停在 Stage 0/1。
+        </p>
+
+        <p>
+          <strong>ecmarkup</strong>（<a href="https://tc39.es/ecmarkup/" target="_blank" rel="noopener">tc39.es/ecmarkup</a>）是写 spec text 的工具——把 HTML + 自定义标签（<code>&lt;emu-clause&gt;</code>、<code>&lt;emu-alg&gt;</code> 等）渲染成规范文本。<strong>ECMA-262 全文用它生成</strong>，每个提案的 <code>spec.html</code> 也用同款语法——这样进 Stage 4 时直接 merge。
+        </p>
+
+        <h3>Case 1 · Top-Level Await ⭐（成功案例）</h3>
+        <p>
+          <strong>问题</strong>：ES2015 引入 ESM 时，模块顶层不能 <code>await</code>——你必须包一个 async function。这意味着"<em>异步初始化</em>"代码（fetch config、连接数据库、加载 WASM）必须写成额外的"<em>调用入口</em>"。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 没有 TLA 时的模式</span>
+          <pre class="code"><code class="lang-js">// ❌ 不能这样写（pre-ES2022）
+const config = await fetch('/api/config').then(r =&gt; r.json());
+export default config;
+
+// ✅ 只能这样
+let _config;
+export const initConfig = async () =&gt; {
+  if (_config) return _config;
+  _config = await fetch('/api/config').then(r =&gt; r.json());
+  return _config;
+};
+export const getConfig = () =&gt; _config; // 可能返回 undefined ⚠️</code></pre>
+        </div>
+
+        <h4>时间线</h4>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 110px">时间</th>
+              <th style="width: 110px">Stage</th>
+              <th>事件</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>2014</td>
+              <td>—</td>
+              <td>Domenic Denicola 在博客提出"<em>module-level await</em>"想法</td>
+            </tr>
+            <tr>
+              <td>2018-06</td>
+              <td>Stage 1</td>
+              <td>Myles Borins 成为 Champion，提案进入 TC39 流程</td>
+            </tr>
+            <tr>
+              <td>2018-11</td>
+              <td>Stage 2</td>
+              <td>关键决策：选 "<strong>Variant A: Top-level await blocks tree</strong>"——TLA 模块阻塞所有依赖它的下游</td>
+            </tr>
+            <tr>
+              <td>2019-06</td>
+              <td>Stage 3</td>
+              <td>spec text 完整。但 Ryan Dahl 公开质疑（影响 Node 模块加载性能）→ Variant 重新讨论</td>
+            </tr>
+            <tr>
+              <td>2019-12</td>
+              <td>—</td>
+              <td>V8 实现 + chrome 89 上线（Stage 3 阶段先行）</td>
+            </tr>
+            <tr>
+              <td>2021-04</td>
+              <td>Stage 4</td>
+              <td>≥2 个引擎实现 + Test262 全过 + Node 14.8 集成</td>
+            </tr>
+            <tr>
+              <td>2022-06</td>
+              <td>—</td>
+              <td><strong>纳入 ES2022（第 13 版）</strong></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h4>跨 clause 修改的复杂性</h4>
+        <p>
+          TLA 不是"<em>加一个语法</em>"，是<strong>修改了 §9 + §16 + §27 三大块</strong>。让我们看具体改了什么（用 B5 学到的概念）：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">spec · TLA 涉及的 clause 修改</span>
+          <pre class="code"><code class="lang-js">// ① §9.10 Source Text Module Records 修改：
+//    - 加 [[HasTLA]] 字段（本模块是否含 TLA）
+//    - 加 [[AsyncEvaluation]] 字段（异步求值状态）
+//    - 加 [[AsyncEvaluationOrder]]（cycle 中的 settle 顺序）
+//    - 加 [[TopLevelCapability]]（顶层 evaluate 返回的 Promise）
+//    - 改 LinkRequestedModules 算法支持 cycle + async 检测
+//    - 改 Evaluate 算法变成异步（返回 Promise 而非同步完成）
+//
+// ② §16.2.1.5 InitializeEnvironment 修改：
+//    - module evaluation 从 sync execution 改为返回 Promise
+//
+// ③ §13 Expressions 修改：
+//    - AwaitExpression 在 Module 顶层（除 Script）也合法
+//
+// ④ §27.2 Promise Objects 修改：
+//    - PromiseResolveThenableJob 配合 module evaluation 的新协议
+//
+// 共修改 ~15 处算法步骤，加 ~600 行新文本。
+// 这是「单一特性跨多个 clause 修改」的典型 —— 普通提案改 1-3 处。</code></pre>
+        </div>
+
+        <h4>实施 timeline</h4>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">引擎</th>
+              <th style="width: 110px">支持版本</th>
+              <th>距 Stage 4</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>V8 (Chrome / Edge)</td>
+              <td>89 (2021-03)</td>
+              <td>Stage 3 阶段就先行</td>
+            </tr>
+            <tr>
+              <td>Node.js</td>
+              <td>14.8 (2020-08，--harmony 实验性) → 14.16 (2021-04，正式)</td>
+              <td>同步 V8</td>
+            </tr>
+            <tr>
+              <td>SpiderMonkey (Firefox)</td>
+              <td>89 (2021-06)</td>
+              <td>Stage 4 后 2 个月</td>
+            </tr>
+            <tr>
+              <td>JSC (Safari)</td>
+              <td>15 (2021-09)</td>
+              <td>Stage 4 后 5 个月</td>
+            </tr>
+            <tr>
+              <td>Bun</td>
+              <td>0.1 起原生支持</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td>Deno</td>
+              <td>1.0 起原生支持</td>
+              <td>—</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>关键观察</strong>：从 Stage 4（2021-04）到所有主流引擎都支持，用了约 6 个月。<strong>所以"我可以写 TLA 了"的实际时间是 2021 年底，不是 ES2022 发布的 2022-06</strong>。
+        </p>
+
+        <h3>Case 2 · Records &amp; Tuples ⚠️（卡 Stage 2 反例）</h3>
+        <p>
+          <strong>问题</strong>：JS 的对象 / 数组按引用比较——<code>{ a: 1 } === { a: 1 }</code> 是 false。但很多场景需要"<em>结构相等</em>"（Redux state 比较、React props memo、深 immutable）。社区方案（Immutable.js、structuredClone-based equality）都是性能或语法妥协。
+        </p>
+
+        <p>
+          <strong>提案</strong>：引入新原始类型 Record (<code>#{}</code>) 和 Tuple (<code>#[]</code>)：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Records &amp; Tuples 设计目标</span>
+          <pre class="code"><code class="lang-js">// 字面量语法（带 # 前缀）
+const r1 = #{ name: 'Alice', age: 30 };
+const r2 = #{ name: 'Alice', age: 30 };
+r1 === r2;     // true!（按值相等）
+
+const t1 = #[1, 2, 3];
+const t2 = #[1, 2, 3];
+t1 === t2;     // true!
+
+// 深度 immutable
+r1.name = 'Bob';   // TypeError（不可变）
+
+// 嵌套保持原始性
+const nested = #{ inner: #[1, 2] };
+typeof nested;     // "record"
+typeof nested.inner; // "tuple"
+
+// 与 Object / Array 互转
+const obj = Object(r1);    // 转成 Object
+const tup = #[...arr];     // Array 转 Tuple（仅当元素都是原始值）</code></pre>
+        </div>
+
+        <h4>时间线</h4>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 110px">时间</th>
+              <th style="width: 110px">Stage</th>
+              <th>事件</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>2017</td>
+              <td>—</td>
+              <td>提议出现，最初叫 "Const Value Types"</td>
+            </tr>
+            <tr>
+              <td>2019-07</td>
+              <td>Stage 1</td>
+              <td>Bloomberg 工程师 Robin Ricard / Rick Button 成为 Champion</td>
+            </tr>
+            <tr>
+              <td>2020-04</td>
+              <td>Stage 2</td>
+              <td>使用 <code>#{}</code> / <code>#[]</code> 字面量。社区 polyfill 出现</td>
+            </tr>
+            <tr>
+              <td>2021-2024</td>
+              <td>Stage 2</td>
+              <td><strong>反复修订，未能进 Stage 3</strong>。社区争议愈演愈烈</td>
+            </tr>
+            <tr>
+              <td>2024-09</td>
+              <td>Stage 2</td>
+              <td>Champion 提议<strong>大幅缩减范围</strong>（"Records and Tuples Lite"）—— 只支持原始值嵌套，不支持 ImmutableObject</td>
+            </tr>
+            <tr>
+              <td>2025-04（写作时点）</td>
+              <td>Stage 2</td>
+              <td><strong>仍卡在 Stage 2，已 7+ 年</strong>。Mozilla 表示无意实现</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h4>4 大阻碍详解</h4>
+
+        <p><strong>① GC 实现复杂</strong></p>
+        <ul>
+          <li>"<em>结构相等</em>"要求 hash 用结构而非引用——每次创建一个 Record 都要算结构 hash</li>
+          <li>引擎要维护"<em>已存在的相等 Record 共享内存</em>"机制（hash-cons）—— 否则 <code>#{a:1} === #{a:1}</code> 实现起来很慢</li>
+          <li>这种 hash-cons 表本身要 GC，且和现有 V8 / SpiderMonkey 的对象内存模型不兼容</li>
+        </ul>
+
+        <p><strong>② <code>===</code> 心智冲突</strong></p>
+        <ul>
+          <li>30 年来 JS 心智："<em><code>===</code> 检查引用相等</em>"。突然引入"<em>有些类型 <code>===</code> 检查结构相等</em>"——这是<strong>语义分裂</strong></li>
+          <li>用户将看到 <code>{} === {}</code> 是 false 但 <code>#{} === #{}</code> 是 true。不一致带来心智成本</li>
+        </ul>
+
+        <p><strong>③ <code>typeof</code> 新值争议</strong></p>
+        <ul>
+          <li>Records 是新原始类型 → <code>typeof r === "record"</code>？还是 "object"？还是 "tuple"？</li>
+          <li>30 年的 <code>typeof === "object"</code> 检查代码会全部不正确处理 Record</li>
+          <li>"向后兼容性"和"语义清晰"的两难</li>
+        </ul>
+
+        <p><strong>④ 与 React 等框架的心智冲突</strong></p>
+        <ul>
+          <li>React 用 "对象按引用变化触发 re-render"——Record 不再是引用语义，破坏 useState/useMemo 直觉</li>
+          <li>"<em>setState({...state, x: 1})</em>" 在 Record 下变成"<em>setState(#{...state, x: 1})</em>"，但相等性意义完全不同</li>
+          <li>框架社区对此有<strong>明确反对意见</strong>（Dan Abramov 等公开质疑）</li>
+        </ul>
+
+        <h4>当前替代方案</h4>
+        <ul>
+          <li><a href="https://immerjs.github.io/immer/" target="_blank" rel="noopener"><strong>Immer</strong></a> ——"<em>用可变 API 写不可变更新</em>"，工程上事实标准</li>
+          <li><a href="https://immutable-js.com/" target="_blank" rel="noopener"><strong>Immutable.js</strong></a>（Facebook）—— 老牌方案，性能好但 API 不直观</li>
+          <li><strong>structured cloning + deep equal</strong>（lodash <code>_.isEqual</code>）—— 简单但性能差</li>
+          <li><strong>Object.freeze 浅冻结 + 工程纪律</strong> —— 最务实的"假" immutability</li>
+        </ul>
+
+        <p>
+          <strong>给提案的启示</strong>：技术上可行的提案<strong>不一定能进规范</strong>。需要：① 不动摇核心心智 ② 框架社区不强烈反对 ③ 引擎实现可行 ④ 不存在更轻量的库方案。Records &amp; Tuples 4 项都不满足，所以卡了 7 年。
+        </p>
+
+        <h3>Case 3 · Iterator Helpers（最近顺畅案例）</h3>
+        <p>
+          <strong>问题</strong>：ES2015 引入 Iterator 协议（<a href="../01-history/02-design-principles.html">A2 设计原则</a> 详述）—— 但 Iterator 自身没有 <code>.map</code> / <code>.filter</code> / <code>.toArray</code> 等方法。要用必须先 spread 成数组 <code>[...iter].map(...)</code>，<strong>失去了懒求值</strong>（spread 已经把全部值算出来了）。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Iterator Helpers 之前 vs 之后</span>
+          <pre class="code"><code class="lang-js">// 之前：必须先 spread —— 全量内存，失去懒求值
+const result = [...generator()]
+  .filter(x =&gt; x &gt; 0)
+  .map(x =&gt; x * 2)
+  .slice(0, 10);
+
+// ES2025 Iterator Helpers：链式 + 懒求值
+const result = generator()
+  .filter(x =&gt; x &gt; 0)
+  .map(x =&gt; x * 2)
+  .take(10)
+  .toArray();
+// take(10) 后只算前 10 个，generator() 不会全跑完
+
+// 配套的还有 .reduce / .forEach / .some / .every / .find / .flatMap
+// 还有静态方法 Iterator.from(iterable) 把任意 iterable 转 Iterator</code></pre>
+        </div>
+
+        <h4>时间线</h4>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 110px">时间</th>
+              <th style="width: 110px">Stage</th>
+              <th>事件</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>2017-12</td>
+              <td>Stage 1</td>
+              <td>Gus Caplan 提案 (Node.js core 维护者)</td>
+            </tr>
+            <tr>
+              <td>2018-2021</td>
+              <td>Stage 2</td>
+              <td>设计反复（关键决策：是否包括 async iterator helpers？最终先做 sync 版）</td>
+            </tr>
+            <tr>
+              <td>2022-09</td>
+              <td>Stage 3</td>
+              <td>规范文本完整</td>
+            </tr>
+            <tr>
+              <td>2023-2024</td>
+              <td>Stage 3</td>
+              <td>V8、SpiderMonkey、JSC 陆续实现</td>
+            </tr>
+            <tr>
+              <td>2024-12</td>
+              <td>Stage 4</td>
+              <td>所有引擎齐备 + Test262 全过</td>
+            </tr>
+            <tr>
+              <td>2025-06</td>
+              <td>—</td>
+              <td><strong>纳入 ES2025（第 16 版）</strong></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h4>为什么这次顺畅</h4>
+        <ul>
+          <li><strong>不动摇任何心智</strong>：只是给现有 Iterator 加方法，老代码完全不受影响</li>
+          <li><strong>polyfill 简单</strong>：纯 JS 就能 polyfill（<code>core-js</code> 早已支持）—— 风险可预测</li>
+          <li><strong>工程价值显著</strong>：每个 JS 工程师都用过 <code>[...gen()].map(...)</code>，对懒求值有直接需求</li>
+          <li><strong>跨引擎共识</strong>：V8 团队主动推动，其他引擎跟进顺利</li>
+        </ul>
+
+        <p>
+          <strong>对比 Records &amp; Tuples</strong>：Iterator Helpers 是"<em>给已有抽象加便利方法</em>"，Records &amp; Tuples 是"<em>引入全新数据类型</em>"。前者风险低，后者风险高。<strong>提案的"工程友好度"≈ 它对现有代码的破坏程度的反比</strong>。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 团队评估"要不要用 Stage 3 提案"</h3>
+          <p>
+            React 项目想用 <a href="https://github.com/tc39/proposal-async-context" target="_blank" rel="noopener">AsyncContext</a>（Stage 2，2025-04）做隐式 trace ID 传递——这值得用吗？决策框架：
+          </p>
+          <ol>
+            <li><strong>Stage 2 是上限警戒线</strong>——可能永远不进，或语义大改。<strong>禁止生产用 Stage 0-2 提案语法</strong></li>
+            <li><strong>Stage 3 + 引擎都已实现</strong>—— 可以用，但配 polyfill + 关注更新</li>
+            <li><strong>Stage 4 + 1 年</strong>—— 可假设原生支持，但仍要看 baseline 浏览器</li>
+            <li><strong>查 polyfill 风险</strong>——能 polyfill？polyfill 体积？polyfill 100% 还原原生？</li>
+            <li><strong>查框架社区态度</strong>——React/Vue 等明确反对的提案，即使进规范也不要押注</li>
+          </ol>
+          <p>
+            AsyncContext 当前评估：Stage 2，未进 Stage 3，<strong>暂不用</strong>。等到进 Stage 4 + 至少 V8/SpiderMonkey 实现后再回看（预计 2027+）。同期的替代方案：用 OpenTelemetry SDK 提供的"<em>fake AsyncContext</em>" polyfill。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 给 TC39 提 PR 的入门路径</h3>
+          <p>
+            想给 ECMAScript 提个想法（如 <code>Array.prototype.partition</code>）——怎么做？
+          </p>
+          <ol>
+            <li>先去 <a href="https://es.discourse.group/" target="_blank" rel="noopener">es.discourse.group</a>（社区讨论区）发帖，看社区反应</li>
+            <li>如果有兴趣，找一个 TC39 成员 champion 你的提案（Bloomberg / Microsoft / Mozilla / Apple / Google 等公司都有 representatives）</li>
+            <li>建 GitHub repo，按 tc39 模板写 README + EXPLAINER + spec.html</li>
+            <li>在 TC39 plenary（2 个月一次）present，争取 Stage 1</li>
+            <li>反复迭代 spec text，找引擎团队反馈，争取 Stage 2/3/4</li>
+          </ol>
+          <p>
+            <strong>大多数提案在 Stage 0-1 就被否决</strong>——常见原因：① 已有库方案 ② 语义不清晰 ③ 不符合 ES 设计哲学。<strong>读 <a href="https://github.com/tc39/proposals/blob/main/inactive-proposals.md" target="_blank" rel="noopener">tc39 inactive-proposals</a> 的退役提案</strong>是免费的"<em>怎么避免不被接受</em>"教材。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 解读为什么这个 polyfill 这样写</h3>
+          <p>
+            读 <a href="https://github.com/zloirock/core-js" target="_blank" rel="noopener">core-js</a> 源码看 Iterator Helpers polyfill：
+          </p>
+          <ul>
+            <li>为什么要新建一个 <code>%IteratorPrototype%</code> 而不是改 <code>Array.prototype</code>？—— 因为提案明确加在 Iterator 上而非 Array，向后兼容</li>
+            <li>为什么 <code>.map</code> 返回 lazy iterator 而不是 Array？—— 提案要求懒求值，全量执行违反语义</li>
+            <li>为什么有 <code>IteratorClose</code> 处理 break？—— 提案要求 break 时调用 generator 的 <code>.return()</code> 让 finally 跑（B3 讲过）</li>
+          </ul>
+          <p>
+            读 polyfill 时<strong>对照原提案 spec text</strong>能解释每一行决策。这是 B 轨学完后能做到的"<em>用规范读代码</em>"。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>追踪一个提案的 Stage 流转</h3>
+
+        <div class="code-block">
+          <span class="code-label">提案完整生命周期模板</span>
+          <pre class="code"><code class="lang-js">// 假设我们在 2026 年想给 ECMAScript 加 Set.prototype.partition：
+// 把 Set 按 predicate 分成两个 Set 返回 [matchSet, restSet]
+
+// === Stage 0 → 1 ===
+// 1. 在 GitHub 建 proposal-set-partition 仓库
+// 2. README 写：
+//    "Adds Set.prototype.partition(fn) returning [matchSet, restSet]"
+// 3. EXPLAINER.md 给真实用例：
+//    - 把活跃用户和非活跃用户分组
+//    - 把校验通过的字段和失败的字段分组
+// 4. 找 champion（如 Bloomberg 的 Mathieu Hofman）
+// 5. 在 TC39 plenary present
+//    若通过 → Stage 1
+
+// === Stage 1 → 2 ===
+// 1. 写初版 spec.html (用 ecmarkup):
+//    Set.prototype.partition ( predicate )
+//    1. Let _O_ be ? ToObject(this value).
+//    2. Perform ? RequireInternalSlot(_O_, [[SetData]]).
+//    3. If IsCallable(_predicate_) is false, throw TypeError.
+//    4. Let _matches_ be a new Set.
+//    5. Let _rest_ be a new Set.
+//    6. For each element _e_ of _O_.[[SetData]], do
+//       a. If ? Call(_predicate_, undefined, « _e_ »), add _e_ to _matches_.
+//       b. Else, add _e_ to _rest_.
+//    7. Return CreateArrayFromList(« _matches_, _rest_ »).
+// 2. 写 polyfill 验证语义
+// 3. 写 Test262 测试
+// 4. 在 plenary present → Stage 2
+
+// === Stage 2 → 3 → 4 ===
+// 类似流程，反复迭代 spec text，等引擎实现，最后 Test262 全过 → Stage 4
+
+// 全程 2-5 年。每两个月一次 plenary 是关键节点。</code></pre>
+        </div>
+
+        <h3>读 spec text 的实战</h3>
+
+        <div class="code-block">
+          <span class="code-label">spec · Iterator.prototype.map（ES2025）实际规范</span>
+          <pre class="code"><code class="lang-js">// 27.1.4.1.5 Iterator.prototype.map ( mapper )
+// 1. Let O be the this value.
+// 2. If O is not an Object, throw a TypeError exception.
+// 3. If IsCallable(mapper) is false, throw a TypeError exception.
+// 4. Let iterated be ? GetIteratorDirect(O).
+// 5. Let counter be 0.
+// 6. Let closure be a new Abstract Closure with no parameters that
+//    captures iterated, mapper, and counter and performs the following
+//    steps when called:
+//    a. Repeat,
+//       i. Let value be ? IteratorStepValue(iterated).
+//       ii. If value is done, return undefined.
+//       iii. Let mapped be Completion(Call(mapper, undefined, « value, F(counter) »)).
+//       iv. IfAbruptCloseIterator(mapped, iterated).
+//       v. Let completion be Completion(Yield(mapped)).
+//       vi. IfAbruptCloseIterator(completion, iterated).
+//       vii. Set counter to counter + 1.
+// 7. Let result be CreateIteratorFromClosure(closure, "Iterator Helper", %IteratorHelperPrototype%).
+// 8. Set result.[[UnderlyingIterator]] to iterated.
+// 9. Return result.
+
+// 用 B 轨学到的能力解读：
+// - 步骤 1-3：标准的 this 检查 + IsCallable（B3）
+// - 步骤 4：GetIteratorDirect 是新抽象操作（不调 Symbol.iterator，直接用 O 当迭代器）
+// - 步骤 6：Abstract Closure（B2）—— 规范层的"匿名函数"，捕获 iterated/mapper/counter
+// - 步骤 6.iv / 6.vi：IfAbruptCloseIterator 处理 abrupt completion + 调 IteratorClose（B3）
+// - 步骤 7：返回新 Iterator exotic（B4）
+
+// 全程使用 B1-B5 的术语和概念。
+// 读懂这段 = Track B 学习成果验收。</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：以为 Stage 4 = 所有引擎已实现</div>
+          <p>
+            <strong>不是</strong>。Stage 4 要求 ≥2 个引擎实现，<strong>不要求所有</strong>。如 ES2024 的 <code>Promise.withResolvers</code> Stage 4 时仅 V8 + SpiderMonkey 实现，JSC 用了 4 个月才支持。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：查 <a href="https://kangax.github.io/compat-table/" target="_blank" rel="noopener">kangax compat-table</a> 看具体引擎支持情况。<strong>"原生支持"的实际时间 ≈ Stage 4 + 6-12 个月</strong>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：以为 polyfill 能 100% 还原原生行为</div>
+          <p>
+            部分提案<strong>无法 polyfill</strong>：
+          </p>
+          <ul>
+            <li>Top-Level Await —— 影响 Module 求值，无法在 polyfill 层模拟</li>
+            <li>Records &amp; Tuples —— <code>===</code> 行为靠引擎深度集成，polyfill 只能用方法（<code>.equals()</code>）模拟</li>
+            <li>Optional Chaining <code>?.</code> —— 这是<strong>语法</strong>，必须用 Babel 等 transpile</li>
+            <li>Symbol.dispose / using —— 部分能 polyfill，但 <code>using</code> 语法仍需 transpile</li>
+          </ul>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：判断"<em>这个提案能否 polyfill</em>"——是新 API（如 <code>Promise.try</code>）就能 polyfill；是新语法（如 <code>?.</code>、<code>using</code>）就必须 transpile；是涉及引擎深度集成（如 TLA、Records）就<strong>无法 polyfill</strong>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：把 inactive proposals 当现存特性</div>
+          <p>
+            tc39/proposals 仓库有 <a href="https://github.com/tc39/proposals/blob/main/inactive-proposals.md" target="_blank" rel="noopener">inactive-proposals.md</a>—— 已退役、不再推进的提案（如 <code>Number.fromString</code>、<code>RegExp.escape</code> 早期版本）。<strong>读到这些提案不要以为它们存在</strong>。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：任何 Stage 信息都看 <a href="https://github.com/tc39/proposals" target="_blank" rel="noopener">tc39/proposals/README.md</a> 当前主表（含 finished + active + inactive 分类），不只看个别提案的 README。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：把 Stage 进度等同于"应该用"</div>
+          <p>
+            Stage 4 的提案不一定是"<em>好特性</em>"——只是社区共识 + 引擎实现都到位了。有些 Stage 4 特性后来被发现"<em>设计有遗憾</em>"（如 ES5 的 <code>__proto__</code> getter/setter 进了 Annex B），但已无法回退。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：用 Stage 4 特性时仍要<strong>判断它是否解决你的问题</strong>。不是所有"标准特性"都值得用——<code>with</code> 语句、<code>arguments.callee</code> 等已成事实禁用。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>提案管理</h3>
+        <ul>
+          <li>
+            <a href="https://github.com/tc39/proposals" target="_blank" rel="noopener">tc39/proposals</a> —— 当前所有提案 Stage 状态实时表
+          </li>
+          <li>
+            <a href="https://github.com/tc39/proposals/blob/main/inactive-proposals.md" target="_blank" rel="noopener">tc39/proposals · inactive-proposals.md</a> —— 退役提案（学习"<em>什么样的提案不会进</em>"的免费教材）
+          </li>
+          <li>
+            <a href="https://tc39.es/process-document/" target="_blank" rel="noopener">TC39 Process Document</a> —— Stage 流程定义
+          </li>
+        </ul>
+
+        <h3>本章主案例</h3>
+        <ul>
+          <li>
+            <a href="https://github.com/tc39/proposal-top-level-await" target="_blank" rel="noopener">tc39/proposal-top-level-await</a>
+          </li>
+          <li>
+            <a href="https://github.com/tc39/proposal-record-tuple" target="_blank" rel="noopener">tc39/proposal-record-tuple</a>
+          </li>
+          <li>
+            <a href="https://github.com/tc39/proposal-iterator-helpers" target="_blank" rel="noopener">tc39/proposal-iterator-helpers</a>
+          </li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="05-execution-context.html">B5 执行上下文（§9）</a></li>
+          <li>
+            <strong>🎉 Track B 收官</strong>。整个 ECMAScript 主题 11 章 ✅ 完工！
+          </li>
+          <li>
+            返回 <a href="../index.html">ECMAScript 主页</a> 或继续探索其他主题：
+            <a href="../../javascript/index.html">JavaScript 深度学习</a> /
+            <a href="../../typescript/index.html">TypeScript 深度学习</a>
+          </li>
+        </ul>
+
+        <h3>跨主题参考</h3>
+        <ul>
+          <li><a href="../01-history/01-standards-history.html">A1 标准发展史</a> —— TC39 流程历史 + ES4 失败教训</li>
+          <li><a href="../01-history/05-modern-ecosystem.html">A5 现代生态</a> —— Stage 0-4 流程详解</li>
+          <li><a href="01-how-to-read.html">B1 怎么读规范</a> —— ecmarkup + spec text 入门</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="05-execution-context.html">
+            <span class="label">← 上一章</span>
+            <span class="title">B5 · 执行上下文（§9）</span>
+          </a>
+          <a class="next" href="../index.html">
+            <span class="label">🎉 完工 →</span>
+            <span class="title">返回 ECMAScript 主页</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

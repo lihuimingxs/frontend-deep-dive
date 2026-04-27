@@ -8,7 +8,7 @@
 | ---------------- | ----------- | ------------------------------------------------------------------- | ----------------- |
 | **JavaScript**   | ✅ 完成     | [javascript.info](https://javascript.info/)                         | 62 章 / 7 阶段    |
 | **TypeScript**   | ✅ 完成     | [typescriptlang.org/docs](https://www.typescriptlang.org/docs/)     | 20 章 / 4 Part    |
-| **ECMAScript**   | 🚧 编写中   | [ecma-international.org/ecma-262](https://ecma-international.org/publications-and-standards/standards/ecma-262/) | 11 章 / 2 轨（历史脉络 + 规范精读）|
+| **ECMAScript**   | ✅ 完成     | [ecma-international.org/ecma-262](https://ecma-international.org/publications-and-standards/standards/ecma-262/) | 11 章 / 2 轨（历史脉络 + 规范精读）|
 | **Tailwind CSS** | ⏳ 规划中   | [tailwindcss.com/docs](https://tailwindcss.com/docs)                | 待定              |
 | **V8 Engine**    | ⏳ 规划中   | [v8.dev/docs](https://v8.dev/docs)                                  | 待定              |
 
@@ -65,11 +65,11 @@ docs/learning/deep-dive/
 │   ├── 03-reference/           # Part 3 · Reference（5 章）
 │   └── 04-project/             # Part 4 · 工程化（3 章）
 │
-├── ecma/                       # 🚧 ECMAScript 主题（编写中，2 轨独立）
+├── ecma/                       # ✅ ECMAScript 主题（11 章完成，2 轨独立）
 │   ├── index.html              # ES hub
 │   ├── outline.md              # 写作蓝本
-│   ├── 01-history/             # Track A · 历史脉络与设计（5 章）
-│   └── 02-spec/                # Track B · ECMA-262 规范精读（6 章）
+│   ├── 01-history/             # ✅ Track A · 历史脉络与设计（5 章）
+│   └── 02-spec/                # ✅ Track B · ECMA-262 规范精读（6 章）
 │
 ├── tailwindcss/                # ⏳ 规划中
 └── v8/                         # ⏳ 规划中
@@ -127,7 +127,7 @@ docs/learning/deep-dive/
 
 - ✅ JavaScript（62 章，2026-04 完成）
 - ✅ TypeScript（20 章 / 4 Part 完成）
-- 🚧 ECMAScript（2 轨独立：✅ Track A 历史脉络 5 章 / 🚧 Track B 规范精读 5/6 章 — B1-B5 已写，仅剩 B6 提案旅程）
+- ✅ ECMAScript（11 章 / 2 轨完成 · Track A 历史脉络 5 章 + Track B 规范精读 6 章）
 - ⏳ Tailwind CSS / V8（规划中，需后续单独研究）
 
 ## 与 Mira 项目的关系
