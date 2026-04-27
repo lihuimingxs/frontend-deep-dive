@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>B4 · 内部槽与内部方法（§10）· ECMAScript 深度学习</title>
+    <meta
+      name="description"
+      content="ECMA-262 §10 精读：11 个 essential internal methods（[[Get]]/[[Set]]/[[Construct]] 等）+ Ordinary 默认实现 + 7 种 Exotic Object（Array length 同步 / Proxy 替换 trap / TypedArray / Bound function / Module Namespace 冻结）。讲清楚为什么 Proxy 是 ES 最强的元编程能力。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c84a1f'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EES%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>ECMAScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.16 35); color: #fff">ES</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">ES 首页</a>
+          <a href="index.html">Track B 目录</a>
+          <a href="https://262.ecma-international.org/15.0/index.html#sec-ordinary-and-exotic-objects-behaviours" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Track B · ECMA-262 规范精读</h3>
+        <ul>
+          <li><a href="index.html">Track 概览</a></li>
+          <li><a href="01-how-to-read.html">B1 · 怎么读规范</a></li>
+          <li><a href="02-data-types.html">B2 · 数据类型与值（§6）</a></li>
+          <li><a href="03-abstract-operations.html">B3 · 抽象操作（§5、§7）</a></li>
+          <li><a href="04-internal-slots.html" class="active">B4 · 内部槽与方法（§10）</a></li>
+          <li><span class="sidebar-pending">B5 · 执行上下文（§9）⏳</span></li>
+          <li><span class="sidebar-pending">B6 · 提案旅程 ⏳</span></li>
+        </ul>
+        <h3>另一轨</h3>
+        <ul>
+          <li><a href="../01-history/index.html">Track A · 历史脉络（已完成）</a></li>
+        </ul>
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../javascript/index.html">JavaScript 深度学习</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">ECMAScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Track B · 规范精读</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>B4 · 内部槽与方法</span>
+        </nav>
+
+        <h1>B4 · 内部槽与内部方法（§10）</h1>
+        <p class="lead">
+          ECMA-262 §10 是<strong>"对象本质"的规范层定义</strong>：每个对象有 <strong>11 个 essential internal methods</strong>（<code>[[GetPrototypeOf]]</code> / <code>[[Get]]</code> / <code>[[Set]]</code> / <code>[[Delete]]</code> 等）+ 若干<strong>内部槽</strong>（<code>[[Prototype]]</code> / <code>[[Extensible]]</code> 等）。普通对象的 internal methods 走"<strong>Ordinary 默认实现</strong>"（如 <code>OrdinaryGet</code>），<strong>7 种 Exotic Object</strong>（Array、String、Arguments、Module Namespace、Proxy、Bound、TypedArray）覆盖部分方法实现特殊行为。<strong>Proxy 的本质就是"替换全部 11 个 internal methods 为 trap"</strong>——理解这一层，Proxy 这个被神秘化的特性立刻变得朴素直白。
+        </p>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 本章交叉规则</div>
+          <p>
+            原型链查找、<code>Object.freeze</code> 行为、Proxy 用法、TypedArray 等"用户视角"机制在 <a href="../../javascript/02-advanced/05-prototype.html">JS · 原型链</a>、<a href="../../javascript/02-advanced/08-proxy-reflect.html">JS · Proxy / Reflect</a> 等章节已详述。本章<strong>从规范层"对象内部方法"视角</strong>讲——把"<em>对象的行为</em>"还原成"<strong>11 个内部方法的实现</strong>"。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> <a href="01-how-to-read.html">B1</a> + <a href="02-data-types.html">B2</a> + <a href="03-abstract-operations.html">B3</a></span>
+          <span><strong>对应 ECMA-262</strong>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-ordinary-and-exotic-objects-behaviours" target="_blank" rel="noopener">§10 Ordinary and Exotic Objects Behaviours</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>对象 = 内部槽 + 11 个 internal methods + 属性表</strong>。所有对象行为（<code>obj.x</code> / <code>obj.x = 1</code> / <code>delete obj.x</code> / <code>x in obj</code>）都映射到这 11 个方法。
+          </li>
+          <li>
+            <strong>Ordinary 是默认实现，Exotic 是覆盖</strong>。普通对象走 <code>OrdinaryGet</code> / <code>OrdinarySet</code> 等；7 种 Exotic 对象（Array / String / Arguments / Module Namespace / Proxy / Bound / TypedArray）覆盖部分内部方法实现特殊行为。
+          </li>
+          <li>
+            <strong>Proxy 的本质就是"把全部 11 个 internal methods 重定向到 trap"</strong>。每个 trap 没定义时回落到 <code>OrdinaryX(target)</code>。这套机制让 Vue 3 / Solid / Mobx 等响应式系统能完全拦截属性访问。
+          </li>
+        </ol>
+
+        <p>11 个 essential internal methods 总览：</p>
+
+        <div class="code-block">
+          <span class="code-label">spec · §10.1 11 个 essential internal methods</span>
+          <pre class="code"><code class="lang-js">// 原型 / 可扩展性
+[[GetPrototypeOf]]()      → Object | null
+[[SetPrototypeOf]](V)     → boolean
+[[IsExtensible]]()        → boolean
+[[PreventExtensions]]()   → boolean
+
+// 属性查询
+[[GetOwnProperty]](P)     → PropertyDescriptor | undefined
+[[DefineOwnProperty]](P, Desc) → boolean
+[[HasProperty]](P)        → boolean
+[[OwnPropertyKeys]]()     → List of (String | Symbol)
+
+// 读写删
+[[Get]](P, Receiver)      → any
+[[Set]](P, V, Receiver)   → boolean
+[[Delete]](P)             → boolean
+
+// 函数对象额外（非所有对象都有）
+[[Call]](thisArg, args)   → any
+[[Construct]](args, newTarget) → Object</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Ordinary Object —— 默认实现（§10.1）</h3>
+        <p>
+          <strong>Ordinary</strong>（普通）就是"<em>没有特殊行为的常规对象</em>"——你写 <code>{ a: 1 }</code> 创建的就是 Ordinary。它的 11 个 internal methods 都用规范定义的"Ordinary*"系列函数实现：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 40%">internal method</th>
+              <th>Ordinary 实现</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>[[GetPrototypeOf]]</code></td>
+              <td><code>OrdinaryGetPrototypeOf</code> —— 直接返回 <code>[[Prototype]]</code> 内部槽</td>
+            </tr>
+            <tr>
+              <td><code>[[SetPrototypeOf]](V)</code></td>
+              <td><code>OrdinarySetPrototypeOf</code> —— 检查是否会形成循环原型链，再设</td>
+            </tr>
+            <tr>
+              <td><code>[[GetOwnProperty]](P)</code></td>
+              <td><code>OrdinaryGetOwnProperty</code> —— 在属性表里查 P，返回 PropertyDescriptor</td>
+            </tr>
+            <tr>
+              <td><code>[[DefineOwnProperty]](P, Desc)</code></td>
+              <td><code>OrdinaryDefineOwnProperty</code> —— 检查 configurable 等再写入属性表</td>
+            </tr>
+            <tr>
+              <td><code>[[HasProperty]](P)</code></td>
+              <td><code>OrdinaryHasProperty</code> —— 自有 + 沿原型链查</td>
+            </tr>
+            <tr>
+              <td><code>[[Get]](P, Receiver)</code></td>
+              <td><code>OrdinaryGet</code> —— B1 给过完整算法（沿原型链 + getter）</td>
+            </tr>
+            <tr>
+              <td><code>[[Set]](P, V, Receiver)</code></td>
+              <td><code>OrdinarySet</code> —— 找属性 → setter？data？沿原型链？</td>
+            </tr>
+            <tr>
+              <td><code>[[Delete]](P)</code></td>
+              <td><code>OrdinaryDelete</code> —— 检查 configurable 再删</td>
+            </tr>
+            <tr>
+              <td><code>[[OwnPropertyKeys]]()</code></td>
+              <td><code>OrdinaryOwnPropertyKeys</code> —— 数字 key 升序 → 字符串 key 插入序 → Symbol key 插入序</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>属性遍历顺序的规范保证</strong>：<code>OrdinaryOwnPropertyKeys</code> 明确：① 整数 key 按数值升序（"<em>0, 1, 2, ..., 10, 11</em>"）；② 字符串 key 按插入序；③ Symbol key 按插入序。<strong>这是 ES2015 起的规范保证</strong>——之前各引擎实现不一致。
+        </p>
+
+        <h3>7 种 Exotic Object（§10.2-§10.5）</h3>
+        <p>
+          <strong>Exotic Object</strong> = 至少有一个 internal method 不是 Ordinary 默认实现的对象。规范定义了 7 种：
+        </p>
+
+        <h4>① Array Exotic Object（§10.4.2）—— length 自动同步</h4>
+        <p>
+          数组对象的特殊行为：<strong>写 <code>arr.length = N</code> 时自动删除超出索引的元素，写 <code>arr[N] = x</code> 时自动更新 length</strong>。这是通过覆盖 <code>[[DefineOwnProperty]]</code> 实现的：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Array exotic 行为</span>
+          <pre class="code"><code class="lang-js">const arr = [1, 2, 3, 4, 5];
+arr.length = 3;            // 触发 [[DefineOwnProperty]]("length", { value: 3, ... })
+                            // Array 的特殊版本：删除 arr[3]、arr[4]
+console.log(arr);          // [1, 2, 3] —— 元素真的被删了
+
+arr[10] = 'x';             // 触发 [[DefineOwnProperty]]("10", ...)
+                            // Array 的特殊版本：把 length 自动改成 11
+console.log(arr.length);   // 11
+console.log(arr);          // [1, 2, 3, &lt;7 empty items&gt;, 'x']
+
+// 这种"写 X 影响 Y"的行为是 Ordinary 做不到的，必须 Exotic。
+// "Array.isArray" 就是判断对象是不是 Array exotic（B3 已讲）。
+
+// 一个 plain object 即使有 length 属性和数字 key，也不是 Array exotic：
+const arrLike = { 0: 'a', 1: 'b', length: 2 };
+arrLike.length = 1;
+console.log(arrLike);      // { 0: 'a', 1: 'b', length: 1 } —— length 改了但 a/b 还在！
+arrLike.map?.();           // undefined —— Array.prototype.map 不在它原型链上</code></pre>
+        </div>
+
+        <h4>② String Exotic Object（§10.4.3）—— index → char 映射</h4>
+        <p>
+          String 包装对象（<code>new String("abc")</code>）和原始字符串自动装箱时产生 Object：它的 <code>[[GetOwnProperty]]</code> 被覆盖，<strong>整数 key 直接返回对应位置的 1-字符 String</strong>：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · String exotic 行为</span>
+          <pre class="code"><code class="lang-js">const s = "abc";
+s[0];                       // 'a'
+                            // 等价于 ToObject(s)[0] —— ToObject 装箱成 String exotic
+                            // String exotic 的 [[GetOwnProperty]]("0") 返回 'a'
+
+s[100];                     // undefined —— 越界
+"abc"[1.5];                 // undefined —— 非整数 key 走 Ordinary 路径，没这属性
+
+// String exotic 也是 frozen-like：所有 index property 是 non-writable, non-configurable
+const o = Object(s);        // 显式装箱
+o[0] = 'x';                 // 静默失败（strict 抛 TypeError）
+o[0];                       // 仍是 'a'</code></pre>
+        </div>
+
+        <h4>③ Arguments Exotic Object（§10.4.4）—— 与命名参数同步</h4>
+        <p>
+          <strong>非 strict 函数</strong>的 <code>arguments</code> 对象是 Exotic：修改 <code>arguments[0]</code> 会同步修改第一个命名参数（"mapped arguments"）。<strong>strict 模式下退化成 Ordinary Object</strong>，不再同步：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · arguments mapped vs unmapped</span>
+          <pre class="code"><code class="lang-js">function nonStrict(a, b) {
+  arguments[0] = 100;
+  console.log(a);            // 100 —— mapped！修改 arguments 影响命名参数
+}
+
+function strict(a, b) {
+  'use strict';
+  arguments[0] = 100;
+  console.log(a);            // 原值 —— unmapped，arguments 是 Ordinary
+}
+
+// 现代代码已不用 arguments —— 用 ...rest 代替（ES2015）
+// 因为 mapped arguments 的"行为耦合"反直觉，且 strict/sloppy 不一致</code></pre>
+        </div>
+
+        <h4>④ Module Namespace Exotic Object（§10.4.6）—— frozen + live binding</h4>
+        <p>
+          <code>import * as ns from './m'</code> 中的 <code>ns</code> 是 Module Namespace exotic。它的特殊行为：
+        </p>
+        <ul>
+          <li><strong>所有属性 non-writable, non-configurable</strong>（<code>ns.foo = 1</code> 抛错）</li>
+          <li><strong>但 <code>[[Get]]</code> 是"<em>live binding</em>"</strong>——读 <code>ns.foo</code> 时实际去模块 EnvironmentRecord 取最新值（A2 设计原则讲过）</li>
+          <li>没有 <code>[[Prototype]]</code>（设为 null），<code>obj.toString()</code> 都没有</li>
+        </ul>
+
+        <h4>⑤ Proxy Exotic Object（§10.5）⭐ —— 最核心</h4>
+        <p>
+          <strong>Proxy 的本质</strong>：每个 internal method 都不是 Ordinary 实现，而是<strong>查 handler 上对应的 trap</strong>。trap 没定义时回落到 <code>OrdinaryX(target)</code>。
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 38%">Proxy internal method</th>
+              <th>handler trap</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>[[GetPrototypeOf]]</code></td>
+              <td><code>getPrototypeOf</code></td>
+            </tr>
+            <tr>
+              <td><code>[[SetPrototypeOf]]</code></td>
+              <td><code>setPrototypeOf</code></td>
+            </tr>
+            <tr>
+              <td><code>[[IsExtensible]]</code></td>
+              <td><code>isExtensible</code></td>
+            </tr>
+            <tr>
+              <td><code>[[PreventExtensions]]</code></td>
+              <td><code>preventExtensions</code></td>
+            </tr>
+            <tr>
+              <td><code>[[GetOwnProperty]]</code></td>
+              <td><code>getOwnPropertyDescriptor</code></td>
+            </tr>
+            <tr>
+              <td><code>[[DefineOwnProperty]]</code></td>
+              <td><code>defineProperty</code></td>
+            </tr>
+            <tr>
+              <td><code>[[HasProperty]]</code></td>
+              <td><code>has</code></td>
+            </tr>
+            <tr>
+              <td><code>[[Get]]</code></td>
+              <td><code>get</code></td>
+            </tr>
+            <tr>
+              <td><code>[[Set]]</code></td>
+              <td><code>set</code></td>
+            </tr>
+            <tr>
+              <td><code>[[Delete]]</code></td>
+              <td><code>deleteProperty</code></td>
+            </tr>
+            <tr>
+              <td><code>[[OwnPropertyKeys]]</code></td>
+              <td><code>ownKeys</code></td>
+            </tr>
+            <tr>
+              <td><code>[[Call]]</code>（仅 callable target）</td>
+              <td><code>apply</code></td>
+            </tr>
+            <tr>
+              <td><code>[[Construct]]</code>（仅 constructible target）</td>
+              <td><code>construct</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout success">
+          <div class="callout-title">📐 一句话理解 Proxy</div>
+          <p>
+            Proxy <strong>不是"拦截器"</strong>（虽然常这样说）。它是一个<strong>把 11 个 essential internal methods 全部重定向到 handler 对应 trap</strong>的 Exotic Object。每个没实现的 trap 自动回落到 <code>OrdinaryX(target)</code>——这就是为什么 <code>new Proxy({}, {})</code>（空 handler）行为完全像普通对象。
+          </p>
+          <p style="margin-top: 8px">
+            因此 <strong>Proxy 是 ECMAScript 元编程能力的最高层</strong>——它能拦截语言能感知的所有对象操作。Vue 3 / Solid 用 <code>get</code> trap 收集依赖、<code>set</code> trap 触发更新；Mobx 用 <code>get</code> 转 observable；immer 用全套 trap 实现"<em>看似可变但实际不可变</em>"的 produce API。
+          </p>
+        </div>
+
+        <h4>⑥ Bound Function Exotic Object（§10.4.1）</h4>
+        <p>
+          <code>fn.bind(thisArg, ...args)</code> 返回的对象是 Bound Function exotic。它的特殊行为：
+        </p>
+        <ul>
+          <li><code>[[Call]]</code> 调用时把 <code>thisArg</code> 强制设为 bind 时传的（忽略实际调用的 this）</li>
+          <li><code>[[Construct]]</code> 时不忽略 newTarget（<code>new boundFn()</code> 仍然以 boundFn 为 newTarget）</li>
+          <li>不会有 <code>prototype</code> 属性（与原函数解耦）</li>
+        </ul>
+
+        <h4>⑦ Integer-Indexed Exotic Object（§10.4.5）—— TypedArray</h4>
+        <p>
+          <code>Int32Array</code> / <code>Float64Array</code> 等的内部。整数 index 不是属性查找，而是<strong>直接读底层 ArrayBuffer 的字节</strong>：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · TypedArray exotic</span>
+          <pre class="code"><code class="lang-js">const buf = new ArrayBuffer(8);
+const view = new Int32Array(buf);
+view[0] = 0x12345678;        // 触发 [[Set]] —— TypedArray 特殊：写入底层 Data Block 的字节
+view[1] = -1;
+view[100] = 42;              // 越界 —— 静默失败（不抛错，也不存）
+view.foo = 'bar';            // 字符串 key 走 Ordinary —— 但仍能存
+console.log(view.foo);       // 'bar' —— 字符串 key 用 Ordinary 行为
+
+// TypedArray 是"整数 key 用 exotic、其他 key 用 ordinary"的混合</code></pre>
+        </div>
+
+        <h3>[[Call]] 与 [[Construct]] —— 函数对象的 internal methods</h3>
+        <p>
+          函数对象（function、class、箭头函数、bound function）都有 <code>[[Call]]</code>，但<strong>不一定有 <code>[[Construct]]</code></strong>：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">类型</th>
+              <th>有 <code>[[Call]]</code>？</th>
+              <th>有 <code>[[Construct]]</code>？</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>普通 <code>function</code> 声明</td>
+              <td>✅</td>
+              <td>✅</td>
+            </tr>
+            <tr>
+              <td><code>class</code></td>
+              <td>❌（直接调用抛 TypeError）</td>
+              <td>✅</td>
+            </tr>
+            <tr>
+              <td>箭头函数 <code>() => {}</code></td>
+              <td>✅</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td>方法简写 <code>{ method() {} }</code></td>
+              <td>✅</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td>Generator <code>function*</code></td>
+              <td>✅</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td>async function</td>
+              <td>✅</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td>Bound function</td>
+              <td>看 target</td>
+              <td>看 target</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <code>[[Construct]]</code> 调用时还接收 <code>newTarget</code>（B3 提过）—— 这是 ES2015 引入的概念，<code>new.target</code> 在函数内访问到。<code>Reflect.construct(F, args, newTarget)</code> 是显式传 newTarget 的入口。
+        </p>
+
+        <h3>PrivateElement / PrivateName（§6.1.7.1）</h3>
+        <p>
+          ES2022 加的 class <code>#field</code> 私有字段在规范层用 <strong>PrivateElement</strong> 类型表示——它和普通属性<strong>完全分开</strong>存储，不在属性表里：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · #field 是真私有，不只是约定</span>
+          <pre class="code"><code class="lang-js">class Counter {
+  #count = 0;
+  inc() { this.#count++; }
+  get value() { return this.#count; }
+}
+
+const c = new Counter();
+c.inc();
+
+// 完全不可访问：
+c['#count'];                  // undefined（不是属性）
+Object.keys(c);               // [] —— 属性枚举看不到
+Object.getOwnPropertyNames(c); // [] —— 即使非可枚举也看不到
+c['#count'] = 100;            // 静默成功 —— 但创建了一个新 string 属性 "#count"！
+console.log(c.value, c['#count']); // 1 100
+
+// PrivateElement 存在 ExecutionContext 的 PrivateEnvironment 上（A3 提过），
+// 不是 obj 自身的属性 —— 这就是"硬隐私"的实现。
+
+// 跨 class 访问 抛 TypeError：
+class Other { test(c) { return c.#count; } }  // SyntaxError 已在 parse 阶段</code></pre>
+        </div>
+
+        <p>
+          <strong>关键差异</strong>：TypeScript 的 <code>private</code> 只是<strong>编译期约束</strong>（运行时仍是普通属性）；ES2022 的 <code>#field</code> 是<strong>规范级硬隐私</strong>，引擎层面隔离。详见 <a href="../../typescript/01-handbook-basics/06-classes.html">TS · Classes</a>。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 写 Proxy-based 响应式系统</h3>
+          <p>
+            Vue 3 / Solid / Mobx 都用 Proxy 实现响应式。最核心的两个 trap：<code>get</code> 收集依赖、<code>set</code> 触发更新。
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 极简响应式</span>
+            <pre class="code"><code class="lang-js">let activeEffect = null;
+const targetMap = new WeakMap();
+
+function track(target, key) {
+  if (!activeEffect) return;
+  let depsMap = targetMap.get(target);
+  if (!depsMap) targetMap.set(target, (depsMap = new Map()));
+  let dep = depsMap.get(key);
+  if (!dep) depsMap.set(key, (dep = new Set()));
+  dep.add(activeEffect);
+}
+
+function trigger(target, key) {
+  const dep = targetMap.get(target)?.get(key);
+  dep?.forEach(effect =&gt; effect());
+}
+
+function reactive(obj) {
+  return new Proxy(obj, {
+    get(target, key, receiver) {
+      track(target, key);
+      const result = Reflect.get(target, key, receiver);
+      // 嵌套对象也变 reactive
+      return typeof result === 'object' &amp;&amp; result !== null
+        ? reactive(result)
+        : result;
+    },
+    set(target, key, value, receiver) {
+      const result = Reflect.set(target, key, value, receiver);
+      trigger(target, key);
+      return result;
+    },
+  });
+}
+
+function effect(fn) {
+  activeEffect = fn;
+  fn();
+  activeEffect = null;
+}
+
+// 用法：
+const state = reactive({ count: 0 });
+effect(() =&gt; console.log('count is', state.count));   // 立即跑一次：count is 0
+state.count++;                                         // 触发 effect：count is 1
+state.count++;                                         // count is 2</code></pre>
+          </div>
+          <p>
+            这就是 Vue 3 reactive 的简化原理。Vue 实际还要处理 Map/Set/Array 等特殊集合的 trap、ref/computed/effect scope 等——但核心是 Proxy 拦截 internal methods。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 调试 Array-like 不能 .map</h3>
+          <p>
+            <code>document.querySelectorAll('div')</code> 返回 NodeList，<code>arguments</code> 是 Arguments exotic——它们看起来像数组但 <code>.map</code> 调用失败。原因：<strong>它们的原型链上没有 <code>Array.prototype</code></strong>。
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 转成真数组</span>
+            <pre class="code"><code class="lang-js">// ❌ 直接调用：
+const nodes = document.querySelectorAll('div');
+nodes.map(...);              // TypeError: nodes.map is not a function
+
+// ✅ 1. Array.from（适用所有 iterable / array-like）
+Array.from(nodes).map(...);
+
+// ✅ 2. spread（仅 iterable）
+[...nodes].map(...);
+
+// ✅ 3. Array.prototype.map.call（借调）
+Array.prototype.map.call(nodes, ...);
+
+// 三者底层都是把 array-like 转成真 Array（含 Array.prototype 链）。
+// Array.from 还接受 mapFn 参数，最常用。</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 实现深 freeze</h3>
+          <p>
+            <code>Object.freeze</code> 是浅冻结：嵌套对象仍可修改。要"<em>真正不可变</em>"需要递归冻结：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · deepFreeze</span>
+            <pre class="code"><code class="lang-js">function deepFreeze(obj) {
+  if (Object.isFrozen(obj)) return obj;
+  // 先递归（freeze 后不能修改 child reference）
+  for (const key of Reflect.ownKeys(obj)) {
+    const val = obj[key];
+    if (val &amp;&amp; (typeof val === 'object' || typeof val === 'function')) {
+      deepFreeze(val);
+    }
+  }
+  return Object.freeze(obj);
+}
+
+// Object.freeze 在规范层做的事（§7.3.18 SetIntegrityLevel "frozen"）：
+// 1. 调 [[PreventExtensions]]() —— 不能加新属性
+// 2. 对所有自有属性调 [[DefineOwnProperty]]：
+//    - data: writable=false, configurable=false
+//    - accessor: configurable=false（getter/setter 仍可调用）
+// 3. 不递归（这就是为什么要 deepFreeze）
+
+const config = deepFreeze({
+  api: { url: 'https://...', retries: 3 },
+  features: { darkMode: true },
+});
+config.api.retries = 5;       // 静默失败（strict 抛）
+config.features.darkMode = false;  // 同上
+config.api;                   // 仍是原对象</code></pre>
+          </div>
+          <p>注意：<code>Object.freeze</code> 不递归，<code>structuredClone</code> 也不复制 frozen 状态——所以"深冻结 + 深克隆"组合需要自己实现。</p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>用 Proxy 实现负数索引</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 让 arr[-1] 返回最后一个元素</span>
+          <pre class="code"><code class="lang-js">function negativeIndex(arr) {
+  return new Proxy(arr, {
+    get(target, key, receiver) {
+      // 检测 "-1", "-2" 这样的字符串 key（注意：key 总是 string 或 symbol）
+      if (typeof key === 'string') {
+        const n = Number(key);
+        if (Number.isInteger(n) &amp;&amp; n &lt; 0) {
+          return Reflect.get(target, target.length + n, receiver);
+        }
+      }
+      return Reflect.get(target, key, receiver);
+    },
+  });
+}
+
+const arr = negativeIndex([1, 2, 3, 4, 5]);
+arr[-1];    // 5
+arr[-2];    // 4
+arr[0];     // 1
+arr.length; // 5（沿原型链查 .length，走 Reflect.get）
+
+// 注意：这是 ES2022 Array.prototype.at(-1) 的"超集"版本 —— at() 是方法调用，
+// 这里直接用 [-1] 索引语法。
+// 工程上推荐用 .at()，因为 Proxy 有性能开销且行为不直观。</code></pre>
+        </div>
+
+        <h3>用 Reflect 完整调用 internal methods</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Reflect 是 internal methods 的"用户入口"</span>
+          <pre class="code"><code class="lang-js">// Reflect 提供了几乎每个 essential internal method 的"显式调用"接口：
+// （都在 Reflect 命名空间下，不污染 Object）
+
+const obj = { a: 1 };
+
+// 11 个 internal methods 对应 Reflect 方法：
+Reflect.getPrototypeOf(obj);              // [[GetPrototypeOf]]
+Reflect.setPrototypeOf(obj, null);        // [[SetPrototypeOf]]
+Reflect.isExtensible(obj);                // [[IsExtensible]]
+Reflect.preventExtensions(obj);           // [[PreventExtensions]]
+Reflect.getOwnPropertyDescriptor(obj, 'a'); // [[GetOwnProperty]]
+Reflect.defineProperty(obj, 'b', { value: 2 }); // [[DefineOwnProperty]]
+Reflect.has(obj, 'a');                    // [[HasProperty]]
+Reflect.get(obj, 'a');                    // [[Get]]
+Reflect.set(obj, 'c', 3);                 // [[Set]]
+Reflect.deleteProperty(obj, 'a');         // [[Delete]]
+Reflect.ownKeys(obj);                     // [[OwnPropertyKeys]]
+
+// 函数额外：
+Reflect.apply(fn, thisArg, args);         // [[Call]]
+Reflect.construct(F, args, newTarget);    // [[Construct]]
+
+// 写 Proxy trap 时几乎总是用 Reflect 转发未拦截的部分：
+new Proxy(target, {
+  get(target, key, receiver) {
+    console.log('get', key);
+    return Reflect.get(target, key, receiver);  // 转发到默认行为
+  }
+});
+
+// Object.* 和 Reflect.* 的区别：
+// - Object.* 失败常抛错；Reflect.* 失败返回 false
+// - Reflect 总是有完整签名（含 receiver），适合写 Proxy trap
+// - Object.* 设计早，Reflect.* 是 ES2015 整理出来的"完整 internal method API"</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：Proxy trap 不实现就忘了它要回落 ordinary</div>
+          <p>
+            "<em>我只想拦 set，不实现 get</em>"——<strong>没问题</strong>，未实现的 trap 自动回落到 <code>Reflect.X(target, ...)</code>。但如果你<strong>实现了</strong>但只 <code>return undefined</code>，会破坏正常行为。
+          </p>
+          <div class="code-block" style="margin-top: 12px">
+            <span class="code-label">javascript · 错误的 trap 实现</span>
+            <pre class="code"><code class="lang-js">// ❌ 拦截所有 get 但什么都不返回
+new Proxy(obj, { get() { /* 啥都不写 */ } });
+// 所有 obj.x 返回 undefined
+
+// ✅ 不实现 → 自动回落
+new Proxy(obj, {});
+
+// ✅ 显式转发
+new Proxy(obj, {
+  get(t, k, r) { return Reflect.get(t, k, r); }
+});</code></pre>
+          </div>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：要么不实现 trap，要么实现时<strong>显式转发不需要拦截的部分</strong>给 <code>Reflect</code>。这就是为什么 Vue 3 的 <code>get</code> trap 总是 <code>Reflect.get(target, key, receiver)</code> 兜底。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：用 Object.assign 复制 Array 当 deep clone</div>
+          <p>
+            <code>Object.assign({}, arr)</code> 复制 Array 的属性到 Object，<strong>但目标是 Ordinary Object 不是 Array exotic</strong>——结果丢了 length 同步行为，且不是数组：
+          </p>
+          <div class="code-block" style="margin-top: 12px">
+            <span class="code-label">javascript · Array exotic 行为不复制</span>
+            <pre class="code"><code class="lang-js">const arr = [1, 2, 3];
+const copy = Object.assign({}, arr);
+console.log(copy);             // { 0: 1, 1: 2, 2: 3, length: 3 }
+console.log(Array.isArray(copy));  // false ⚠️
+copy.push(4);                  // TypeError: copy.push is not a function
+
+// 复制 Array 用 [...arr] 或 arr.slice() 或 Array.from(arr)
+// 这些都创建新的 Array exotic 对象</code></pre>
+          </div>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：复制不同类型的对象用对应的工厂——Array 用 <code>[...arr]</code>、Map 用 <code>new Map(orig)</code>、Set 用 <code>new Set(orig)</code>、Date 用 <code>new Date(d)</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：忽视 Proxy 的性能开销</div>
+          <p>
+            每次属性访问 Proxy 都要走 trap → JS 函数调用 → Reflect → 真正 internal method。<strong>比直接访问慢 5-50 倍</strong>。Vue 3 在 hot path 上做了大量缓存优化才达到生产可用性能。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：① Proxy 适合"<em>少数关键对象</em>"，不适合包装"所有对象"；② 性能敏感场景用 dirty check 或 immer 等轻量方案；③ 千万别在循环热点里 <code>new Proxy</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：以为 Object.freeze 是深冻结</div>
+          <p>
+            <code>Object.freeze</code> 只冻结自身属性。嵌套对象仍可修改。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：要深冻结自己写递归（上面给过 <code>deepFreeze</code>）。或用 <code>immutable.js</code> / <code>Immer</code> 等库。规范层有 <a href="https://github.com/tc39/proposal-record-tuple" target="_blank" rel="noopener">Records &amp; Tuples</a> 提案目标深不可变（卡 Stage 2 至今未进，详见 <a href="../01-history/05-modern-ecosystem.html">A5</a>）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：在 strict 函数里用 arguments 期待 mapped 行为</div>
+          <p>
+            <code>'use strict'</code> 函数（含所有 ES Module、class body）的 <code>arguments</code> 是 unmapped——修改 <code>arguments[0]</code> <strong>不影响</strong>命名参数。老代码迁移到 strict 时这是"<em>静默 break</em>"的常见来源。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：现代代码用 <code>...rest</code> 取代 arguments。<code>function (a, ...rest)</code> 行为一致、类型友好（TS 能精确推导）、性能更好（V8 对 rest 优化更狠）。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范本体</h3>
+        <ul>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-ordinary-object-internal-methods-and-internal-slots" target="_blank" rel="noopener">ECMA-262 §10.1 Ordinary Object Internal Methods</a>
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-ecmascript-standard-built-in-objects" target="_blank" rel="noopener">ECMA-262 §10.2-§10.5 Exotic Objects</a> —— 7 种 exotic 详细定义
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-proxy-object-internal-methods-and-internal-slots" target="_blank" rel="noopener">ECMA-262 §10.5 Proxy Object</a>
+          </li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="03-abstract-operations.html">B3 抽象操作（§5、§7）</a></li>
+          <li>下一步：<strong>B5 执行上下文（§9）</strong>（编写中）—— 从规范层视角再讲 A3 的机器结构（Realm / Agent / Job / Environment Record / Host hooks）</li>
+        </ul>
+
+        <h3>跨主题参考</h3>
+        <ul>
+          <li><a href="../../javascript/02-advanced/05-prototype.html">JS · 原型链</a></li>
+          <li><a href="../../javascript/02-advanced/08-proxy-reflect.html">JS · Proxy / Reflect</a></li>
+          <li><a href="../01-history/02-design-principles.html">A2 · 设计原则</a> —— 为什么 JS 用原型而非类</li>
+          <li><a href="../../typescript/01-handbook-basics/06-classes.html">TS · Classes</a> —— TS private 与 ES2022 #field 区别</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="03-abstract-operations.html">
+            <span class="label">← 上一章</span>
+            <span class="title">B3 · 抽象操作（§5、§7）</span>
+          </a>
+          <a class="next" href="index.html">
+            <span class="label">下一步 →</span>
+            <span class="title">B5 · 执行上下文（🚧 编写中，先看 Track 概览）</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
