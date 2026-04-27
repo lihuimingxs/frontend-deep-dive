@@ -1,0 +1,802 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>13 · Modules · Part 3 · TypeScript 深度学习</title>
+    <meta
+      name="description"
+      content="TypeScript 模块系统全谱：ES module 静态结构、import type / inline type、CommonJS 互通、esModuleInterop / verbatimModuleSyntax 配置含义、namespace 反模式、triple-slash directive 遗留场景。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%233178c6'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETS%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>TypeScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.62 0.13 245); color: #fff">TS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">TS 首页</a>
+          <a href="index.html">Part 3 目录</a>
+          <a href="https://www.typescriptlang.org/docs/handbook/2/modules.html" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Part 3 · Reference</h3>
+        <ul>
+          <li><a href="index.html">Part 概览</a></li>
+          <li><a href="13-modules.html">13 · Modules</a></li>
+          <li><a href="14-decorators.html">14 · Decorators</a></li>
+          <li><a href="15-merging-mixins.html">15 · Declaration Merging / Mixins / Symbols</a></li>
+          <li><a href="16-iterators-jsx.html">16 · Iterators / JSX</a></li>
+          <li><a href="17-type-compatibility.html">17 · Type Compatibility & Inference</a></li>
+        </ul>
+        <h3>其他 Part</h3>
+        <ul>
+          <li><a href="../01-handbook-basics/index.html">Part 1 · Handbook 基础</a></li>
+          <li><a href="../02-type-manipulation/index.html">Part 2 · 类型操作</a></li>
+          <li><a href="../04-project/index.html">Part 4 · 工程化</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TypeScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Part 3 · Reference</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>13 · Modules</span>
+        </nav>
+
+        <h1>13 · Modules</h1>
+        <p class="lead">
+          TS 的模块系统跨越<strong>三个时代</strong>：ES module（静态、可 tree-shake）、CommonJS（运行时 require）、namespace（旧 internal module，反模式）。本章拆解三者互通、<code>import type</code> 的编译期消失、<code>esModuleInterop</code> 和 5.0 引入的 <code>verbatimModuleSyntax</code> 配置含义、以及为什么"没有 import/export 的 .ts 文件会污染全局类型"。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> JS 模块基础（推荐
+            <a href="../../javascript/04-modules/01-esm.html">JS · 04-modules</a>）</span>
+          <span
+            ><strong>对应 typescriptlang.org</strong>
+            <a href="https://www.typescriptlang.org/docs/handbook/2/modules.html" target="_blank" rel="noopener"
+              >Handbook · Modules</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三个核心规则：</p>
+        <ol>
+          <li><strong>有 top-level <code>import</code> 或 <code>export</code> = 模块</strong>。否则该文件被当成<strong>全局脚本</strong>，所有声明污染全局类型空间</li>
+          <li><strong><code>import type</code> 编译产物中完全消失</strong>。仅在类型层引入，不触发运行时副作用</li>
+          <li><strong><code>module</code> 决定输出格式，<code>moduleResolution</code> 决定如何找文件</strong>，是两件事</li>
+        </ol>
+        <div class="code-block">
+          <span class="code-label">typescript · 最常用语法</span>
+          <pre class="code"><code class="lang-ts">// 命名导入 / 导出
+export const x = 1;
+import { x } from "./mod";
+
+// default 导入 / 导出
+export default function f() {}
+import f from "./mod";
+
+// 仅类型 — 编译产物消失
+import type { User } from "./types";
+
+// inline type modifier（4.5+）
+import { fn, type X } from "./mod";
+
+// namespace 导入（拿到所有 export 的对象）
+import * as M from "./mod";
+
+// re-export
+export { x } from "./mod";
+export type { X } from "./types";
+
+// side-effect import（仅运行 mod 顶层代码）
+import "./polyfill";
+
+// CJS 互通
+import x = require("legacy-cjs-pkg");</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>1. ES module 是静态结构 —— tree-shaking 的根因</h3>
+        <p>
+          ES module 的 <code>import</code> / <code>export</code> 必须在 top-level，<strong>不能在 if 里、不能在函数里</strong>（动态 <code>import()</code> 是另一回事）。这一约束的根本动机：让 bundler 在<strong>不执行代码</strong>的情况下，仅靠静态分析就能知道哪些 export 被使用、可以删除什么。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// ❌ ES module 不允许
+if (condition) {
+  import { x } from "./mod";   // SyntaxError
+}
+
+// ❌ 也不允许
+function load() {
+  import { x } from "./mod";   // SyntaxError
+}
+
+// ✅ 动态 import — 运行时按需加载，返回 Promise
+async function load() {
+  const { x } = await import("./mod");
+}</code></pre>
+        </div>
+        <p>
+          对比 CommonJS：<code>require()</code> 是<strong>运行时函数</strong>，可以放在任意位置、可以条件调用、可以被赋值。这让它灵活，但<strong>无法静态分析</strong> —— 这就是为什么纯 CJS 项目无法 tree-shake。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript · CJS</span>
+          <pre class="code"><code class="lang-js">if (process.env.NODE_ENV === "dev") {
+  const debug = require("./debug");   // 运行时条件加载
+  debug.start();
+}
+
+// 这种代码 bundler 无法分析 — 必须把所有可能 require 的东西都打进去</code></pre>
+        </div>
+
+        <h3>2. <code>import type</code>：仅类型层引入</h3>
+        <p>
+          <code>import type</code> 是 TS 3.8 引入的语法，编译产物中<strong>完全消失</strong>。它解决三个工程痛点：
+        </p>
+        <ul>
+          <li><strong>避免循环依赖</strong>：A 引用 B 的类型，B 运行时引用 A —— 用 <code>import type</code> 后，A → B 的依赖只在编译期，运行时无</li>
+          <li><strong>避免 side effect 加载</strong>：仅取类型时，原模块的顶层副作用不会运行</li>
+          <li><strong>配合 <code>isolatedModules</code></strong>：babel/swc 等单文件 transpiler 必须能区分"类型 vs 值"才能正确 emit</li>
+        </ul>
+        <div class="code-block">
+          <span class="code-label">typescript · 编译对比</span>
+          <pre class="code"><code class="lang-ts">// 源 .ts
+import type { User } from "./types";
+import { fn } from "./util";
+
+const greet = (u: User) =&gt; fn(u.name);
+
+// 编译后 .js（target: ES2022）
+import { fn } from "./util";
+//                  注意：./types 完全消失了
+const greet = (u) =&gt; fn(u.name);</code></pre>
+        </div>
+        <p>
+          TS 4.5 进一步引入 <strong>inline type modifier</strong>，让类型导入和值导入混在一行：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 4.5+ inline type
+import { fn, type Config, type User } from "./mod";
+//          ^^^   ^^^^^^^^^^^^^^^^^^   编译时仅 fn 保留，类型消失</code></pre>
+        </div>
+
+        <h3>3. <code>esModuleInterop</code>：CJS/ESM 不兼容的运行时垫片</h3>
+        <p>
+          这是 TS 工程配置中最容易让人混淆的开关。要理解它先看历史：
+        </p>
+        <ul>
+          <li><strong>CJS 模块</strong>：<code>module.exports = ...</code>，整个 module 是单值（可以是函数、对象、类）</li>
+          <li><strong>ES module</strong>：<code>export default ...</code> 是命名为 "default" 的导出，所有命名导出在一个对象里</li>
+        </ul>
+        <p>
+          一个 ES 模块导入 CJS 模块时存在不兼容：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript · 不开 esModuleInterop</span>
+          <pre class="code"><code class="lang-ts">// CJS 库 fs：module.exports = { readFileSync, ... }
+
+// ❌ 直觉的 default 导入失败
+import fs from "fs";
+fs.readFileSync;   // 错 — fs 是 undefined
+
+// 必须用 namespace 导入
+import * as fs from "fs";
+fs.readFileSync;   // ✓
+
+// 或者老语法
+import fs = require("fs");
+fs.readFileSync;   // ✓</code></pre>
+        </div>
+        <p>
+          开 <code>esModuleInterop: true</code> 后，TS 在编译产物里<strong>注入一个垫片函数</strong> <code>__importDefault</code>，让 <code>import fs from "fs"</code> 也能工作：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript · 开 esModuleInterop</span>
+          <pre class="code"><code class="lang-ts">import fs from "fs";   // ✓ 通过
+fs.readFileSync;</code></pre>
+        </div>
+        <p>
+          编译产物大约是：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript · 编译后</span>
+          <pre class="code"><code class="lang-js">var __importDefault = (mod) =&gt; (mod &amp;&amp; mod.__esModule) ? mod : { default: mod };
+const fs = __importDefault(require("fs"));
+fs.default.readFileSync;
+// （TS 通过 IDE 提示让你写得像 fs.readFileSync，但产物里是 fs.default.readFileSync）</code></pre>
+        </div>
+        <p>
+          <strong>实用建议</strong>：新项目永远开 <code>esModuleInterop: true</code>。它兼容性更好。<code>allowSyntheticDefaultImports</code> 是 esModuleInterop 的<strong>仅类型层</strong>子集（不注入运行时垫片，仅让 TS 类型层接受 default 导入），通常和 esModuleInterop 一起开。
+        </p>
+
+        <h3>4. <code>verbatimModuleSyntax</code>（TS 5.0）：严格区分 import type 和 import</h3>
+        <p>
+          TS 5.0 引入这个 flag 替代旧的 <code>importsNotUsedAsValues</code> / <code>preserveValueImports</code>。语义：<strong>编译时不删除任何 import 语句，原样保留你写的 import / import type</strong>。
+        </p>
+        <div class="code-block">
+          <span class="code-label">json · tsconfig</span>
+          <pre class="code"><code class="lang-js">{ "compilerOptions": { "verbatimModuleSyntax": true } }</code></pre>
+        </div>
+        <p>
+          这一开关强制了几条规则：
+        </p>
+        <ul>
+          <li><strong>仅类型导入必须用 <code>import type</code></strong>。否则编译产物里仍会保留 <code>import "..."</code> 触发副作用</li>
+          <li><strong>仅类型导出必须用 <code>export type</code></strong></li>
+          <li><strong>不允许 <code>import x = require()</code> 与 <code>module = ...</code> 等 CJS 语法</strong>，因为它们在 ESM 输出时无法直接保留</li>
+        </ul>
+        <p>
+          为什么这个 flag 重要？因为 babel / swc / esbuild 等 transpiler 是<strong>单文件处理</strong>的 —— 它们不知道某个 import 仅是类型用途。开 <code>verbatimModuleSyntax</code> 让 TS 的输出和这些 transpiler 输出完全一致，工具链可互换。
+        </p>
+
+        <h3>5. 没有 import/export 的 .ts 文件 = 全局脚本</h3>
+        <p>
+          这是最容易踩的坑：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript · src/utils.ts</span>
+          <pre class="code"><code class="lang-ts">// 没有 import / export
+function helper() { return 1 }
+const x = "abc";
+
+// 此文件被当成全局脚本：helper / x 进入<strong>全局命名空间</strong>
+// 其他文件即使不 import 也能用 helper（且与其他全局名字可能冲突）</code></pre>
+        </div>
+        <p>
+          要把它变成模块（推荐）：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">export function helper() { return 1 }   // ← 加 export 即可
+const x = "abc";
+
+// 或者随便加个空 export
+export {};</code></pre>
+        </div>
+        <p>
+          tsconfig 选项 <code>"moduleDetection": "force"</code>（TS 4.7+）可以强制所有 .ts 都按模块处理，避免这种意外。新项目建议开。
+        </p>
+
+        <h3>6. ⚠️ <code>namespace</code> 是反模式（在 ES module 时代）</h3>
+        <p>
+          TS 早期曾用 <code>namespace</code> 做"<strong>internal module</strong>"，把多个文件的代码合并到同一命名空间下。在 ES module 标准化之前这是合理设计，<strong>现在是反模式</strong>。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript · 旧时代</span>
+          <pre class="code"><code class="lang-ts">namespace MyApp {
+  export function start() {}
+  export namespace Utils {
+    export function helper() {}
+  }
+}
+
+MyApp.start();
+MyApp.Utils.helper();</code></pre>
+        </div>
+        <p>
+          为什么不用了：
+        </p>
+        <ul>
+          <li>无法 tree-shake：整个 namespace 被打包成一个对象，bundler 看不出哪些没用</li>
+          <li>不利于代码分割（dynamic import）</li>
+          <li>和 ES module 混用容易行为诡异</li>
+          <li>命名空间嵌套深时调用链冗长</li>
+        </ul>
+        <p>
+          <strong>什么时候仍然要用</strong>：仅在<strong>声明文件 <code>.d.ts</code></strong> 中给全局对象（jQuery、$、process 等）写类型时，namespace 是合适的（详见 18 章）。生产代码避免。
+        </p>
+
+        <h3>7. ⚠️ Triple-slash directive：仅 .d.ts 内偶用</h3>
+        <p>
+          <code>/// &lt;reference&gt;</code> 是 TS 在 ES module 之前的"<strong>文件级依赖声明</strong>"。现代项目几乎不用。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">/// &lt;reference path="./types.d.ts" /&gt;       // 加载某 .d.ts
+/// &lt;reference types="node" /&gt;              // 加载某 @types 包
+/// &lt;reference lib="ES2020" /&gt;               // 加载内置 lib
+
+// 现代项目用 tsconfig 的 "types" / "lib" 配置代替</code></pre>
+        </div>
+
+        <h3>8. <code>module</code> vs <code>moduleResolution</code></h3>
+        <p>
+          这两个 tsconfig 选项常被混淆：
+        </p>
+        <table>
+          <thead>
+            <tr><th>选项</th><th>决定什么</th><th>常用值</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>module</code></td>
+              <td><strong>输出</strong>什么模块格式</td>
+              <td><code>commonjs</code> / <code>esnext</code> / <code>nodenext</code> / <code>preserve</code></td>
+            </tr>
+            <tr>
+              <td><code>moduleResolution</code></td>
+              <td><strong>解析 import</strong> 时如何找文件</td>
+              <td><code>node</code> / <code>node10</code> / <code>node16</code> / <code>nodenext</code> / <code>bundler</code></td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          TS 5.0 引入 <code>moduleResolution: "bundler"</code>，对应 Vite / webpack / esbuild 等 bundler 的解析逻辑（接受 ESM 语法 + 不强制 .js 后缀 + 支持 conditional exports）。是新项目最常用的配置。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · Monorepo workspace alias</h3>
+          <div class="code-block">
+            <span class="code-label">json · tsconfig.json</span>
+            <pre class="code"><code class="lang-js">{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@app/*": ["apps/app/src/*"],
+      "@shared/*": ["packages/shared/src/*"],
+      "@/lib/*": ["src/lib/*"]
+    }
+  }
+}</code></pre>
+          </div>
+          <p>
+            ⚠️ <code>paths</code> <strong>只影响 tsc 的类型检查</strong>，不影响运行时。Vite / Next.js / webpack 必须各自配 alias，否则编译过运行时 module not found（详见 19 章）。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 仅类型导入避免循环依赖</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// user.ts
+import type { Post } from "./post";   // 仅类型 — 编译产物消失
+
+export interface User {
+  id: string;
+  posts: Post[];
+}
+
+export const fetchUser = async () =&gt; { /* ... */ };
+
+// post.ts
+import { fetchUser } from "./user";   // 运行时引用 user
+
+export interface Post { id: string; authorId: string }
+
+export async function fetchAuthor(p: Post) {
+  return fetchUser();   // 运行时仅 user → post 的边没循环
+}</code></pre>
+          </div>
+          <p>
+            如果 <code>user.ts</code> 用 <code>import { Post }</code> 而非 <code>import type { Post }</code>，运行时会形成 user ↔ post 循环依赖，可能导致部分 export 是 undefined（取决于加载顺序）。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · Vite + Next.js 16 推荐配置</h3>
+          <div class="code-block">
+            <span class="code-label">json · tsconfig.json</span>
+            <pre class="code"><code class="lang-js">{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "preserve"
+  }
+}</code></pre>
+          </div>
+          <p>
+            <code>noEmit: true</code> + bundler 自己 transpile 是现代前端工程的标配。<code>tsc</code> 仅做类型检查，编译速度由 esbuild / SWC 决定（详见 19 章）。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · Node 22 + ESM 项目</h3>
+          <div class="code-block">
+            <span class="code-label">json · package.json</span>
+            <pre class="code"><code class="lang-js">{
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  }
+}</code></pre>
+          </div>
+          <div class="code-block">
+            <span class="code-label">json · tsconfig.json</span>
+            <pre class="code"><code class="lang-js">{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext"
+  }
+}</code></pre>
+          </div>
+          <p>
+            <code>NodeNext</code> 模式要求 import 路径带 <code>.js</code> 后缀（即使源文件是 .ts）：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">import { foo } from "./util.js";   // ✓ 必须 .js（不是 .ts）
+import { bar } from "./util";       // ❌ 在 NodeNext + ESM 下报错</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>所有 import / export 形态一览</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// === 命名导出 ===
+export const x = 1;
+export function fn() {}
+export class C {}
+export interface I {}
+export type T = string;
+export enum E { A }
+
+// === 一次导出多个（已声明的） ===
+const a = 1;
+const b = 2;
+export { a, b };
+export { a as renamed };
+
+// === default 导出（仅一个） ===
+export default function () {}
+// 或
+const value = {};
+export default value;
+
+// === 仅类型导出（不出现在产物） ===
+export type { I, T };
+
+// === re-export ===
+export { x } from "./mod";
+export * from "./mod";          // 全部 re-export
+export * as M from "./mod";     // re-export 为 namespace
+export { default } from "./mod"; // re-export default
+
+// === 导入 ===
+import { x } from "./mod";              // 命名
+import { x as renamed } from "./mod";   // 重命名
+import default_ from "./mod";            // default
+import * as M from "./mod";              // namespace
+import default_, { x } from "./mod";    // 混合
+import "./polyfill";                     // side-effect
+
+// === 仅类型导入 ===
+import type { T } from "./mod";
+import { fn, type T } from "./mod";     // inline type（4.5+）
+
+// === CJS 互通 ===
+import x = require("legacy-pkg");
+export = x;                              // CJS 风格 default 导出（不推荐 ESM 项目用）</code></pre>
+        </div>
+
+        <h3>动态 import 的类型化</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 动态 import 返回 Promise&lt;Module&gt;
+async function loadAdmin() {
+  const adminModule = await import("./admin");
+  // adminModule: typeof import("./admin")
+  adminModule.start();
+}
+
+// 类型层取动态 import 的 module 类型
+type AdminModule = typeof import("./admin");
+
+// 配合 React.lazy
+const Admin = React.lazy(() =&gt; import("./Admin"));
+
+// dynamic import 是代码分割的 hook
+async function feature() {
+  const { exportedFn } = await import("./big-feature");
+  return exportedFn();
+}</code></pre>
+        </div>
+
+        <h3>TypeScript 的 ambient module declaration</h3>
+        <div class="code-block">
+          <span class="code-label">typescript · types/global.d.ts</span>
+          <pre class="code"><code class="lang-ts">// 给"无类型的 npm 包"加类型
+declare module "untyped-lib" {
+  export function helper(): void;
+  export const version: string;
+}
+
+// 通配 module — 让 webpack/Vite 资源 import 通过
+declare module "*.svg" {
+  const content: string;
+  export default content;
+}
+
+declare module "*.css" {
+  const styles: { [k: string]: string };
+  export default styles;
+}
+
+// 全局变量
+declare global {
+  interface Window {
+    __APP_VERSION__: string;
+  }
+}
+export {};   // 必须加，否则文件会被当全局脚本</code></pre>
+        </div>
+
+        <h3>避免循环依赖的"interface only"模式</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// types.ts — 仅类型，不被运行时依赖
+export interface User { id: string; name: string }
+export interface Post { id: string; authorId: string }
+
+// user.ts
+import type { Post } from "./types";   // 仅类型
+import { fetchPost } from "./post";
+
+export interface UserWithPosts extends User {
+  posts: Post[];
+}
+
+// post.ts
+import type { User } from "./types";   // 仅类型
+import { fetchUser } from "./user";
+
+// 运行时依赖图：user ↔ post 仍循环
+// 但若 user/post 不互相运行时引用，仅类型层关联，循环消失</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 没有 import/export 的 .ts 污染全局</div>
+          <p>
+            最易遗漏。一个 utility 文件如果只声明不导出，所有声明会进入全局空间：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// utils/log.ts — 没 import / export
+function log(msg: string) { console.log(msg) }
+const PREFIX = "[app]";
+
+// other.ts 不 import 也能用 — 和你想的不一样
+log("hello");   // ✓ TS 居然不报错
+</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：
+          </p>
+          <ul>
+            <li>每个 .ts 至少写一个 <code>export {}</code></li>
+            <li>tsconfig 开 <code>"moduleDetection": "force"</code>（4.7+）—— 强制所有文件都是模块</li>
+          </ul>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 默认导出与命名导出混用导致 tree-shaking 失败</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// ❌ 把多个 utility 集合在一个 default object 里
+export default {
+  formatDate,
+  parseJSON,
+  log,
+};
+
+// 调用方
+import utils from "./utils";
+utils.log("hi");
+
+// 即使只用 utils.log，bundler 仍把整个 utils 对象打进去 — 无法删除未用的 method
+
+// ✅ 命名导出，每个独立
+export { formatDate, parseJSON, log };
+
+// 调用方
+import { log } from "./utils";   // ✓ tree-shake 友好</code></pre>
+          </div>
+          <p>
+            <strong>规则</strong>：库代码<strong>永远</strong>用命名导出。default 导出仅用于"该模块语义就是单值"的场景（如 <code>export default function App()</code>）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · esModuleInterop 在 ESM-only 项目下的反作用</div>
+          <p>
+            如果你的项目<strong>所有依赖都是 ESM</strong>（不再有 CJS），<code>esModuleInterop: true</code> 会让 TS 给每个 default 导入加垫片，<strong>反而可能改变语义</strong>。
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// ESM 库 some-pkg 直接 export default {fn}
+import x from "some-pkg";
+x.fn();   // ESM 原生：x = { fn }，OK
+
+// 开 esModuleInterop 后产物注入垫片：
+// const x = __importDefault(require("some-pkg")).default
+// → x = { fn }，仍然 OK
+// 但有些边缘情况（CJS module.exports 是函数）行为会怪</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：纯 ESM 项目可以试试 <code>esModuleInterop: false</code>，需要时显式 <code>import * as ns from</code>。但绝大多数项目仍开 esModuleInterop（兼容性最好）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · NodeNext 模式忘了 .js 后缀</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// tsconfig: module: NodeNext
+import { foo } from "./util";        // ❌ Cannot find module './util'
+import { foo } from "./util.js";     // ✓ 必须 .js（即使源是 .ts）
+import { foo } from "./util.ts";     // ❌ 不允许 .ts</code></pre>
+          </div>
+          <p>
+            <strong>原因</strong>：NodeNext 严格遵循 Node 的 ESM 解析规则，要求带后缀。但 TS 不让你写 <code>.ts</code>（产物里是 .js）—— 所以约定写 <code>.js</code>，TS 自己映射回 <code>.ts</code> 源做检查。
+          </p>
+          <p>
+            <strong>规避</strong>：用 <code>moduleResolution: "bundler"</code>（如果用 Vite/Next）—— 不需要后缀。或者用 <a href="https://github.com/justkey007/tsc-alias" target="_blank" rel="noopener">tsc-alias</a> 等工具自动加后缀。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 在 .d.ts 中误用 import 引发"全局 vs 模块"切换</div>
+          <div class="code-block">
+            <span class="code-label">typescript · types/global.d.ts</span>
+            <pre class="code"><code class="lang-ts">// 想给全局 Window 加字段
+interface Window {
+  __APP_VERSION__: string;
+}
+// ✓ 此时文件是"全局脚本" — interface Window 自动 declaration merge
+
+// 加了 import 之后变成"模块"
+import { something } from "./other";
+interface Window { __APP_VERSION__: string }
+// ❌ 不再 merge —— 在模块内的 interface Window 是局部的</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：模块内扩展全局必须用 <code>declare global { ... }</code> 包裹（详见 15 章）：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">import { something } from "./other";
+
+declare global {
+  interface Window {
+    __APP_VERSION__: string;
+  }
+}
+
+export {};   // 让此文件是模块</code></pre>
+          </div>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · 老代码用 namespace 与新代码混合</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// ❌ 混用
+namespace MyApp {
+  export function start() {}
+}
+
+import { other } from "./other";   // 模块导入
+
+MyApp.start();   // 还能用 — 但产物诡异</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：迁移老代码时把 namespace 全部改成 ES module。仅在 <code>.d.ts</code>（给全局 jQuery 等写类型时）保留。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://www.typescriptlang.org/docs/handbook/2/modules.html" target="_blank" rel="noopener"
+              >Handbook · Modules</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-0.html#--verbatimmodulesyntax"
+              target="_blank"
+              rel="noopener"
+              >TS 5.0 · verbatimModuleSyntax</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-7.html#esm-support-for-nodejs"
+              target="_blank"
+              rel="noopener"
+              >TS 4.7 · NodeNext / .mjs / .cts 支持</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-5.html#type-modifiers-on-import-names"
+              target="_blank"
+              rel="noopener"
+              >TS 4.5 · inline type modifiers</a
+            >
+          </li>
+          <li>
+            JS 衔接 →
+            <a href="../../javascript/04-modules/01-esm.html">JS · ESM</a> 配合理解 ESM 的运行时三阶段
+          </li>
+          <li>
+            JS 衔接 →
+            <a href="../../javascript/04-modules/02-cjs-interop.html">JS · CJS/ESM 互通</a>
+          </li>
+          <li>
+            下一章 →
+            <a href="14-decorators.html">14 Decorators</a> Stage 3 vs legacy
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../02-type-manipulation/12-satisfies.html">
+            <span class="label">← 上一章</span>
+            <span class="title">12 · satisfies 与组合艺术</span>
+          </a>
+          <a class="next" href="14-decorators.html">
+            <span class="label">下一章 →</span>
+            <span class="title">14 · Decorators</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

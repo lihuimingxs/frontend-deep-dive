@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Blob / File / FormData · P7 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="Blob 不可变字节流容器、File 是 Blob 的扩展、FileReader vs Response.blob()、URL.createObjectURL 的生命周期与内存泄漏、FormData 上传的 Content-Type 自动设置、大文件分片上传。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P7 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · 高级专题</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-binary.html">01 · ArrayBuffer / TypedArray</a></li>
+          <li><a href="02-blob-file.html">02 · Blob / File / FormData</a></li>
+          <li><a href="03-streams.html">03 · Streams API</a></li>
+          <li><a href="04-canvas.html">04 · Canvas / OffscreenCanvas</a></li>
+          <li><a href="05-animation.html">05 · Animation & RAF</a></li>
+          <li><a href="06-web-components.html">06 · Web Components</a></li>
+          <li><a href="07-regex.html">07 · 正则表达式引擎</a></li>
+          <li><a href="08-intl.html">08 · Intl 国际化</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-fundamentals/index.html">P1 · 语言基础</a></li>
+          <li><a href="../02-advanced/index.html">P2 · 高阶语言</a></li>
+          <li><a href="../03-async/index.html">P3 · 异步 & 错误处理</a></li>
+          <li><a href="../04-modules/index.html">P4 · 模块 & 元编程</a></li>
+          <li><a href="../05-dom/index.html">P5 · DOM & 事件</a></li>
+          <li><a href="../06-network/index.html">P6 · 网络 & 存储</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · 高级专题</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Blob / File / FormData</span>
+        </nav>
+
+        <h1>Blob / File / FormData</h1>
+        <p class="lead">
+          <strong>Blob</strong> 是浏览器里表示任意二进制数据（文件、图片、音视频、网络响应）的统一容器，<strong
+            >File</strong
+          >
+          是带文件名/修改时间的 Blob 子类，<strong>FormData</strong> 是 multipart
+          编码的辅助类。处理上传/下载/图片/媒体必然要用。本章讲清它们的语义、<code>URL.createObjectURL</code>
+          的生命周期、以及大文件分片上传的实战代码。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 01 Binary · P6 Fetch</span>
+          <span
+            ><strong>规范</strong>
+            <a href="https://w3c.github.io/FileAPI/" target="_blank" rel="noopener">W3C File API</a> ·
+            <a href="https://xhr.spec.whatwg.org/#interface-formdata" target="_blank" rel="noopener">FormData</a></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ul>
+          <li>
+            <strong>Blob 不可变</strong>：创建后不能改内容，只能 <code>slice</code> 出新 Blob；<code
+              >Blob.prototype.size / type / arrayBuffer() / text() / stream() / slice()</code
+            >。
+          </li>
+          <li>
+            <strong>File extends Blob</strong>：额外有 <code>name</code> 和 <code>lastModified</code>；从
+            <code>&lt;input type="file"&gt;</code>、<code>DataTransfer</code>、<code>new File([...], "a.txt")</code>
+            得到。
+          </li>
+          <li>
+            <strong>Blob 和 ArrayBuffer</strong>：Blob 是"懒"的（可能存磁盘），ArrayBuffer 一定在内存。大文件优先 Blob。
+          </li>
+          <li>
+            <code>URL.createObjectURL(blob)</code> 生成 <code>blob:https://site/uuid</code>，必须
+            <code>revokeObjectURL</code> 释放否则常驻内存。
+          </li>
+          <li>
+            <code>FormData</code> 自动设置 <code>Content-Type: multipart/form-data; boundary=...</code>；手动 set
+            Content-Type 会<strong>覆盖 boundary</strong> 导致后端解析失败。
+          </li>
+          <li>
+            <code>FileReader</code> 是 2010 年老 API（回调/事件），<strong
+              >2026 年 Blob.text() / arrayBuffer()（Promise）</strong
+            >已全面可用，新代码不再用 FileReader。
+          </li>
+        </ul>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+        <h3>Blob 的构造与读取</h3>
+        <pre><code class="language-javascript">// 从各种源构造
+const blob1 = new Blob(["hello"], { type: "text/plain" });
+const blob2 = new Blob([new Uint8Array([1, 2, 3])], { type: "application/octet-stream" });
+const blob3 = new Blob([blob1, blob2]);       // 串联多个 Blob
+const blob4 = blob1.slice(1, 4, "text/plain"); // "ell"，不复制数据（懒视图）
+
+blob1.size;    // 5
+blob1.type;    // "text/plain"
+
+// 读取为各种格式（全部 Promise）
+await blob1.text();          // "hello"
+await blob1.arrayBuffer();    // ArrayBuffer(5)
+await blob1.bytes();          // Uint8Array(5)（ES2024，新）
+const stream = blob1.stream(); // ReadableStream&lt;Uint8Array&gt;（流式读大文件）
+
+// 老 API（不要在新代码用）
+const fr = new FileReader();
+fr.onload = () =&gt; console.log(fr.result);
+fr.readAsText(blob1);</code></pre>
+
+        <h3>File 的获取方式</h3>
+        <pre><code class="language-javascript">// 1. input[type=file]
+input.addEventListener("change", () =&gt; {
+  for (const file of input.files) {
+    console.log(file.name, file.type, file.size, file.lastModified);
+  }
+});
+
+// 2. 拖放
+dropZone.addEventListener("drop", (e) =&gt; {
+  e.preventDefault();
+  for (const item of e.dataTransfer.items) {
+    if (item.kind === "file") console.log(item.getAsFile());
+  }
+});
+
+// 3. 剪贴板
+document.addEventListener("paste", (e) =&gt; {
+  for (const item of e.clipboardData.items) {
+    if (item.type.startsWith("image/")) console.log(item.getAsFile());
+  }
+});
+
+// 4. 手动构造
+const file = new File(["content"], "hello.txt", {
+  type: "text/plain",
+  lastModified: Date.now(),
+});
+
+// 5. File System Access API（Chrome，需要用户授权）
+const [handle] = await window.showOpenFilePicker();
+const file = await handle.getFile();</code></pre>
+
+        <h3>URL.createObjectURL 生命周期</h3>
+        <pre><code class="language-javascript">const url = URL.createObjectURL(blob); // "blob:https://site/abc-def"
+// 把 Blob 引用在当前 document 的内部表中
+img.src = url;
+
+// ⚠️ Blob 会在 document 销毁前一直驻留内存
+// 必须手动释放
+URL.revokeObjectURL(url);
+
+// 但别过早释放 —— img.src 还在用就不能 revoke
+img.onload = () =&gt; URL.revokeObjectURL(url); // 加载完再释放</code></pre>
+        <p>
+          <strong>为什么默认不释放</strong>：浏览器无法知道 url 字符串被拷贝到哪些地方（DOM
+          属性、CSS、发给服务端）。Blob URL 的生命周期必须手动管理，就像 C 的 malloc/free。
+        </p>
+
+        <h3>data: URL vs blob: URL</h3>
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th>data:URL</th>
+              <th>blob:URL</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>编码</td>
+              <td>base64（+33% 体积）</td>
+              <td>指向 Blob 对象（零开销）</td>
+            </tr>
+            <tr>
+              <td>长度</td>
+              <td>可达几 MB（URL 越长越卡）</td>
+              <td>恒定短 URL</td>
+            </tr>
+            <tr>
+              <td>生命周期</td>
+              <td>字符串存在即有效</td>
+              <td>需 revoke</td>
+            </tr>
+            <tr>
+              <td>适合</td>
+              <td>小图标、CSS 内嵌</td>
+              <td>大图/视频预览、下载</td>
+            </tr>
+            <tr>
+              <td>CSP</td>
+              <td>需 <code>data:</code> source</td>
+              <td>需 <code>blob:</code> source</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>FormData 的三种构造</h3>
+        <pre><code class="language-javascript">// 1. 空 FormData + 手动 append
+const fd = new FormData();
+fd.append("name", "Alice");
+fd.append("avatar", fileInput.files[0]);
+fd.append("avatar", anotherFile, "alt.png"); // 同一 key 多值（数组）
+fd.set("name", "Bob"); // 替换现有 key
+
+// 2. 从 &lt;form&gt; 元素构造（自动读取所有字段）
+const form = document.querySelector("form");
+const fd2 = new FormData(form);
+
+// 3. 只包含提交按钮的字段（ES2022）
+const fd3 = new FormData(form, submitButton);
+
+// 遍历
+for (const [key, value] of fd.entries()) { /* ... */ }
+
+// 发送
+await fetch("/upload", { method: "POST", body: fd });
+// → Content-Type 自动变 multipart/form-data; boundary=----WebKit...
+// ⚠️ 不要手动 set Content-Type header，浏览器需要生成 boundary</code></pre>
+
+        <h3>Blob 的底层存储</h3>
+        <p>
+          浏览器为 Blob 维护<strong>内部表</strong>（Blob registry），每个 Blob 有 UUID 和可能的磁盘文件。小 Blob（<code
+            >&lt; ~40KB</code
+          >）常驻内存，大 Blob 转为磁盘文件。<code>blob.slice()</code> 只创建视图不复制底层数据。
+        </p>
+        <p>
+          Chrome 对单个 origin 的 Blob 总大小也有限额（与 IndexedDB 共享配额）；生产环境读大文件用
+          <code>blob.stream()</code> 流式处理，避免 <code>arrayBuffer()</code> 一次性加载到内存。
+        </p>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <h3>图片预览与压缩</h3>
+        <pre><code class="language-typescript">async function previewAndCompress(file: File, maxDim = 1600, quality = 0.85) {
+  // 1. 生成 blob URL 给 &lt;img&gt;
+  const previewUrl = URL.createObjectURL(file);
+  imgEl.src = previewUrl;
+  imgEl.onload = () =&gt; URL.revokeObjectURL(previewUrl);
+
+  // 2. 用 createImageBitmap 解码 + 缩放
+  const bitmap = await createImageBitmap(file, {
+    resizeWidth: maxDim,
+    resizeQuality: "high",
+  });
+
+  // 3. 画到 canvas 并导出
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const ctx = canvas.getContext("2d")!;
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close(); // 释放 GPU 纹理
+
+  const compressedBlob = await canvas.convertToBlob({ type: "image/webp", quality });
+  return compressedBlob;
+}</code></pre>
+
+        <h3>客户端下载</h3>
+        <pre><code class="language-typescript">function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // 延迟 revoke，防止某些浏览器下载队列还没读
+  setTimeout(() =&gt; URL.revokeObjectURL(url), 1000);
+}
+
+// CSV 导出
+function exportCsv(rows: string[][], filename = "data.csv") {
+  const csv = rows.map(r =&gt; r.map(c =&gt; `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  //                    ↑ UTF-8 BOM，让 Excel 识别中文
+  downloadBlob(blob, filename);
+}</code></pre>
+
+        <h3>大文件分片上传（带断点续传）</h3>
+        <pre><code class="language-typescript">const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
+
+async function uploadInChunks(file: File, uploadUrl: string) {
+  // 1. 计算文件指纹（用于秒传 / 断点）
+  const hash = await sha256OfFile(file);
+
+  // 2. 询问服务端已传到第几片
+  const { uploaded } = await fetch(`${uploadUrl}/status?hash=${hash}`).then(r =&gt; r.json());
+
+  const total = Math.ceil(file.size / CHUNK_SIZE);
+  for (let i = uploaded; i &lt; total; i++) {
+    const start = i * CHUNK_SIZE;
+    const end = Math.min(start + CHUNK_SIZE, file.size);
+    const chunk = file.slice(start, end);
+
+    const fd = new FormData();
+    fd.append("hash", hash);
+    fd.append("index", String(i));
+    fd.append("chunk", chunk, `${hash}-${i}`);
+    await fetch(`${uploadUrl}/chunk`, { method: "POST", body: fd });
+  }
+
+  // 3. 通知合并
+  await fetch(`${uploadUrl}/merge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hash, total, filename: file.name }),
+  });
+}
+
+async function sha256OfFile(file: File): Promise&lt;string&gt; {
+  // 大文件用流式哈希（避免 arrayBuffer 爆内存）
+  const reader = file.stream().getReader();
+  // 浏览器 crypto.subtle 不支持增量 hash；大文件用 SubtleCrypto 需整块传
+  // 实战用 wasm 版 blake3 / spark-md5 做流式
+  const buf = await file.arrayBuffer(); // ≤ 100MB 可接受
+  const h = await crypto.subtle.digest("SHA-256", buf);
+  return Array.from(new Uint8Array(h)).map(b =&gt; b.toString(16).padStart(2, "0")).join("");
+}</code></pre>
+
+        <h3>把文本/JSON 包装成可下载 Blob</h3>
+        <pre><code class="language-typescript">// JSON 导出
+downloadBlob(
+  new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }),
+  "data.json",
+);
+
+// 多文件打包（zip 需要库，如 jszip）
+import JSZip from "jszip";
+const zip = new JSZip();
+zip.file("a.txt", "content a");
+zip.file("b.json", JSON.stringify(obj));
+zip.folder("images")!.file("logo.png", pngBlob);
+const zipBlob = await zip.generateAsync({ type: "blob" });
+downloadBlob(zipBlob, "archive.zip");</code></pre>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <h3>安全的 Blob URL 管理 Hook</h3>
+        <pre><code class="language-typescript">import { useEffect, useState } from "react";
+
+export function useObjectUrl(blob: Blob | File | null) {
+  const [url, setUrl] = useState&lt;string | null&gt;(null);
+
+  useEffect(() =&gt; {
+    if (!blob) { setUrl(null); return; }
+    const u = URL.createObjectURL(blob);
+    setUrl(u);
+    return () =&gt; URL.revokeObjectURL(u); // 组件卸载或 blob 变化时释放
+  }, [blob]);
+
+  return url;
+}
+
+// 使用
+function Preview({ file }: { file: File | null }) {
+  const url = useObjectUrl(file);
+  return url ? &lt;img src={url} alt="" /&gt; : null;
+}</code></pre>
+
+        <h3>拖放上传区</h3>
+        <pre><code class="language-typescript">function DropZone({ onFiles }: { onFiles: (files: File[]) =&gt; void }) {
+  const [dragging, setDragging] = useState(false);
+
+  return (
+    &lt;div
+      onDragEnter={() =&gt; setDragging(true)}
+      onDragLeave={() =&gt; setDragging(false)}
+      onDragOver={(e) =&gt; e.preventDefault()} // 必须阻止默认，否则 drop 不触发
+      onDrop={async (e) =&gt; {
+        e.preventDefault();
+        setDragging(false);
+        const files: File[] = [];
+        for (const item of e.dataTransfer.items) {
+          if (item.kind === "file") {
+            const f = item.getAsFile();
+            if (f) files.push(f);
+          }
+        }
+        onFiles(files);
+      }}
+      className={dragging ? "ring" : ""}
+    /&gt;
+  );
+}</code></pre>
+
+        <h3>流式读取大文本文件</h3>
+        <pre><code class="language-typescript">async function* iterateLines(file: File): AsyncGenerator&lt;string&gt; {
+  const reader = file.stream().pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) { if (buffer) yield buffer; return; }
+    buffer += value;
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) yield line;
+  }
+}
+
+// 处理几 GB 的日志文件不爆内存
+for await (const line of iterateLines(logFile)) {
+  if (line.includes("ERROR")) console.log(line);
+}</code></pre>
+
+        <!-- 05 常见陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="callout callout-warn">
+          <strong>陷阱 1：FormData 时手动设 Content-Type</strong>
+          <p>
+            <code>fetch(url, { headers: { "Content-Type": "multipart/form-data" }, body: fd })</code> → 没
+            boundary，后端解析失败。<strong>让浏览器自动设置</strong>，你只 append FormData。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 2：忘了 revokeObjectURL 内存泄漏</strong>
+          <p>
+            单页应用每次显示 100 张图生成 100 个 blob URL，切页不 revoke，原 blob 常驻内存。DevTools Memory → 看 "Blob"
+            count 确认。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 3：download 属性的安全限制</strong>
+          <p>
+            跨源 URL 的 <code>&lt;a download&gt;</code> 属性被浏览器忽略（防止下载钓鱼）。跨源下载必须先 fetch → Blob →
+            本站 blob URL。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 4：大文件 arrayBuffer() 爆内存</strong>
+          <p>
+            <code>await file.arrayBuffer()</code> 对 2GB 文件一次性载入 2GB 内存 → 移动端直接 OOM。大文件用
+            <code>file.stream()</code> 或 <code>file.slice(start, end).arrayBuffer()</code> 分片。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 5：Safari 对 File 的 lastModified 精度</strong>
+          <p>
+            Safari 只保留到秒，Chrome 保留毫秒。用 lastModified 做去重 key 时两浏览器行为不一致，建议用
+            <code>name + size + hash(first 64KB)</code>。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 6：input.files 没有 Array 方法</strong>
+          <p>
+            <code>input.files</code> 是 <code>FileList</code>（类数组），不能 <code>.map</code>。用
+            <code>Array.from(input.files)</code> 或 <code>[...input.files]</code>。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 7：Blob 的 type 不做验证</strong>
+          <p>
+            <code>new Blob([...], { type: "image/png" })</code> 里 type 完全是字符串，浏览器不校验内容是否真是
+            PNG。上传后端必须用 magic number（文件头 4 字节）校验，防止 <code>.jpg</code> 改后缀传 <code>.php</code>。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 8：同 key 多次 append 是追加，不是覆盖</strong>
+          <p>
+            <code>fd.append("a", 1); fd.append("a", 2)</code> → 两个值都在（后端通常解析为数组）。想替换用
+            <code>fd.set("a", 2)</code>。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 9：FileReader 的事件顺序</strong>
+          <p>
+            老代码常用 FileReader：事件是 <code>loadstart → progress* → load / error / abort → loadend</code>。loadend
+            无论成功失败都触发，常被用错。新代码直接用 <code>await blob.text()</code>。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 10：blob URL 在 iframe / Worker 中的作用域</strong>
+          <p>
+            blob URL 绑定在创建它的 document 上。主线程创建的 blob URL 在 Worker 中 <code>fetch</code> 会失败（不同
+            scope）。Worker 内需要用就在 Worker 内 <code>URL.createObjectURL</code>。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://w3c.github.io/FileAPI/" target="_blank" rel="noopener">W3C · File API</a></li>
+          <li>
+            <a
+              href="https://developer.mozilla.org/en-US/docs/Web/API/URL/createObjectURL_static"
+              target="_blank"
+              rel="noopener"
+              >MDN · URL.createObjectURL</a
+            >
+          </li>
+          <li>
+            <a href="https://web.dev/articles/file-system-access" target="_blank" rel="noopener"
+              >web.dev · File System Access API</a
+            >
+          </li>
+          <li>
+            <a href="https://developer.mozilla.org/en-US/docs/Web/API/FormData" target="_blank" rel="noopener"
+              >MDN · FormData</a
+            >
+          </li>
+          <li><strong>下一步</strong> → <a href="03-streams.html">03 · Streams API</a>。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-binary.html"
+            ><span class="label">← 上一章</span><span class="title">01 · ArrayBuffer / TypedArray</span></a
+          >
+          <a class="next" href="03-streams.html"
+            ><span class="label">下一章 →</span><span class="title">03 · Streams API</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

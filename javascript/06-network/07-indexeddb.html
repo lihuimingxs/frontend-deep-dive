@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>IndexedDB · P6 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="IndexedDB 的对象存储、索引、事务模型、版本升级、游标遍历，idb/idb-keyval 封装库，navigator.storage.estimate/persist，OPFS 与 IndexedDB 的选型对比。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · 网络 & 存储</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-fetch.html">01 · Fetch API</a></li>
+          <li><a href="02-xhr.html">02 · XHR 残余场景</a></li>
+          <li><a href="03-websocket.html">03 · WebSocket</a></li>
+          <li><a href="04-sse.html">04 · Server-Sent Events</a></li>
+          <li><a href="05-cors-csp.html">05 · CORS 与 CSP</a></li>
+          <li><a href="06-cookie-storage.html">06 · Cookie / Storage</a></li>
+          <li><a href="07-indexeddb.html">07 · IndexedDB</a></li>
+          <li><a href="08-service-worker.html">08 · Service Worker + 跨标签</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-fundamentals/index.html">P1 · 语言基础</a></li>
+          <li><a href="../02-advanced/index.html">P2 · 高阶语言</a></li>
+          <li><a href="../03-async/index.html">P3 · 异步 & 错误处理</a></li>
+          <li><a href="../04-modules/index.html">P4 · 模块 & 元编程</a></li>
+          <li><a href="../05-dom/index.html">P5 · DOM & 事件</a></li>
+          <li><a href="../07-advanced/index.html">P7 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · 网络 & 存储</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>IndexedDB</span>
+        </nav>
+
+        <h1>IndexedDB</h1>
+        <p class="lead">
+          浏览器内置的<strong>事务型 NoSQL 数据库</strong>，支持索引、游标、version 迁移、structured clone
+          原生存储（Date/Blob/File/Map/Set/ArrayBuffer 全部保真）。原生 API 极其丑陋（回调套回调），生产一律用
+          <code>idb</code> 封装。本章讲清事务边界、版本迁移、游标的实际用法和常见陷阱。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> 06 Storage</span>
+          <span
+            ><strong>规范</strong>
+            <a href="https://www.w3.org/TR/IndexedDB/" target="_blank" rel="noopener">W3C IndexedDB 3.0</a></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ul>
+          <li>
+            数据库层级：<code>Database</code>（有版本号）→ <code>ObjectStore</code>（≈表，有 keyPath + 索引）→
+            <code>Record</code>（key + value，value 为任意 structured clone 可复制对象）。
+          </li>
+          <li>
+            所有操作在 <strong>Transaction</strong> 内：<code>readonly</code>（并发）/ <code>readwrite</code>（互斥）/
+            <code>versionchange</code>（升级，独占）。
+          </li>
+          <li>
+            事务<strong>自动提交</strong>：当所有 pending request 完成且事件循环空转一轮后提交；期间不能有任何 await 非
+            IDB 操作（会丢失事务）。
+          </li>
+          <li>
+            容量：共享配额（通常磁盘 60%），<code>navigator.storage.estimate()</code> 查询，<code>persist()</code>
+            申请持久化避免自动清理。
+          </li>
+          <li>
+            键空间有序，支持 <code>IDBKeyRange</code> 范围查询；索引可设 <code>unique</code> /
+            <code>multiEntry</code>（数组值展开）。
+          </li>
+          <li>
+            生产一律用 <code>idb</code>（Promise 包装）或 <code>idb-keyval</code>（key-value 糖）；<code>Dexie</code>
+            提供更高级 ORM。
+          </li>
+        </ul>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+        <h3>原生 API 的事件模型</h3>
+        <pre><code class="language-javascript">const request = indexedDB.open("myDB", 2); // 版本号必须是正整数
+
+request.onupgradeneeded = (e) =&gt; {
+  // 仅当版本号变化时触发，独占 versionchange 事务
+  const db = request.result;
+  const oldVersion = e.oldVersion;
+  if (oldVersion &lt; 1) {
+    const store = db.createObjectStore("tasks", { keyPath: "id", autoIncrement: true });
+    store.createIndex("by_status", "status");
+    store.createIndex("by_tags", "tags", { multiEntry: true });
+  }
+  if (oldVersion &lt; 2) {
+    // 逐版本迁移
+    const tx = request.transaction; // versionchange 事务
+    const store = tx.objectStore("tasks");
+    store.createIndex("by_createdAt", "createdAt");
+  }
+};
+
+request.onsuccess = () =&gt; {
+  const db = request.result;
+  // 用 db 创建事务...
+};
+
+request.onerror = () =&gt; console.error(request.error);
+request.onblocked = () =&gt; {
+  // 其他标签打开了旧版本，升级被阻塞
+  // 需要提示用户关闭其他标签或主动 close 其他连接
+};</code></pre>
+
+        <h3>事务自动提交陷阱</h3>
+        <pre><code class="language-javascript">// ❌ 事务在 await fetch 后已提交，store 不可用
+const tx = db.transaction("tasks", "readwrite");
+const store = tx.objectStore("tasks");
+await store.put({ id: 1, name: "A" });
+await fetch("/api/log");                  // ← 事件循环让出
+await store.put({ id: 2, name: "B" });    // TransactionInactiveError
+
+// ✅ 事务内只做 IDB 操作；外部副作用放事务外
+const tx = db.transaction("tasks", "readwrite");
+const store = tx.objectStore("tasks");
+store.put({ id: 1, name: "A" });
+store.put({ id: 2, name: "B" });
+await tx.done; // 等待事务完成（idb 库）或监听 tx.oncomplete
+await fetch("/api/log");</code></pre>
+        <p>
+          <strong>为什么会自动提交</strong>：规范要求事务在所有 request 完成且 microtask queue
+          空时提交，防止长事务阻塞其他连接。一个非 IDB 的 await 让出控制权，触发提交检查。
+        </p>
+
+        <h3>版本迁移：只能递增、只能在 upgrade 事件内</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>操作</th>
+              <th>允许时机</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>createObjectStore</code> / <code>deleteObjectStore</code></td>
+              <td>仅 <code>onupgradeneeded</code>（versionchange 事务内）</td>
+            </tr>
+            <tr>
+              <td><code>createIndex</code> / <code>deleteIndex</code></td>
+              <td>仅 <code>onupgradeneeded</code></td>
+            </tr>
+            <tr>
+              <td>修改 <code>keyPath</code> / <code>autoIncrement</code></td>
+              <td><strong>不允许</strong>，只能删库重建</td>
+            </tr>
+            <tr>
+              <td><code>put</code> / <code>delete</code> / <code>add</code> / <code>get</code></td>
+              <td>任何事务</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          <code>onupgradeneeded</code> 必须<strong>幂等</strong>：用户可能跳过中间版本（从 v1 直接到 v5），代码要检查
+          <code>oldVersion</code> 按顺序迁移。
+        </p>
+
+        <h3>键与索引</h3>
+        <pre><code class="language-javascript">// 主键来源：3 种
+db.createObjectStore("a", { keyPath: "id" });              // 从 value 取 id 字段
+db.createObjectStore("b", { keyPath: "id", autoIncrement: true }); // 取 id，无则自动生成
+db.createObjectStore("c", { autoIncrement: true });        // 外部指定或自动生成
+db.createObjectStore("d");                                 // 必须 .put(value, key) 手动传 key
+
+// 键合法类型（有序）
+// number | string | Date | binary | Array
+store.put(value, [2024, "a", "b"]);  // 复合键
+
+// 范围查询
+const range = IDBKeyRange.bound("a", "z", false, true); // [a, z)
+const index = store.index("by_name");
+const request = index.getAll(range, 100);
+
+// multiEntry：数组值展开成多条索引
+store.createIndex("by_tags", "tags", { multiEntry: true });
+// 存 { id: 1, tags: ["rust", "wasm"] }
+// 索引产生两条：("rust", 1) 和 ("wasm", 1)
+// 支持 index.getAll("rust") 直接查</code></pre>
+
+        <h3>游标遍历</h3>
+        <pre><code class="language-javascript">// 原生 API：每次 continue() 触发一次 onsuccess
+const tx = db.transaction("tasks", "readonly");
+const store = tx.objectStore("tasks");
+const request = store.openCursor();
+request.onsuccess = () =&gt; {
+  const cursor = request.result;
+  if (!cursor) return; // 遍历结束
+  console.log(cursor.key, cursor.value);
+  cursor.continue();
+};
+
+// idb 封装：用 for await
+import { openDB } from "idb";
+const db = await openDB("myDB", 2);
+const tx = db.transaction("tasks", "readonly");
+for await (const cursor of tx.store) {
+  console.log(cursor.key, cursor.value);
+  // cursor.update(newValue) / cursor.delete() 可用
+  if (cursor.key &gt; 1000) break; // 提前退出
+}</code></pre>
+        <p>
+          <strong>为什么用游标而不是 getAll</strong>：百万行数据 getAll 一次性载入内存会 OOM；游标逐条拉取 +
+          提前退出可做分页、流式渲染。
+        </p>
+
+        <h3>structured clone：IndexedDB 的隐藏超能力</h3>
+        <p>LocalStorage 只能存字符串；IndexedDB 用 structured clone 算法序列化，支持：</p>
+        <ul>
+          <li>
+            <code>Date</code>、<code>RegExp</code>、<code>Blob</code>、<code>File</code>、<code>FileList</code>、<code
+              >ImageData</code
+            >
+          </li>
+          <li>
+            <code>Map</code>、<code>Set</code>、<code>ArrayBuffer</code>、<code>TypedArray</code>、<code>DataView</code>
+          </li>
+          <li>循环引用（<code>const o = { self: null }; o.self = o</code> 可存可取）</li>
+        </ul>
+        <p>不支持：函数、Symbol、Error（部分浏览器支持）、DOM 节点。存图片可直接塞 Blob，比 base64 省 33%。</p>
+
+        <h3>配额与持久化</h3>
+        <pre><code class="language-javascript">// 查询配额
+const { quota, usage } = await navigator.storage.estimate();
+console.log(`已用 ${usage} / ${quota} 字节`);
+
+// 申请持久化（防止被自动清理）
+if (navigator.storage.persist) {
+  const persisted = await navigator.storage.persist();
+  console.log("Persistent storage:", persisted);
+  // 依赖站点评分：已安装 PWA / 高频访问 / 用户交互后会授予
+}
+
+// 检查是否已持久化
+const isPersisted = await navigator.storage.persisted();</code></pre>
+        <p>
+          Chrome 默认给单个 origin 最多 <strong>可用磁盘的 60%</strong>；所有 origin 总和不超过磁盘的 60%。超限时
+          <code>put</code> 抛 <code>QuotaExceededError</code>。
+        </p>
+
+        <h3>IndexedDB vs OPFS vs Cache Storage</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>场景</th>
+              <th>推荐</th>
+              <th>理由</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>结构化数据 + 索引查询</td>
+              <td>IndexedDB</td>
+              <td>事务 + 索引 + 游标原生支持</td>
+            </tr>
+            <tr>
+              <td>大文件读写（&gt;100MB）</td>
+              <td>OPFS（<code>navigator.storage.getDirectory()</code>）</td>
+              <td>文件系统 API，同步访问在 Worker 中极快</td>
+            </tr>
+            <tr>
+              <td>HTTP 响应缓存</td>
+              <td>Cache Storage（Service Worker）</td>
+              <td>Request/Response 对象原生存储，与 fetch 匹配</td>
+            </tr>
+            <tr>
+              <td>跨 Worker 共享</td>
+              <td>OPFS + AccessHandle（同步 IO）</td>
+              <td>Atomics + SAB 做无锁同步</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>SQLite WASM（<code>sqlite-wasm</code>）基于 OPFS 提供真 SQL 引擎；复杂查询场景比 IndexedDB 易用得多。</p>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <h3>离线队列（Background Sync 前的兜底）</h3>
+        <pre><code class="language-typescript">// 用户离线时把操作排队
+import { openDB } from "idb";
+
+const dbPromise = openDB("pending-ops", 1, {
+  upgrade(db) {
+    db.createObjectStore("queue", { keyPath: "id", autoIncrement: true });
+  },
+});
+
+async function enqueueOp(op: { url: string; method: string; body?: unknown }) {
+  const db = await dbPromise;
+  await db.add("queue", { ...op, createdAt: Date.now() });
+  // 尝试触发 Background Sync（详见 P6-08）
+  const reg = await navigator.serviceWorker.ready;
+  await reg.sync?.register("flush-queue");
+}
+
+async function flushQueue() {
+  const db = await dbPromise;
+  const tx = db.transaction("queue", "readwrite");
+  for await (const cursor of tx.store) {
+    const op = cursor.value;
+    try {
+      await fetch(op.url, { method: op.method, body: JSON.stringify(op.body) });
+      await cursor.delete();
+    } catch {
+      // 网络仍不通，保留到下次
+      break;
+    }
+  }
+}</code></pre>
+
+        <h3>大列表缓存（替代 LocalStorage 的 5MB 限制）</h3>
+        <pre><code class="language-typescript">import { openDB } from "idb";
+
+interface CachedItem&lt;T&gt; { key: string; value: T; expiresAt: number; }
+
+const db = await openDB("app-cache", 1, {
+  upgrade(db) {
+    const store = db.createObjectStore("items", { keyPath: "key" });
+    store.createIndex("by_expires", "expiresAt");
+  },
+});
+
+async function setCache&lt;T&gt;(key: string, value: T, ttlMs: number) {
+  await db.put("items", { key, value, expiresAt: Date.now() + ttlMs });
+}
+
+async function getCache&lt;T&gt;(key: string): Promise&lt;T | null&gt; {
+  const item = await db.get("items", key) as CachedItem&lt;T&gt; | undefined;
+  if (!item) return null;
+  if (item.expiresAt &lt; Date.now()) {
+    await db.delete("items", key);
+    return null;
+  }
+  return item.value;
+}
+
+// 定期清理过期项
+async function gc() {
+  const range = IDBKeyRange.upperBound(Date.now());
+  const tx = db.transaction("items", "readwrite");
+  for await (const cursor of tx.store.index("by_expires").iterate(range)) {
+    await cursor.delete();
+  }
+}</code></pre>
+
+        <h3>idb-keyval：最简单的 key-value 接口</h3>
+        <pre><code class="language-typescript">import { get, set, del, keys } from "idb-keyval";
+
+await set("user", { id: 1, name: "Alice", createdAt: new Date() });
+const user = await get("user"); // Date 保持 Date 类型
+await del("user");
+const all = await keys();
+
+// 自定义 store
+import { createStore } from "idb-keyval";
+const settingsStore = createStore("app", "settings");
+await set("theme", "dark", settingsStore);</code></pre>
+
+        <h3>Dexie：更像 ORM 的封装</h3>
+        <pre><code class="language-typescript">import Dexie, { type EntityTable } from "dexie";
+
+interface Task { id?: number; title: string; status: "todo" | "done"; tags: string[]; }
+
+const db = new Dexie("TaskDB") as Dexie & {
+  tasks: EntityTable&lt;Task, "id"&gt;;
+};
+db.version(1).stores({
+  tasks: "++id, status, *tags", // ++id 自增主键，*tags 多值索引
+});
+
+// 查询像链式调用
+const done = await db.tasks.where("status").equals("done").reverse().limit(20).toArray();
+const rustTasks = await db.tasks.where("tags").equals("rust").toArray();
+
+// 事务显式
+await db.transaction("rw", db.tasks, async () =&gt; {
+  const task = await db.tasks.get(1);
+  if (task) await db.tasks.update(1, { status: "done" });
+});</code></pre>
+
+        <h3>全文搜索</h3>
+        <p>
+          IndexedDB 原生不支持全文检索。常见方案：（a）建倒排索引 store，自己维护 token → id 映射；（b）用
+          <code>lunr</code> 或 <code>FlexSearch</code> 在内存建索引，IndexedDB 持久化；（c）SQLite WASM +
+          FTS5。百万级以下数据 FlexSearch 足矣。
+        </p>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <h3>带版本迁移的 idb 封装</h3>
+        <pre><code class="language-typescript">import { openDB, type IDBPDatabase } from "idb";
+
+interface Schema {
+  tasks: { key: number; value: { id: number; title: string; status: string; createdAt: Date; tags: string[] }; indexes: { by_status: string; by_tags: string; by_createdAt: Date } };
+  projects: { key: string; value: { slug: string; name: string } };
+}
+
+let dbPromise: Promise&lt;IDBPDatabase&lt;Schema&gt;&gt; | null = null;
+
+export function getDb() {
+  if (dbPromise) return dbPromise;
+  dbPromise = openDB&lt;Schema&gt;("app", 3, {
+    upgrade(db, oldVersion, newVersion, tx) {
+      if (oldVersion &lt; 1) {
+        const tasks = db.createObjectStore("tasks", { keyPath: "id", autoIncrement: true });
+        tasks.createIndex("by_status", "status");
+      }
+      if (oldVersion &lt; 2) {
+        const tasks = tx.objectStore("tasks");
+        tasks.createIndex("by_tags", "tags", { multiEntry: true });
+      }
+      if (oldVersion &lt; 3) {
+        db.createObjectStore("projects", { keyPath: "slug" });
+        const tasks = tx.objectStore("tasks");
+        tasks.createIndex("by_createdAt", "createdAt");
+      }
+    },
+    blocked(currentVersion, blockedVersion) {
+      console.warn(`其他标签在用 v${currentVersion}，升级到 v${blockedVersion} 被阻塞`);
+    },
+    blocking(currentVersion, blockedVersion, event) {
+      // 其他标签要升级，提示用户刷新
+      alert("有新版本可用，请刷新页面");
+    },
+    terminated() {
+      // 连接被浏览器意外关闭（磁盘满、隐私模式等）
+      dbPromise = null;
+    },
+  });
+  return dbPromise;
+}</code></pre>
+
+        <h3>并发安全的 "upsert"</h3>
+        <pre><code class="language-typescript">// 原子递增计数器（事务保证无竞态）
+async function incrementCounter(key: string) {
+  const db = await getDb();
+  const tx = db.transaction("counters", "readwrite");
+  const store = tx.objectStore("counters");
+  const current = (await store.get(key))?.count ?? 0;
+  await store.put({ key, count: current + 1 });
+  await tx.done; // 等事务提交
+}</code></pre>
+
+        <h3>监测配额并在接近上限时清理</h3>
+        <pre><code class="language-typescript">async function ensureQuota(minFree: number) {
+  const { quota = 0, usage = 0 } = await navigator.storage.estimate();
+  const free = quota - usage;
+  if (free &gt;= minFree) return;
+
+  // 清理最旧的缓存直到达到阈值
+  const db = await getDb();
+  const tx = db.transaction("items", "readwrite");
+  for await (const cursor of tx.store.index("by_createdAt")) {
+    await cursor.delete();
+    const { usage: u2 = 0 } = await navigator.storage.estimate();
+    if (quota - u2 &gt;= minFree) break;
+  }
+}</code></pre>
+
+        <!-- 05 常见陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="callout callout-warn">
+          <strong>陷阱 1：事务内 await fetch 必丢事务</strong>
+          <p>
+            IDB 事务在 microtask 空转后自动提交。事务内只做 IDB
+            操作，网络/计算放事务外。需要原子性时先读完所有数据→计算→新开事务写。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 2：版本升级时其他标签未关闭 → 永久阻塞</strong>
+          <p>
+            用户开了 5 个标签，其中 1 个升级了代码，其他仍连着旧 DB。监听 <code>blocking</code> 事件主动
+            <code>db.close()</code> 并提示刷新，否则新标签永远卡在 <code>onblocked</code>。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 3：onupgradeneeded 不幂等</strong>
+          <p>
+            用户跳过多版本（旧标签从 v1 直接升到 v5），代码写
+            <code>if (oldVersion === 1)</code> 只处理一档，中间迁移丢失。必须用
+            <code>if (oldVersion &lt; N)</code> 级联处理所有版本。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 4：keyPath 修改只能删库</strong>
+          <p>
+            原用 <code>{ keyPath: "_id" }</code>，想改成 <code>"id"</code>？不行。只能
+            <code>deleteObjectStore</code> 后重建，数据丢失。设计 schema 时 keyPath 要稳定。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 5：Safari 隐私模式 IndexedDB 可用但写失败</strong>
+          <p>
+            Safari Private Browsing 允许打开 DB，但写操作抛错。用户可能看到半 bug 的界面。所有写操作 catch，fallback
+            到内存 Map。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 6：Firefox 无痕模式 DB 被强制隔离</strong>
+          <p>
+            Firefox Private Window 的 IDB 关闭窗口即清空；Chrome 2020 前清理时机不一致。不要把核心数据只存在 IDB ——
+            云端要能恢复。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 7：multiEntry 索引对非数组值静默跳过</strong>
+          <p>
+            <code>tags</code> 字段偶尔是字符串而非数组时，该条不进索引（既不报错也不建
+            key）。数据层保证类型一致或迁移时清理。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 8：getAll 一次性吃光内存</strong>
+          <p>
+            百万条记录 <code>store.getAll()</code> 会把所有 value 克隆到主线程堆，几 GB 内存占用。改用
+            <code>openCursor</code> + 分页。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 9：structured clone 不复制 function / Symbol / Proxy</strong>
+          <p>类实例（带方法）存进去，取出来方法全丢失，只剩属性。存纯数据，业务对象在应用层重建。</p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 10：versionchange 事件导致打开的连接被关闭</strong>
+          <p>
+            标签 A 打开 DB，标签 B 升级，A 的连接收到 <code>onversionchange</code> 事件 —— 若不处理，B 的
+            <code>onblocked</code> 永远 pending。A 必须监听并 <code>db.close()</code>。idb 库的
+            <code>blocking</code> 回调已帮你抽象。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://www.w3.org/TR/IndexedDB/" target="_blank" rel="noopener">W3C · IndexedDB 3.0 规范</a>
+          </li>
+          <li>
+            <a href="https://github.com/jakearchibald/idb" target="_blank" rel="noopener"
+              >idb · Promise 封装（Jake Archibald）</a
+            >
+          </li>
+          <li>
+            <a href="https://github.com/jakearchibald/idb-keyval" target="_blank" rel="noopener"
+              >idb-keyval · 超简 key-value 封装</a
+            >
+          </li>
+          <li><a href="https://dexie.org/" target="_blank" rel="noopener">Dexie · IDB ORM</a></li>
+          <li>
+            <a href="https://sqlite.org/wasm/doc/trunk/persistence.md" target="_blank" rel="noopener"
+              >SQLite WASM · OPFS 持久化</a
+            >
+          </li>
+          <li><strong>下一步</strong> → <a href="08-service-worker.html">08 · Service Worker + 跨标签通信</a>。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="06-cookie-storage.html"
+            ><span class="label">← 上一章</span><span class="title">06 · Cookie / Storage</span></a
+          >
+          <a class="next" href="08-service-worker.html"
+            ><span class="label">下一章 →</span><span class="title">08 · Service Worker + 跨标签</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

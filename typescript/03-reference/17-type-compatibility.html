@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>17 · Type Compatibility & Inference · Part 3 · TypeScript 深度学习</title>
+    <meta
+      name="description"
+      content="TypeScript 类型系统的元层机制：结构化兼容、协变 / 逆变 / 双变 / 不变（variance）的直觉与形式化、method bivariance 设计权衡、strictFunctionTypes 的边界、contextual typing、best common type。Part 3 最难章。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%233178c6'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETS%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>TypeScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.62 0.13 245); color: #fff">TS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">TS 首页</a>
+          <a href="index.html">Part 3 目录</a>
+          <a href="https://www.typescriptlang.org/docs/handbook/type-compatibility.html" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Part 3 · Reference</h3>
+        <ul>
+          <li><a href="index.html">Part 概览</a></li>
+          <li><a href="13-modules.html">13 · Modules</a></li>
+          <li><a href="14-decorators.html">14 · Decorators</a></li>
+          <li><a href="15-merging-mixins.html">15 · Declaration Merging / Mixins / Symbols</a></li>
+          <li><a href="16-iterators-jsx.html">16 · Iterators / JSX</a></li>
+          <li><a href="17-type-compatibility.html">17 · Type Compatibility & Inference</a></li>
+        </ul>
+        <h3>其他 Part</h3>
+        <ul>
+          <li><a href="../01-handbook-basics/index.html">Part 1 · Handbook 基础</a></li>
+          <li><a href="../02-type-manipulation/index.html">Part 2 · 类型操作</a></li>
+          <li><a href="../04-project/index.html">Part 4 · 工程化</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TypeScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Part 3 · Reference</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>17 · Type Compatibility & Inference</span>
+        </nav>
+
+        <h1>17 · Type Compatibility & Inference</h1>
+        <p class="lead">
+          这是 TS 类型系统的<strong>元层机制</strong> —— 解释"为什么一个类型能赋给另一个类型"。本章深入<strong>协变 / 逆变 / 双变 / 不变</strong>这套 variance 概念、method bivariance 这个 TS 故意留的不安全口子、<code>strictFunctionTypes</code> 解决了什么、<strong>contextual typing</strong> 让回调参数能被反推、以及 <strong>best common type</strong> 在数组字面量推断中的行为。理解这些后回头看 Part 2 也会更深 —— 因为 09 章 conditional type 的 distributive、10 章 mapped type 的 modifier 都基于这套底层规则。
+        </p>
+        <p class="lead">
+          ⚠️ <strong>本 Part 最难一章</strong>。variance 是函数式 / 库作者必须掌握的元能力，对应用代码作者只需知道直觉法则即可。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~45 分钟</span>
+          <span><strong>前置</strong>
+            前 16 章的所有内容（这是综合元层）</span>
+          <span
+            ><strong>对应 typescriptlang.org</strong>
+            Type Compatibility + Type Inference</span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>
+          一句话总结：<strong>TS 是结构化（structural）类型系统</strong>。两个类型的兼容性<strong>看形状不看名字</strong>。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">interface Named { name: string }
+interface User  { name: string; age: number }
+
+const u: User = { name: "Alice", age: 30 };
+const n: Named = u;     // ✓ User 的形状包含 Named 要求的所有字段
+const u2: User = n;     // ❌ Named 缺 age</code></pre>
+        </div>
+        <p>
+          但函数 / class / generic 上有更细致的规则，叫 <strong>variance（型变）</strong>。直觉法则：
+        </p>
+        <ul>
+          <li><strong>输入位置变窄不安全</strong>（应"逆变" contravariant）</li>
+          <li><strong>输出位置变窄安全</strong>（可"协变" covariant）</li>
+        </ul>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>1. 对象兼容性：源至少要有目标的所有 required 字段</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">interface Point2D { x: number; y: number }
+interface Point3D { x: number; y: number; z: number }
+
+const p3: Point3D = { x: 0, y: 0, z: 0 };
+const p2: Point2D = p3;    // ✓ Point3D 形状是 Point2D 的超集
+
+const p4: Point3D = p2;    // ❌ Point2D 缺 z</code></pre>
+        </div>
+        <p>
+          可选字段 <code>?</code> 不强制要求，<code>readonly</code> 不影响赋值方向（02 章讲过）。多余字段在<strong>立即字面量</strong>赋值时触发 excess property check（这是结构兼容的特殊保护）。
+        </p>
+
+        <h3>2. 函数参数：逆变（contravariance）</h3>
+        <p>
+          这是 variance 概念中最反直觉的部分。一个法则：
+        </p>
+        <p>
+          <strong>能接受 <code>Animal</code> 的函数，可以替换"期望接受 <code>Dog</code> 的函数"位置</strong>。
+        </p>
+        <p>
+          为什么？想象有一个函数类型 <code>type Handler = (x: Dog) =&gt; void</code>。"期望 Dog handler"的代码会传 Dog 给它。如果实际函数是 <code>(x: Animal) =&gt; void</code>，由于 Dog 是 Animal 子类型，传 Dog 满足 Animal —— 安全。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">interface Animal { name: string }
+interface Dog extends Animal { bark(): void }
+
+type DogHandler = (d: Dog) =&gt; void;
+type AnimalHandler = (a: Animal) =&gt; void;
+
+const animalH: AnimalHandler = a =&gt; console.log(a.name);
+const dogH: DogHandler = d =&gt; d.bark();
+
+// 参数逆变：宽参数可以放窄参数位置
+const f1: DogHandler = animalH;   // ✓ AnimalHandler 比 DogHandler 更"宽"
+                                    //   能接 Animal 的函数自然也能接 Dog
+const f2: AnimalHandler = dogH;   // ❌ DogHandler 接不了非 Dog 的 Animal
+                                    //   把它放进期望 AnimalHandler 的位置不安全</code></pre>
+        </div>
+        <p>
+          形式化：函数类型 <code>(x: A) =&gt; B</code> 中，<strong>参数 A 是逆变位置（输入）</strong>，<strong>返回值 B 是协变位置（输出）</strong>。
+        </p>
+
+        <h3>3. 函数返回值：协变（covariance）</h3>
+        <p>
+          返回值更窄是安全的：调用方期望 Animal，实际给了 Dog（Dog 是 Animal 的子类型），完全没问题。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">type ReturnsAnimal = () =&gt; Animal;
+type ReturnsDog = () =&gt; Dog;
+
+const getDog: ReturnsDog = () =&gt; ({ name: "Rex", bark() {} });
+
+// 返回值协变：窄返回值可以放宽返回位置
+const f1: ReturnsAnimal = getDog;   // ✓ Dog 是 Animal — 调用方拿 Animal 当然也行
+const f2: ReturnsDog = (() =&gt; ({ name: "x" } as Animal));   // ❌ Animal 不一定是 Dog</code></pre>
+        </div>
+
+        <h3>4. 完整法则：函数类型兼容（含返回值 + 参数）</h3>
+        <table>
+          <thead>
+            <tr><th>位置</th><th>要兼容的方向</th><th>口诀</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>参数</td><td>逆变（变宽 OK，变窄不 OK）</td><td>"<strong>少要求</strong>"安全</td></tr>
+            <tr><td>返回值</td><td>协变（变窄 OK，变宽不 OK）</td><td>"<strong>多承诺</strong>"安全</td></tr>
+          </tbody>
+        </table>
+        <div class="code-block">
+          <span class="code-label">typescript · 综合例子</span>
+          <pre class="code"><code class="lang-ts">type FA = (x: Animal) =&gt; Dog;          // 接受 Animal，返回 Dog
+type FB = (x: Dog) =&gt; Animal;           // 接受 Dog，返回 Animal
+
+// FA 可以赋给 FB 吗？
+//   参数：FA 接 Animal（宽），FB 接 Dog（窄） — 给 FB 位置一个 FA，调用方传 Dog，FA 接受 Animal 包含 Dog ✓
+//   返回值：FA 返回 Dog（窄），FB 返回 Animal（宽） — 调用方拿 Animal，FA 给的 Dog 是 Animal ✓
+const f1: FB = ((x: Animal) =&gt; ({ name: "x", bark() {} })) as FA;   // ✓
+
+// 反向：FB 赋给 FA？
+//   参数：FB 接 Dog（窄），FA 接 Animal（宽） — 给 FA 一个 FB，调用方传 Animal，FB 不接 ❌
+const f2: FA = ((x: Dog) =&gt; ({ name: "x" } as Animal)) as FB;     // ❌</code></pre>
+        </div>
+
+        <h3>5. ⚠️ Method bivariance：TS 故意留的不安全口子</h3>
+        <p>
+          上面的"参数逆变"规则只对<strong>函数类型</strong>（<code>(x: T) =&gt; U</code>）成立。但 TS 对<strong>方法签名</strong>（interface / class 里的 <code>method(x: T): U</code>）<strong>默认采用双变（bivariance）</strong>—— 参数<strong>双向</strong>都允许：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript · 默认（strictFunctionTypes 关）</span>
+          <pre class="code"><code class="lang-ts">interface Listener&lt;T&gt; {
+  handle(event: T): void;   // method 签名 — bivariant
+}
+
+const dogListener: Listener&lt;Dog&gt; = { handle(d) { d.bark() } };
+
+// ⚠️ 参数变窄竟然也通过 — 这不安全
+const animalListener: Listener&lt;Animal&gt; = dogListener;
+animalListener.handle({ name: "cat" });   // 编译过 → 运行时炸：bark is not a function</code></pre>
+        </div>
+        <p>
+          为什么 TS 这么设计？历史包袱：在 <code>strictFunctionTypes</code> 出现之前，TS 完全双变，因为<strong>这种不安全在实践中被工程接受</strong>。最经典的例子：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// JS / TS 设计上 Array&lt;T&gt; 的 push 是 bivariant 的
+const dogs: Dog[] = [{ name: "Rex", bark() {} }];
+const animals: Animal[] = dogs;   // ⚠️ 不严格安全 — 但 TS 允许，因为大多数情况"够用"
+
+// 严格说不安全的原因：
+animals.push({ name: "cat" });    // 编译过
+dogs[1].bark();                    // 运行时炸（cat 不是 Dog）</code></pre>
+        </div>
+
+        <h3>6. <code>strictFunctionTypes</code> 关掉双变（仅函数类型）</h3>
+        <p>
+          TS 2.6 引入这个 flag。打开后，<strong>函数类型</strong>（function type expression）按严格逆变；<strong>方法签名</strong>（method signature）仍是双变 —— 后者无法严格化（涉及 array、event handler 等大量历史代码）。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript · strictFunctionTypes: true</span>
+          <pre class="code"><code class="lang-ts">// 函数类型 — 严格逆变
+type DogCb = (d: Dog) =&gt; void;
+type AnimalCb = (a: Animal) =&gt; void;
+
+const dogCb: DogCb = d =&gt; d.bark();
+const animalCb: AnimalCb = dogCb;   // ❌ 严格 mode 下不允许
+
+// 但方法签名仍是双变（设计如此）
+interface Handler { handle(d: Dog): void }
+const h: Handler = { handle(d) { d.bark() } };
+const h2: { handle(a: Animal): void } = h;   // ✓ 仍允许（method bivariance 未关闭）</code></pre>
+        </div>
+        <p>
+          实用建议：永远开 <code>strictFunctionTypes</code>（包含在 <code>strict: true</code> 里）。无法严格的 method 部分接受现状。要严格 method 兼容性，把 method 改成 callable property：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 方法签名 — bivariant
+interface Listener1&lt;T&gt; {
+  handle(event: T): void;
+}
+
+// 函数类型 callable property — strictFunctionTypes 下严格逆变
+interface Listener2&lt;T&gt; {
+  handle: (event: T) =&gt; void;   // 注意：用 = 不是 :
+}
+
+// 在严格模式下 Listener2 行为更安全</code></pre>
+        </div>
+
+        <h3>7. Class 兼容性：private / protected 创建"血缘绑定"</h3>
+        <p>
+          普通 class 走结构兼容。但<strong>有 <code>private</code> 或 <code>protected</code> 字段时</strong>，TS 把这些字段视为"<strong>来源标记</strong>"—— 只有共同继承链下的 class 才兼容：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">class A {
+  private secret = 1;
+}
+class B {
+  private secret = 1;
+}
+// A 和 B 的 secret 名字相同，但来源不同
+const a: A = new B();   // ❌ 'private' property 'secret' has different origins
+
+// 继承关系下兼容
+class A2 {
+  private secret = 1;
+}
+class C extends A2 {}
+const a2: A2 = new C();   // ✓ C 继承自 A2，secret 是同源</code></pre>
+        </div>
+        <p>
+          这是 TS 类型系统中<strong>极少数破坏纯结构化</strong>的地方 —— 用名义化区分 class 的具体来源。设计意图：让"私有字段"真正起到"封装"作用，外部无法通过结构兼容绕过。
+        </p>
+
+        <h3>8. Generic 兼容性：类型参数不出现在结构里时被忽略</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"<code class="lang-ts">// T 不出现在结构里
+interface Empty&lt;T&gt; {}
+
+const e1: Empty&lt;string&gt; = {};
+const e2: Empty&lt;number&gt; = e1;   // ✓ T 不影响兼容性
+
+// T 出现在结构里
+interface Box&lt;T&gt; { value: T }
+const b1: Box&lt;string&gt; = { value: "x" };
+const b2: Box&lt;number&gt; = b1;   // ❌ Box&lt;string&gt; 不兼容 Box&lt;number&gt;</code></pre>
+        </div>
+
+        <h3>9. 特殊类型互通：any / unknown / never / void</h3>
+        <table>
+          <thead>
+            <tr><th>类型</th><th>能赋给什么</th><th>什么能赋给它</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>any</code></td>
+              <td>任何（除 never）</td>
+              <td>任何</td>
+            </tr>
+            <tr>
+              <td><code>unknown</code></td>
+              <td>仅 unknown / any</td>
+              <td>任何</td>
+            </tr>
+            <tr>
+              <td><code>never</code></td>
+              <td>任何（never 是底类型，所有类型的子类）</td>
+              <td>仅 never</td>
+            </tr>
+            <tr>
+              <td><code>void</code></td>
+              <td>仅 void / any</td>
+              <td>void / undefined（in non-strict）/ 任何（在函数返回值位置，特殊规则）</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          关键观察：<strong>any 是"双向洞"</strong> — 既是顶又是底。这是它危险的根源。<strong>unknown 是顶（top type）</strong> — 任何能赋给它，但它必须 narrow 后才能用。<strong>never 是底（bottom type）</strong> — 只有 never 能赋给 never，但 never 能赋给任何。
+        </p>
+
+        <h3>10. Contextual typing：由位置决定参数类型</h3>
+        <p>
+          通常类型推断是"<strong>从值推类型</strong>"：<code>const x = "abc"</code> 推 string。Contextual typing 反过来 —— "<strong>从位置推类型</strong>"：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">interface Button {
+  addEventListener(type: "click", h: (e: MouseEvent) =&gt; void): void;
+}
+declare const btn: Button;
+
+// 内联回调 — contextual typing 工作
+btn.addEventListener("click", e =&gt; {
+  e.button;   // ✓ e: MouseEvent — 从 addEventListener 签名反推
+});
+
+// 脱离上下文 — 退化成 any
+const handler = e =&gt; e.button;   // ❌ Parameter 'e' implicitly has an 'any' type
+//                                   handler 不在 addEventListener 上下文里
+btn.addEventListener("click", handler);</code></pre>
+        </div>
+        <p>
+          这是为什么内联回调好写、独立函数难写的根因。要给独立函数加类型，要么显式注解，要么用 <code>typeof</code> 复用签名：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 显式注解
+const handler1 = (e: MouseEvent) =&gt; e.button;
+
+// 复用 addEventListener 第二参数类型
+type ClickHandler = Parameters&lt;Button["addEventListener"]&gt;[1];
+const handler2: ClickHandler = e =&gt; e.button;</code></pre>
+        </div>
+
+        <h3>11. Best common type：数组字面量推断的妥协</h3>
+        <p>
+          数组字面量含<strong>多种类型</strong>时，TS 推断为这些类型的 union，<strong>不会自动找父类</strong>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">class Animal { name = "" }
+class Dog extends Animal { bark() {} }
+class Cat extends Animal { meow() {} }
+
+const xs = [new Dog(), new Cat()];
+//    ^? (Dog | Cat)[]    不是 Animal[]
+
+// 要推 Animal[] 必须显式注解
+const ys: Animal[] = [new Dog(), new Cat()];
+
+// 数字与字符串混合
+const zs = [1, "a"];   // (string | number)[]
+//    ^^^^^^^^^^^^^^   不会推 unknown[]</code></pre>
+        </div>
+        <p>
+          为什么不找父类？因为 TS 没法<strong>在结构化类型系统里</strong>可靠地"找最小公共父类型" —— 任意两个对象都可能有无穷多共同父类型（例如空 interface <code>{}</code>、Object、unknown 等都是它们的父类）。所以 TS 取折中：保留每个具体类型的 union。
+        </p>
+
+        <h3>12. 推断的"宽化"</h3>
+        <p>
+          字面量类型在某些位置会自动"宽化"成原始类型，避免推断过窄：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">const a = "hello";    // a: "hello"   字面量
+let b = "hello";       // b: string    宽化 — 因为 let 可重新赋值
+
+const obj = { x: "hello" };   // { x: string }   对象字段也宽化
+const obj2 = { x: "hello" } as const;   // { readonly x: "hello" }   as const 阻止宽化
+
+// 函数返回 inference 会"立即宽化"避免过窄
+function get() { return "hello" }
+type R = ReturnType&lt;typeof get&gt;;   // string
+//                                  不是 "hello"</code></pre>
+        </div>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 写函数式工具库时的 variance 选择</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// 写一个"事件 channel"：subscribe / publish
+class Channel&lt;T&gt; {
+  private subs: Array&lt;(v: T) =&gt; void&gt; = [];
+
+  subscribe(fn: (v: T) =&gt; void) { this.subs.push(fn) }
+  publish(v: T) { this.subs.forEach(fn =&gt; fn(v)) }
+}
+
+// 应用：能给 Channel&lt;Animal&gt; 订阅 Channel&lt;Dog&gt; 的 handler 吗？
+//   handler 期望 Dog（窄）；channel publish Animal（宽）
+//   实际可能传非 Dog 的 Animal 给 handler — 不安全
+const ac = new Channel&lt;Animal&gt;();
+ac.subscribe((d: Dog) =&gt; d.bark());
+//                       ^   ❌ strictFunctionTypes 严格逆变拦住
+
+// 反过来 — 安全
+const dc = new Channel&lt;Dog&gt;();
+dc.subscribe((a: Animal) =&gt; console.log(a.name));   // ✓ handler 宽，channel 窄</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 第三方库类型 patch 的兼容性</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// 第三方库声明
+declare class Logger {
+  log(msg: string): void;
+}
+
+// 你想 mock 它做测试 — 接受更宽参数
+class TestLogger {
+  log(msg: string | number): void {   // 参数变宽
+    console.log(String(msg));
+  }
+}
+
+const logger: Logger = new TestLogger();   // ✓
+// 因为 TestLogger.log 接收的更宽（string | number），
+// 调用方调 logger.log("x") 时 TestLogger.log 完全能处理 — 安全
+logger.log("hello");</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · React 高阶组件的泛型联动</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// HOC：给被包装组件加 props
+function withAuth&lt;P extends { user?: User }&gt;(
+  Component: ComponentType&lt;P&gt;,
+): ComponentType&lt;Omit&lt;P, "user"&gt;&gt; {
+  return (props) =&gt; {
+    const user = useAuth();
+    return &lt;Component {...(props as P)} user={user} /&gt;;
+  };
+}
+
+interface ProfileProps { user?: User; theme: "light" | "dark" }
+const Profile = (p: ProfileProps) =&gt; ...;
+
+const AuthProfile = withAuth(Profile);
+// AuthProfile 的 props: Omit&lt;ProfileProps, "user"&gt; = { theme }
+&lt;AuthProfile theme="dark" /&gt;   // ✓
+&lt;AuthProfile theme="dark" user={...} /&gt;   // ❌ user 已被 HOC 注入</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 写 zod / valibot 等 schema 库的类型基础</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// schema 库要把 schema 与"它能产生的类型"双向绑定
+abstract class Schema&lt;Out, In = Out&gt; {
+  abstract parse(input: In): Out;
+}
+
+// 嵌套使用时 covariance 让"窄 schema 可作为宽 schema"传
+class StringSchema extends Schema&lt;string&gt; {
+  parse(x: string) { return x }
+}
+class EmailSchema extends Schema&lt;string&gt; {
+  parse(x: string) {
+    if (!/.+@.+/.test(x)) throw new Error("not email");
+    return x;
+  }
+}
+
+// 接受任何 Schema&lt;string&gt;
+function validate(s: Schema&lt;string&gt;) { return s.parse("test") }
+validate(new EmailSchema());   // ✓ EmailSchema 是 Schema&lt;string&gt; 的子类</code></pre>
+          </div>
+          <p>
+            这种设计是 zod / valibot / arktype 等 schema 库类型系统的内核。理解 variance 后能更好读它们的源码。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>检验自己的"variance 直觉"</h3>
+        <div class="code-block">
+          <span class="code-label">typescript · 自测题</span>
+          <pre class="code"><code class="lang-ts">interface Animal { name: string }
+interface Dog extends Animal { bark(): void }
+
+// strictFunctionTypes: true
+
+// 1. (a: Animal) =&gt; void 能赋给 (d: Dog) =&gt; void 吗？
+let f1: (d: Dog) =&gt; void = (a: Animal) =&gt; { /* */ };
+// ✓ 能 — 接受更宽的参数函数可以放在期望更窄参数的位置（参数逆变）
+
+// 2. (d: Dog) =&gt; void 能赋给 (a: Animal) =&gt; void 吗？
+let f2: (a: Animal) =&gt; void = (d: Dog) =&gt; { d.bark() };
+// ❌ 不能 — strictFunctionTypes 拦住
+
+// 3. () =&gt; Dog 能赋给 () =&gt; Animal 吗？
+let f3: () =&gt; Animal = (() =&gt; ({ name: "Rex", bark() {} } as Dog));
+// ✓ 能 — 返回更窄的函数可以放在期望更宽返回的位置（返回值协变）
+
+// 4. () =&gt; Animal 能赋给 () =&gt; Dog 吗？
+let f4: () =&gt; Dog = (() =&gt; ({ name: "x" } as Animal));
+// ❌ 不能 — Animal 不一定是 Dog
+
+// 5. Array&lt;Dog&gt; 能赋给 Array&lt;Animal&gt; 吗？
+let arr1: Animal[] = [{ name: "x", bark() {} } as Dog];
+// ✓ 能 — TS Array 是 covariant（虽然严格说不安全 — push Animal 后 Dog[] 拿不到 bark）</code></pre>
+        </div>
+
+        <h3>区分函数类型和方法签名</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 函数类型语法（function type expression）
+interface A {
+  cb: (x: Dog) =&gt; void;       // strictFunctionTypes 严格
+}
+
+// 方法签名语法（method signature）
+interface B {
+  cb(x: Dog): void;             // bivariant — 即使 strict 也宽松
+}
+
+// 等价的写法但行为不同！
+const a: A = { cb: (a: Animal) =&gt; { /* */ } };   // ❌ strict mode
+const b: B = { cb(a: Animal) { /* */ } };          // ✓ method 双变</code></pre>
+        </div>
+
+        <h3>contextual typing 的边界</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 内联：contextual 工作
+[1, 2, 3].map(x =&gt; x * 2);
+//             ^? number   从 Array&lt;number&gt;.map 反推
+
+// 提取出来：失去 context
+const double = x =&gt; x * 2;   // ❌ implicit any
+
+// 解决方案 1：显式注解
+const double = (x: number) =&gt; x * 2;
+
+// 解决方案 2：用 typeof + 索引取出 callback 类型
+type MapCb&lt;T, U&gt; = Parameters&lt;Array&lt;T&gt;["map"]&gt;[0];
+//   实际太复杂，一般直接显式注解</code></pre>
+        </div>
+
+        <h3>best common type 与显式注解</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 默认推 union
+const xs = [1, "a", true];   // (string | number | boolean)[]
+
+// 显式注解推到父类型
+const xs2: unknown[] = [1, "a", true];   // unknown[]
+
+// 数组字面量含 null/undefined — 默认推宽
+const ys = [1, null, "x"];   // (string | number | null)[]
+
+// strictNullChecks: false 时
+// const ys = [1, null, "x"];   //（string | number）[] — null 被静默吞</code></pre>
+        </div>
+
+        <h3>完整 variance 表（含其他位置）</h3>
+        <table>
+          <thead>
+            <tr><th>位置</th><th>variance</th><th>例</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>函数参数</td><td>逆变（contravariant）</td><td><code>(x: Animal) =&gt; void</code> 可放 <code>(x: Dog) =&gt; void</code></td></tr>
+            <tr><td>函数返回值</td><td>协变（covariant）</td><td><code>() =&gt; Dog</code> 可放 <code>() =&gt; Animal</code></td></tr>
+            <tr><td>method 参数</td><td>双变（bivariant）</td><td>strictFunctionTypes 不影响</td></tr>
+            <tr><td>readonly 数组</td><td>协变</td><td><code>readonly Dog[]</code> 可放 <code>readonly Animal[]</code></td></tr>
+            <tr><td>可变数组</td><td>双变（不严格安全，TS 允许）</td><td><code>Dog[]</code> 可放 <code>Animal[]</code></td></tr>
+            <tr><td>Promise&lt;T&gt;</td><td>协变（仅有 .then）</td><td><code>Promise&lt;Dog&gt;</code> 可放 <code>Promise&lt;Animal&gt;</code></td></tr>
+            <tr><td>类型参数（默认）</td><td>双变（取决于使用位置）</td><td>—</td></tr>
+            <tr><td>in / out modifier（4.7+）</td><td>显式</td><td><code>type F&lt;in T&gt; = (x: T) =&gt; void</code></td></tr>
+          </tbody>
+        </table>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 关掉 strictFunctionTypes 让 callback 类型不安全</div>
+          <p>
+            <code>"strict": true</code> 包含 strictFunctionTypes，但单独关掉会让<strong>所有函数类型双变</strong>：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// strictFunctionTypes: false
+type DogCb = (d: Dog) =&gt; void;
+type AnimalCb = (a: Animal) =&gt; void;
+
+const dogCb: DogCb = d =&gt; d.bark();
+const animalCb: AnimalCb = dogCb;   // ✓ 不安全但通过
+animalCb({ name: "cat" });           // 编译过 → 运行时炸</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：永远 strict（默认）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 仅 private 字段名相同的两个 class 不兼容</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">class A {
+  private id = "";
+  name = "";
+}
+class B {
+  private id = "";
+  name = "";
+}
+// A 和 B 看起来一样 — 但 private id 来源不同
+const a: A = new B();   // ❌ 不兼容</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：要"接口形状一致"用 interface 而非 class；class 间共享 shape 用 abstract 父类。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 数组 inference 推到 union 而非父类</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">function add(animals: Animal[]) {}
+
+// 期望传 Animal[]，但
+add([new Dog(), new Cat()]);
+//   ^^^^^^^^^^^^^^^^^^^^^^   推断为 (Dog | Cat)[]
+//   能赋给 Animal[] 吗？  — 是的（结构上 Dog | Cat 是 Animal 子类型）
+
+// 但有些 utility 期望严格 Animal[]
+const arr = [new Dog(), new Cat()];   // (Dog | Cat)[]
+const animals: Animal[] = arr;          // ✓
+const arr2: Dog[] = arr;                // ❌</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：需要父类型时显式注解 <code>const arr: Animal[] = [...]</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 内联回调 vs 提取函数的 contextual typing 差异</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// 1️⃣ 内联：context 工作
+btn.addEventListener("click", e =&gt; e.button);   // ✓ e: MouseEvent
+
+// 2️⃣ 提取：失去 context
+const handler = e =&gt; e.button;   // ❌ implicit any
+btn.addEventListener("click", handler);
+
+// 3️⃣ 显式注解：OK
+const handler1 = (e: MouseEvent) =&gt; e.button;</code></pre>
+          </div>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · void 在返回值位置的"宽松"行为</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// 04 章已讲过：void 返回类型上下文允许任意返回值
+type VoidFn = () =&gt; void;
+
+const f1: VoidFn = () =&gt; 42;   // ✓ 返回 number 也通过
+
+// 这导致一个微妙的赋值兼容性
+type StrictReturn = () =&gt; undefined;
+type LooseReturn = () =&gt; void;
+
+const a: StrictReturn = () =&gt; { return };   // ✓ — 显式 return
+const b: StrictReturn = () =&gt; 42;             // ❌
+const c: LooseReturn = () =&gt; 42;              // ✓ — void 宽松
+const d: StrictReturn = c;                     // ❌ — void 不能赋给 undefined</code></pre>
+          </div>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · TS 4.7 in / out 显式 variance 修饰符 — 仅在严格库需要</div>
+          <p>
+            TS 4.7 引入 <code>in</code> / <code>out</code> modifier 让你显式标注类型参数的 variance。但这是<strong>给库作者</strong>的工具，应用代码几乎用不到：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// 显式逆变 in
+type Sink&lt;in T&gt; = (x: T) =&gt; void;
+
+// 显式协变 out
+type Source&lt;out T&gt; = () =&gt; T;
+
+// 显式不变（同时 in + out）
+type Channel&lt;in out T&gt; = { send(x: T): void; receive(): T };</code></pre>
+          </div>
+          <p>
+            没有这个 flag 时，TS 自动从使用位置推 variance。99% 项目不需要显式 in/out。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://www.typescriptlang.org/docs/handbook/type-compatibility.html" target="_blank" rel="noopener"
+              >Handbook · Type Compatibility</a
+            >
+          </li>
+          <li>
+            <a href="https://www.typescriptlang.org/docs/handbook/type-inference.html" target="_blank" rel="noopener"
+              >Handbook · Type Inference</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://www.typescriptlang.org/docs/handbook/release-notes/typescript-2-6.html#strict-function-types"
+              target="_blank"
+              rel="noopener"
+              >TS 2.6 · strictFunctionTypes 引入</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-7.html#optional-variance-annotations-for-type-parameters"
+              target="_blank"
+              rel="noopener"
+              >TS 4.7 · in/out variance modifier</a
+            >
+          </li>
+          <li>
+            <a href="https://en.wikipedia.org/wiki/Covariance_and_contravariance_(computer_science)" target="_blank" rel="noopener"
+              >Wikipedia · Covariance &amp; Contravariance</a
+            > — 跨语言对比
+          </li>
+          <li>
+            <strong>下一 Part →</strong>
+            <a href="../04-project/index.html">Part 4 · 工程化</a> — Declaration Files / tsconfig / Migration
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="16-iterators-jsx.html">
+            <span class="label">← 上一章</span>
+            <span class="title">16 · Iterators / JSX</span>
+          </a>
+          <a class="next" href="../04-project/index.html">
+            <span class="label">下一 Part →</span>
+            <span class="title">Part 4 · 工程化</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

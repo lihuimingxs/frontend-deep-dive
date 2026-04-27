@@ -1,0 +1,720 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cookie / Storage · P6 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="Cookie 的 Domain / Path / SameSite / HttpOnly / Secure / Partitioned (CHIPS) 完整语义，Cookie Store API，LocalStorage / SessionStorage 的同步阻塞模型、storage 事件跨标签同步、容量与序列化陷阱。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · 网络 & 存储</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-fetch.html">01 · Fetch API</a></li>
+          <li><a href="02-xhr.html">02 · XHR 残余场景</a></li>
+          <li><a href="03-websocket.html">03 · WebSocket</a></li>
+          <li><a href="04-sse.html">04 · Server-Sent Events</a></li>
+          <li><a href="05-cors-csp.html">05 · CORS 与 CSP</a></li>
+          <li><a href="06-cookie-storage.html">06 · Cookie / Storage</a></li>
+          <li><a href="07-indexeddb.html">07 · IndexedDB</a></li>
+          <li><a href="08-service-worker.html">08 · Service Worker + 跨标签</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-fundamentals/index.html">P1 · 语言基础</a></li>
+          <li><a href="../02-advanced/index.html">P2 · 高阶语言</a></li>
+          <li><a href="../03-async/index.html">P3 · 异步 & 错误处理</a></li>
+          <li><a href="../04-modules/index.html">P4 · 模块 & 元编程</a></li>
+          <li><a href="../05-dom/index.html">P5 · DOM & 事件</a></li>
+          <li><a href="../07-advanced/index.html">P7 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · 网络 & 存储</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Cookie / Storage</span>
+        </nav>
+
+        <h1>Cookie / Storage</h1>
+        <p class="lead">
+          浏览器提供四种主流客户端存储：<strong>Cookie</strong>（自动随请求发送、用于身份）、<strong>LocalStorage</strong>（同步
+          key-value、持久）、<strong>SessionStorage</strong>（同步
+          key-value、标签生命周期）、<strong>IndexedDB</strong>（异步事务、大容量，下一章）。本章彻底讲清前三种的语义、陷阱与选型。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 05 CORS</span>
+          <span
+            ><strong>规范</strong>
+            <a href="https://datatracker.ietf.org/doc/html/rfc6265" target="_blank" rel="noopener">RFC 6265bis</a> ·
+            <a href="https://html.spec.whatwg.org/multipage/webstorage.html" target="_blank" rel="noopener"
+              >Web Storage</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ul>
+          <li>
+            Cookie 三个维度：<strong>作用域</strong>（Domain +
+            Path）、<strong>生命周期</strong>（Expires/Max-Age）、<strong>安全属性</strong>（Secure + HttpOnly +
+            SameSite + Partitioned）。
+          </li>
+          <li>
+            2020 年 Chrome 把 SameSite 默认值从 None 改为 <code>Lax</code>；2024 年起第三方 Cookie 进入
+            CHIPS（分区）时代。
+          </li>
+          <li>
+            LocalStorage / SessionStorage 是 <strong>同步阻塞 API</strong>，主线程访问会阻塞渲染；只存字符串（对象需
+            <code>JSON.stringify</code>）。
+          </li>
+          <li>
+            <code>storage</code> 事件只在<strong>其他</strong>同源标签触发，不触发当前标签（用 BroadcastChannel
+            或自己派发）。
+          </li>
+          <li>
+            SessionStorage 以 <strong>标签页（browsing context）</strong>为范围，新标签页开同一 URL 也是独立实例；但
+            <code>window.open</code> 打开的子页会继承父标签的 SessionStorage。
+          </li>
+          <li>
+            选型：身份凭证 → HttpOnly Cookie；UI 偏好 → LocalStorage；一次性流程数据 → SessionStorage；大数据/查询 →
+            IndexedDB。
+          </li>
+        </ul>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+        <h3>Cookie 属性完整语义</h3>
+        <pre><code class="language-http">Set-Cookie: sid=abc123;
+  Domain=.example.com;      # 作用域：example.com 及所有子域
+  Path=/;                   # 作用路径：/ 表示站点内所有路径
+  Max-Age=2592000;          # 30 天（秒）；与 Expires 二选一，Max-Age 优先
+  Expires=Wed, 23 May 2026 10:00:00 GMT;
+  Secure;                   # 只在 HTTPS 发送
+  HttpOnly;                 # JS document.cookie 不可见（防 XSS 窃取）
+  SameSite=Lax;             # 跨站请求规则
+  Partitioned;              # CHIPS：按顶层站点分区（第三方 Cookie 必备）
+  Priority=High;            # Chrome 扩展：驱逐时优先保留</code></pre>
+
+        <h3>Domain 属性的容易误用点</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Set-Cookie 来自</th>
+              <th>Domain 属性</th>
+              <th>生效范围</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>api.example.com</code></td>
+              <td>未设</td>
+              <td>仅 <code>api.example.com</code>（host-only）</td>
+            </tr>
+            <tr>
+              <td><code>api.example.com</code></td>
+              <td><code>Domain=example.com</code></td>
+              <td><code>example.com</code> 及所有子域</td>
+            </tr>
+            <tr>
+              <td><code>example.com</code></td>
+              <td><code>Domain=api.example.com</code></td>
+              <td><strong>被拒绝</strong>（不能设到子域）</td>
+            </tr>
+            <tr>
+              <td><code>example.com</code></td>
+              <td><code>Domain=other.com</code></td>
+              <td><strong>被拒绝</strong>（跨站）</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          Domain 不允许设 <strong>公共后缀列表</strong>（<code>.com</code> / <code>.co.uk</code> /
+          <code>vercel.app</code>）。PSL 定义见
+          <a href="https://publicsuffix.org/" target="_blank" rel="noopener">publicsuffix.org</a>，浏览器内置副本。
+        </p>
+
+        <h3>SameSite 三值对比</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>值</th>
+              <th>跨站 GET（&lt;a&gt;、top-level nav）</th>
+              <th>跨站 POST / XHR / iframe</th>
+              <th>要求</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>Strict</code></td>
+              <td>❌ 不发送</td>
+              <td>❌ 不发送</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td><code>Lax</code>（默认）</td>
+              <td>✅ 发送（仅 GET）</td>
+              <td>❌ 不发送</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td><code>None</code></td>
+              <td>✅</td>
+              <td>✅</td>
+              <td>必须 <code>Secure</code>；2024 起需 <code>Partitioned</code></td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          <strong>Lax 的豁免窗口</strong>：Chrome 曾对"2 分钟内创建、通过 POST top-level 跳转"的 Cookie
+          发送（"Lax+POST"），2022 年已移除。现在 Lax + POST 严格拒绝。OAuth 回调必须用 GET 或显式
+          <code>SameSite=None; Secure</code>。
+        </p>
+
+        <h3>CHIPS（Partitioned Cookie）</h3>
+        <p>
+          Chrome 2024 起逐步废弃未分区的第三方 Cookie。原来一个 <code>ads.example.com</code> 在所有嵌入它的网站共享一份
+          Cookie；CHIPS 改为按<strong>顶层站点</strong>分区：
+        </p>
+        <pre><code class="language-http">Set-Cookie: id=123;
+  SameSite=None; Secure;
+  Partitioned</code></pre>
+        <p>
+          用户访问 <code>news.com</code>（其中嵌入 <code>ads.example.com</code> iframe）时 Cookie 存在
+          <code>(news.com, ads.example.com)</code> 这对 key 下；访问
+          <code>blog.com</code> 时用另一份。跨站追踪被阻断，但嵌入式三方服务（聊天 widget、SSO iframe）仍能工作。
+        </p>
+
+        <h3>Cookie 容量与优先级</h3>
+        <ul>
+          <li>每个 Cookie ≤ <strong>4096 字节</strong>（name + value + attributes）。</li>
+          <li>每个 domain ≤ <strong>180 个</strong>（Chrome），所有 domain 合计 ≤ 3000。</li>
+          <li>超限时浏览器按 <code>Priority</code>（Low/Medium/High）+ LRU 驱逐。</li>
+          <li>Session Cookie（无 Max-Age/Expires）关闭浏览器即失效，但 Chrome "继续运行后台应用" 会保留。</li>
+        </ul>
+
+        <h3>document.cookie vs Cookie Store API</h3>
+        <pre><code class="language-javascript">// 传统 API：同步、字符串拼接、丑陋
+document.cookie; // "a=1; b=2; sid=abc"  ← 读所有 Cookie 但不含 HttpOnly
+document.cookie = "theme=dark; Max-Age=31536000; Path=/; SameSite=Lax";
+// ↑ 只能一次设一个 Cookie，且看起来像覆盖整个 cookie 但实际是追加
+
+// 现代 API：异步、结构化（Chrome 87+，Safari 未支持）
+await cookieStore.set({
+  name: "theme",
+  value: "dark",
+  expires: Date.now() + 31536000000,
+  sameSite: "lax",
+  partitioned: true,
+});
+const cookie = await cookieStore.get("theme");
+cookieStore.addEventListener("change", (e) => {
+  console.log(e.changed, e.deleted);
+});</code></pre>
+        <p>
+          Cookie Store API 在 Service Worker 中很有用（SW 内 <code>document</code> 不可用）。生产环境需判断
+          <code>"cookieStore" in window</code>。
+        </p>
+
+        <h3>LocalStorage / SessionStorage 的本质</h3>
+        <p>
+          存储是<strong>同源隔离</strong>的 key-value map，但 API 设计早于 IndexedDB（2009
+          HTML5），规范要求<strong>同步执行</strong>：
+        </p>
+        <pre><code class="language-javascript">localStorage.setItem("key", value);    // 同步：阻塞主线程直到写入磁盘
+const v = localStorage.getItem("key");  // 同步：阻塞读取
+localStorage.length;                    // 同步
+localStorage.key(0);                    // 同步
+localStorage.removeItem("key");
+localStorage.clear();
+
+// 也可用属性语法（不推荐）
+localStorage.key = "value";
+localStorage["key"] = "value";</code></pre>
+        <p>
+          <strong>为什么同步是问题</strong>：Chrome 把 LocalStorage 存在 LevelDB / SQLite
+          中，进程隔离后写入跨进程。在低端 Android 上一次 <code>setItem</code> 可能 10-50ms，触发 long task，影响
+          INP。Firefox 曾把它改成内存缓存 + 异步落盘，但规范要求同步读写视图，仍会阻塞。
+        </p>
+
+        <h3>容量与计费</h3>
+        <ul>
+          <li>LocalStorage / SessionStorage：每个 origin <strong>约 5MB</strong>（UTF-16 编码，实际字符数减半）。</li>
+          <li>超限抛 <code>QuotaExceededError</code>（DOMException name），不是普通 Error。</li>
+          <li>IndexedDB、Cache Storage 共享更大配额（<code>navigator.storage.estimate()</code>），详见 P6-07。</li>
+        </ul>
+
+        <h3>storage 事件的怪异之处</h3>
+        <pre><code class="language-javascript">// 标签 A
+localStorage.setItem("theme", "dark");
+
+// 标签 B（同源、已打开）收到事件
+window.addEventListener("storage", (e) => {
+  console.log(e.key, e.oldValue, e.newValue, e.url, e.storageArea);
+});
+
+// 标签 A 自己不会收到 storage 事件！
+// 跨标签通信可用，同标签内监听无效。</code></pre>
+        <p>
+          同一标签内监听 LocalStorage 变化需自己发自定义事件或用 <code>BroadcastChannel</code>（详见
+          P6-08）。事件只在主线程触发，Worker 内的 <code>storage</code> 事件不支持。
+        </p>
+
+        <h3>SessionStorage 的继承规则</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>操作</th>
+              <th>新页面的 SessionStorage</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>地址栏输入 URL</td>
+              <td>全新、空</td>
+            </tr>
+            <tr>
+              <td>复制标签（Chrome "Duplicate tab"）</td>
+              <td><strong>完全复制父标签</strong>的 SessionStorage</td>
+            </tr>
+            <tr>
+              <td><code>window.open("/b")</code></td>
+              <td><strong>继承</strong>父标签的 SessionStorage</td>
+            </tr>
+            <tr>
+              <td><code>&lt;a href="/b" target="_blank" rel="noopener"&gt;</code></td>
+              <td>全新、空（noopener 切断继承）</td>
+            </tr>
+            <tr>
+              <td><code>&lt;a target="_blank"&gt;</code>（无 noopener）</td>
+              <td>继承（但存在 tab-nabbing 风险，默认不推荐）</td>
+            </tr>
+            <tr>
+              <td>刷新同一标签（F5）</td>
+              <td>保留</td>
+            </tr>
+            <tr>
+              <td>关闭后恢复（Ctrl+Shift+T）</td>
+              <td>保留</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          iframe 的 SessionStorage 与父页独立（按源分区）；如果 iframe 同源，两者独立但通过
+          <code>parent.sessionStorage</code> 可互访。
+        </p>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景与选型</span></h2>
+        <h3>决策表</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>数据</th>
+              <th>推荐</th>
+              <th>理由</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Session ID / Auth Token</td>
+              <td><strong>HttpOnly Cookie</strong></td>
+              <td>防 XSS 窃取；自动发送；服务端可撤销</td>
+            </tr>
+            <tr>
+              <td>CSRF Token</td>
+              <td>Cookie + 响应 body / header</td>
+              <td>Double Submit 模式（见 P6-05）</td>
+            </tr>
+            <tr>
+              <td>CDN / 灰度标识</td>
+              <td>Cookie（Secure + Lax）</td>
+              <td>CDN 在 Edge 读 Cookie 分流</td>
+            </tr>
+            <tr>
+              <td>UI 偏好（主题、语言）</td>
+              <td>LocalStorage</td>
+              <td>客户端独享、不必上传服务端</td>
+            </tr>
+            <tr>
+              <td>表单草稿</td>
+              <td>LocalStorage + debounce</td>
+              <td>防止刷新丢失；定期清理</td>
+            </tr>
+            <tr>
+              <td>多步流程中间态</td>
+              <td>SessionStorage</td>
+              <td>关闭标签自动清理，避免泄漏</td>
+            </tr>
+            <tr>
+              <td>OAuth state 参数</td>
+              <td>SessionStorage</td>
+              <td>仅此标签需要，回调后立即清理</td>
+            </tr>
+            <tr>
+              <td>离线数据 / 查询</td>
+              <td>IndexedDB</td>
+              <td>异步、事务、索引（见 P6-07）</td>
+            </tr>
+            <tr>
+              <td>大文件 / 图片</td>
+              <td>Cache API</td>
+              <td>Response 对象原生支持（见 P6-08）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>典型的跨站请求 Cookie 故障</h3>
+        <p>前端 <code>app.com</code> 调用后端 <code>api.com</code>：</p>
+        <pre><code class="language-http"># 后端设置 Cookie
+Set-Cookie: sid=abc; SameSite=Lax; HttpOnly
+
+# 前端 fetch("https://api.com/me", { credentials: "include" })
+# → Cookie 不发送！
+# 原因：SameSite=Lax 在跨站 XHR/fetch 中不发送
+# 修复：SameSite=None; Secure; Partitioned
+Set-Cookie: sid=abc; SameSite=None; Secure; HttpOnly; Partitioned</code></pre>
+        <p>
+          同时后端 CORS 必须 <code>Access-Control-Allow-Credentials: true</code> 且 <code>Allow-Origin</code> 不为
+          <code>*</code>（见 P6-05）。
+        </p>
+
+        <h3>防止 LocalStorage 阻塞主线程</h3>
+        <pre><code class="language-javascript">// ❌ 启动时批量读取，阻塞 FCP
+const settings = JSON.parse(localStorage.getItem("settings") ?? "{}");
+const cache = JSON.parse(localStorage.getItem("cache") ?? "{}");
+const history = JSON.parse(localStorage.getItem("history") ?? "[]");
+// → 三次同步 IO + 三次 JSON.parse，可能 20-100ms
+
+// ✅ 只在需要时读，且用 requestIdleCallback 预热
+requestIdleCallback(() => {
+  const settings = JSON.parse(localStorage.getItem("settings") ?? "{}");
+  window.__settings = settings;
+});
+
+// ✅ 大数据用 IndexedDB（异步）
+import { get } from "idb-keyval";
+const cache = await get("cache"); // 不阻塞主线程</code></pre>
+
+        <h3>Tab 间状态同步</h3>
+        <pre><code class="language-javascript">// 方案 1：storage 事件（简单，但自标签不触发）
+function broadcastSetItem(key, value) {
+  localStorage.setItem(key, value);
+  // 手动派发，让自标签也感知变化
+  window.dispatchEvent(new StorageEvent("storage", { key, newValue: value }));
+}
+
+// 方案 2：BroadcastChannel（推荐，不依赖存储）
+const bc = new BroadcastChannel("app");
+bc.postMessage({ type: "LOGOUT" });
+bc.addEventListener("message", (e) => {
+  if (e.data.type === "LOGOUT") location.reload();
+});
+// 广播到所有同源标签，当前标签不收到自己发的消息
+
+// 方案 3：SharedWorker（详见 P6-08）</code></pre>
+
+        <h3>Next.js 场景</h3>
+        <pre><code class="language-typescript">// middleware.ts：Edge 读 Cookie 做认证
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+
+export function middleware(req: NextRequest) {
+  const sid = req.cookies.get("sid")?.value;
+  if (!sid && req.nextUrl.pathname.startsWith("/app")) {
+    return NextResponse.redirect(new URL("/login", req.url));
+  }
+  const res = NextResponse.next();
+  // 设置/更新 Cookie
+  res.cookies.set("trace", crypto.randomUUID(), {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    maxAge: 3600,
+  });
+  return res;
+}
+
+// Server Action：读 Cookie
+import { cookies } from "next/headers";
+const sid = (await cookies()).get("sid")?.value;</code></pre>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <h3>封装 SafeStorage（处理 QuotaExceededError、隐私模式）</h3>
+        <pre><code class="language-typescript">interface SafeStorage {
+  get&lt;T&gt;(key: string, fallback: T): T;
+  set(key: string, value: unknown): boolean;
+  remove(key: string): void;
+}
+
+function createSafeStorage(area: "local" | "session"): SafeStorage {
+  const storage = area === "local" ? localStorage : sessionStorage;
+
+  return {
+    get(key, fallback) {
+      try {
+        const raw = storage.getItem(key);
+        return raw === null ? fallback : JSON.parse(raw);
+      } catch {
+        // JSON 损坏 → 清理并返回 fallback
+        storage.removeItem(key);
+        return fallback;
+      }
+    },
+    set(key, value) {
+      try {
+        storage.setItem(key, JSON.stringify(value));
+        return true;
+      } catch (e) {
+        // QuotaExceededError 或隐私模式（Safari 早期）
+        if (e instanceof DOMException && e.name === "QuotaExceededError") {
+          // 策略 1：清理旧缓存再试
+          evictOldEntries(storage);
+          try { storage.setItem(key, JSON.stringify(value)); return true; }
+          catch { return false; }
+        }
+        return false;
+      }
+    },
+    remove(key) { storage.removeItem(key); },
+  };
+}
+
+function evictOldEntries(storage: Storage) {
+  // 清理带过期时间的缓存
+  for (let i = storage.length - 1; i &gt;= 0; i--) {
+    const key = storage.key(i);
+    if (!key || !key.startsWith("cache:")) continue;
+    try {
+      const { expiresAt } = JSON.parse(storage.getItem(key) ?? "{}");
+      if (expiresAt &lt; Date.now()) storage.removeItem(key);
+    } catch { storage.removeItem(key); }
+  }
+}</code></pre>
+
+        <h3>Cookie 辅助函数（处理 encodeURIComponent + HttpOnly 不可见）</h3>
+        <pre><code class="language-typescript">function getCookie(name: string): string | undefined {
+  const target = encodeURIComponent(name);
+  // 注意：HttpOnly Cookie 读不到；只能读非 HttpOnly
+  const match = document.cookie
+    .split("; ")
+    .find((row) =&gt; row.startsWith(target + "="));
+  return match ? decodeURIComponent(match.slice(target.length + 1)) : undefined;
+}
+
+function setCookie(
+  name: string,
+  value: string,
+  opts: { maxAge?: number; path?: string; sameSite?: "lax" | "strict" | "none"; secure?: boolean } = {},
+) {
+  let cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}`;
+  if (opts.maxAge != null) cookie += `; Max-Age=${opts.maxAge}`;
+  cookie += `; Path=${opts.path ?? "/"}`;
+  cookie += `; SameSite=${opts.sameSite ?? "lax"}`;
+  if (opts.secure ?? location.protocol === "https:") cookie += "; Secure";
+  document.cookie = cookie;
+}
+
+function deleteCookie(name: string, path = "/") {
+  document.cookie = `${encodeURIComponent(name)}=; Max-Age=0; Path=${path}`;
+}</code></pre>
+
+        <h3>React Hook：useLocalStorage（含 storage 事件同步）</h3>
+        <pre><code class="language-typescript">import { useState, useEffect, useCallback } from "react";
+
+export function useLocalStorage&lt;T&gt;(key: string, initialValue: T) {
+  const [value, setValue] = useState&lt;T&gt;(() =&gt; {
+    if (typeof window === "undefined") return initialValue; // SSR
+    try {
+      const raw = localStorage.getItem(key);
+      return raw === null ? initialValue : JSON.parse(raw);
+    } catch {
+      return initialValue;
+    }
+  });
+
+  // 监听其他标签的修改
+  useEffect(() =&gt; {
+    const onStorage = (e: StorageEvent) =&gt; {
+      if (e.key !== key || e.storageArea !== localStorage) return;
+      try {
+        setValue(e.newValue === null ? initialValue : JSON.parse(e.newValue));
+      } catch { /* ignore */ }
+    };
+    window.addEventListener("storage", onStorage);
+    return () =&gt; window.removeEventListener("storage", onStorage);
+  }, [key, initialValue]);
+
+  const set = useCallback(
+    (v: T | ((prev: T) =&gt; T)) =&gt; {
+      setValue((prev) =&gt; {
+        const next = typeof v === "function" ? (v as (p: T) =&gt; T)(prev) : v;
+        try { localStorage.setItem(key, JSON.stringify(next)); } catch {}
+        return next;
+      });
+    },
+    [key],
+  );
+
+  return [value, set] as const;
+}</code></pre>
+
+        <!-- 05 常见陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="callout callout-warn">
+          <strong>陷阱 1：把 JWT 存 LocalStorage 就完了</strong>
+          <p>
+            LocalStorage 对任何同源 JS 可见 —— 只要有一处 XSS（CDN 脚本被攻破、第三方库被投毒），token 全泄。改用
+            <code>HttpOnly; Secure; SameSite=Lax</code> Cookie，JS 根本读不到。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 2：SameSite=Strict 破坏第一次访问</strong>
+          <p>
+            用户在 Google 搜索点击你的站，Strict 的登录 Cookie 不发送，用户看到未登录页。用 Lax 是标准做法；Strict
+            只适合银行级敏感操作。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 3：Secure 属性在 HTTP 本地开发时被静默忽略（但部署时生效）</strong>
+          <p>
+            本地 <code>http://localhost</code> 浏览器特殊放行 Secure Cookie；部署到
+            <code>https://staging.com</code> 也正常。但如果某环境走 HTTP（某些企业内网），带 Secure 的 Cookie
+            不发送，登录循环。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 4：document.cookie 赋值像覆盖，实际是追加</strong>
+          <p>
+            <code>document.cookie = "a=1"</code> 再 <code>document.cookie = "b=2"</code>，两个 Cookie 都存在。删除要用
+            <code>Max-Age=0</code> 或过期 Expires，且 <strong>Path 和 Domain 必须完全匹配</strong>原 Cookie 否则删不掉。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 5：LocalStorage 跨子域不共享</strong>
+          <p>
+            <code>app.example.com</code> 和 <code>www.example.com</code> 的 LocalStorage 是独立的。想共享必须用
+            Cookie（Domain=.example.com）或 iframe postMessage。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 6：Safari ITP（Intelligent Tracking Prevention）</strong>
+          <p>
+            Safari 对第三方 Cookie 默认阻止；对通过 <code>document.cookie</code> 设置的第一方 Cookie 也限制 7
+            天过期（即使你设 Max-Age=1 年）。通过 <code>Set-Cookie</code> header 设置的 Cookie 不受影响 ——
+            登录凭证必须走服务端 Set-Cookie。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 7：JSON.stringify 丢失 Date / Map / Set / undefined</strong>
+          <p>
+            <code>localStorage.setItem("k", JSON.stringify(obj))</code> 中 Date 变字符串、undefined
+            字段被删、函数丢失、Map/Set 变空对象。需要保留这些类型用 <code>superjson</code> 或 IndexedDB（后者原生支持
+            structured clone）。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 8：隐私模式下 setItem 直接抛</strong>
+          <p>
+            Safari 早期版本在 Private Browsing 下 LocalStorage 可见但写入即抛
+            <code>QuotaExceededError</code>（quota=0）。任何写入必须 try/catch，否则整个页面 JS 崩溃。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 9：SessionStorage 以 tab 为单位但 Duplicate Tab 会完全复制</strong>
+          <p>
+            依赖 SessionStorage 存"当前 OAuth state"时，用户复制标签，两个标签同时处理回调，state 冲突。解决：绑定
+            <code>performance.navigation.type</code> 或使用 OAuth nonce。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 10：storage 事件 newValue 为 null 代表删除，不是空字符串</strong>
+          <p>
+            监听 <code>storage</code> 事件时 <code>e.newValue === null</code> 表示
+            <code>removeItem</code>/<code>clear</code>；<code>e.newValue === ""</code>
+            表示被设为空字符串。两者语义不同。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis" target="_blank" rel="noopener"
+              >RFC 6265bis · HTTP State Management</a
+            >
+          </li>
+          <li>
+            <a href="https://html.spec.whatwg.org/multipage/webstorage.html" target="_blank" rel="noopener"
+              >WHATWG · Web Storage</a
+            >
+          </li>
+          <li>
+            <a href="https://developer.chrome.com/docs/privacy-security/chips" target="_blank" rel="noopener"
+              >Chrome CHIPS (Partitioned Cookies) 指南</a
+            >
+          </li>
+          <li>
+            <a href="https://web.dev/articles/samesite-cookies-explained" target="_blank" rel="noopener"
+              >web.dev · SameSite Cookies Explained</a
+            >
+          </li>
+          <li>
+            <a href="https://webkit.org/tracking-prevention/" target="_blank" rel="noopener"
+              >WebKit · Tracking Prevention</a
+            >
+          </li>
+          <li><strong>下一步</strong> → <a href="07-indexeddb.html">07 · IndexedDB</a>。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="05-cors-csp.html"
+            ><span class="label">← 上一章</span><span class="title">05 · CORS 与 CSP</span></a
+          >
+          <a class="next" href="07-indexeddb.html"
+            ><span class="label">下一章 →</span><span class="title">07 · IndexedDB</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

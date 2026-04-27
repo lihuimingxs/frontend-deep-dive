@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>数据类型系统 · P1 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="JavaScript 的 8 种数据类型、原始类型与引用类型的本质差异、装箱/拆箱、IEEE 754 浮点精度、UTF-16 字符编码、BigInt、Symbol。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P1 目录</a>
+          <a href="https://javascript.info/types" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · 语言基础</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-types.html">01 · 数据类型系统</a></li>
+          <li><a href="02-operators.html">02 · 操作符与强制转换</a></li>
+          <li><a href="03-control-flow.html">03 · 控制流</a></li>
+          <li><a href="04-functions.html">04 · 函数基础</a></li>
+          <li><a href="05-objects.html">05 · 对象深入</a></li>
+          <li><a href="06-arrays.html">06 · 数组深入</a></li>
+          <li><a href="07-strings.html">07 · 字符串深入</a></li>
+          <li><a href="08-numbers.html">08 · 数字与 Math</a></li>
+          <li><a href="09-date-intl.html">09 · Date 与 Intl</a></li>
+          <li><a href="10-map-set.html">10 · Map / Set 家族</a></li>
+          <li><a href="11-symbol.html">11 · Symbol 全景</a></li>
+          <li><a href="12-json.html">12 · JSON</a></li>
+          <li><a href="13-iterators.html">13 · 迭代器与 Generator</a></li>
+          <li><a href="14-errors.html">14 · 错误处理</a></li>
+        </ul>
+
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../02-advanced/index.html">P2 · 高阶语言</a></li>
+          <li><a href="../03-async/index.html">P3 · 异步 & 错误处理</a></li>
+          <li><a href="../04-modules/index.html">P4 · 模块 & 元编程</a></li>
+          <li><a href="../05-dom/index.html">P5 · DOM & 事件</a></li>
+          <li><a href="../06-network/index.html">P6 · 网络 & 存储</a></li>
+          <li><a href="../07-advanced/index.html">P7 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · 语言基础</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>数据类型系统</span>
+        </nav>
+
+        <h1>数据类型系统</h1>
+        <p class="lead">
+          JavaScript
+          是动态类型、弱类型语言，但"弱"不代表"没有规则"。本章把类型系统拆成"值的存储方式"和"类型行为"两个层面来看 ——
+          理解了前者，后续关于比较、赋值、内存、装箱的一切行为都不再令人意外。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> 任意一门编程语言</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/types" target="_blank" rel="noopener">Data types</a></span
+          >
+        </div>
+
+        <!-- =========================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <p>ECMAScript 规范定义了 <strong>8 种类型</strong>：7 种原始类型（primitive）+ 1 种对象类型（Object）。</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>类型</th>
+              <th><code>typeof</code></th>
+              <th>字面量</th>
+              <th>存储</th>
+              <th>不可变？</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Undefined</strong></td>
+              <td><code>"undefined"</code></td>
+              <td><code>undefined</code></td>
+              <td>按值</td>
+              <td>✓</td>
+            </tr>
+            <tr>
+              <td><strong>Null</strong></td>
+              <td>
+                <code>"object"</code>
+                <span style="color: var(--danger-fg)">⚠ 历史遗留</span>
+              </td>
+              <td><code>null</code></td>
+              <td>按值</td>
+              <td>✓</td>
+            </tr>
+            <tr>
+              <td><strong>Boolean</strong></td>
+              <td><code>"boolean"</code></td>
+              <td><code>true</code> / <code>false</code></td>
+              <td>按值</td>
+              <td>✓</td>
+            </tr>
+            <tr>
+              <td><strong>Number</strong></td>
+              <td><code>"number"</code></td>
+              <td><code>42</code>, <code>3.14</code>, <code>NaN</code>, <code>Infinity</code></td>
+              <td>按值（64-bit IEEE 754）</td>
+              <td>✓</td>
+            </tr>
+            <tr>
+              <td><strong>BigInt</strong></td>
+              <td><code>"bigint"</code></td>
+              <td><code>10n</code>, <code>BigInt("1e20")</code></td>
+              <td>按值（任意精度）</td>
+              <td>✓</td>
+            </tr>
+            <tr>
+              <td><strong>String</strong></td>
+              <td><code>"string"</code></td>
+              <td><code>"abc"</code>, <code>'abc'</code>, <code>`abc`</code></td>
+              <td>按值（UTF-16 编码单元序列）</td>
+              <td>✓</td>
+            </tr>
+            <tr>
+              <td><strong>Symbol</strong></td>
+              <td><code>"symbol"</code></td>
+              <td><code>Symbol("tag")</code></td>
+              <td>按值（不可伪造 ID）</td>
+              <td>✓</td>
+            </tr>
+            <tr>
+              <td><strong>Object</strong></td>
+              <td><code>"object"</code> / <code>"function"</code></td>
+              <td><code>{}</code>, <code>[]</code>, <code>function(){}</code></td>
+              <td>按引用</td>
+              <td>✗</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout info">
+          <div class="callout-title">💡 记住这条分界线</div>
+          <p>
+            <strong>原始类型按值传递且不可变</strong>；<strong>对象按引用传递且可变</strong>。这是整个 JS 行为大厦的地基
+            —— 参数传递、<code>===</code> 语义、<code>Object.freeze</code> 的边界、<code>structuredClone</code>
+            的必要性，都从这里派生。
+          </p>
+        </div>
+
+        <!-- =========================================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="internals-boxing">引擎层的值表示：NaN-boxing 与 SMI</h3>
+        <p>
+          JS 变量是"有类型的值"而不是"有类型的槽位"。V8、JavaScriptCore、SpiderMonkey 都用类似的技术把所有值压进一个
+          64-bit 机器字：
+        </p>
+        <ul>
+          <li>
+            <strong>SMI（Small Integer）</strong> —— V8 把 -2³¹ ~ 2³¹-1 的整数直接塞进指针低位（用末位 tag bit
+            区分）。算术运算不需要分配堆对象，极快。
+          </li>
+          <li>
+            <strong>NaN-boxing</strong> —— IEEE 754 双精度有 2⁵² 种 NaN 表示，引擎用其中"未使用"的 NaN 编码 undefined /
+            null / bool / 小字符串 / 对象指针。
+          </li>
+          <li><strong>HeapObject</strong> —— 所有对象、函数、长字符串、大数字都是堆上对象，值里存指针。</li>
+        </ul>
+        <p>
+          工程意义：<code>1 + 1</code> 不会触发分配，但 <code>1.1 + 1.1</code> 可能（"double 逃逸"）；<code>+</code>
+          拼接长字符串会分配新字符串对象；<code>BigInt</code> 总是堆对象。在热点循环里避开这些才能拿到 C 级性能。
+        </p>
+
+        <h3 id="internals-reference">引用语义的真实含义</h3>
+        <p>"引用传递"在 JS 里有个精确的含义：<strong>变量持有的是对象头指针的副本</strong>。因此：</p>
+        <ol>
+          <li>把变量赋给另一变量 = 拷贝指针（两个变量指向同一对象）</li>
+          <li>把变量作为参数传给函数 = 拷贝指针（函数内改属性影响外面）</li>
+          <li>在函数内把参数<em>重新赋值</em>为新对象 = 只改局部指针，外面不变</li>
+        </ol>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function mutate(obj) {
+  obj.n = 99;           // 改对象内容 → 外部可见
+}
+function reassign(obj) {
+  obj = { n: 99 };      // 重新赋值 → 只改局部指针
+}
+const a = { n: 1 };
+mutate(a);    console.log(a.n); // 99
+reassign(a);  console.log(a.n); // 仍为 99</code></pre>
+        </div>
+
+        <h3 id="internals-ieee754">Number 的本质：IEEE 754 双精度</h3>
+        <p>JS 的 <code>Number</code> 是 64-bit 双精度浮点数：<strong>1 位符号 + 11 位指数 + 52 位尾数</strong>。</p>
+        <ul>
+          <li>
+            <strong>安全整数范围</strong>：<code>Number.MIN_SAFE_INTEGER</code> = -(2⁵³ - 1)，<code
+              >Number.MAX_SAFE_INTEGER</code
+            >
+            = 2⁵³ - 1。超出此范围整数运算不再精确，因为尾数只有 52 位。
+          </li>
+          <li>
+            <strong>浮点运算不精确</strong> 并非 JS 独有，Python、Java、C 里 <code>0.1 + 0.2</code> 同样等于
+            <code>0.30000000000000004</code>。根因：<code>0.1</code> 和
+            <code>0.2</code> 在二进制下是无限循环小数，截断必然丢精度。
+          </li>
+          <li>
+            <strong>特殊值</strong
+            >：<code>NaN</code>、<code>Infinity</code>、<code>-Infinity</code>、<code>-0</code>（负零）。<code
+              >NaN !== NaN</code
+            >
+            是 IEEE 754 规定的，判断要用 <code>Number.isNaN()</code>。
+          </li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">0.1 + 0.2 === 0.3                // false
+0.1 + 0.2                         // 0.30000000000000004
+
+Number.MAX_SAFE_INTEGER           // 9007199254740991
+9007199254740992 === 9007199254740993  // true (都无法精确表示)
+
+Object.is(-0, 0)                  // false  ← 唯一能区分 ±0 的方法
+1 / -0                            // -Infinity
+
+Number.isNaN(NaN)                 // true
+NaN === NaN                       // false  ← IEEE 754 规定</code></pre>
+        </div>
+
+        <h3 id="internals-utf16">String 的本质：UTF-16 编码单元序列</h3>
+        <p>
+          规范规定 <code>String</code> 是 <strong>16-bit 编码单元</strong>（code unit）的不可变序列。<code
+            >"abc".length</code
+          >
+          数的不是字符数，也不是 Unicode code point 数，而是 <em>UTF-16 code unit 数</em>。
+        </p>
+        <p>
+          Unicode 基本多文种平面（BMP, U+0000 ~ U+FFFF）内的字符用一个 code unit 表示；辅助平面（U+10000 ~ U+10FFFF，如
+          emoji、某些 CJK 扩展汉字）用两个 code unit（<strong>代理对 / surrogate pair</strong>）表示。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">"🔥".length              // 2  ← 一个字符占 2 个 code unit
+"🔥".charCodeAt(0)       // 55357 (高位代理)
+"🔥".charCodeAt(1)       // 56613 (低位代理)
+"🔥".codePointAt(0)      // 128293  ← 真正的 code point
+
+[..."🔥"].length                        // 1   ← 迭代器按 code point
+"🔥".split("")                          // ["\uD83D", "\uDD25"]  ← 裂了
+Array.from("🔥")                        // ["🔥"]
+new Intl.Segmenter().segment("🔥").length // 需借助 Intl.Segmenter 做字素簇切分</code></pre>
+        </div>
+
+        <div class="callout warn">
+          <div class="callout-title">⚠ 实战警告</div>
+          <p>
+            生产代码里"截取前 N 个字符"用 <code>str.slice(0, N)</code> 可能切在代理对中间，把 emoji
+            砍成乱码。正确做法：用 <code>Array.from(str)</code>、<code>[...str]</code> 或
+            <code>Intl.Segmenter</code>。见 <a href="#pitfalls">常见陷阱</a>。
+          </p>
+        </div>
+
+        <h3 id="internals-bigint">BigInt：任意精度整数</h3>
+        <p>
+          BigInt 解决 <code>Number</code> 超过 2⁵³ 后精度丢失的问题。底层是<strong>按需分配的整数数组</strong>（类似
+          Python 的 int）。区别于 Number：
+        </p>
+        <ul>
+          <li>字面量后缀 <code>n</code>：<code>10n</code>。</li>
+          <li>不能与 <code>Number</code> 直接混算（<code>1n + 1</code> 抛 TypeError），必须显式转换。</li>
+          <li><code>JSON.stringify</code> 不支持 BigInt（抛 TypeError），需要自定义 replacer 或转为字符串。</li>
+          <li><code>Math.*</code> 方法不支持 BigInt。</li>
+        </ul>
+
+        <h3 id="internals-symbol">Symbol：值空间唯一的 key</h3>
+        <p>每次调用 <code>Symbol()</code> 都返回全新、不相等、不可伪造的值。描述字符串（传参）只用于 debug。</p>
+        <ul>
+          <li>
+            <strong>内部 slot</strong>：Symbol 值在引擎内部有唯一 seq_id，<code>===</code> 比较本质是比较这个 id。
+          </li>
+          <li>
+            <strong>全局 Symbol 注册表</strong>：<code>Symbol.for("k")</code> 总是返回同一个 Symbol，跨
+            realm（iframe/worker）共享。
+          </li>
+          <li>
+            <strong>Well-known symbols</strong
+            >：<code>Symbol.iterator</code>、<code>Symbol.asyncIterator</code>、<code>Symbol.hasInstance</code>、<code
+              >Symbol.toPrimitive</code
+            >
+            等是语言约定的协议钩子。
+          </li>
+          <li>
+            <strong>不可枚举性</strong>：Symbol 作为对象键时，<code>Object.keys</code> / <code>for...in</code> /
+            <code>JSON.stringify</code> 都看不到；需要 <code>Object.getOwnPropertySymbols</code>。
+          </li>
+        </ul>
+
+        <h3 id="internals-autobox">装箱与拆箱</h3>
+        <p>
+          原始值没有方法，那
+          <code>"abc".toUpperCase()</code> 怎么可能工作？引擎在点号求值时<strong>临时包裹</strong>一个
+          <code>String</code> 对象（wrapper），调用方法后立即丢弃。这叫<em>自动装箱</em>（auto-boxing）。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const s = "abc";
+s.toUpperCase();          // 临时 new String(s).toUpperCase() 后丢弃
+s.foo = 1;                // 赋值的也是临时 wrapper → 立刻被丢
+console.log(s.foo);       // undefined
+
+const S = new String("abc");  // 显式装箱（↓ 几乎永远不要这样写）
+typeof s;                 // "string"
+typeof S;                 // "object"
+s === S;                  // false  ← 值 vs 对象</code></pre>
+        </div>
+
+        <div class="callout danger">
+          <div class="callout-title">⛔ 永远不要 new 原始类型</div>
+          <p>
+            <code>new String / new Number / new Boolean</code> 生成的是 wrapper 对象，与原始值
+            <code>===</code> 不等，会把你的代码变成 debug 噩梦。仅<code>Symbol</code> 和 <code>BigInt</code> 不能
+            new（会直接抛错）—— 这是引擎层面的保护。
+          </p>
+        </div>
+
+        <!-- =========================================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">区分 null 与 undefined 的语义</h3>
+          <p>
+            <strong>undefined</strong
+            >：变量声明未赋值、函数未返回、对象缺失属性、形参未传。由<em>引擎</em>产生，表达"此处没有值"。
+          </p>
+          <p><strong>null</strong>：程序员<em>主动</em>赋的"空值"。表达"此处我知道应该有值，但现在没有"。</p>
+          <p>
+            好的团队约定：对外 API（DB/JSON/HTTP）用 <code>null</code> 表示业务空值；代码内部用
+            <code>undefined</code> 表示缺失。TypeScript 的 <code>strictNullChecks</code> +
+            联合类型可以把这个约定编译期强制。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">BigInt 在后端 ID 场景</h3>
+          <p>
+            Java / Go 服务的 <code>int64</code> ID 传到前端，JSON 数字超过 2⁵³ 会丢精度（如 Twitter 早期 snowflake
+            ID）。解决方案：后端把 ID 序列化为字符串，前端用 <code>BigInt</code> 计算或仅作标识符用途。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Symbol 实现真正的"私有"属性</h3>
+          <p>
+            在 class 私有字段（<code>#field</code>）出现之前，Symbol 是唯一能实现"外部无法访问"属性的方式，因为 Symbol
+            作为 key 时被 <code>Object.keys</code>、<code>for...in</code>、<code>JSON.stringify</code> 忽略。现在 class
+            私有字段是首选，但实现通用协议（<code>Symbol.iterator</code>）仍然必须用 Symbol。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">浮点精度在金额计算中的处理</h3>
+          <p>金融场景严禁直接用 <code>Number</code> 做金额加减。三条标准路径：</p>
+          <ol>
+            <li>
+              <strong>整数化</strong>：把金额统一转成最小单位（分、厘）用整数存储计算，展示时再除。简单、快速，2⁵³ 分 ≈
+              9 万亿元，对大多数业务够用。
+            </li>
+            <li><strong>字符串 + 库</strong>：<code>decimal.js</code> / <code>big.js</code>，任意精度但有运算开销。</li>
+            <li><strong>BigInt + 定点数</strong>：自己维护精度 scale，适合不愿引依赖的项目。</li>
+          </ol>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">React 的 key、Vue 的 reactivity 追踪</h3>
+          <p>
+            React 用 <code>key</code> 的 <code>===</code> 判断 reconciliation，本质依赖原始值按值比较。Vue 3 的
+            <code>reactive</code> 用 <code>WeakMap&lt;rawObject, Proxy&gt;</code> 做缓存 —— WeakMap 的 key
+            必须是对象（引用语义）正是为了能在对象被 GC 后自动清理条目。
+          </p>
+        </div>
+
+        <!-- =========================================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-typeof">精准判断类型</h3>
+        <p><code>typeof</code> 速查但不完整（null/array/date 都是 "object"）。生产代码里的 <em>typeOf</em> 函数：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function typeOf(v) {
+  if (v === null) return "null";
+  const t = typeof v;
+  if (t !== "object" && t !== "function") return t;
+  // [object Array] / [object Date] / [object Map] / ...
+  return Object.prototype.toString.call(v).slice(8, -1).toLowerCase();
+}
+
+typeOf(undefined);    // "undefined"
+typeOf(null);         // "null"
+typeOf(NaN);          // "number"
+typeOf(10n);          // "bigint"
+typeOf(Symbol());     // "symbol"
+typeOf([]);           // "array"
+typeOf(new Date());   // "date"
+typeOf(/x/);          // "regexp"
+typeOf(new Map());    // "map"
+typeOf(() =&gt; {});     // "function"</code></pre>
+        </div>
+
+        <h3 id="ex-equality">安全的值比较</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 1. SameValue 算法（等价于 Object.is）
+Object.is(NaN, NaN);        // true
+Object.is(-0, 0);           // false
+Object.is({}, {});          // false（引用不同）
+
+// 2. 对象结构相等：JSON 序列化仅适用于简单数据
+JSON.stringify({ a: 1 }) === JSON.stringify({ a: 1 });  // true
+// 但无法处理 undefined / 函数 / Symbol / 循环引用 / Date / Map / Set
+
+// 3. 生产推荐
+import { isEqual } from "lodash-es";  // 或 fast-deep-equal、Node.js 的 util.isDeepStrictEqual
+</code></pre>
+        </div>
+
+        <h3 id="ex-number-edge">数值边界</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 安全整数检查
+Number.isSafeInteger(2 ** 53);      // false
+Number.isSafeInteger(2 ** 53 - 1);  // true
+
+// 浮点相等用 epsilon
+function approxEq(a, b, eps = Number.EPSILON * 10) {
+  return Math.abs(a - b) &lt; eps;
+}
+approxEq(0.1 + 0.2, 0.3);           // true
+
+// 保留小数位（注意四舍五入规则）
+(0.1 + 0.2).toFixed(2);             // "0.30"  ← 返回字符串
+Number((0.1 + 0.2).toFixed(2));     // 0.3
+
+// 整数除法
+Math.trunc(7 / 2);                  // 3 (向零截断)
+Math.floor(-7 / 2);                 // -4 (向负无穷)
+(7 / 2) | 0;                        // 3  (位运算，仅 32-bit 整数安全)</code></pre>
+        </div>
+
+        <h3 id="ex-unicode">Unicode 安全的字符串操作</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const s = "Hi👋🌍";
+
+s.length;                           // 7 (UTF-16 code units)
+[...s].length;                      // 5 (code points)
+
+// 按字符截取
+[...s].slice(0, 3).join("");        // "Hi👋"
+
+// 正则匹配 emoji（需要 /u flag）
+/./.test("👋");                     // true（按 code unit，可能对半）
+/\p{Emoji}/u.test("👋");            // true（Unicode 属性转义，推荐）
+
+// 遍历
+for (const ch of s) console.log(ch);  // H, i, 👋, 🌍
+
+// 字素簇（考虑组合字符、肤色修饰符等，ES2024+）
+const seg = new Intl.Segmenter("en", { granularity: "grapheme" });
+[...seg.segment("👨‍👩‍👧")].length;    // 1（一个完整 emoji 家族）</code></pre>
+        </div>
+
+        <h3 id="ex-symbol">Symbol 实现迭代协议</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 让任意对象支持 for...of / 解构 / spread
+class Range {
+  constructor(start, end) { this.start = start; this.end = end; }
+  [Symbol.iterator]() {
+    let i = this.start;
+    const end = this.end;
+    return {
+      next() {
+        return i &lt; end
+          ? { value: i++, done: false }
+          : { value: undefined, done: true };
+      },
+    };
+  }
+}
+for (const n of new Range(1, 4)) console.log(n);  // 1 2 3
+[...new Range(1, 4)];                              // [1, 2, 3]</code></pre>
+        </div>
+
+        <!-- =========================================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">typeof null === "object"</div>
+          <p>
+            历史遗留 bug（第一版 JS 用低 3 位 tag 区分类型，对象是 <code>000</code>，null 恰好是全 0 指针）。<strong
+              >判空必须 <code>=== null</code> 或 <code>== null</code>（同时判 undefined）。</strong
+            >
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">typeof 数组 / Date / Map 都是 "object"</div>
+          <p>
+            用 <code>Array.isArray()</code>、<code>instanceof Date</code>、<code
+              >Object.prototype.toString.call(v)</code
+            >
+            等替代。注意 <code>instanceof</code> 跨 iframe/realm 不可靠（构造函数不同）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">NaN !== NaN</div>
+          <p>
+            <code>NaN</code> 自身不相等，<code>[NaN].includes(NaN)</code> 反而是 <code>true</code>（用
+            SameValueZero）。判断 NaN 用 <code>Number.isNaN()</code>，<strong>不要</strong>用全局
+            <code>isNaN()</code>（它会先做 Number 强转，<code>isNaN("abc")</code> 也是 true）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">"0" / "" / [] / {} 的布尔性</div>
+          <p>
+            布尔上下文中为 <strong>falsy</strong>: <code>false</code>, <code>0</code>, <code>-0</code>, <code>0n</code>,
+            <code>""</code>, <code>null</code>, <code>undefined</code>, <code>NaN</code>。<strong
+              >一切对象都是 truthy</strong
+            >，包括 <code>[]</code>, <code>{}</code>, <code>new Boolean(false)</code>。一个经典 bug：<code
+              >if (form.checkbox)</code
+            >
+            不能用 <code>new Boolean(false)</code> 的值做判断。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">字符串截取切坏 emoji</div>
+          <p>
+            <code>"🔥🔥".slice(0, 1)</code> 得到半个 emoji（孤立代理）。安全方法：<code
+              >[...str].slice(0, n).join("")</code
+            >。更严谨（组合字符、肤色）用 <code>Intl.Segmenter</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">+0 与 -0</div>
+          <p>
+            <code>0 === -0</code> 是 <code>true</code>，但 <code>1 / 0</code> 是 <code>Infinity</code>，<code
+              >1 / -0</code
+            >
+            是 <code>-Infinity</code>。真需要区分用 <code>Object.is(x, -0)</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">parseInt("08") 的遗留坑</div>
+          <p>
+            ES5 前 <code>parseInt</code> 对 "08"、"09" 会按八进制解析返回 0。ES5+ 必须显式传 radix：<code
+              >parseInt("08", 10)</code
+            >。更安全：<code>Number("08")</code> 或 <code>+"08"</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">JSON.stringify 丢失数据</div>
+          <p>
+            <code>undefined</code>、函数、Symbol 值作为属性会被忽略；作为数组元素变成 <code>null</code>；<code
+              >BigInt</code
+            >
+            抛错；<code>Date</code> 变字符串；<code>Map</code>/<code>Set</code> 变 <code>{}</code>。复杂数据用
+            <code>structuredClone</code>（浏览器/Node 原生）或 <code>devalue</code> 等库。
+          </p>
+        </div>
+
+        <!-- =========================================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-ecmascript-data-types-and-values" target="_blank" rel="noopener"
+              >ECMA-262 · 6 ECMAScript Data Types and Values</a
+            >
+          </li>
+          <li>
+            <a href="https://javascript.info/types" target="_blank" rel="noopener">javascript.info · Data types</a>
+          </li>
+          <li>
+            <a
+              href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures"
+              target="_blank"
+              rel="noopener"
+              >MDN · JavaScript data types and data structures</a
+            >
+          </li>
+          <li>
+            <a href="https://v8.dev/blog/pointer-compression" target="_blank" rel="noopener"
+              >V8 blog · Pointer compression in V8</a
+            >
+            —— V8 的值表示进化史
+          </li>
+          <li>
+            <a
+              href="https://docs.google.com/document/d/1M1HREPFT3o9xtVf9Z7ZAL0_cR2M0N9HRx9c0pHv0tnQ/"
+              target="_blank"
+              rel="noopener"
+              >What Every Programmer Should Know About Floating-Point Arithmetic</a
+            >
+          </li>
+          <li>
+            <strong>下一步</strong>：继续读 02 章<em>操作符与强制转换</em>（待写） —— 本章最后一个 typeOf
+            函数只是铺垫，真正的 <code>==</code> vs <code>===</code> 规则、<code>+</code> 的双重语义、<code
+              >Symbol.toPrimitive</code
+            >
+            都在下一章。
+          </li>
+        </ul>
+
+        <!-- =========================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="index.html">
+            <span class="label">← 返回</span>
+            <span class="title">P1 · 语言基础</span>
+          </a>
+          <a class="next" href="02-operators.html">
+            <span class="label">下一章 →</span>
+            <span class="title">02 · 操作符与强制转换</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

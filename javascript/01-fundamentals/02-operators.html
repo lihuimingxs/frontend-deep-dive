@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>操作符与强制转换 · P1 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="ToPrimitive 算法、==/=== 抽象比较规则、+ 的双重语义、短路求值返回操作数的特性、?? 与 ||、可选链、位运算、优先级陷阱。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P1 目录</a>
+          <a href="https://javascript.info/operators" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · 语言基础</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-types.html">01 · 数据类型系统</a></li>
+          <li><a href="02-operators.html">02 · 操作符与强制转换</a></li>
+          <li><a href="03-control-flow.html">03 · 控制流</a></li>
+          <li><a href="04-functions.html">04 · 函数基础</a></li>
+          <li><a href="05-objects.html">05 · 对象深入</a></li>
+          <li><a href="06-arrays.html">06 · 数组深入</a></li>
+          <li><a href="07-strings.html">07 · 字符串深入</a></li>
+          <li><a href="08-numbers.html">08 · 数字与 Math</a></li>
+          <li><a href="09-date-intl.html">09 · Date 与 Intl</a></li>
+          <li><a href="10-map-set.html">10 · Map / Set 家族</a></li>
+          <li><a href="11-symbol.html">11 · Symbol 全景</a></li>
+          <li><a href="12-json.html">12 · JSON</a></li>
+          <li><a href="13-iterators.html">13 · 迭代器与 Generator</a></li>
+          <li><a href="14-errors.html">14 · 错误处理</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../02-advanced/index.html">P2 · 高阶语言</a></li>
+          <li><a href="../03-async/index.html">P3 · 异步 & 错误处理</a></li>
+          <li><a href="../04-modules/index.html">P4 · 模块 & 元编程</a></li>
+          <li><a href="../05-dom/index.html">P5 · DOM & 事件</a></li>
+          <li><a href="../06-network/index.html">P6 · 网络 & 存储</a></li>
+          <li><a href="../07-advanced/index.html">P7 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · 语言基础</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>操作符与强制转换</span>
+        </nav>
+
+        <h1>操作符与强制转换</h1>
+        <p class="lead">
+          JS 的操作符底下藏着一套规范算法：<code>ToPrimitive</code>、<code>ToNumber</code>、<code>ToString</code>、<code
+            >Abstract Equality Comparison</code
+          >。学这一章的正确姿势不是背 "<code>==</code> 转换表"，而是记住这几个算法在什么时候被触发 ——
+          之后一切行为都能推导出来。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> 01 · 数据类型系统</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/operators" target="_blank" rel="noopener">Basic operators</a></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================= -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>按规范分类的操作符：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>类别</th>
+              <th>操作符</th>
+              <th>关键点</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>算术</td>
+              <td><code>+ - * / % ** -(一元) +(一元)</code></td>
+              <td><code>+</code> 有双语义（加法/拼接）</td>
+            </tr>
+            <tr>
+              <td>赋值</td>
+              <td><code>= += -= *= /= %= **= &&= ||= ??=</code></td>
+              <td>赋值是表达式，返回右值</td>
+            </tr>
+            <tr>
+              <td>比较</td>
+              <td><code>== != === !== &lt; &gt; &lt;= &gt;=</code></td>
+              <td><code>===</code> 无强转；<code>==</code> 走 Abstract Equality</td>
+            </tr>
+            <tr>
+              <td>逻辑</td>
+              <td><code>&amp;&amp; || ! ??</code></td>
+              <td>短路返回<em>操作数</em>而非 boolean</td>
+            </tr>
+            <tr>
+              <td>可选链</td>
+              <td><code>?. ?.() ?.[]</code></td>
+              <td>左侧是 null/undefined 时整体 <code>undefined</code></td>
+            </tr>
+            <tr>
+              <td>位运算</td>
+              <td><code>&amp; | ^ ~ &lt;&lt; &gt;&gt; &gt;&gt;&gt;</code></td>
+              <td>先 <code>ToInt32</code>，仅 32-bit 整数安全</td>
+            </tr>
+            <tr>
+              <td>一元</td>
+              <td><code>typeof delete void !</code></td>
+              <td><code>typeof</code> 对未声明变量不抛错</td>
+            </tr>
+            <tr>
+              <td>其他</td>
+              <td><code>, in instanceof ? :</code></td>
+              <td><code>,</code> 返回最右；<code>in</code> 查原型链</td>
+            </tr>
+            <tr>
+              <td>展开/剩余</td>
+              <td><code>...</code></td>
+              <td>同一符号在调用/解构处语义相反</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 =========================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="to-primitive">ToPrimitive 算法：万物归原</h3>
+        <p>
+          任何把对象用到需要原始值的位置（加法、比较、模板字符串、<code>String(obj)</code> 等），引擎都会调用
+          <code>ToPrimitive(input, hint)</code>：
+        </p>
+        <ol>
+          <li>如果 input 是原始值，直接返回。</li>
+          <li>
+            查 input 上的 <code>Symbol.toPrimitive</code> 方法 —— 若有，调用并以其返回值作为结果（必须是原始值，否则抛
+            TypeError）。
+          </li>
+          <li>
+            否则根据 <code>hint</code> 选择 fallback 顺序：
+            <ul>
+              <li>
+                <code>"string"</code>（模板字符串、<code>String()</code>）：先 <code>toString</code>，失败才
+                <code>valueOf</code>
+              </li>
+              <li><code>"number"</code>（算术、比较）：先 <code>valueOf</code>，失败才 <code>toString</code></li>
+              <li>
+                <code>"default"</code>（<code>+</code>、<code>==</code>）：同 <code>"number"</code>，但可被
+                <code>Symbol.toPrimitive</code> 单独区分
+              </li>
+            </ul>
+          </li>
+          <li>若 <code>valueOf</code>/<code>toString</code> 返回对象，继续下一个；都失败则抛 TypeError。</li>
+        </ol>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const money = {
+  amount: 100,
+  currency: "CNY",
+  [Symbol.toPrimitive](hint) {
+    if (hint === "number") return this.amount;
+    if (hint === "string") return `${this.amount} ${this.currency}`;
+    return `${this.amount} ${this.currency}`;  // default
+  },
+};
+
++money;             // 100         ← hint "number"
+`${money}`;         // "100 CNY"   ← hint "string"
+money + "";         // "100 CNY"   ← hint "default" + 字符串拼接
+money == 100;       // true        ← hint "default" → 100, 再数字比较</code></pre>
+        </div>
+
+        <h3 id="plus-operator"><code>+</code> 的双重语义</h3>
+        <p>二元 <code>+</code> 的决策树：</p>
+        <ol>
+          <li>两边都 <code>ToPrimitive(hint: "default")</code>。</li>
+          <li>如果<strong>任一</strong>转换结果是字符串 → 两边 <code>ToString</code>，拼接。</li>
+          <li>否则两边 <code>ToNumber</code>，相加（<code>ToNumber</code> 会将 BigInt 混算抛 TypeError）。</li>
+        </ol>
+        <p>
+          这就是为什么 <code>1 + "2" === "12"</code>，而 <code>"2" - 1 === 1</code> —— 减号没有字符串语义，直接走
+          <code>ToNumber</code>。
+        </p>
+
+        <h3 id="equality">抽象相等比较（<code>==</code>）的 7 条规则</h3>
+        <p><code>x == y</code> 的规范流程（节选，忽略了 BigInt 分支）：</p>
+        <ol>
+          <li>类型相同 → 走 <code>===</code> 的判断。</li>
+          <li><code>null == undefined</code> → <code>true</code>（特判）。</li>
+          <li><code>Number</code> == <code>String</code> → 把 string <code>ToNumber</code> 再比。</li>
+          <li><code>Boolean</code> == 任意 → 把 boolean <code>ToNumber</code>（true→1, false→0）后再比。</li>
+          <li><code>Number/String</code> == <code>Object</code> → 对象 <code>ToPrimitive("default")</code> 后再比。</li>
+          <li>其他一律 <code>false</code>。</li>
+        </ol>
+
+        <div class="callout warn">
+          <div class="callout-title">⚠ 只记三条就够了</div>
+          <p>
+            <strong>（1）</strong> <code>null == undefined</code>，但它们都不 <code>==</code> 其他任何值（包括
+            <code>0</code>, <code>""</code>, <code>false</code>）。 <strong>（2）</strong> 有对象参与的
+            <code>==</code> 会调用 <code>ToPrimitive("default")</code>。 <strong>（3）</strong>
+            <code>NaN</code> 跟谁都不等（包括自己）。其余情况用 <code>===</code>。
+          </p>
+        </div>
+
+        <h3 id="short-circuit">短路求值返回<em>操作数</em></h3>
+        <p>
+          这是 JS 和 C/Java 最大的行为差异之一。<code>&&</code> / <code>||</code> 在 JS 中不返回
+          boolean，而是返回<strong>决定结果的那个操作数</strong>：
+        </p>
+        <ul>
+          <li><code>a &amp;&amp; b</code>：若 <code>a</code> falsy 返回 <code>a</code>，否则返回 <code>b</code>。</li>
+          <li><code>a || b</code>：若 <code>a</code> truthy 返回 <code>a</code>，否则返回 <code>b</code>。</li>
+          <li>
+            <code>a ?? b</code>：若 <code>a</code> 是 <code>null</code> 或 <code>undefined</code> 返回
+            <code>b</code>，否则返回 <code>a</code>。
+          </li>
+        </ul>
+        <p>
+          <code>!</code> 是唯一强制返回 boolean 的逻辑操作符，因此 <code>!!x</code> 是把任意值转 boolean
+          的地道写法（等价于 <code>Boolean(x)</code>）。
+        </p>
+
+        <h3 id="bitwise">位运算的 32-bit 约束</h3>
+        <p>
+          <code>&amp; | ^ ~ &lt;&lt; &gt;&gt;</code> 都先对操作数 <code>ToInt32</code>：把 Number 截断成 32-bit
+          有符号整数。这意味着：
+        </p>
+        <ul>
+          <li><code>x | 0</code> 曾是 <code>Math.trunc</code> 的快速替代（现代引擎两者性能相近，可读性更重要）。</li>
+          <li>数字 > 2³¹-1 或是小数会被"咔嚓"截断，结果可能意外。</li>
+          <li>
+            <code>&gt;&gt;&gt;</code> 是"无符号右移"，把 32-bit 视为无符号整数。唯一能让
+            <code>-1 &gt;&gt;&gt; 0</code> 返回 4294967295 的方式。
+          </li>
+        </ul>
+
+        <h3 id="precedence">运算符优先级要点</h3>
+        <p>
+          完整表见
+          <a
+            href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Operator_precedence"
+            target="_blank"
+            rel="noopener"
+            >MDN</a
+          >，记住几个高频坑点：
+        </p>
+        <ul>
+          <li>
+            一元操作符（<code>+ - ! typeof</code>）比二元更紧。<code>typeof x + ""</code> 先算
+            <code>typeof x</code> 再拼接。
+          </li>
+          <li><code>**</code> 是右结合：<code>2 ** 3 ** 2 === 2 ** 9 === 512</code>。</li>
+          <li>赋值是右结合：<code>a = b = c</code> 等价 <code>a = (b = c)</code>。</li>
+          <li>
+            <code>&amp;&amp;</code> 优先级高于 <code>||</code>，<code>||</code> 高于 <code>??</code>（但
+            <code>??</code> 和 <code>&amp;&amp;</code>/<code>||</code> 不能混用，必须加括号，语法层强制）。
+          </li>
+          <li>
+            <code>,</code> 是优先级最低的操作符。<code>let x = 1, 2;</code> 不合法（声明里 <code>,</code> 是分隔符），但
+            <code>let x = (1, 2);</code> 合法，<code>x</code> 为 2。
+          </li>
+        </ul>
+
+        <!-- 03 应用场景 =========================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">默认值：<code>??</code> vs <code>||</code></h3>
+          <p>
+            <code>||</code> 把所有 falsy 值当成"没提供"，<code>??</code> 只把 null/undefined 当成"没提供"。<br />
+            <strong>经典 bug</strong>：<code>const volume = config.volume || 50;</code> 会把用户设置的
+            <code>0</code>（静音）替换成 50。正确写法：<code>const volume = config.volume ?? 50;</code>。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">可选链：链式取值防崩</h3>
+          <p>
+            <code>user?.profile?.avatar?.url</code> 在链路任一节点是 null/undefined 时返回
+            <code>undefined</code>，不抛错。比
+            <code>user &amp;&amp; user.profile &amp;&amp; ...</code> 短得多。注意：<code>?.</code> 只能防
+            null/undefined，<strong>不能</strong>防 <code>obj.method is not a function</code>。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">逻辑赋值：状态机初始化</h3>
+          <p>
+            <code>cache[key] ??= computeValue();</code> 等价 <code>cache[key] = cache[key] ?? computeValue();</code> ——
+            但只在 <code>cache[key]</code> 是 null/undefined 时才调用
+            <code>computeValue()</code>，避免不必要的开销。<code>&amp;&amp;=</code> 反之（只在已有值时更新）。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">位运算：权限位与颜色通道</h3>
+          <p>
+            Canvas pixel data、权限系统（RWX）、网络协议位标志、TypedArray 索引 —— 这些场景下位运算比字符串/数组操作快
+            10-100 倍且空间占用极小。现代前端工程师最常用的场景其实是位掩码做 feature flag。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">展开语法：不可变更新</h3>
+          <p>
+            Redux、Zustand 等状态库要求 immutable 更新：<code>{ ...state, count: state.count + 1 }</code>、<code
+              >[...list, newItem]</code
+            >。性能不如原地修改，但换来时间旅行、浅比较、结构共享。React 的
+            <code>useState</code> 只在引用不等时才重渲染，所以直接 mutate 原对象不会触发更新。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ============================================ -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-equality"><code>==</code> 决策表（背不如推）</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">null == undefined;       // true   (规则 2)
+null == 0;               // false  (null 只等 undefined)
+null &gt;= 0;               // true   (&gt;= 不走 null 特判，走 ToNumber)
+null == false;           // false  (false→0, null 不转 0)
+"" == 0;                 // true   ("" → 0, 数字比较)
+"0" == false;            // true   ("0" → 0, false → 0)
+[] == false;             // true   ([] → "" → 0, false → 0)
+[0] == false;            // true   ([0] → "0" → 0)
+NaN == NaN;              // false  (NaN 跟谁都不等)</code></pre>
+        </div>
+
+        <h3 id="ex-plus"><code>+</code> 的陷阱演示</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">1 + 2 + "3";            // "33"   (左结合：(1+2) + "3")
+"1" + 2 + 3;            // "123"  (第一步就拼接了)
+[] + [];                // ""     ([] 转空串，空串拼接)
+[] + {};                // "[object Object]"
+{} + [];                // 0      ⚠ 在语句位置 {} 是空块，+[] 是 ToNumber("")=0
+({}) + [];              // "[object Object]"  (加括号变表达式)
++"";                    // 0      (一元 + 是 ToNumber)
++"abc";                 // NaN
++null;                  // 0
++undefined;             // NaN
++"  12  ";              // 12     (ToNumber 会 trim)
++"";                    // 0
++[];                    // 0      ([] → "" → 0)
++[1];                   // 1      ([1] → "1" → 1)
++[1,2];                 // NaN    ([1,2] → "1,2" → NaN)</code></pre>
+        </div>
+
+        <h3 id="ex-precedence">优先级陷阱</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 1. typeof 是一元，绑得更紧
+typeof 1 + "";           // "number"     → typeof 1 === "number", 再拼 ""
+                         // 不是 typeof (1 + "") === "string"
+
+// 2. ** 右结合
+2 ** 3 ** 2;             // 512  (= 2 ** 9, 不是 64)
+
+// 3. ?? 不能与 && / || 混用，必须括号
+// a ?? b && c;          // SyntaxError
+a ?? (b && c);           // ok
+
+// 4. 赋值表达式
+const a = b = 0;         // b 成了全局（非严格）/ ReferenceError（严格）
+                         // a 声明了，b 没有
+
+// 5. , 操作符
+const arr = [1, (2, 3), 4];  // [1, 3, 4]  中间的 (2,3) 返回 3</code></pre>
+        </div>
+
+        <h3 id="ex-coalesce">可选链 + 空值合并的常用组合</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 链式调用带默认
+const count = data?.items?.length ?? 0;
+
+// 调用可能不存在的方法
+element?.scrollIntoView?.();
+
+// 动态键 + 链式
+const value = obj?.[key]?.toString?.() ?? "N/A";
+
+// ?? 的特性：只区分 null/undefined
+const page = params.page ?? 1;    // 允许 page=0
+const page2 = params.page || 1;   // ⚠ page=0 被替换成 1
+
+// ⚠ 短路仍会求值左侧表达式（包括 .get 的 throw）
+// map.get?.(key) 不能防止 get 本身抛错，只防 map 为 null/undefined</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================ -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>[] == ![]</code> 居然是 true</div>
+          <p>
+            右边先算：<code>![]</code> → <code>false</code>（因为 <code>[]</code> 是 truthy）。变成
+            <code>[] == false</code>。规则 4：<code>false → 0</code>，得 <code>[] == 0</code>。规则 5：<code
+              >[] → ToPrimitive → ""</code
+            >。规则 3：<code>"" → 0</code>，得 <code>0 == 0 → true</code>。全程没有任何 bug，就是规则层层套娃。用
+            <code>===</code> 免疫。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>{} + []</code> 的含义取决于位置</div>
+          <p>
+            在语句起始位置 <code>{}</code> 被解析为<em>空块</em>，<code>+[]</code> 是一元加，结果
+            <code>0</code>。在表达式位置 <code>({}) + []</code> 是对象 + 数组 = <code>"[object Object]"</code>。REPL
+            和源文件行为可能不同 —— 这不是 bug，而是 ASI（自动分号插入）的副作用。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>typeof</code> 对已声明但未赋值变量返回 "undefined"</div>
+          <p>
+            <code>let x; typeof x</code> 是 <code>"undefined"</code>。<code>typeof undeclaredVar</code>
+            <strong>也</strong>是 <code>"undefined"</code> 而不抛错 ——
+            这是语言层面唯一允许引用未声明变量的地方。历史原因（早期用于检测全局对象），现代代码基本用不到。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>null &gt;= 0</code> 是 true，但 <code>null &gt; 0</code> 是 false</div>
+          <p>
+            关系操作符走 <code>ToNumber</code>，<code>null → 0</code>，所以
+            <code>null &gt;= 0 === 0 &gt;= 0 === true</code>。而 <code>null == 0</code> 是 <code>false</code>（因为
+            <code>==</code> 有 null 特判）。<strong><code>&gt;=</code> 不等于 <code>&gt; || ==</code>。</strong>
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">链式 <code>?.</code> 的短路会跳过后续调用</div>
+          <p>
+            <code>a?.b().c</code>：如果 <code>a</code> 是 null/undefined，整个表达式短路为 <code>undefined</code>，<code
+              >.b()</code
+            >
+            也不会被调用。如果 <code>a.b()</code> 返回 null，<code>.c</code> 会抛错。链中每个可能为空的节点都需要
+            <code>?.</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>delete</code> 不会删除变量，只删对象属性</div>
+          <p>
+            <code>const x = 1; delete x;</code> 返回 <code>true</code> 但
+            <code>x</code> 仍存在（严格模式下直接语法错误）。<code>delete</code> 只对对象属性生效，且对非 configurable
+            属性也静默失败。清空状态用赋值 <code>obj.key = undefined</code> 或删键 <code>delete obj.key</code>（后者影响
+            for-in/hasOwn）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>void 0</code> 是获取 <code>undefined</code> 的"安全"方式</div>
+          <p>
+            在 ES5 严格模式/现代代码里 <code>undefined</code> 已经是只读全局，写 <code>undefined</code> 就够了。<code
+              >void 0</code
+            >
+            是 ES3 时代兼容写法（当时 <code>undefined</code> 可被覆盖）。Minifier 仍会用 <code>void 0</code> 替换
+            <code>undefined</code> 省字节 —— 这是工具做的，你不需要手写。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">展开语法的浅拷贝陷阱</div>
+          <p>
+            <code>{ ...obj }</code> 和 <code>[...arr]</code> 只拷贝一层。嵌套对象/数组仍共享引用。改
+            <code>copy.nested.x</code> 会改原对象。深拷贝用
+            <code>structuredClone(obj)</code>（原生、支持循环引用/Map/Set/Date/TypedArray，不支持函数和 Symbol key）。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================ -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-toprimitive" target="_blank" rel="noopener"
+              >ECMA-262 · 7.1.1 ToPrimitive</a
+            >
+          </li>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-abstract-equality-comparison" target="_blank" rel="noopener"
+              >ECMA-262 · 7.2.14 IsLooselyEqual</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Operator_precedence"
+              target="_blank"
+              rel="noopener"
+              >MDN · Operator precedence 完整表</a
+            >
+          </li>
+          <li>
+            <a href="https://dorey.github.io/JavaScript-Equality-Table/" target="_blank" rel="noopener"
+              >JavaScript Equality Table</a
+            >
+            —— 交互式 <code>==</code> / <code>===</code> 对照图
+          </li>
+          <li><strong>下一步</strong> → <a href="03-control-flow.html">03 · 控制流</a>，从表达式跳到语句。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-types.html">
+            <span class="label">← 上一章</span>
+            <span class="title">01 · 数据类型系统</span>
+          </a>
+          <a class="next" href="03-control-flow.html">
+            <span class="label">下一章 →</span>
+            <span class="title">03 · 控制流</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

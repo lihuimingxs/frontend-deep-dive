@@ -1,0 +1,640 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DOM 修改与安全 · P5 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="createElement / append / insertAdjacentHTML、innerHTML 的 XSS 风险、DOMParser 与 Sanitizer API、textContent vs innerText vs innerHTML、DocumentFragment 批量插入、Template 元素。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · DOM & 事件</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-dom-tree.html">01 · DOM 树与 Node 接口</a></li>
+          <li><a href="02-dom-query.html">02 · DOM 查询与遍历</a></li>
+          <li><a href="03-dom-mutation.html">03 · DOM 修改与安全</a></li>
+          <li><a href="04-event-propagation.html">04 · 事件传播三阶段</a></li>
+          <li><a href="05-delegation-custom.html">05 · 事件委托与自定义事件</a></li>
+          <li><a href="06-observers.html">06 · 各种 Observer</a></li>
+          <li><a href="07-forms.html">07 · Form 控件与验证</a></li>
+          <li><a href="08-loading.html">08 · 资源加载时机</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-fundamentals/index.html">P1 · 语言基础</a></li>
+          <li><a href="../02-advanced/index.html">P2 · 高阶语言</a></li>
+          <li><a href="../03-async/index.html">P3 · 异步 & 错误处理</a></li>
+          <li><a href="../04-modules/index.html">P4 · 模块 & 元编程</a></li>
+          <li><a href="../06-network/index.html">P6 · 网络 & 存储</a></li>
+          <li><a href="../07-advanced/index.html">P7 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · DOM & 事件</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>DOM 修改与安全</span>
+        </nav>
+
+        <h1>DOM 修改与安全</h1>
+        <p class="lead">
+          DOM 修改有三条路：<strong>分步创建</strong>（createElement + append）、<strong>字符串解析</strong>（innerHTML
+          / insertAdjacentHTML）、<strong>模板克隆</strong>（&lt;template&gt;.content.cloneNode）。选错了要么慢、要么
+          XSS。本章把每条路的使用场景、性能、安全边界讲全。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 01 DOM 树</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/modifying-document" target="_blank" rel="noopener"
+              >Modifying the document</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <h3>现代 DOM 修改 API（都支持多参 + 字符串/节点混合）</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>方法</th>
+              <th>位置</th>
+              <th>输入</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>el.append(...)</code></td>
+              <td>子树末尾</td>
+              <td>Node / string（自动 Text 节点）</td>
+            </tr>
+            <tr>
+              <td><code>el.prepend(...)</code></td>
+              <td>子树开头</td>
+              <td>同上</td>
+            </tr>
+            <tr>
+              <td><code>el.before(...)</code></td>
+              <td>el 之前</td>
+              <td>同上</td>
+            </tr>
+            <tr>
+              <td><code>el.after(...)</code></td>
+              <td>el 之后</td>
+              <td>同上</td>
+            </tr>
+            <tr>
+              <td><code>el.replaceWith(...)</code></td>
+              <td>替换 el</td>
+              <td>同上</td>
+            </tr>
+            <tr>
+              <td><code>el.replaceChildren(...)</code></td>
+              <td>清空并重设子节点</td>
+              <td>同上</td>
+            </tr>
+            <tr>
+              <td><code>el.remove()</code></td>
+              <td>移除自己</td>
+              <td>无</td>
+            </tr>
+            <tr>
+              <td><code>el.insertAdjacentHTML(pos, html)</code></td>
+              <td>4 种位置</td>
+              <td>HTML 字符串（解析）</td>
+            </tr>
+            <tr>
+              <td><code>el.insertAdjacentElement(pos, node)</code></td>
+              <td>4 种位置</td>
+              <td>Node</td>
+            </tr>
+            <tr>
+              <td><code>el.insertAdjacentText(pos, str)</code></td>
+              <td>4 种位置</td>
+              <td>纯文本</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          <code>insertAdjacentXxx</code> 的 position：<code>"beforebegin"</code> / <code>"afterbegin"</code> /
+          <code>"beforeend"</code> / <code>"afterend"</code>。
+        </p>
+
+        <h3>写入内容的 3 种方式</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>方式</th>
+              <th>解析 HTML？</th>
+              <th>XSS 风险</th>
+              <th>性能</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>textContent</code></td>
+              <td>否</td>
+              <td>无</td>
+              <td>最快</td>
+            </tr>
+            <tr>
+              <td><code>innerHTML</code> / <code>insertAdjacentHTML</code></td>
+              <td>是</td>
+              <td><strong>有</strong>（用户输入需转义）</td>
+              <td>解析字符串成本</td>
+            </tr>
+            <tr>
+              <td><code>createElement + append</code></td>
+              <td>否</td>
+              <td>无</td>
+              <td>中等</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="innerhtml-xss">innerHTML 和 XSS</h3>
+        <p><code>el.innerHTML = userInput</code> 是经典 XSS 入口。浏览器解析 HTML 后：</p>
+        <ul>
+          <li><strong>内联 script 不执行</strong>（HTML 规范，防 SSR 遗留 XSS）。</li>
+          <li>
+            但 <code>&lt;img src=x onerror=...&gt;</code>、<code>&lt;svg onload=...&gt;</code>、<code>javascript:</code>
+            URL 都会执行。
+          </li>
+          <li>
+            <code>&lt;iframe srcdoc&gt;</code>、<code>&lt;object&gt;</code>、<code>&lt;embed&gt;</code> 等 HTML
+            特性也是攻击面。
+          </li>
+        </ul>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// ❌ 直接 XSS
+el.innerHTML = userInput;
+
+// ❌ 仅转义 &lt;&gt; 不够（&lt;img onerror&gt; 还能靠属性注入）
+function escape(s) {
+  return s.replace(/&lt;/g, "&amp;lt;").replace(/&gt;/g, "&amp;gt;");
+}
+
+// ✓ 用 textContent（纯文本）
+el.textContent = userInput;
+
+// ✓ 用 DOMPurify 清洗
+import DOMPurify from "dompurify";
+el.innerHTML = DOMPurify.sanitize(userInput);
+
+// ✓ 原生 Sanitizer API（Chrome 119+）
+el.setHTML(userInput);                       // 自带白名单，拒绝危险元素
+el.setHTML(userInput, { sanitizer: new Sanitizer({ allowElements: ["b", "i", "a"] }) });</code></pre>
+        </div>
+
+        <h3 id="reflow">DOM 修改触发 reflow</h3>
+        <p><strong>Reflow（布局计算）</strong>和<strong>Paint（绘制）</strong>是 DOM 修改后的大开销。规则：</p>
+        <ul>
+          <li>改属性、加/删节点、resize 都可能触发 reflow。</li>
+          <li>浏览器会合并相邻修改到下一帧批量处理。</li>
+          <li>
+            但<strong>读取布局属性</strong>（<code>offsetTop</code>、<code>getBoundingClientRect</code> 等）会强制立即
+            reflow，叫 "forced synchronous layout"。
+          </li>
+        </ul>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// ❌ 读写交替 → 每次读都触发 reflow（layout thrashing）
+for (const el of items) {
+  el.style.width = (el.offsetWidth + 10) + "px";
+  //                ↑ 读 → 强制 reflow
+  // 写入又 invalidate 布局 → 下一次读又 reflow
+}
+
+// ✓ 读写分离（所有读在前，所有写在后）
+const widths = items.map(el =&gt; el.offsetWidth);
+items.forEach((el, i) =&gt; el.style.width = (widths[i] + 10) + "px");</code></pre>
+        </div>
+
+        <h3 id="document-fragment">DocumentFragment：一次 reflow</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const frag = document.createDocumentFragment();
+for (const item of list) {
+  const li = document.createElement("li");
+  li.textContent = item;
+  frag.append(li);                    // 不触发 reflow（不在 document 里）
+}
+ul.append(frag);                      // ← 唯一一次 reflow
+
+// fragment 被 append 后自己变空（子节点全被搬走）
+// 可复用同一 fragment 做下一批插入</code></pre>
+        </div>
+
+        <h3 id="template">&lt;template&gt; 元素</h3>
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-js">&lt;template id=&quot;card&quot;&gt;
+  &lt;article class=&quot;card&quot;&gt;
+    &lt;h3&gt;&lt;/h3&gt;
+    &lt;p&gt;&lt;/p&gt;
+  &lt;/article&gt;
+&lt;/template&gt;
+
+&lt;script&gt;
+const tpl = document.getElementById(&quot;card&quot;);
+for (const data of items) {
+  const clone = tpl.content.cloneNode(true);   // ← deep clone
+  clone.querySelector(&quot;h3&quot;).textContent = data.title;
+  clone.querySelector(&quot;p&quot;).textContent = data.body;
+  container.append(clone);
+}
+&lt;/script&gt;
+
+// &lt;template&gt; 的 content 是 DocumentFragment
+// 浏览器解析时<strong>不渲染 template 内部</strong>（不执行 script / 下载 img）
+// 比 innerHTML 性能好（预解析一次，克隆多次）
+// 比 createElement 链好（模板在 HTML 里，结构清晰）</code></pre>
+        </div>
+
+        <h3 id="move-vs-clone">插入已存在的节点 vs 克隆</h3>
+        <p>
+          把一个已在 DOM 里的节点 <code>append</code> 到别处，它<strong>自动从原位置移除</strong>（不是复制）。想复制用
+          <code>cloneNode(true)</code>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const a = document.getElementById("a");
+other.append(a);                       // a 从原位置<strong>移动</strong>到 other
+
+const b = a.cloneNode(true);           // deep clone（含子树）
+other.append(b);                       // a 和 b 共存
+
+// 只克隆外壳
+const shell = a.cloneNode(false);
+
+// ⚠ cloneNode 不复制事件监听器（需要重新 bind）</code></pre>
+        </div>
+
+        <h3 id="dom-parser">DOMParser</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 完整解析 HTML 字符串（带 head/body）
+const parser = new DOMParser();
+const doc = parser.parseFromString(htmlString, "text/html");
+doc.body.firstElementChild;            // 拿到解析的 DOM
+
+// vs innerHTML：DOMParser 产出独立的 document（脚本不执行、图片不加载）
+// 适合解析用户提交的 HTML 做结构分析 / 清洗</code></pre>
+        </div>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">清空并重新填充列表</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 老代码
+ul.innerHTML = "";                     // 清空（会被 XSS 风险警告影响）
+for (const item of list) ul.append(createLi(item));
+
+// 现代
+ul.replaceChildren(...list.map(createLi));
+// replaceChildren 一次调用同时清空+替换
+// 没有 XSS 风险（不涉及字符串解析）</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">交换两个节点的位置</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 现代 API
+a.replaceWith(b);
+b.before(a);
+// 或用 moveBefore（新 API，保留状态如 media / iframe）
+
+// 交换时不丢内部状态（iframe 的 contentDocument 等）很重要
+// React/Vue 的 keyed list 重排依赖这个特性</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">批量渲染用 template</h3>
+          <div class="code-block">
+            <span class="code-label">html</span>
+            <pre class="code"><code class="lang-js">&lt;template id=&quot;row&quot;&gt;
+  &lt;tr&gt;&lt;td class=&quot;name&quot;&gt;&lt;/td&gt;&lt;td class=&quot;score&quot;&gt;&lt;/td&gt;&lt;/tr&gt;
+&lt;/template&gt;
+
+&lt;script&gt;
+const tpl = document.getElementById(&quot;row&quot;);
+const frag = document.createDocumentFragment();
+for (const user of users) {
+  const tr = tpl.content.cloneNode(true);
+  tr.querySelector(&quot;.name&quot;).textContent = user.name;
+  tr.querySelector(&quot;.score&quot;).textContent = user.score;
+  frag.append(tr);
+}
+tbody.replaceChildren(frag);
+&lt;/script&gt;
+
+&lt;!-- 10000 行性能：
+&lt;!-- - innerHTML 拼字符串：最快但有 XSS
+&lt;!-- - template + fragment：稍慢但安全且可读
+&lt;!-- - createElement 链：最慢 --&gt;</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">虚拟滚动只渲染可视区</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 大列表（10 万+ 行）不可能全量渲染
+// 只渲染可视区 + 几行 buffer，滚动时替换
+function render(startIndex, count) {
+  const frag = document.createDocumentFragment();
+  for (let i = startIndex; i &lt; startIndex + count; i++) {
+    frag.append(createRow(data[i]));
+  }
+  container.replaceChildren(frag);
+  container.style.paddingTop = startIndex * rowHeight + "px";
+}
+
+// IntersectionObserver 或 scroll + requestAnimationFrame 驱动
+// React/Vue 生态有 react-virtual / vue-virtual-scroller</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">安全的富文本渲染</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 用户发布的富文本（支持 b / i / a / ul 等）
+import DOMPurify from "dompurify";
+const config = {
+  ALLOWED_TAGS: ["b", "i", "a", "ul", "ol", "li", "p", "br"],
+  ALLOWED_ATTR: ["href", "target"],
+  // 强制加 rel=noopener
+  ADD_ATTR: ["target"],
+};
+const clean = DOMPurify.sanitize(userInput, config);
+el.innerHTML = clean;
+
+// 原生 Sanitizer API（Chrome 119+ / Safari/Firefox 尚未）
+// el.setHTML(userInput, { sanitizer: new Sanitizer(config) });</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-h-helper">h() helper 函数</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 类似 React.createElement 的 DOM 版
+function h(tag, props = {}, ...children) {
+  const el = document.createElement(tag);
+  for (const [key, val] of Object.entries(props)) {
+    if (key === "style" &amp;&amp; typeof val === "object") {
+      Object.assign(el.style, val);
+    } else if (key.startsWith("on") &amp;&amp; typeof val === "function") {
+      el.addEventListener(key.slice(2).toLowerCase(), val);
+    } else if (key === "class" || key === "className") {
+      el.className = val;
+    } else {
+      el.setAttribute(key, val);
+    }
+  }
+  for (const child of children.flat()) {
+    if (child == null || child === false) continue;
+    el.append(typeof child === "string" || typeof child === "number"
+      ? String(child) : child);
+  }
+  return el;
+}
+
+// 用法
+const card = h("article", { class: "card", onClick: handleClick },
+  h("h3", {}, user.name),
+  h("p", {}, user.bio),
+);</code></pre>
+        </div>
+
+        <h3 id="ex-safe-html">安全 HTML 工具函数</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 标签模板 + 自动转义
+const escape = (s) =&gt; String(s)
+  .replace(/&amp;/g, "&amp;amp;")
+  .replace(/&lt;/g, "&amp;lt;")
+  .replace(/&gt;/g, "&amp;gt;")
+  .replace(/"/g, "&amp;quot;")
+  .replace(/'/g, "&amp;#39;");
+
+function html(strings, ...values) {
+  return strings.reduce((s, lit, i) =&gt; s + lit + (i &lt; values.length ? escape(values[i]) : ""), "");
+}
+
+// 用法
+el.innerHTML = html`&lt;h1&gt;Hello ${userName}&lt;/h1&gt;`;
+// userName 自动转义；字面量部分原样保留</code></pre>
+        </div>
+
+        <h3 id="ex-batch">批量 DOM 操作</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 一次 rAF 内合并所有 DOM 修改
+let pending = false;
+let ops = [];
+
+function schedule(op) {
+  ops.push(op);
+  if (!pending) {
+    pending = true;
+    requestAnimationFrame(() =&gt; {
+      const frag = document.createDocumentFragment();
+      for (const op of ops) op(frag);
+      target.append(frag);
+      ops = [];
+      pending = false;
+    });
+  }
+}
+
+// 使用
+items.forEach(item =&gt; schedule(frag =&gt; frag.append(createLi(item))));
+// 无论调多少次，都只在下一帧做一次 append</code></pre>
+        </div>
+
+        <h3 id="ex-diff">简易 diff + patch</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 简化版 keyed reconciliation
+function patchList(container, newData, keyFn, createEl) {
+  const oldMap = new Map(
+    [...container.children].map(el =&gt; [el.dataset.key, el])
+  );
+  const frag = document.createDocumentFragment();
+  for (const data of newData) {
+    const key = keyFn(data);
+    let el = oldMap.get(key);
+    if (el) {
+      oldMap.delete(key);          // 存在则移到 fragment（自动移动）
+    } else {
+      el = createEl(data);
+      el.dataset.key = key;
+    }
+    frag.append(el);
+  }
+  oldMap.forEach(el =&gt; el.remove());  // 剩下的是要删的
+  container.append(frag);
+}</code></pre>
+        </div>
+
+        <!-- 05 陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">innerHTML 丢失事件监听器</div>
+          <p>
+            <code>el.innerHTML += "..."</code> = 读出字符串、拼接、重新解析子树 →
+            原有子节点上的事件监听器全部丢失（因为节点被替换了）。用 insertAdjacentHTML 或 append 创建新节点方式。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>append</code> vs <code>appendChild</code></div>
+          <p>
+            <code>append</code>：可传多个 / 接收字符串 / 返回 undefined。<code>appendChild</code>：只一个 Node / 返回
+            appended 节点 / 不接受字符串。新代码用 append。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">节点被<strong>移动</strong>而非<strong>复制</strong></div>
+          <p>
+            <code>other.append(existingNode)</code> 把 existingNode 从原位置搬到 other。想保留原位置必须
+            <code>cloneNode(true)</code> 先克隆。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">cloneNode 不克隆事件监听器</div>
+          <p>
+            addEventListener 挂的 listener 克隆时丢失。<code>onclick=</code> 内联属性会被克隆。工程建议用事件委托（04
+            章）避免这个问题。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">读写交替触发 layout thrashing</div>
+          <p>循环里读 <code>offsetHeight</code> 再写 style 会让浏览器反复 reflow。分两阶段或用 rAF 合并。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">innerHTML 不执行 script 但执行事件</div>
+          <p>
+            <code>&lt;script&gt;</code> 标签被解析成元素但 script 不执行（规范）。<strong>但</strong>
+            <code>&lt;img src=x onerror=alert()&gt;</code> 的 onerror 会执行。不要认为"没 script 就安全"。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">仅转义 HTML 不够防 XSS</div>
+          <p>
+            转义 <code>&lt; &gt; &amp; " '</code> 能防大部分，但 <code>javascript:</code> URL、<code>on*</code>
+            属性、CSS url() 等都是注入面。用 DOMPurify 或 Trusted Types（P4-07）覆盖全面。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">
+            <code>&lt;template&gt;.innerHTML</code> 和 <code>.content.innerHTML</code> 不同
+          </div>
+          <p>
+            <code>template.innerHTML</code> 返回模板<strong>标签的 HTML 字符串</strong>（相当于里面的内容）；<code
+              >template.content.innerHTML</code
+            >
+            则是 DocumentFragment 的内容。克隆要用 <code>.content.cloneNode(true)</code>，不是 .cloneNode。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a
+              href="https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html"
+              target="_blank"
+              rel="noopener"
+              >HTML · Dynamic markup insertion</a
+            >
+          </li>
+          <li><a href="https://github.com/cure53/DOMPurify" target="_blank" rel="noopener">DOMPurify</a></li>
+          <li>
+            <a href="https://developer.mozilla.org/en-US/docs/Web/API/HTML_Sanitizer_API" target="_blank" rel="noopener"
+              >MDN · HTML Sanitizer API</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://web.dev/articles/avoid-large-complex-layouts-and-layout-thrashing/"
+              target="_blank"
+              rel="noopener"
+              >web.dev · Avoid layout thrashing</a
+            >
+          </li>
+          <li><strong>下一步</strong> → <a href="04-event-propagation.html">04 · 事件传播三阶段</a>。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="02-dom-query.html"
+            ><span class="label">← 上一章</span><span class="title">02 · DOM 查询与遍历</span></a
+          >
+          <a class="next" href="04-event-propagation.html"
+            ><span class="label">下一章 →</span><span class="title">04 · 事件传播三阶段</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

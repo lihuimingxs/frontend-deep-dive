@@ -1,0 +1,545 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ArrayBuffer / TypedArray / DataView · P7 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="二进制基础：ArrayBuffer 只是 raw bytes 容器、8 种 TypedArray 的视图语义、DataView 处理字节序（endianness）、SharedArrayBuffer + Atomics 多线程共享、structured clone 与 Transferable、与 WASM memory 互操作。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P7 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · 高级专题</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-binary.html">01 · ArrayBuffer / TypedArray</a></li>
+          <li><a href="02-blob-file.html">02 · Blob / File / FormData</a></li>
+          <li><a href="03-streams.html">03 · Streams API</a></li>
+          <li><a href="04-canvas.html">04 · Canvas / OffscreenCanvas</a></li>
+          <li><a href="05-animation.html">05 · Animation & RAF</a></li>
+          <li><a href="06-web-components.html">06 · Web Components</a></li>
+          <li><a href="07-regex.html">07 · 正则表达式引擎</a></li>
+          <li><a href="08-intl.html">08 · Intl 国际化</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-fundamentals/index.html">P1 · 语言基础</a></li>
+          <li><a href="../02-advanced/index.html">P2 · 高阶语言</a></li>
+          <li><a href="../03-async/index.html">P3 · 异步 & 错误处理</a></li>
+          <li><a href="../04-modules/index.html">P4 · 模块 & 元编程</a></li>
+          <li><a href="../05-dom/index.html">P5 · DOM & 事件</a></li>
+          <li><a href="../06-network/index.html">P6 · 网络 & 存储</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · 高级专题</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>ArrayBuffer / TypedArray</span>
+        </nav>
+
+        <h1>ArrayBuffer / TypedArray / DataView</h1>
+        <p class="lead">
+          <strong>ArrayBuffer</strong> 是 JS 中唯一的"原始字节"容器；<strong>TypedArray</strong>
+          是按固定宽度解读它的视图；<strong>DataView</strong>
+          是按任意偏移/字节序解读它的万用视图。这三者构成所有二进制处理（WebGL、音频、WebSocket
+          二进制消息、WASM、文件协议）的底层。本章讲清它们的内存模型、字节序陷阱，以及与 Workers / WASM 的互操作。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> P4 Workers · P6 Fetch 流</span>
+          <span
+            ><strong>规范</strong>
+            <a href="https://tc39.es/ecma262/#sec-arraybuffer-objects" target="_blank" rel="noopener"
+              >ECMA-262 §25</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ul>
+          <li>
+            <strong>ArrayBuffer</strong> 只是字节数组，<em>不能直接读写</em>，必须通过 TypedArray 或 DataView 视图访问。
+          </li>
+          <li>
+            8 种 TypedArray（<code>Uint8Array</code> / <code>Int8Array</code> / <code>Uint16Array</code> /
+            <code>Int16Array</code> / <code>Uint32Array</code> / <code>Int32Array</code> / <code>Float32Array</code> /
+            <code>Float64Array</code>） + <code>Uint8ClampedArray</code>（Canvas 用）+ <code>BigInt64Array</code> /
+            <code>BigUint64Array</code>。
+          </li>
+          <li>
+            TypedArray 用<strong>平台字节序</strong>（几乎所有平台是 little-endian）；跨设备传输用
+            <strong>DataView + 显式 endian</strong>。
+          </li>
+          <li>
+            多视图共享同一个 ArrayBuffer 时写入<strong>互相可见</strong>（同一块内存）；<code>buffer.slice()</code>
+            复制。
+          </li>
+          <li>
+            <strong>SharedArrayBuffer</strong> 可跨 Worker 共享，配合 <code>Atomics</code> 做无锁同步；需
+            <code>Cross-Origin-Isolated</code> 响应头启用。
+          </li>
+          <li>
+            Transferable：<code>worker.postMessage(buffer, [buffer])</code> 转移所有权，原线程
+            <code>byteLength === 0</code>；不转移则 structured clone 复制。
+          </li>
+        </ul>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+        <h3>内存模型</h3>
+        <pre><code class="language-javascript">// 分配 16 字节的原始内存（初始全 0）
+const buf = new ArrayBuffer(16);
+buf.byteLength; // 16
+
+// 直接访问字节：不行，没有索引器
+buf[0]; // undefined
+buf[0] = 1; // 无效
+
+// 必须通过视图
+const u8 = new Uint8Array(buf);        // 16 个 u8 元素
+const u32 = new Uint32Array(buf);      // 4 个 u32 元素（16/4）
+const f64 = new Float64Array(buf);     // 2 个 f64 元素（16/8）
+
+u32[0] = 0x01020304;
+console.log(u8[0], u8[1], u8[2], u8[3]);
+// → 4, 3, 2, 1（little-endian：低位在前）
+// → 1, 2, 3, 4（big-endian，极少见）</code></pre>
+
+        <h3>TypedArray 的三种构造</h3>
+        <pre><code class="language-javascript">// 1. 新建 ArrayBuffer（byteLength = length * BYTES_PER_ELEMENT）
+const a = new Uint32Array(4);          // 16 字节，全 0
+
+// 2. 包裹已有 buffer（视图，不复制）
+const b = new Uint32Array(buf, 4, 2);  // 从 buf 的偏移 4 开始，2 个 u32 = 8 字节
+
+// 3. 从可迭代构造（复制）
+const c = new Uint8Array([1, 2, 3]);   // 新 buffer，值 [1,2,3]
+const d = new Uint8Array(a);            // 从 a 复制值（类型转换+复制）
+
+// 关键 API
+a.set([1, 2, 3], 0);                   // 批量写入
+a.subarray(1, 3);                      // 视图切片（不复制 buffer）
+a.slice(1, 3);                         // 复制切片（新 buffer）
+a.fill(0xff);
+a.copyWithin(0, 2);                    // 类数组方法
+Uint8Array.from("abc", c =&gt; c.charCodeAt(0)); // [97, 98, 99]</code></pre>
+
+        <h3>Uint8ClampedArray vs Uint8Array</h3>
+        <pre><code class="language-javascript">const a = new Uint8Array(1);
+a[0] = 300;   // → 44（300 % 256）
+a[0] = -10;   // → 246（两补码环绕）
+
+const b = new Uint8ClampedArray(1);
+b[0] = 300;   // → 255（截断到 [0,255]）
+b[0] = -10;   // → 0
+b[0] = 1.7;   // → 2（四舍五入，而非 Uint8Array 的 truncate）</code></pre>
+        <p>
+          <code>Uint8ClampedArray</code> 专为 Canvas 的
+          <code>ImageData.data</code> 设计，颜色分量不能溢出。其他场景用普通 <code>Uint8Array</code>。
+        </p>
+
+        <h3>DataView：显式字节序</h3>
+        <pre><code class="language-javascript">const buf = new ArrayBuffer(8);
+const view = new DataView(buf);
+
+// setUint32(offset, value, littleEndian?)
+view.setUint32(0, 0x01020304, false); // big-endian（网络序）
+view.setUint32(4, 0x01020304, true);  // little-endian
+
+new Uint8Array(buf); // [1,2,3,4,  4,3,2,1]
+
+// 任意偏移（不要求对齐）
+view.getFloat32(1, true); // OK；TypedArray 要求按元素宽度对齐
+view.getBigInt64(0, false);
+view.getFloat16?.(0, true); // ES2024 (Chrome 123+)</code></pre>
+
+        <h3>字节序陷阱</h3>
+        <pre><code class="language-javascript">// ❌ 用 TypedArray 跨设备传输
+const sendBuf = new ArrayBuffer(4);
+new Uint32Array(sendBuf)[0] = 0x01020304;
+// 在 Intel（little-endian）机器上，字节序列是 [4,3,2,1]
+// 接收端如果是 ARM big-endian（极少）→ 读成 0x04030201
+
+// ✅ 用 DataView 固定字节序
+const view = new DataView(sendBuf);
+view.setUint32(0, 0x01020304, false); // 强制 big-endian（网络序）
+// 接收端统一 view.getUint32(0, false)</code></pre>
+
+        <h3>SharedArrayBuffer + Atomics</h3>
+        <pre><code class="language-javascript">// 启用前提：响应头
+// Cross-Origin-Opener-Policy: same-origin
+// Cross-Origin-Embedder-Policy: require-corp
+// 否则 new SharedArrayBuffer(n) 抛 SecurityError
+
+// 主线程
+const sab = new SharedArrayBuffer(16);
+const sharedView = new Int32Array(sab);
+const worker = new Worker("worker.js");
+worker.postMessage({ sab }); // SharedArrayBuffer 不需要转移，自动共享
+
+// worker.js
+self.addEventListener("message", ({ data: { sab } }) =&gt; {
+  const view = new Int32Array(sab);
+  // 无锁原子操作
+  Atomics.add(view, 0, 1);                  // view[0] += 1（原子）
+  const old = Atomics.exchange(view, 1, 42); // CAS
+  Atomics.wait(view, 0, 0);                 // 阻塞直到 view[0] !== 0（仅 Worker 允许）
+  Atomics.notify(view, 0, 1);               // 唤醒 1 个等待者
+});</code></pre>
+        <p>
+          <strong>为什么需要 Atomics</strong>：多线程同时写 <code>view[0] += 1</code> 在 CPU 层面是 load→add→store
+          三步，两个线程交错会丢更新。<code>Atomics.add</code> 使用处理器的 LOCK 前缀保证原子性。<code
+            >Atomics.wait/notify</code
+          >
+          用来建 mutex/semaphore。
+        </p>
+
+        <h3>Transferable：零拷贝转移</h3>
+        <pre><code class="language-javascript">const buf = new ArrayBuffer(1_000_000);
+new Uint8Array(buf)[0] = 42;
+
+// 默认：structured clone 复制（数 MB 要几 ms）
+worker.postMessage(buf);
+buf.byteLength; // 1000000（仍可用）
+
+// Transferable：转移所有权（O(1)，无复制）
+worker.postMessage(buf, [buf]);
+buf.byteLength; // 0（detached，不可再读写）
+new Uint8Array(buf)[0]; // TypeError: detached</code></pre>
+        <p>
+          Transferable
+          对象：<code>ArrayBuffer</code>、<code>MessagePort</code>、<code>ReadableStream</code>、<code>OffscreenCanvas</code>、<code>ImageBitmap</code>、<code>AudioData</code>、<code>VideoFrame</code>。对需要高频大数据交互的
+          Worker 通信，一定用 Transferable。
+        </p>
+
+        <h3>Resizable / Growable ArrayBuffer（ES2024）</h3>
+        <pre><code class="language-javascript">// 新建可调整大小的 buffer
+const rab = new ArrayBuffer(8, { maxByteLength: 1024 });
+rab.resizable;  // true
+rab.maxByteLength; // 1024
+rab.resize(256);
+rab.resize(0);   // 允许缩到 0
+
+// Shared 版
+const sab = new SharedArrayBuffer(8, { maxByteLength: 1024 });
+sab.grow(256); // 只能增长</code></pre>
+
+        <h3>与 WASM memory 互操作</h3>
+        <pre><code class="language-javascript">// WASM 的线性内存就是一个 ArrayBuffer
+const { instance } = await WebAssembly.instantiateStreaming(fetch("a.wasm"));
+const memory = instance.exports.memory; // WebAssembly.Memory
+const buffer = memory.buffer;            // ArrayBuffer
+
+// JS 侧读写 WASM 堆
+const view = new Uint8Array(buffer);
+view[0] = 42;
+instance.exports.process(0, 1);          // WASM 看到 view[0] === 42
+
+// ⚠ memory.grow() 会创建新 buffer，旧视图 detach
+memory.grow(1);
+view.byteLength; // 0，需要重新 new Uint8Array(memory.buffer)</code></pre>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <h3>二进制协议解析（WebSocket 二进制帧）</h3>
+        <pre><code class="language-typescript">// 协议：[1 字节 type][4 字节 length BE][N 字节 payload]
+interface Frame { type: number; payload: Uint8Array; }
+
+function parseFrame(buf: ArrayBuffer): Frame {
+  const view = new DataView(buf);
+  const type = view.getUint8(0);
+  const length = view.getUint32(1, false); // big-endian
+  if (5 + length &gt; buf.byteLength) throw new Error("incomplete");
+  const payload = new Uint8Array(buf, 5, length);
+  return { type, payload };
+}
+
+function encodeFrame(type: number, payload: Uint8Array): ArrayBuffer {
+  const buf = new ArrayBuffer(5 + payload.length);
+  const view = new DataView(buf);
+  view.setUint8(0, type);
+  view.setUint32(1, payload.length, false);
+  new Uint8Array(buf, 5).set(payload);
+  return buf;
+}
+
+// 配合 WebSocket
+ws.binaryType = "arraybuffer";
+ws.onmessage = (e) =&gt; handle(parseFrame(e.data));
+ws.send(encodeFrame(0x01, new TextEncoder().encode("hello")));</code></pre>
+
+        <h3>图像像素处理</h3>
+        <pre><code class="language-javascript">const canvas = document.querySelector("canvas");
+const ctx = canvas.getContext("2d");
+const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+// img.data 是 Uint8ClampedArray：[R, G, B, A, R, G, B, A, ...]
+
+for (let i = 0; i &lt; img.data.length; i += 4) {
+  // 灰度化：gray = 0.3*R + 0.59*G + 0.11*B
+  const gray = 0.3 * img.data[i] + 0.59 * img.data[i + 1] + 0.11 * img.data[i + 2];
+  img.data[i] = img.data[i + 1] = img.data[i + 2] = gray;
+}
+ctx.putImageData(img, 0, 0);
+
+// 大图片 → OffscreenCanvas + Worker（详见 P7-04）
+const offscreen = canvas.transferControlToOffscreen();
+worker.postMessage({ canvas: offscreen }, [offscreen]);</code></pre>
+
+        <h3>TextEncoder / TextDecoder（字符串 ↔ 字节）</h3>
+        <pre><code class="language-javascript">const enc = new TextEncoder(); // 始终 UTF-8
+const dec = new TextDecoder("utf-8"); // 可指定其他编码
+
+const bytes = enc.encode("hello 你好"); // Uint8Array(12)
+dec.decode(bytes); // "hello 你好"
+
+// 流式解码（不切断多字节字符）
+const chunk1 = new Uint8Array([0xe4, 0xbd]); // "你" 的前 2 字节
+const chunk2 = new Uint8Array([0xa0]);        // "你" 的第 3 字节
+dec.decode(chunk1, { stream: true }); // ""（保留未完整字节）
+dec.decode(chunk2, { stream: true }); // "你"
+
+// 非 UTF-8（legacy）
+new TextDecoder("gbk").decode(gbkBytes); // Chrome / Firefox 支持常见编码</code></pre>
+
+        <h3>CRC32 / 哈希计算</h3>
+        <pre><code class="language-javascript">// SubtleCrypto（Web Crypto API）
+const data = new TextEncoder().encode("hello");
+const hash = await crypto.subtle.digest("SHA-256", data);
+// hash 是 ArrayBuffer，32 字节
+const hex = Array.from(new Uint8Array(hash))
+  .map(b =&gt; b.toString(16).padStart(2, "0"))
+  .join("");
+// 注意：subtle.digest 不支持 MD5（弱），不支持 CRC32（非加密）
+
+// CRC32 自己实现（适合校验而非安全）
+function crc32(u8) {
+  let crc = 0xffffffff;
+  for (const byte of u8) {
+    crc ^= byte;
+    for (let i = 0; i &lt; 8; i++) crc = crc &gt;&gt;&gt; 1 ^ (crc &amp; 1 ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) &gt;&gt;&gt; 0;
+}</code></pre>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <h3>环形缓冲（音频流场景）</h3>
+        <pre><code class="language-typescript">class RingBuffer {
+  private readonly data: Float32Array;
+  private writeIdx = 0;
+  private readIdx = 0;
+
+  constructor(private readonly capacity: number) {
+    this.data = new Float32Array(capacity);
+  }
+
+  write(chunk: Float32Array) {
+    for (const v of chunk) {
+      this.data[this.writeIdx] = v;
+      this.writeIdx = (this.writeIdx + 1) % this.capacity;
+    }
+  }
+
+  read(count: number): Float32Array {
+    const out = new Float32Array(count);
+    for (let i = 0; i &lt; count; i++) {
+      out[i] = this.data[this.readIdx];
+      this.readIdx = (this.readIdx + 1) % this.capacity;
+    }
+    return out;
+  }
+}</code></pre>
+
+        <h3>Worker 间的零拷贝 pipeline</h3>
+        <pre><code class="language-typescript">// 主线程 → Worker A → Worker B → 主线程
+// 用 Transferable 避免每步都复制
+
+async function pipeline(input: ArrayBuffer) {
+  const a = new Worker("a.js");
+  const b = new Worker("b.js");
+
+  return new Promise&lt;ArrayBuffer&gt;((resolve) =&gt; {
+    a.postMessage({ buf: input }, [input]);
+    a.onmessage = (e) =&gt; {
+      b.postMessage({ buf: e.data.buf }, [e.data.buf]);
+    };
+    b.onmessage = (e) =&gt; {
+      resolve(e.data.buf);
+      a.terminate();
+      b.terminate();
+    };
+  });
+}</code></pre>
+
+        <h3>Atomics Spinlock（仅示例，生产用 MutexSync）</h3>
+        <pre><code class="language-javascript">// 共享 Int32Array[0] 作为锁：0 = 空闲，1 = 占用
+function lock(mu) {
+  while (Atomics.compareExchange(mu, 0, 0, 1) !== 0) {
+    // 已被占用，自旋等待（浪费 CPU）
+    // 实际用 Atomics.wait（仅 Worker）
+  }
+}
+function unlock(mu) { Atomics.store(mu, 0, 0); Atomics.notify(mu, 0, 1); }
+
+// Worker 中的阻塞等待
+function lockBlocking(mu) {
+  while (true) {
+    if (Atomics.compareExchange(mu, 0, 0, 1) === 0) return;
+    Atomics.wait(mu, 0, 1); // 睡眠直到被唤醒
+  }
+}</code></pre>
+
+        <!-- 05 常见陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="callout callout-warn">
+          <strong>陷阱 1：TypedArray 索引赋值会静默类型转换</strong>
+          <p>
+            <code>new Uint8Array(1)[0] = 300</code> 不报错，存成 44。Float 存整数也会转
+            double。校验输入范围靠自己；从不可信源读数据先过 <code>Uint8ClampedArray</code> 或手动校验。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 2：字节序假设</strong>
+          <p>
+            代码在 MacBook（x86/ARM，都 little-endian）测试没问题，部署到某些服务端 CPU 或移动设备时...
+            其实现代所有主流平台都是 LE，但跨网络传输必须约定 endian。永远用 DataView + 显式 endian 参数编解码协议。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 3：subarray vs slice 语义差异</strong>
+          <p>
+            <code>arr.subarray(0, 100)</code> 返回指向同 buffer 的视图（零拷贝）；<code>arr.slice(0, 100)</code>
+            返回<strong>复制</strong>到新 buffer 的视图。改 subarray 会影响原数组，改 slice 不会。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 4：转移后 buffer detach</strong>
+          <p>
+            <code>postMessage(buf, [buf])</code> 后 <code>buf.byteLength === 0</code>。基于该 buffer 的所有 TypedArray
+            视图也同时 detach，访问抛 TypeError。转移前想保留数据要 <code>buf.slice()</code>。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 5：SharedArrayBuffer 需要 COOP/COEP</strong>
+          <p>
+            2020 年后（Spectre 缓解），SharedArrayBuffer 只在跨源隔离的上下文可用。生产环境必须响应头：<code
+              >Cross-Origin-Opener-Policy: same-origin</code
+            >
+            + <code>Cross-Origin-Embedder-Policy: require-corp</code>。本地 dev 也要配，否则
+            <code>new SharedArrayBuffer()</code> 抛。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 6：Atomics.wait 只能在 Worker</strong>
+          <p>
+            主线程调 <code>Atomics.wait</code> 抛 TypeError（会阻塞 UI）。用 <code>Atomics.waitAsync</code>（返回
+            Promise）或把逻辑搬到 Worker。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 7：JSON.stringify(new Uint8Array(...))</strong>
+          <p>
+            输出是 <code>{"0":1,"1":2,"2":3}</code> 格式（当成对象序列化），不是 <code>[1,2,3]</code>。序列化二进制用
+            base64 或 Array.from 转普通数组。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 8：WASM memory.grow 后旧视图失效</strong>
+          <p>
+            WASM 调用 <code>memory.grow()</code> 分配新内存后，旧的 <code>new Uint8Array(memory.buffer)</code> 全部
+            detach。每次写入前重新拿 <code>memory.buffer</code>，或用 glue 代码封装（<code>wasm-bindgen</code>
+            自动处理）。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 9：BigInt64Array 不能直接和 Number 混用</strong>
+          <p>
+            <code>bigArr[0] + 1</code> 抛 TypeError。必须 <code>bigArr[0] + 1n</code>。BigInt 无法隐式转
+            Number，处理时间戳（&gt; 2^53 毫秒）要一路 BigInt 到底。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 10：对齐要求</strong>
+          <p>
+            TypedArray 要求起始偏移按元素宽度对齐：<code>new Uint32Array(buf, 1)</code> 抛（偏移 1 不是 4
+            的倍数）。DataView 无对齐要求，但读取跨页的未对齐数据在某些 CPU 上稍慢。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-arraybuffer-objects" target="_blank" rel="noopener"
+              >ECMA-262 §25 · Structured Data</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/TypedArray"
+              target="_blank"
+              rel="noopener"
+              >MDN · TypedArray</a
+            >
+          </li>
+          <li>
+            <a href="https://v8.dev/features/shared-memory" target="_blank" rel="noopener"
+              >V8 · Shared memory and atomics</a
+            >
+          </li>
+          <li>
+            <a href="https://developer.chrome.com/blog/enabling-shared-array-buffer/" target="_blank" rel="noopener"
+              >Chrome · Enabling SharedArrayBuffer</a
+            >
+          </li>
+          <li><strong>下一步</strong> → <a href="02-blob-file.html">02 · Blob / File / FormData</a>。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../06-network/08-service-worker.html"
+            ><span class="label">← 上一阶段</span><span class="title">P6 · 08 Service Worker</span></a
+          >
+          <a class="next" href="02-blob-file.html"
+            ><span class="label">下一章 →</span><span class="title">02 · Blob / File / FormData</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

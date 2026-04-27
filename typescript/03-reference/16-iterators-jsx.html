@@ -1,0 +1,805 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>16 · Iterators / JSX · Part 3 · TypeScript 深度学习</title>
+    <meta
+      name="description"
+      content="两个独立小专题：迭代协议（Iterable / Iterator / Generator / async iterator）+ JSX（jsx 5 种模式、jsxImportSource、JSX.IntrinsicElements augmentation、.tsx 中尖括号断言冲突）。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%233178c6'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETS%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>TypeScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.62 0.13 245); color: #fff">TS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">TS 首页</a>
+          <a href="index.html">Part 3 目录</a>
+          <a href="https://www.typescriptlang.org/docs/handbook/iterators-and-generators.html" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Part 3 · Reference</h3>
+        <ul>
+          <li><a href="index.html">Part 概览</a></li>
+          <li><a href="13-modules.html">13 · Modules</a></li>
+          <li><a href="14-decorators.html">14 · Decorators</a></li>
+          <li><a href="15-merging-mixins.html">15 · Declaration Merging / Mixins / Symbols</a></li>
+          <li><a href="16-iterators-jsx.html">16 · Iterators / JSX</a></li>
+          <li><a href="17-type-compatibility.html">17 · Type Compatibility & Inference</a></li>
+        </ul>
+        <h3>其他 Part</h3>
+        <ul>
+          <li><a href="../01-handbook-basics/index.html">Part 1 · Handbook 基础</a></li>
+          <li><a href="../02-type-manipulation/index.html">Part 2 · 类型操作</a></li>
+          <li><a href="../04-project/index.html">Part 4 · 工程化</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TypeScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Part 3 · Reference</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>16 · Iterators / JSX</span>
+        </nav>
+
+        <h1>16 · Iterators / JSX</h1>
+        <p class="lead">
+          两个独立小专题。<strong>Iterators</strong> 部分讲 ES 迭代协议（<code>Iterable&lt;T&gt;</code> / <code>Iterator&lt;T&gt;</code>）、Generator、async iterator 在 TS 中的类型化，以及 <code>downlevelIteration</code> 配置坑。<strong>JSX</strong> 部分讲 5 种 jsx 模式（preserve / react / react-jsx / react-native / react-jsxdev）、<code>jsxImportSource</code> 自定义 runtime、JSX.IntrinsicElements augmentation、以及 <code>.tsx</code> 中尖括号断言与 JSX 标签的冲突。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong>
+            <a href="../01-handbook-basics/06-classes.html">06 Classes</a></span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>Iterators 部分核心：</p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// Iterable&lt;T&gt; 是有 [Symbol.iterator]() 方法的对象
+// Iterator&lt;T&gt; 是有 next() / return?() / throw?() 方法的对象
+
+// 自定义可迭代对象
+class Range implements Iterable&lt;number&gt; {
+  constructor(public start: number, public end: number) {}
+  *[Symbol.iterator]() {
+    for (let i = this.start; i &lt;= this.end; i++) yield i;
+  }
+}
+
+for (const n of new Range(1, 3)) console.log(n);   // 1, 2, 3</code></pre>
+        </div>
+        <p>JSX 部分核心：</p>
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// .tsx 文件支持 JSX 语法
+function Hello({ name }: { name: string }) {
+  return &lt;div&gt;Hello {name}&lt;/div&gt;;
+}
+
+// JSX 编译为 React.createElement 或 _jsx 调用
+// 由 tsconfig 的 jsx 选项决定</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>1. ES 迭代协议：Iterable + Iterator 双协议</h3>
+        <p>
+          ES 把"可迭代"拆成两个协议：
+        </p>
+        <ul>
+          <li><strong>Iterable&lt;T&gt;</strong>：有 <code>[Symbol.iterator](): Iterator&lt;T&gt;</code> 方法</li>
+          <li><strong>Iterator&lt;T&gt;</strong>：有 <code>next(): { value: T; done: boolean }</code> 方法</li>
+        </ul>
+        <div class="code-block">
+          <span class="code-label">typescript · lib.es2015.iterable.d.ts</span>
+          <pre class="code"><code class="lang-ts">interface IteratorYieldResult&lt;TYield&gt; { done?: false; value: TYield }
+interface IteratorReturnResult&lt;TReturn&gt; { done: true; value: TReturn }
+
+interface Iterator&lt;T, TReturn = any, TNext = undefined&gt; {
+  next(...args: [] | [TNext]): IteratorYieldResult&lt;T&gt; | IteratorReturnResult&lt;TReturn&gt;;
+  return?(value?: TReturn): IteratorYieldResult&lt;T&gt; | IteratorReturnResult&lt;TReturn&gt;;
+  throw?(e?: any): IteratorYieldResult&lt;T&gt; | IteratorReturnResult&lt;TReturn&gt;;
+}
+
+interface Iterable&lt;T, TReturn = any, TNext = undefined&gt; {
+  [Symbol.iterator](): Iterator&lt;T, TReturn, TNext&gt;;
+}
+
+// IterableIterator：自身既是 Iterable 又是 Iterator
+interface IterableIterator&lt;T&gt; extends Iterator&lt;T&gt; {
+  [Symbol.iterator](): IterableIterator&lt;T&gt;;
+}</code></pre>
+        </div>
+        <p>
+          内置可迭代类型：<code>Array</code> / <code>Map</code> / <code>Set</code> / <code>String</code> / <code>TypedArray</code> / <code>NodeList</code> / generator。<code>for...of</code>、扩展运算 <code>...arr</code>、解构 <code>const [a, b] = arr</code>、<code>Array.from()</code>、<code>Promise.all()</code> 等都依赖此协议。
+        </p>
+
+        <h3>2. Generator：自动满足两个协议</h3>
+        <p>
+          <code>function*</code> 生成器函数返回 <code>Generator&lt;T, TReturn, TNext&gt;</code>，自动同时满足 Iterable 和 Iterator：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">function* range(start: number, end: number): Generator&lt;number, void, unknown&gt; {
+  for (let i = start; i &lt;= end; i++) yield i;
+}
+
+const gen = range(1, 3);
+
+// 用作 Iterator
+gen.next();   // { value: 1, done: false }
+gen.next();   // { value: 2, done: false }
+gen.next();   // { value: 3, done: false }
+gen.next();   // { value: undefined, done: true }
+
+// 用作 Iterable
+for (const n of range(1, 3)) console.log(n);
+
+// Generator 类型三参数：
+// Generator&lt;TYield, TReturn, TNext&gt;
+//   TYield  — yield 表达式产生的类型
+//   TReturn — return 语句的值类型
+//   TNext   — next(x) 传入的参数类型
+function* g(): Generator&lt;number, string, boolean&gt; {
+  const flag: boolean = yield 1;   // 调用 .next(true) 时 flag 为 true
+  yield 2;
+  return "done";
+}</code></pre>
+        </div>
+
+        <h3>3. Async iterator / async generator：处理流</h3>
+        <p>
+          异步版本：<code>AsyncIterable&lt;T&gt;</code> / <code>AsyncIterator&lt;T&gt;</code>，<code>next()</code> 返回 <code>Promise&lt;{value, done}&gt;</code>。<code>async function*</code> 自动满足：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 处理 SSE 流
+async function* readSSE(url: string): AsyncGenerator&lt;string, void, unknown&gt; {
+  const response = await fetch(url);
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) return;
+    yield decoder.decode(value);
+  }
+}
+
+// 消费用 for await...of
+for await (const chunk of readSSE("/events")) {
+  console.log(chunk);
+}</code></pre>
+        </div>
+
+        <h3>4. <code>downlevelIteration</code>：target ES5 时的兼容性开关</h3>
+        <p>
+          target 降到 ES5 时，TS 默认假设运行环境<strong>没有 Symbol.iterator</strong>，所以 <code>for...of</code> 在数组上工作但在 Map / Set 上不行：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// tsconfig: { target: "ES5", downlevelIteration: false }
+const m = new Map();
+m.set("a", 1);
+
+for (const [k, v] of m) { /* ... */ }
+// ❌ Type 'Map' is not assignable to 'IterableIterator&lt;[any, any]&gt;'.
+// ⚠️ TS 不会替你 emit 对应的 polyfill 代码
+
+// 方案 A：开 downlevelIteration
+// tsconfig: { downlevelIteration: true }
+// → TS emit 完整的 Symbol.iterator 兼容代码
+
+// 方案 B：把 target 拉高到 ES2015+（推荐）
+// → 所有 ES2015 迭代特性原生支持，产物更小</code></pre>
+        </div>
+        <p>
+          实践：现代项目永远 <code>target: "ES2017"</code> 或更高（覆盖 95%+ 浏览器），不需要这个开关。仅旧 IE 项目才需要 downlevelIteration。
+        </p>
+
+        <h3>5. JSX：把 XML 字面量编译为函数调用</h3>
+        <p>
+          JSX <strong>不是 TS 特有</strong>，是 React 团队提的语法扩展。它把 <code>&lt;div /&gt;</code> 这样的 XML 字面量编译为函数调用。TS 通过 <code>.tsx</code> 扩展名 + <code>jsx</code> tsconfig 选项支持它。
+        </p>
+        <p>
+          <code>jsx</code> 选项的 5 种模式：
+        </p>
+        <table>
+          <thead>
+            <tr><th>模式</th><th>编译结果</th><th>用途</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>"preserve"</code></td>
+              <td>保持 JSX 不编译</td>
+              <td>babel / swc / Vite 后续处理</td>
+            </tr>
+            <tr>
+              <td><code>"react"</code></td>
+              <td><code>React.createElement(...)</code></td>
+              <td>旧 React（&lt; 17）</td>
+            </tr>
+            <tr>
+              <td><code>"react-jsx"</code></td>
+              <td><code>_jsx(...)</code> 自动 import</td>
+              <td>React 17+ 推荐</td>
+            </tr>
+            <tr>
+              <td><code>"react-jsxdev"</code></td>
+              <td><code>_jsxDEV(...)</code> 含位置信息</td>
+              <td>React 17+ dev 模式</td>
+            </tr>
+            <tr>
+              <td><code>"react-native"</code></td>
+              <td>类似 preserve（RN 自己处理）</td>
+              <td>React Native</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="code-block">
+          <span class="code-label">tsx · 源</span>
+          <pre class="code"><code class="lang-tsx">function Hello({ name }: { name: string }) {
+  return &lt;div className="greeting"&gt;Hello {name}&lt;/div&gt;;
+}</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">javascript · jsx: react（旧）</span>
+          <pre class="code"><code class="lang-js">import React from "react";   // 必须显式 import React
+function Hello({ name }) {
+  return React.createElement("div", { className: "greeting" }, "Hello ", name);
+}</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">javascript · jsx: react-jsx（新）</span>
+          <pre class="code"><code class="lang-js">import { jsx as _jsx } from "react/jsx-runtime";   // ← 编译器自动 import
+function Hello({ name }) {
+  return _jsx("div", { className: "greeting", children: ["Hello ", name] });
+}
+// 不再要求 import React！</code></pre>
+        </div>
+
+        <h3>6. <code>jsxImportSource</code>：自定义 JSX runtime</h3>
+        <p>
+          配合 <code>jsx: "react-jsx"</code>，可以指定从哪个包 import jsx-runtime。这让 emotion / theme-ui / preact 等库能"接管" JSX：
+        </p>
+        <div class="code-block">
+          <span class="code-label">json · tsconfig</span>
+          <pre class="code"><code class="lang-js">{
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "@emotion/react"
+    // 编译产物：import { jsx as _jsx } from "@emotion/react/jsx-runtime"
+  }
+}</code></pre>
+        </div>
+        <p>
+          在文件级别覆盖：
+        </p>
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">/** @jsxImportSource @emotion/react */
+
+function Hello() {
+  return &lt;div css={{ color: "red" }}&gt;Hi&lt;/div&gt;;   // emotion 的 css prop
+}</code></pre>
+        </div>
+
+        <h3>7. <code>JSX.IntrinsicElements</code> 与 augmentation</h3>
+        <p>
+          TS 通过 global namespace <code>JSX</code> 来定义 JSX 类型。<code>JSX.IntrinsicElements</code> 列出所有可用的"小写元素"（HTML 标签）。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript · 简化版（实际由 @types/react 提供）</span>
+          <pre class="code"><code class="lang-ts">declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      div: { className?: string; children?: ReactNode; ... };
+      a: { href?: string; ... };
+      // ... 100+ HTML 元素
+    }
+    interface Element { ... }       // JSX 表达式的返回类型
+    interface ElementAttributesProperty { props: {} }   // 决定从 prop 取
+    interface ElementChildrenAttribute { children: {} } // 决定 children prop 名
+  }
+}</code></pre>
+        </div>
+        <p>
+          要给 JSX 加自定义元素（如 web components），用 module augmentation：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      "my-custom-element": {
+        attr1?: string;
+        attr2?: number;
+        children?: any;
+      };
+    }
+  }
+}
+
+export {};</code></pre>
+        </div>
+
+        <h3>8. <code>.tsx</code> 中尖括号断言与 JSX 冲突</h3>
+        <p>
+          02 章讲过 <code>&lt;T&gt;value</code> 是旧式断言语法。在 <code>.tsx</code> 文件里它<strong>与 JSX 标签冲突</strong>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ 在 .tsx 中
+const x = &lt;string&gt;value;   // TS 看这是 JSX 标签 &lt;string&gt;...
+//                          ❌ JSX element 'string' has no corresponding closing tag
+
+// ✅ .tsx 中只能用 as
+const x = value as string;
+
+// 旧式 .ts 中两种都能用
+const y = &lt;string&gt;value;   // ✓ 仅 .ts
+const z = value as string;  // ✓ 推荐</code></pre>
+        </div>
+        <p>
+          <strong>规则</strong>：永远用 <code>as T</code>。<code>&lt;T&gt;value</code> 是<strong>已淘汰</strong>语法。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 自定义可迭代对象（分页 / 流式 API）</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// 自动分页迭代器
+async function* paginate&lt;T&gt;(
+  fetchPage: (cursor?: string) =&gt; Promise&lt;{ items: T[]; nextCursor?: string }&gt;,
+): AsyncGenerator&lt;T&gt; {
+  let cursor: string | undefined;
+  do {
+    const { items, nextCursor } = await fetchPage(cursor);
+    for (const item of items) yield item;
+    cursor = nextCursor;
+  } while (cursor);
+}
+
+// 调用方一行消费
+for await (const user of paginate(c =&gt; api.listUsers({ cursor: c }))) {
+  console.log(user);
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · async generator 处理 LLM SSE 流</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">async function* streamLLM(prompt: string): AsyncGenerator&lt;string&gt; {
+  const res = await fetch("/api/llm", {
+    method: "POST",
+    body: JSON.stringify({ prompt, stream: true }),
+  });
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) return;
+    buffer += decoder.decode(value);
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        const data = JSON.parse(line.slice(6));
+        if (data.text) yield data.text;
+      }
+    }
+  }
+}
+
+// 在 React 组件里消费
+async function chat() {
+  let answer = "";
+  for await (const chunk of streamLLM("hello")) {
+    answer += chunk;
+    setMessage(answer);   // 增量更新 UI
+  }
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · React 19 项目 tsconfig 标配</h3>
+          <div class="code-block">
+            <span class="code-label">json · tsconfig.json</span>
+            <pre class="code"><code class="lang-js">{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",                  // 17+ 新 runtime
+    "jsxImportSource": "react",           // 默认即此值
+    "lib": ["DOM", "DOM.Iterable", "ESNext"],
+    "noEmit": true
+  }
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 给 Web Components 加 JSX 类型</h3>
+          <div class="code-block">
+            <span class="code-label">typescript · types/web-components.d.ts</span>
+            <pre class="code"><code class="lang-ts">declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      "stripe-buy-button": React.DetailedHTMLProps&lt;
+        React.HTMLAttributes&lt;HTMLElement&gt; &amp; {
+          "buy-button-id": string;
+          "publishable-key": string;
+        },
+        HTMLElement
+      &gt;;
+    }
+  }
+}
+
+export {};</code></pre>
+          </div>
+          <div class="code-block">
+            <span class="code-label">tsx · 使用</span>
+            <pre class="code"><code class="lang-tsx">function Checkout() {
+  return (
+    &lt;stripe-buy-button
+      buy-button-id="..."
+      publishable-key="pk_test_..."
+    /&gt;
+  );
+}</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>三种 yield 形态</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">function* g(): Generator&lt;number, string, boolean&gt; {
+  // 简单 yield
+  yield 1;
+
+  // 接收 next() 传入的值
+  const flag: boolean = yield 2;
+  console.log(flag);   // 调用 .next(true) 时为 true
+
+  // yield* 委托其他 generator
+  yield* otherGen();
+
+  // return 设置 done: true 时的 value
+  return "done";
+}
+
+function* otherGen() {
+  yield 100;
+  yield 200;
+}
+
+const it = g();
+it.next();        // { value: 1, done: false }
+it.next();        // { value: 2, done: false }
+it.next(true);    // 内部 flag = true，{ value: 100, done: false }
+it.next();        // { value: 200, done: false }
+it.next();        // { value: "done", done: true }</code></pre>
+        </div>
+
+        <h3>双向通信 generator（自动机模式）</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">function* stateMachine(): Generator&lt;
+  string,    // yield 类型 — 当前 state 名
+  void,      // return 类型
+  string     // next 传入 — 事件名
+&gt; {
+  let state = "idle";
+  while (true) {
+    const event = yield state;
+    if (state === "idle" &amp;&amp; event === "start") state = "running";
+    else if (state === "running" &amp;&amp; event === "stop") state = "idle";
+  }
+}
+
+const sm = stateMachine();
+sm.next();          // { value: "idle" }
+sm.next("start");   // { value: "running" }
+sm.next("stop");    // { value: "idle" }</code></pre>
+        </div>
+
+        <h3>JSX 全套类型导入</h3>
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import {
+  ReactNode,             // 任意可渲染节点（含 string / number / null / Element / array）
+  ReactElement,           // JSX 表达式返回的具体 element
+  ComponentProps,         // 取某组件 props
+  ComponentPropsWithRef,
+  ComponentPropsWithoutRef,
+  ChangeEvent,            // 事件类型
+  MouseEvent,
+  FormEvent,
+  KeyboardEvent,
+  CSSProperties,          // style prop 类型
+  Ref,                    // useRef 返回的 ref
+  HTMLAttributes,         // 通用 HTML attrs
+  DetailedHTMLProps,
+} from "react";
+
+interface ButtonProps extends ComponentPropsWithoutRef&lt;"button"&gt; {
+  variant: "primary" | "secondary";
+}
+
+function Button({ variant, ...rest }: ButtonProps) {
+  return &lt;button type="button" {...rest} className={`btn-${variant}`} /&gt;;
+}
+
+const handler = (e: ChangeEvent&lt;HTMLInputElement&gt;) =&gt; {
+  e.target.value;   // ✓
+};</code></pre>
+        </div>
+
+        <h3>JSX.Element vs ReactNode 的区别</h3>
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// JSX.Element / ReactElement — 必须是单个 JSX 表达式
+function Foo(): JSX.Element {
+  return &lt;div /&gt;;
+}
+
+// ReactNode — 任何可渲染（string / null / number / array / fragment）
+function Bar({ children }: { children: ReactNode }) {
+  return &lt;div&gt;{children}&lt;/div&gt;;
+}
+
+// 一般 children 用 ReactNode（更宽容）；
+// 函数返回值用 ReactNode 或 JSX.Element 都行
+function App() {
+  return (
+    &lt;Bar&gt;
+      hello                   {/* string */}
+      {42}                     {/* number */}
+      {null}                   {/* null */}
+      &lt;div&gt;nested&lt;/div&gt;        {/* JSX.Element */}
+      {[1, 2, 3].map(n =&gt; &lt;span key={n}&gt;{n}&lt;/span&gt;)}   {/* array */}
+    &lt;/Bar&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>Iterable&lt;T&gt; 作为函数参数</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 接受任何可迭代对象
+function sum(nums: Iterable&lt;number&gt;): number {
+  let total = 0;
+  for (const n of nums) total += n;
+  return total;
+}
+
+sum([1, 2, 3]);                     // ✓ Array
+sum(new Set([1, 2, 3]));            // ✓ Set
+sum(new Map().keys());              // ❌ keys 是 string[]
+sum((function* () { yield 1; })()); // ✓ Generator
+
+// 生成器作为参数（更广义）
+function consumeAsync&lt;T&gt;(it: AsyncIterable&lt;T&gt;) {
+  for await (const item of it) console.log(item);
+}</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · for...in 在 array 上枚举字符串 key</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">const arr = ["a", "b", "c"];
+
+// ❌ for...in 枚举的是 key
+for (const k in arr) {
+  console.log(k);   // "0", "1", "2"  字符串！
+  console.log(arr[k]);   // 通过但语义诡异
+}
+
+// ✅ for...of 才是值
+for (const v of arr) console.log(v);   // "a", "b", "c"
+
+// ✅ 要 index：entries
+for (const [i, v] of arr.entries()) console.log(i, v);</code></pre>
+          </div>
+          <p>
+            <strong>规则</strong>：数组永远用 <code>for...of</code>，对象自有 key 用 <code>Object.keys / entries</code>。<code>for...in</code> 几乎不该出现在新代码里。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · target ES5 不开 downlevelIteration 时 spread / for...of 失败</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// target: ES5
+const m = new Map();
+const arr = [...m];   // ❌ Type 'Map' is not array type
+
+// 数组虽然能 for...of 但 Map / Set / Generator 不行
+// 解：开 downlevelIteration（产物变大）或拉高 target</code></pre>
+          </div>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · .tsx 中尖括号被理解为 JSX</div>
+          <div class="code-block">
+            <span class="code-label">tsx</span>
+            <pre class="code"><code class="lang-tsx">const x = &lt;string&gt;value;          // ❌ JSX 标签
+
+const a = arr.map&lt;string&gt;(...);    // ✓ 这里是泛型实参，OK
+const fn = &lt;T,&gt;(x: T) =&gt; x;        // ✓ 加逗号让 TS 区分泛型 vs JSX
+const fn2 = &lt;T extends {}&gt;(x: T) =&gt; x;   // ✓ 加约束也行</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：<code>.tsx</code> 中
+          </p>
+          <ul>
+            <li>断言永远用 <code>as T</code></li>
+            <li>箭头函数泛型加逗号 <code>&lt;T,&gt;</code> 或加约束 <code>&lt;T extends {}&gt;</code></li>
+          </ul>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · jsx mode 选错</div>
+          <table>
+            <thead>
+              <tr><th>项目</th><th>推荐 jsx</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Vite / Next.js（让 bundler 处理）</td><td><code>preserve</code> 或 <code>react-jsx</code></td></tr>
+              <tr><td>纯 tsc 编译，React 17+</td><td><code>react-jsx</code></td></tr>
+              <tr><td>纯 tsc 编译，React 16 或更早</td><td><code>react</code></td></tr>
+              <tr><td>React Native</td><td><code>react-native</code></td></tr>
+              <tr><td>开发模式（要 source 行号信息）</td><td><code>react-jsxdev</code></td></tr>
+            </tbody>
+          </table>
+          <p>
+            <strong>规避</strong>：模板项目（<code>create-vite</code> / <code>create-next-app</code>）已经配好，新项目从模板起步即可。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · async generator 的 throw 处理</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">async function* readStream(): AsyncGenerator&lt;string&gt; {
+  try {
+    yield "first";
+    yield "second";
+  } finally {
+    console.log("cleanup");   // 仅在 done 或 throw / return 时跑
+  }
+}
+
+const it = readStream();
+await it.next();   // first
+await it.return(); // 提前结束 — finally 会跑
+
+// for await...of 中 break 会自动调 .return()，触发 finally
+for await (const x of readStream()) {
+  if (x === "first") break;   // → 自动 cleanup
+}</code></pre>
+          </div>
+          <p>
+            生成器的 finally 是清理资源的好地方（关闭文件 / 取消订阅 / 释放锁），但要注意它<strong>仅在被消费完 / 提前 return / throw 时</strong>才跑 — 没人消费它就一直挂着。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · React.FC 已被官方"温和劝退"</div>
+          <div class="code-block">
+            <span class="code-label">tsx</span>
+            <pre class="code"><code class="lang-tsx">// 老写法（不推荐，但仍可用）
+const Hello: React.FC&lt;{ name: string }&gt; = ({ name }) =&gt; &lt;div&gt;{name}&lt;/div&gt;;
+
+// 新写法 — 直接函数 + props 类型
+function Hello({ name }: { name: string }) {
+  return &lt;div&gt;{name}&lt;/div&gt;;
+}
+
+// 或匿名箭头
+const Hello = ({ name }: { name: string }) =&gt; &lt;div&gt;{name}&lt;/div&gt;;</code></pre>
+          </div>
+          <p>
+            React 团队在 18+ 文档中倾向直接函数 + props 类型注解。React.FC 的隐式 children 在 React 18 已移除。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://www.typescriptlang.org/docs/handbook/iterators-and-generators.html" target="_blank" rel="noopener"
+              >Handbook · Iterators &amp; Generators</a
+            >
+          </li>
+          <li>
+            <a href="https://www.typescriptlang.org/docs/handbook/jsx.html" target="_blank" rel="noopener"
+              >Handbook · JSX</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-1.html#jsx-factories"
+              target="_blank"
+              rel="noopener"
+              >TS 4.1 · jsxImportSource 引入</a
+            >
+          </li>
+          <li>
+            JS 衔接 →
+            <a href="../../javascript/01-fundamentals/13-iterators.html">JS · 迭代器与 Generator</a> 含双向通信详解
+          </li>
+          <li>
+            JS 衔接 →
+            <a href="../../javascript/03-async/05-async-await.html">JS · async/await</a> 配合 async iterator
+          </li>
+          <li>
+            下一章 →
+            <a href="17-type-compatibility.html">17 Type Compatibility & Inference</a> ⭐ Part 3 最难
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="15-merging-mixins.html">
+            <span class="label">← 上一章</span>
+            <span class="title">15 · Declaration Merging / Mixins / Symbols</span>
+          </a>
+          <a class="next" href="17-type-compatibility.html">
+            <span class="label">下一章 →</span>
+            <span class="title">17 · Type Compatibility & Inference</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

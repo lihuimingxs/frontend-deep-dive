@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Date 与 Intl · P1 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="Date 底层即 epoch 毫秒、月份从 0 开始、ISO 字符串的 UTC/本地语义差异、setDate 溢出进位、时区与夏令时陷阱、Intl.DateTimeFormat/RelativeTimeFormat/NumberFormat、Temporal 提案。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P1 目录</a>
+          <a href="https://javascript.info/date" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · 语言基础</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-types.html">01 · 数据类型系统</a></li>
+          <li><a href="02-operators.html">02 · 操作符与强制转换</a></li>
+          <li><a href="03-control-flow.html">03 · 控制流</a></li>
+          <li><a href="04-functions.html">04 · 函数基础</a></li>
+          <li><a href="05-objects.html">05 · 对象深入</a></li>
+          <li><a href="06-arrays.html">06 · 数组深入</a></li>
+          <li><a href="07-strings.html">07 · 字符串深入</a></li>
+          <li><a href="08-numbers.html">08 · 数字与 Math</a></li>
+          <li><a href="09-date-intl.html">09 · Date 与 Intl</a></li>
+          <li><a href="10-map-set.html">10 · Map / Set 家族</a></li>
+          <li><a href="11-symbol.html">11 · Symbol 全景</a></li>
+          <li><a href="12-json.html">12 · JSON</a></li>
+          <li><a href="13-iterators.html">13 · 迭代器与 Generator</a></li>
+          <li><a href="14-errors.html">14 · 错误处理</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../02-advanced/index.html">P2 · 高阶语言</a></li>
+          <li><a href="../03-async/index.html">P3 · 异步 & 错误处理</a></li>
+          <li><a href="../04-modules/index.html">P4 · 模块 & 元编程</a></li>
+          <li><a href="../05-dom/index.html">P5 · DOM & 事件</a></li>
+          <li><a href="../06-network/index.html">P6 · 网络 & 存储</a></li>
+          <li><a href="../07-advanced/index.html">P7 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · 语言基础</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Date 与 Intl</span>
+        </nav>
+
+        <h1>Date 与 Intl</h1>
+        <p class="lead">
+          <code>Date</code> 是 JS 里被吐槽最多的内置类型：月份从 0 开始、<code>getDay</code> 返回星期而不是几号、ISO
+          短格式按 UTC 解析、没有原生时区支持…… 本章把这些"常识"的规范依据、<code>Intl.*</code>
+          的正确用法、未来替代（<code>Temporal</code>）梳清楚。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 08 数字</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/date" target="_blank" rel="noopener">Date and time</a></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================= -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 构造：5 种形式
+new Date();                                 // 当前时间
+new Date(1_700_000_000_000);                // epoch 毫秒
+new Date("2024-03-15T10:00:00Z");           // ISO 字符串（推荐）
+new Date(2024, 2, 15, 10, 0, 0, 0);         // ⚠ month 从 0 开始
+Date.now();                                 // 当前 epoch 毫秒（不建对象，更快）
+
+// 读
+d.getFullYear();  d.getMonth();  d.getDate();
+d.getDay();       // 星期几（0 = Sun）
+d.getHours();     d.getMinutes();  d.getSeconds();  d.getMilliseconds();
+d.getTime();      // epoch 毫秒
+d.getTimezoneOffset();  // 本地与 UTC 的分钟偏移 —— ⚠ 符号反直觉，UTC+8 返回 -480
+
+// UTC 版（getter / setter 都有）
+d.getUTCHours();  d.setUTCHours(0);
+
+// 写
+d.setFullYear(2025);  d.setDate(15);  d.setHours(12);
+// setters 全部 mutating，返回 epoch 毫秒
+
+// 格式化
+d.toISOString();                // "2024-03-15T10:00:00.000Z"  ← 永远 UTC
+d.toJSON();                     // 同 toISOString
+d.toLocaleString("zh-CN");      // 本地化（底下是 Intl.DateTimeFormat）</code></pre>
+        </div>
+
+        <h3>Intl 家族成员</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>API</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>Intl.DateTimeFormat</code></td>
+              <td>本地化日期时间格式</td>
+            </tr>
+            <tr>
+              <td><code>Intl.RelativeTimeFormat</code></td>
+              <td>"3 天前" / "in 2 hours"</td>
+            </tr>
+            <tr>
+              <td><code>Intl.NumberFormat</code></td>
+              <td>数字 / 货币 / 百分比（见 08 章）</td>
+            </tr>
+            <tr>
+              <td><code>Intl.Collator</code></td>
+              <td>本地化排序（见 07 章）</td>
+            </tr>
+            <tr>
+              <td><code>Intl.Segmenter</code></td>
+              <td>字素簇 / 词 / 句切分（见 07 章）</td>
+            </tr>
+            <tr>
+              <td><code>Intl.ListFormat</code></td>
+              <td>列表格式（"A, B, and C"）</td>
+            </tr>
+            <tr>
+              <td><code>Intl.PluralRules</code></td>
+              <td>单复数规则（英文/俄文差异）</td>
+            </tr>
+            <tr>
+              <td><code>Intl.Locale</code></td>
+              <td>locale 本身的结构化对象</td>
+            </tr>
+            <tr>
+              <td><code>Intl.DurationFormat</code></td>
+              <td>持续时间（ES2025）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 =========================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="date-is-number"><code>Date</code> 本质 = epoch 毫秒</h3>
+        <p>
+          <code>Date</code> 对象内部就存一个数字：自 1970-01-01T00:00:00Z 起的毫秒数（Unix 时间戳 × 1000）。所有 getter
+          / setter / format 方法都是基于这个数字 + 一个隐含的"以本地时区解释"操作。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const d = new Date("2024-03-15T10:00:00Z");
++d;                      // 1710496800000  （epoch 毫秒）
+d.getTime();             // 同上
+d.valueOf();             // 同上
+
+// 日期减法：毫秒差
+const start = new Date();
+// ... 工作 ...
+const ms = Date.now() - start;</code></pre>
+        </div>
+
+        <h3 id="iso-parsing">字符串解析的"短格式按 UTC"规则</h3>
+        <p>规范对日期字符串解析极其严格。只有下列格式能保证跨引擎一致解析（其他格式由引擎自行决定）：</p>
+        <ul>
+          <li><code>"YYYY"</code></li>
+          <li><code>"YYYY-MM"</code></li>
+          <li><code>"YYYY-MM-DD"</code> — <strong>按 UTC</strong>（注意！）</li>
+          <li><code>"YYYY-MM-DDTHH:mm"</code></li>
+          <li><code>"YYYY-MM-DDTHH:mm:ss"</code></li>
+          <li><code>"YYYY-MM-DDTHH:mm:ss.sss"</code></li>
+          <li><code>"YYYY-MM-DDTHH:mm:ssZ"</code>（带 Z，显式 UTC）</li>
+          <li><code>"YYYY-MM-DDTHH:mm:ss+08:00"</code>（显式偏移）</li>
+        </ul>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 在 UTC+8 的机器上：
+new Date("2024-03-15");          // 2024-03-15T00:00:00Z  → 本地时间 2024-03-15 08:00
+new Date("2024-03-15T00:00");    // 2024-03-14T16:00Z     → 本地时间 2024-03-15 00:00
+
+// ⚠ 短格式和带时间的格式，时区解释不一样！
+// 短格式 "2024-03-15" 按 UTC 午夜，带时间的按本地午夜
+
+// 只有显式带 Z 或偏移的格式语义最清楚
+new Date("2024-03-15T00:00:00Z");       // 明确 UTC
+new Date("2024-03-15T00:00:00+08:00");  // 明确 +8 时区</code></pre>
+        </div>
+        <div class="callout warn">
+          <div class="callout-title">⚠ 记住三条</div>
+          <p>
+            <strong>（1）</strong> 跨时区系统一律用 ISO 字符串传递，带 <code>Z</code> 或明确偏移。
+            <strong>（2）</strong> <code>new Date("2024-03-15")</code> 不等于 <code>new Date(2024, 2, 15)</code>（前者
+            UTC，后者本地）。 <strong>（3</strong>） 不用 <code>Date.parse(nonStandardString)</code> —— 引擎差异大（IE /
+            Safari / Firefox 行为不同）。
+          </p>
+        </div>
+
+        <h3 id="month-zero">月份从 0 开始的历史</h3>
+        <p>
+          继承自 Java，Java 继承自 C 的 <code>struct tm</code>。历史没有合理原因。<code>getMonth()</code> /
+          <code>setMonth()</code> 返回/接受 0-11（0 = 一月），<code>getDate()</code> 返回 1-31（日）。日期 /
+          月份分别用不同 getter 也是这个历史。
+        </p>
+
+        <h3 id="setters-overflow">Setter 的溢出"好心"</h3>
+        <p>
+          <code>setDate</code>、<code>setMonth</code> 等接受超范围的值，自动进位/退位。这是 JS Date 最有用的特性之一：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 获取下个月同一天
+const d = new Date(2024, 0, 31);    // 1月31
+d.setMonth(d.getMonth() + 1);       // 2月 → 自动溢出到 3月2/3（因为没有 2/31）
+
+// 获取本月最后一天：设为下月 0 号 = 本月最后一天
+const lastDay = new Date(year, month + 1, 0);
+
+// 获取 N 天后
+const nDaysLater = new Date();
+nDaysLater.setDate(nDaysLater.getDate() + n);   // setDate 支持负数 / 超 31
+
+// 获取昨天
+const yesterday = new Date();
+yesterday.setDate(yesterday.getDate() - 1);</code></pre>
+        </div>
+
+        <h3 id="timezone">时区与 DST 是全局陷阱</h3>
+        <p>Date 对象<strong>不存储时区</strong>。显示时用"运行环境的本地时区"解释。这意味着：</p>
+        <ul>
+          <li>同一 Date 对象在纽约服务器显示 "2024-03-14 20:00"，在上海浏览器显示 "2024-03-15 08:00"。</li>
+          <li>涉及服务端渲染（SSR）时，服务器和浏览器的 locale 必须一致，否则 hydration mismatch。</li>
+          <li>DST（夏令时）会让某些日期"不存在"或"存在两次"。<code>setHours</code> 不会处理 DST 切换。</li>
+          <li>
+            没有原生方式把一个 Date "转到另一个时区"，只能借助库（<code>date-fns-tz</code>、<code>luxon</code>）或
+            <code>Intl.DateTimeFormat</code> 的 <code>timeZone</code> 选项<strong>仅用于格式化</strong>。
+          </li>
+        </ul>
+
+        <h3 id="intl-datetime"><code>Intl.DateTimeFormat</code> 的配置</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const fmt = new Intl.DateTimeFormat("zh-CN", {
+  year: "numeric", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit",
+  hour12: false,
+  timeZone: "Asia/Shanghai",     // 指定时区 ← 这个参数！
+});
+fmt.format(new Date());           // "2024/03/15 10:30"
+
+// 预设风格
+new Intl.DateTimeFormat("zh", { dateStyle: "full", timeStyle: "short" })
+  .format(new Date());             // "2024年3月15日星期五 10:30"
+
+// 所有 locale 支持的时区
+Intl.supportedValuesOf("timeZone"); // ["Africa/Abidjan", ...]
+
+// formatToParts 拆分字段（用于自定义拼接）
+const parts = fmt.formatToParts(new Date());
+// [{type: "year", value: "2024"}, {type: "literal", value: "/"}, ...]</code></pre>
+        </div>
+
+        <h3 id="temporal">Temporal 提案：未来的时间 API</h3>
+        <p>TC39 Stage 3 提案 <code>Temporal</code> 是 Date 的彻底替代：</p>
+        <ul>
+          <li>
+            区分
+            <code>PlainDate</code>（无时区）、<code>ZonedDateTime</code>（带时区）、<code>Instant</code>（时间戳）。
+          </li>
+          <li>所有操作<strong>不可变</strong>（返回新对象）。</li>
+          <li>一等公民的时区、日历系统、持续时间。</li>
+          <li>
+            当前（2026 年）Firefox Nightly、Safari TP 已实现，可用 polyfill <code>@js-temporal/polyfill</code> 试用。
+          </li>
+        </ul>
+        <p>
+          生产代码：继续用 <code>date-fns</code>、<code>dayjs</code>、<code>luxon</code> 之一。<strong>避免</strong>
+          <code>moment.js</code>（已进入"维护模式"，且包大）。
+        </p>
+
+        <!-- 03 应用场景 =========================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">相对时间：<code>Intl.RelativeTimeFormat</code></h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">const rtf = new Intl.RelativeTimeFormat("zh", { numeric: "auto" });
+rtf.format(-1, "day");           // "昨天"
+rtf.format(0, "day");            // "今天"
+rtf.format(3, "hour");           // "3 小时后"
+
+// 工具函数：距离现在多久
+function timeAgo(date) {
+  const diff = (Date.now() - date.getTime()) / 1000;   // 秒
+  const units = [
+    [60, "second"], [60, "minute"], [24, "hour"], [30, "day"], [12, "month"], [Infinity, "year"],
+  ];
+  let n = diff, u = "second";
+  for (const [step, unit] of units) {
+    if (Math.abs(n) &lt; step) { u = unit; break; }
+    n /= step;
+  }
+  return rtf.format(-Math.round(n), u);
+}
+timeAgo(new Date(Date.now() - 3600_000));    // "1 小时前"</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">日期加减：避免时区坑</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// ❌ 直接加毫秒 —— 穿越 DST 时差会错 1 小时
+const oneDay = 24 * 60 * 60 * 1000;
+const tomorrow1 = new Date(Date.now() + oneDay);
+
+// ✓ 用 setDate —— 引擎处理 DST
+const tomorrow2 = new Date();
+tomorrow2.setDate(tomorrow2.getDate() + 1);
+
+// 减法可以直接减（结果是毫秒差）
+const ms = endDate.getTime() - startDate.getTime();
+const days = Math.floor(ms / oneDay);    // 粗略天数，跨 DST 可能误差 1h</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">仅日期比较（忽略时分秒）</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">function sameDay(a, b) {
+  return a.getFullYear() === b.getFullYear()
+    &amp;&amp; a.getMonth() === b.getMonth()
+    &amp;&amp; a.getDate() === b.getDate();
+}
+
+function startOfDay(d) {
+  const c = new Date(d);
+  c.setHours(0, 0, 0, 0);    // 本地时区零点
+  return c;
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">持续时间格式化</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// Intl.DurationFormat（ES2025，Chrome 129+）
+const df = new Intl.DurationFormat("zh", { style: "long" });
+df.format({ hours: 1, minutes: 30 });   // "1 小时 30 分钟"
+
+// polyfill 时段：手写
+function formatDuration(ms) {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  return [h, m, ss].map(n =&gt; String(n).padStart(2, "0")).join(":");
+}
+formatDuration(3_723_000);             // "01:02:03"</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">跨时区展示</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 把同一个瞬间在不同时区展示
+const d = new Date();
+["Asia/Shanghai", "America/New_York", "Europe/London"].forEach(tz =&gt; {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    dateStyle: "short", timeStyle: "short", timeZone: tz,
+  });
+  console.log(tz, fmt.format(d));
+});
+// Asia/Shanghai   3/15/24, 10:30 AM
+// America/New_York 3/14/24, 10:30 PM
+// Europe/London    3/15/24, 2:30 AM</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 =========================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-format-parts"><code>formatToParts</code> 自定义拼接</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 需要 "03月15日 星期五" 这种非默认组合
+const fmt = new Intl.DateTimeFormat("zh", {
+  month: "2-digit", day: "2-digit", weekday: "long",
+});
+const parts = fmt.formatToParts(new Date());
+// 拼成自己想要的格式
+const map = Object.fromEntries(parts.map(p =&gt; [p.type, p.value]));
+`${map.month}月${map.day}日 ${map.weekday}`;   // "03月15日 星期五"</code></pre>
+        </div>
+
+        <h3 id="ex-parse-iso">安全解析 ISO 字符串</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function parseISO(s) {
+  if (typeof s !== "string") return null;
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+parseISO("2024-03-15T10:00Z");     // Date
+parseISO("bad");                    // null
+parseISO("");                       // null  ← ⚠ new Date("") 是 Invalid Date 但 null 被 Number(null)=0 坑到
+// 所以必须显式 isNaN 校验</code></pre>
+        </div>
+
+        <h3 id="ex-date-range">日期区间生成器</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function* dateRange(start, end) {
+  const d = new Date(start);
+  while (d &lt;= end) {
+    yield new Date(d);
+    d.setDate(d.getDate() + 1);
+  }
+}
+
+for (const d of dateRange(new Date("2024-03-01"), new Date("2024-03-05"))) {
+  console.log(d.toISOString().slice(0, 10));
+}
+// 2024-03-01 ... 2024-03-05</code></pre>
+        </div>
+
+        <h3 id="ex-weekday">周一开始的本周 / 本月开始结束</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 本周一（周一 = 1，周日 = 0 → 周日要减 6 而非 0）
+function mondayOfWeek(d = new Date()) {
+  const copy = new Date(d);
+  const day = copy.getDay() || 7;     // 周日 0 → 7
+  copy.setDate(copy.getDate() - day + 1);
+  copy.setHours(0, 0, 0, 0);
+  return copy;
+}
+
+// 本月第一天 / 最后一天
+function startOfMonth(d) { return new Date(d.getFullYear(), d.getMonth(), 1); }
+function endOfMonth(d)   { return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999); }</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 =========================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">月份从 0 开始</div>
+          <p>
+            <code>new Date(2024, 3, 15)</code> 是 <strong>4月</strong>15日（月份 0-11）。但<code
+              >new Date("2024-03-15")</code
+            >
+            是 3月。构造函数和字符串两套系统共存。统一用 ISO 字符串最不容易错。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>getDay</code> 返回星期，<code>getDate</code> 返回几号</div>
+          <p>命名反直觉但无法修改（向后兼容）。记忆：<em>date = 日期数字 (1-31)，day = 星期 (0-6)</em>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>"2024-03-15"</code> vs <code>"2024-03-15T00:00"</code></div>
+          <p>
+            前者 UTC 午夜，后者本地午夜。UTC+8 地区差 8 小时。跨系统传递日期<strong>永远用带 Z 的完整 ISO</strong>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>getTimezoneOffset</code> 的符号反直觉</div>
+          <p>
+            UTC+8 返回 <code>-480</code>（不是 +480）。历史原因：这是"本地 → UTC"的偏移，符号和常见"UTC →
+            本地"相反。计算当地毫秒戳用 <code>date.getTime() - date.getTimezoneOffset() * 60_000</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>new Date("invalid")</code> 是 <code>Invalid Date</code>，不是抛错</div>
+          <p>
+            <code>new Date("abc").getTime()</code> 是 <code>NaN</code>；<code>d.toString()</code> 是
+            <code>"Invalid Date"</code>。校验用 <code>Number.isNaN(d.getTime())</code> 或
+            <code>d instanceof Date &amp;&amp; !isNaN(d)</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>Date.parse(非 ISO)</code> 结果由引擎决定</div>
+          <p>
+            <code>Date.parse("15/03/2024")</code> 在 Chrome 可能解析成功，Safari 返回 NaN。<strong>不要</strong>解析非
+            ISO 格式，要么强制前端格式，要么用 <code>date-fns</code> 的 <code>parse</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>JSON.stringify(date)</code> 自动转 ISO 字符串</div>
+          <p>
+            通过 <code>Date.prototype.toJSON</code> 实现（等价 <code>toISOString()</code>）。好处：传输简单。代价：<code
+              >JSON.parse</code
+            >
+            后是字符串不是 Date，需要用 reviver 手动还原。详见 12 章 JSON。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">DST 跨越时刻的 setHours 可能意外</div>
+          <p>
+            在夏令时切换日，<code>date.setHours(2)</code> 可能跳过 2:00（春令切换时 2:00 不存在）或有两个
+            2:00（秋令切换时）。精确日历操作用 <code>Temporal</code> 或 <code>date-fns-tz</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">循环里反复 <code>new Intl.DateTimeFormat</code></div>
+          <p>
+            创建 Intl 对象有成本（初始化 ICU 数据）。<strong>提到模块顶层一次创建、多次 <code>.format</code></strong
+            >，性能差异能有 10-100 倍。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================ -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-date-objects" target="_blank" rel="noopener"
+              >ECMA-262 · 21.4 Date Objects</a
+            >
+          </li>
+          <li>
+            <a href="https://tc39.es/ecma402/" target="_blank" rel="noopener"
+              >ECMA-402 · ECMAScript Internationalization API</a
+            >
+          </li>
+          <li>
+            <a href="https://tc39.es/proposal-temporal/docs/" target="_blank" rel="noopener">TC39 Temporal 提案文档</a>
+          </li>
+          <li>
+            <a href="https://date-fns.org/" target="_blank" rel="noopener">date-fns</a> /
+            <a href="https://moment.github.io/luxon/" target="_blank" rel="noopener">Luxon</a> — 现代替代
+          </li>
+          <li>
+            <a href="https://www.iana.org/time-zones" target="_blank" rel="noopener">IANA Time Zone Database</a> —
+            时区数据的规范源
+          </li>
+          <li>
+            <strong>下一步</strong> → <a href="10-map-set.html">10 · Map / Set 家族</a>，把对象/数组做不了的事情补齐。
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="08-numbers.html"
+            ><span class="label">← 上一章</span><span class="title">08 · 数字与 Math</span></a
+          >
+          <a class="next" href="10-map-set.html"
+            ><span class="label">下一章 →</span><span class="title">10 · Map / Set 家族</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

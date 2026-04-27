@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>async / await · P3 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="async 函数的去糖结果、await 与 Promise.then 的等价关系、top-level await、async iterator、顺序 vs 并行的选择、forEach + async 的陷阱、循环 await 性能。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P3 目录</a>
+          <a href="https://javascript.info/async-await" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · 异步 & 错误处理</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-event-loop.html">01 · Event Loop 模型</a></li>
+          <li><a href="02-microtask-macrotask.html">02 · 微任务 vs 宏任务</a></li>
+          <li><a href="03-promise.html">03 · Promise 状态机</a></li>
+          <li><a href="04-promise-combinators.html">04 · Promise 组合器</a></li>
+          <li><a href="05-async-await.html">05 · async / await</a></li>
+          <li><a href="06-abort-controller.html">06 · AbortController</a></li>
+          <li><a href="07-concurrency.html">07 · 并发控制</a></li>
+          <li><a href="08-node-eventloop-errors.html">08 · Node Event Loop + 错误收口</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-fundamentals/index.html">P1 · 语言基础</a></li>
+          <li><a href="../02-advanced/index.html">P2 · 高阶语言</a></li>
+          <li><a href="../04-modules/index.html">P4 · 模块 & 元编程</a></li>
+          <li><a href="../05-dom/index.html">P5 · DOM & 事件</a></li>
+          <li><a href="../06-network/index.html">P6 · 网络 & 存储</a></li>
+          <li><a href="../07-advanced/index.html">P7 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · 异步 & 错误处理</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>async / await</span>
+        </nav>
+
+        <h1>async / await</h1>
+        <p class="lead">
+          <code>async/await</code> 不是新 API —— 它是
+          <strong>Generator + Promise + 自动恢复</strong
+          >的语法糖。理解它的去糖结果，你就能精确预测执行时序、异常行为、循环中的并发特征，并<em
+            >不再被 "forEach + async" 之类的陷阱骗到</em
+          >。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~20 分钟</span>
+          <span><strong>前置</strong> 03 Promise · P1-13 iterator</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/async-await" target="_blank" rel="noopener">Async/await</a></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 4 种形式
+async function fn() { }                 // 声明
+const fn = async function () { };       // 表达式
+const fn = async () =&gt; { };             // 箭头
+class X { async method() { } }          // class 方法
+
+// async 函数特性
+async function hi() { return 42; }
+hi();                                    // 返回 Promise&lt;42&gt;
+
+async function fail() { throw new Error("x"); }
+fail();                                  // 返回 rejected Promise
+
+// await 只能在 async 函数里（或 ESM 顶层）
+async function loadUser() {
+  const res = await fetch("/api/user");
+  const data = await res.json();
+  return data;
+}
+
+// 等价 Promise 链
+function loadUser2() {
+  return fetch("/api/user").then(r =&gt; r.json());
+}</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="desugar">async / await 的去糖</h3>
+        <p>规范上 <code>async function</code> 可以用 Generator + 自动 resume 来等价表达：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 原始
+async function fn() {
+  const a = await fetchA();
+  const b = await fetchB(a);
+  return a + b;
+}
+
+// 等价去糖（大致）
+function fn() {
+  return spawn(function* () {
+    const a = yield fetchA();
+    const b = yield fetchB(a);
+    return a + b;
+  });
+}
+
+// spawn 是"自动 resume generator"的工具
+function spawn(genFn) {
+  return new Promise((resolve, reject) =&gt; {
+    const gen = genFn();
+    step(gen.next());
+    function step({ value, done }) {
+      if (done) return resolve(value);
+      Promise.resolve(value).then(
+        v =&gt; step(gen.next(v)),
+        e =&gt; step(gen.throw(e)),
+      );
+    }
+  });
+}</code></pre>
+        </div>
+
+        <h3 id="await-semantics"><code>await</code> 的规范语义</h3>
+        <p><code>await expr</code> 的规范步骤：</p>
+        <ol>
+          <li>计算 <code>expr</code>，把结果用 <code>Promise.resolve</code> 包装（thenable 也被吸收）。</li>
+          <li>"暂停"当前 async 函数，返回一个 pending Promise 给调用者。</li>
+          <li>
+            给内部 Promise 挂 <code>.then</code> / <code>.catch</code> 回调 —— 在 <strong>microtask</strong> 中 resume。
+          </li>
+          <li>resolve 时用值继续执行（作为 <code>await</code> 表达式的值）；reject 时在 await 处抛错。</li>
+        </ol>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 所以每个 await 都"让出"一轮 microtask
+async function f() {
+  console.log(1);
+  await Promise.resolve();   // 让出
+  console.log(2);            // 下一轮 microtask
+  await Promise.resolve();
+  console.log(3);            // 又让一轮
+}
+console.log(0);
+f();
+console.log(4);
+// 输出：0, 1, 4, 2, 3</code></pre>
+        </div>
+
+        <h3 id="top-level-await">Top-level await（ESM）</h3>
+        <p>ES2022 起 ESM 顶层可以直接 <code>await</code>（非 ESM 脚本/CJS 不行）：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// module.mjs
+const config = await fetch("/config.json").then(r =&gt; r.json());
+export { config };
+
+// 引入此模块的代码也会"异步"等待：
+// import { config } from "./module.mjs";   // 等 config 加载完才能用
+
+// ⚠ 影响模块加载时序：所有 depend on 此模块的都被阻塞
+// 生产代码里谨慎使用 —— 启动期初始化可以；热路径别用</code></pre>
+        </div>
+
+        <h3 id="vs-then">await vs .then 的等价关系</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>写法</th>
+              <th>等价 .then</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>const v = await p;</code></td>
+              <td><code>p.then(v =&gt; { /* 后续代码 */ })</code></td>
+            </tr>
+            <tr>
+              <td><code>try { await p; } catch (e) { }</code></td>
+              <td><code>p.then(_ =&gt; {}, e =&gt; {})</code></td>
+            </tr>
+            <tr>
+              <td><code>await Promise.all([a, b])</code></td>
+              <td><code>Promise.all([a, b]).then(...)</code></td>
+            </tr>
+            <tr>
+              <td><code>for (const p of ps) await p;</code></td>
+              <td>顺序：每个 <code>.then</code> 链起来</td>
+            </tr>
+            <tr>
+              <td><code>await Promise.all(ps.map(fn))</code></td>
+              <td>并行：所有 <code>fn</code> 同时启动</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 id="error-propagation">错误处理</h3>
+        <p>
+          async 函数里的 <code>throw</code> → 返回 rejected Promise。<br />
+          <code>await rejectedPromise</code> → 在 await 处"同步抛错"，被 try/catch 捕获。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">async function f() {
+  try {
+    await fetch("/bad");      // reject 了
+  } catch (err) {
+    console.error("caught:", err);
+    throw new Error("wrap", { cause: err });   // 被调用方接
+  } finally {
+    cleanup();
+  }
+}
+
+// 上层
+try {
+  await f();
+} catch (err) {
+  err.message;    // "wrap"
+  err.cause;      // 原始错误
+}</code></pre>
+        </div>
+
+        <h3 id="parallel-vs-sequential">循环中的并发性</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// ❌ 顺序 —— 每个请求等上一个完成（1 + 1 + 1 = 3s）
+for (const url of urls) {
+  await fetch(url);
+}
+
+// ✓ 并行 —— 所有请求同时启动（max = 1s）
+await Promise.all(urls.map(u =&gt; fetch(u)));
+
+// ✓ 并发但需要顺序结果：allSettled + 处理
+const results = await Promise.all(urls.map(u =&gt; fetch(u).then(r =&gt; r.json())));
+// results 顺序和 urls 一致
+
+// 顺序但要求"前一个结果用于下一个"：必须 for 循环 + await
+let acc = initial;
+for (const item of items) {
+  acc = await process(item, acc);    // 每步依赖前一步
+}</code></pre>
+        </div>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">重构 Promise 链到 async/await</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 链式
+function loadDashboard() {
+  return fetchUser()
+    .then(user =&gt; Promise.all([user, fetchOrders(user.id), fetchStats(user.id)]))
+    .then(([user, orders, stats]) =&gt; ({ user, orders, stats }))
+    .catch(err =&gt; { logger.error(err); return null; });
+}
+
+// async/await
+async function loadDashboard() {
+  try {
+    const user = await fetchUser();
+    const [orders, stats] = await Promise.all([
+      fetchOrders(user.id),
+      fetchStats(user.id),
+    ]);
+    return { user, orders, stats };
+  } catch (err) {
+    logger.error(err);
+    return null;
+  }
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">顶层 await 做模块初始化</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// db.mjs
+import { Pool } from "pg";
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+await pool.connect();           // 启动时确保数据库可用
+export { pool };
+
+// 使用方
+import { pool } from "./db.mjs";  // import 本身完成时 pool 已就绪
+pool.query("...");</code></pre>
+          </div>
+          <p style="margin-top: 8px">⚠ 生产代码慎用 —— 连锁依赖的模块都会被阻塞，影响启动时间。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Fire-and-forget 模式</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 不需要等待结果的副作用
+function trackEvent(event) {
+  sendBeacon(event).catch(err =&gt; logger.warn({ err }, "tracking failed"));
+  //                ↑ 必须 .catch 防止 unhandled rejection
+}
+
+// 或用 void 显式标记"故意不 await"
+void sendBeacon(event);    // ⚠ 抛错仍会变 unhandled
+// 更好：
+sendBeacon(event).catch(noop);</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">异步中间件链（Koa / fastify 风格）</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">async function compose(middlewares) {
+  return async (ctx) =&gt; {
+    let index = -1;
+    async function dispatch(i) {
+      if (i &lt;= index) throw new Error("next called multiple times");
+      index = i;
+      const mw = middlewares[i];
+      if (mw) await mw(ctx, () =&gt; dispatch(i + 1));
+    }
+    await dispatch(0);
+  };
+}
+
+// 中间件可以 await 下游
+app.use(async (ctx, next) =&gt; {
+  const start = Date.now();
+  await next();                   // 等下游全部完成
+  ctx.responseTime = Date.now() - start;
+});</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">async generator + for await of</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 分页流
+async function* fetchPages(base) {
+  let page = 1;
+  while (true) {
+    const { items, hasMore } = await fetch(`${base}?p=${page}`).then(r =&gt; r.json());
+    yield* items;                    // 逐项产出
+    if (!hasMore) return;
+    page++;
+  }
+}
+
+for await (const item of fetchPages("/api")) {
+  process(item);
+  if (shouldStop(item)) break;       // 提前退出自动 close generator
+}</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-foreach-async">forEach + async 的坑</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// ❌ forEach 不等 await
+await [1, 2, 3].forEach(async (x) =&gt; {
+  await save(x);             // save 同时启动，但 forEach 立即返回
+});
+// forEach 返回 undefined，await undefined 不等任何事
+// 结果：save(1/2/3) 并行，外层代码不等它们
+
+// ✓ 并行：Promise.all + map
+await Promise.all([1, 2, 3].map(async (x) =&gt; save(x)));
+
+// ✓ 串行：for-of
+for (const x of [1, 2, 3]) await save(x);
+
+// ✓ 并发限制：p-limit / Promise.all 加信号量（下一章 P3-07）</code></pre>
+        </div>
+
+        <h3 id="ex-top-level">ESM 顶层 await</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 动态 import 替换
+// 旧：
+let config;
+(async () =&gt; { config = await fetch(...).then(r =&gt; r.json()); })();
+
+// ES2022 顶层 await
+const config = await fetch("/api/config").then(r =&gt; r.json());
+
+// 条件加载
+const mod = process.env.NODE_ENV === "development"
+  ? await import("./dev-tools.mjs")
+  : null;</code></pre>
+        </div>
+
+        <h3 id="ex-async-iife">async IIFE（非 ESM 场景）</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 旧代码（CJS / script）没有顶层 await，用 IIFE 包
+(async () =&gt; {
+  const data = await load();
+  initialize(data);
+})().catch(err =&gt; {
+  console.error(err);
+  process.exit(1);
+});</code></pre>
+        </div>
+
+        <h3 id="ex-timing">精确时序</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">async function test() {
+  console.log("a");
+  await null;              // await 任何值都让出一轮 microtask
+  console.log("b");
+  await null;
+  console.log("c");
+}
+
+console.log("1");
+test();
+console.log("2");
+Promise.resolve().then(() =&gt; console.log("p1"));
+
+// 输出：1, a, 2, b, p1, c
+// 解释：
+// - "1": 同步
+// - test() 启动 → "a" 同步 → await 让出
+// - "2": 同步
+// - microtask：test 恢复 → "b" → await 让出
+// - microtask：p1 队列里（先入先出）先执行 → "p1"
+// - 下一轮 microtask：test 恢复 → "c"</code></pre>
+        </div>
+
+        <!-- 05 陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>forEach(async fn)</code> 不等待</div>
+          <p>
+            <code>forEach</code> 签名是 sync，返回 undefined。传 async 函数进去，回调返回的 Promise 被丢弃。用
+            <code>for-of</code> 或 <code>Promise.all(arr.map(async fn))</code>。ESLint
+            <code>no-misleading-character-class</code> / 社区规则能拦。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">循环里 await 是串行</div>
+          <p>
+            <code>for (const url of urls) await fetch(url);</code> 是 1 + 1 + 1 + ... 的串行。100 个 url × 100ms =
+            10s。不需要顺序就用 <code>Promise.all(urls.map(fetch))</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">忘 await 导致错误逃逸</div>
+          <p>
+            <code>async function f() { doAsync(); }</code> —— 没 await 的 <code>doAsync()</code> 里的错误不会进 f 的
+            reject 链，变 unhandled rejection。ESLint <code>@typescript-eslint/no-floating-promises</code> /
+            <code>promise/always-return</code> 能拦。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>return await p</code> 还是 <code>return p</code>？</div>
+          <p>
+            两者行为几乎一样（async 函数自动 unwrap Promise），但有差异：<strong>错误堆栈</strong>和
+            <strong>try/catch 位置</strong>。<code>try { return await p } catch</code> 能接住 p 的 reject；<code
+              >try { return p } catch</code
+            >
+            接不住（p 的 reject 发生在 try 块外）。规范建议"总是 <code>return await</code>"便于错误处理。但 V8
+            优化让两者性能等同。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">async 函数里 throw 不是同步</div>
+          <p>
+            <code>async function f() { throw x; } f();</code> 返回 rejected Promise，不是同步抛错。调用 f 的人必须
+            <code>try/await</code> 或 <code>.catch</code> 才能接。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>await 0</code> / <code>await "x"</code> 也让出一轮 microtask</div>
+          <p>
+            即使表达式不是 Promise，await 仍走 <code>Promise.resolve(val).then</code> —— 至少让出一次。代码里看到
+            <code>await null</code> 作为"让行" trick，就是利用这个。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Top-level await 阻塞所有依赖模块</div>
+          <p>
+            如果 <code>a.mjs</code> 顶层 await 5s，所有 <code>import</code> a 的模块都要等 5s
+            才能开始执行。深度依赖链会让启动时间炸掉。仅在"真正需要异步初始化"的叶子模块用。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">async 不能用在构造器</div>
+          <p>
+            <code>class Foo { async constructor() {} }</code>
+            语法错。构造器必须同步返回实例。需要异步初始化用工厂方法：<code
+              >static async create() { const foo = new Foo(); await foo.#init(); return foo; }</code
+            >。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>await</code> 在非 async 函数里是 SyntaxError</div>
+          <p>
+            <code>function f() { await p; }</code> 报错。除非是 ESM 顶层。移动 await 到 async 函数，或用
+            <code>p.then(...)</code>。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-async-function-definitions" target="_blank" rel="noopener"
+              >ECMA-262 · 27.7 Async Function Definitions</a
+            >
+          </li>
+          <li>
+            <a href="https://github.com/tc39/proposal-top-level-await" target="_blank" rel="noopener"
+              >TC39 · Top-level await 提案</a
+            >
+          </li>
+          <li>
+            <a href="https://v8.dev/blog/fast-async" target="_blank" rel="noopener"
+              >V8 · Faster async functions and promises</a
+            >
+          </li>
+          <li>
+            <strong>下一步</strong> → <a href="06-abort-controller.html">06 · AbortController</a> — 真正取消 async
+            操作。
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="04-promise-combinators.html"
+            ><span class="label">← 上一章</span><span class="title">04 · Promise 组合器</span></a
+          >
+          <a class="next" href="06-abort-controller.html"
+            ><span class="label">下一章 →</span><span class="title">06 · AbortController</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,722 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Service Worker + 跨标签通信 · P6 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="Service Worker 生命周期（install / activate / fetch）、Cache API 缓存策略（cache-first、network-first、stale-while-revalidate）、Workbox 常用路由；BroadcastChannel、SharedWorker、postMessage 跨上下文通信模型对比。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · 网络 & 存储</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-fetch.html">01 · Fetch API</a></li>
+          <li><a href="02-xhr.html">02 · XHR 残余场景</a></li>
+          <li><a href="03-websocket.html">03 · WebSocket</a></li>
+          <li><a href="04-sse.html">04 · Server-Sent Events</a></li>
+          <li><a href="05-cors-csp.html">05 · CORS 与 CSP</a></li>
+          <li><a href="06-cookie-storage.html">06 · Cookie / Storage</a></li>
+          <li><a href="07-indexeddb.html">07 · IndexedDB</a></li>
+          <li><a href="08-service-worker.html">08 · Service Worker + 跨标签</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-fundamentals/index.html">P1 · 语言基础</a></li>
+          <li><a href="../02-advanced/index.html">P2 · 高阶语言</a></li>
+          <li><a href="../03-async/index.html">P3 · 异步 & 错误处理</a></li>
+          <li><a href="../04-modules/index.html">P4 · 模块 & 元编程</a></li>
+          <li><a href="../05-dom/index.html">P5 · DOM & 事件</a></li>
+          <li><a href="../07-advanced/index.html">P7 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · 网络 & 存储</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Service Worker + 跨标签</span>
+        </nav>
+
+        <h1>Service Worker + 跨标签通信</h1>
+        <p class="lead">
+          Service Worker 是<strong>浏览器与网络之间的代理线程</strong>，拦截所有同源 fetch 请求，用 Cache API 决定直连 /
+          回源 / 响应合成。它也是 PWA、Push、Background Sync
+          的基座。本章同时讲清跨上下文通信：<code>BroadcastChannel</code>（最常用）、<code>SharedWorker</code>（共享状态）、<code>postMessage</code>（点对点）。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~28 分钟</span>
+          <span><strong>前置</strong> 07 IndexedDB · P4 Workers</span>
+          <span
+            ><strong>规范</strong>
+            <a href="https://www.w3.org/TR/service-workers/" target="_blank" rel="noopener"
+              >W3C Service Workers</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ul>
+          <li>
+            SW 是<strong>独立线程</strong>，没有 DOM、没有 <code>window</code>；只有
+            <code>self</code>、<code>caches</code>、<code>clients</code>、<code>fetch</code>、<code>indexedDB</code>。
+          </li>
+          <li>
+            生命周期：<strong>register → install → activate → fetch/message</strong>；新版本默认等所有旧 SW
+            控制的页面关闭才激活，<code>skipWaiting</code> + <code>clients.claim</code> 可强制立即生效。
+          </li>
+          <li>SW 只能注册在 <strong>HTTPS</strong>（localhost 豁免），作用域受 SW 脚本路径限制。</li>
+          <li>Cache API 存的是 <code>Request</code>/<code>Response</code> 键值对；和 IndexedDB 共享配额。</li>
+          <li>
+            四种缓存策略：<strong>cache-first</strong>（静态资源）、<strong>network-first</strong>（API）、<strong>stale-while-revalidate</strong>（推荐默认）、<strong
+              >cache-only</strong
+            >
+            / <strong>network-only</strong>（边界）。
+          </li>
+          <li>
+            跨标签通信：<code>BroadcastChannel</code>（同源广播）、<code>SharedWorker</code>（共享状态 +
+            复杂协议）、<code>postMessage</code>（点对点 + Transferable）。
+          </li>
+        </ul>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+        <h3>SW 生命周期</h3>
+        <pre><code class="language-javascript">// 注册（主线程）
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", async () =&gt; {
+    const reg = await navigator.serviceWorker.register("/sw.js", {
+      scope: "/",                    // 作用域默认是脚本所在目录
+      updateViaCache: "none",        // sw.js 自身不缓存（HTTP 缓存层面）
+      type: "classic",               // 或 "module" 支持 import
+    });
+    console.log("SW registered:", reg.scope);
+  });
+}
+
+// sw.js
+self.addEventListener("install", (event) =&gt; {
+  // 预缓存静态资源
+  event.waitUntil(
+    caches.open("static-v1").then((cache) =&gt; cache.addAll([
+      "/", "/app.js", "/app.css",
+    ])),
+  );
+  // self.skipWaiting(); // 跳过 waiting 阶段
+});
+
+self.addEventListener("activate", (event) =&gt; {
+  // 清理旧版本缓存
+  event.waitUntil((async () =&gt; {
+    const names = await caches.keys();
+    await Promise.all(names.filter((n) =&gt; n !== "static-v1").map((n) =&gt; caches.delete(n)));
+    // await self.clients.claim(); // 立即接管已存在的页面
+  })());
+});
+
+self.addEventListener("fetch", (event) =&gt; {
+  event.respondWith(handleFetch(event.request));
+});</code></pre>
+
+        <h3>install 与 activate 的微妙区别</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>阶段</th>
+              <th>触发时机</th>
+              <th>适合做</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>install</code></td>
+              <td>SW 文件变化后首次解析</td>
+              <td>预缓存静态资源，<strong>不要</strong>在此清理旧缓存（旧 SW 还在用）</td>
+            </tr>
+            <tr>
+              <td><code>waiting</code></td>
+              <td>install 完成，等旧 SW 退役</td>
+              <td>显示更新提示，用户确认后 <code>skipWaiting</code></td>
+            </tr>
+            <tr>
+              <td><code>activate</code></td>
+              <td>所有旧 SW 控制页面关闭</td>
+              <td>清理旧缓存、升级 IDB schema、<code>clients.claim</code></td>
+            </tr>
+            <tr>
+              <td><code>idle</code></td>
+              <td>40 秒无事件自动 sleep</td>
+              <td>—</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          <strong>skipWaiting + clients.claim 的风险</strong>：旧页面加载了 v1 资源（JS/CSS/chunks），立即换成 v2 的
+          SW，如果 v2 缓存里没有 v1 的 chunk，用户触发懒加载会 404。生产一般用"通知 + 用户主动刷新"模式，不默认
+          skipWaiting。
+        </p>
+
+        <h3>scope 与 clients</h3>
+        <pre><code class="language-javascript">// scope 是注册时的 URL 前缀
+navigator.serviceWorker.register("/sw.js", { scope: "/" }); // 控制整个站
+navigator.serviceWorker.register("/app/sw.js", { scope: "/app/" }); // 只控制 /app/*
+// 想让根目录 /sw.js 控制 / 但允许放在 /app/ 需服务端返回 Service-Worker-Allowed: /
+
+// clients：SW 管理下所有同源页面的引用
+self.addEventListener("message", async (event) =&gt; {
+  const allClients = await self.clients.matchAll({ type: "window" });
+  for (const client of allClients) {
+    client.postMessage({ type: "UPDATE" }); // 向所有页面广播
+  }
+});
+
+// 唯一客户端模式：新窗口聚焦已打开的
+self.addEventListener("notificationclick", (event) =&gt; {
+  event.waitUntil((async () =&gt; {
+    const clients = await self.clients.matchAll({ type: "window" });
+    for (const c of clients) {
+      if (c.url.endsWith("/app") &amp;&amp; "focus" in c) return c.focus();
+    }
+    return self.clients.openWindow("/app");
+  })());
+});</code></pre>
+
+        <h3>Cache API</h3>
+        <pre><code class="language-javascript">// Cache 对象：Request → Response 映射
+const cache = await caches.open("runtime-v1");
+
+await cache.put(request, response.clone()); // response 是流，put 会消费，需 clone
+const cached = await cache.match(request);   // 支持字符串或 Request
+await cache.delete(request);
+const keys = await cache.keys();              // 所有 Request
+
+// 按 URL 路径匹配（忽略 search）
+const resp = await cache.match(request, { ignoreSearch: true });
+// 跨 cache 匹配
+const resp2 = await caches.match(request);  // 搜索所有 cache
+
+// 批量添加（失败则全部回滚）
+await cache.addAll(["/a", "/b", "/c"]);</code></pre>
+        <p>
+          <code>response.clone()</code> 的必要性：<code>Response.body</code> 是 ReadableStream，只能读一次。<code
+            >put(req, resp)</code
+          >
+          消费流后，<code>resp.body</code> 已 locked，不能再用 <code>resp.text()</code>。
+        </p>
+
+        <h3>四种缓存策略</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>策略</th>
+              <th>适合场景</th>
+              <th>优点</th>
+              <th>缺点</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>cache-first</td>
+              <td>版本化静态资源（JS/CSS 带 hash）</td>
+              <td>最快，离线可用</td>
+              <td>资源更新依赖版本化 URL</td>
+            </tr>
+            <tr>
+              <td>network-first</td>
+              <td>HTML / 动态 API</td>
+              <td>始终最新</td>
+              <td>离线时才用缓存，网络抖动时慢</td>
+            </tr>
+            <tr>
+              <td>stale-while-revalidate</td>
+              <td>默认推荐 / 头像 / 配置</td>
+              <td>立即返回旧缓存 + 后台更新</td>
+              <td>用户首次看到可能是旧数据</td>
+            </tr>
+            <tr>
+              <td>cache-only</td>
+              <td>纯离线资源</td>
+              <td>—</td>
+              <td>无法更新</td>
+            </tr>
+            <tr>
+              <td>network-only</td>
+              <td>鉴权 API / 支付</td>
+              <td>保证实时</td>
+              <td>SW 完全不缓存</td>
+            </tr>
+          </tbody>
+        </table>
+        <pre><code class="language-javascript">// stale-while-revalidate（推荐默认）
+async function staleWhileRevalidate(request) {
+  const cache = await caches.open("swr-v1");
+  const cached = await cache.match(request);
+
+  const fetchPromise = fetch(request).then((resp) =&gt; {
+    if (resp.ok) cache.put(request, resp.clone());
+    return resp;
+  }).catch(() =&gt; null);
+
+  return cached ?? (await fetchPromise) ?? new Response("offline", { status: 503 });
+}</code></pre>
+
+        <h3>Workbox 简介</h3>
+        <p>
+          Google 出的 SW 编排库，声明式路由 + 缓存策略。Next.js PWA
+          插件（<code>next-pwa</code>、<code>@ducanh2912/next-pwa</code>）底层就是它。
+        </p>
+        <pre><code class="language-javascript">import { registerRoute } from "workbox-routing";
+import { CacheFirst, NetworkFirst, StaleWhileRevalidate } from "workbox-strategies";
+import { ExpirationPlugin } from "workbox-expiration";
+
+registerRoute(
+  ({ request }) =&gt; request.destination === "image",
+  new CacheFirst({
+    cacheName: "images",
+    plugins: [new ExpirationPlugin({ maxEntries: 50, maxAgeSeconds: 30 * 24 * 3600 })],
+  }),
+);
+
+registerRoute(
+  ({ url }) =&gt; url.pathname.startsWith("/api/"),
+  new NetworkFirst({ cacheName: "api", networkTimeoutSeconds: 3 }),
+);</code></pre>
+
+        <h3>Background Sync</h3>
+        <pre><code class="language-javascript">// 主线程：注册同步任务
+const reg = await navigator.serviceWorker.ready;
+await reg.sync.register("send-pending-messages");
+
+// sw.js
+self.addEventListener("sync", (event) =&gt; {
+  if (event.tag === "send-pending-messages") {
+    event.waitUntil(flushMessageQueue());
+  }
+});</code></pre>
+        <p>浏览器在网络恢复后（可能跨浏览器重启）自动触发 sync 事件。仅 Chromium 支持，Safari / Firefox 仍在跟进。</p>
+
+        <h3>跨上下文通信对比</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>机制</th>
+              <th>通信对象</th>
+              <th>API 特点</th>
+              <th>典型用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>window.postMessage</code></td>
+              <td>iframe / 弹出窗口 / opener</td>
+              <td>点对点，需目标引用</td>
+              <td>跨源嵌入通信（SSO、支付）</td>
+            </tr>
+            <tr>
+              <td><code>worker.postMessage</code></td>
+              <td>主线程 ↔ Worker</td>
+              <td>结构化克隆 + Transferable</td>
+              <td>CPU 密集任务</td>
+            </tr>
+            <tr>
+              <td><code>BroadcastChannel</code></td>
+              <td>所有同源上下文（tab/SW/Worker）</td>
+              <td>发布订阅，自己不收</td>
+              <td>登出广播、数据同步</td>
+            </tr>
+            <tr>
+              <td><code>SharedWorker</code></td>
+              <td>所有同源标签共享一个 Worker</td>
+              <td>状态集中，port 通信</td>
+              <td>WebSocket 多路复用</td>
+            </tr>
+            <tr>
+              <td><code>Service Worker clients</code></td>
+              <td>SW ↔ 所有控制页面</td>
+              <td>SW 主动广播</td>
+              <td>推送、更新通知</td>
+            </tr>
+            <tr>
+              <td><code>storage</code> 事件</td>
+              <td>同源标签（非当前）</td>
+              <td>依赖 LocalStorage 写入</td>
+              <td>简易同步（见 P6-06）</td>
+            </tr>
+            <tr>
+              <td>IndexedDB + polling</td>
+              <td>任何上下文</td>
+              <td>慢、需定时</td>
+              <td>持久化协作状态</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>BroadcastChannel 语义</h3>
+        <pre><code class="language-javascript">// 所有同源上下文共享同名 channel
+const bc = new BroadcastChannel("auth");
+bc.postMessage({ type: "LOGOUT" });
+
+bc.addEventListener("message", (event) =&gt; {
+  // 发送者自己不会收到；其他所有同名 channel 的上下文会收
+  if (event.data.type === "LOGOUT") location.href = "/login";
+});
+
+bc.close(); // 释放，防止内存泄漏
+
+// 支持 structured clone：Date、Map、Blob 都能传</code></pre>
+
+        <h3>SharedWorker 语义</h3>
+        <pre><code class="language-javascript">// 主线程：连接到共享 Worker
+const worker = new SharedWorker("/shared.js");
+worker.port.start();
+worker.port.postMessage({ type: "PING" });
+worker.port.addEventListener("message", (e) =&gt; console.log(e.data));
+
+// shared.js：被所有同源标签共享的单例
+const connections = new Set();
+
+self.addEventListener("connect", (event) =&gt; {
+  const port = event.ports[0];
+  connections.add(port);
+  port.addEventListener("message", (e) =&gt; {
+    // 广播到所有连接
+    for (const p of connections) p.postMessage(e.data);
+  });
+  port.start();
+});</code></pre>
+        <p>
+          SharedWorker <strong>不在 Chrome Android / Safari iOS 上可用</strong>，移动端生产不可依赖。桌面端可以用它做
+          WebSocket 多路复用（10 个标签共享 1 个 WS 连接）。
+        </p>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <h3>PWA 离线骨架</h3>
+        <pre><code class="language-javascript">// sw.js
+const APP_SHELL = "shell-v3";
+const SHELL_URLS = ["/", "/offline.html", "/manifest.webmanifest", "/icon.svg"];
+
+self.addEventListener("install", (e) =&gt; {
+  e.waitUntil(caches.open(APP_SHELL).then((c) =&gt; c.addAll(SHELL_URLS)));
+});
+
+self.addEventListener("activate", (e) =&gt; {
+  e.waitUntil((async () =&gt; {
+    const names = await caches.keys();
+    await Promise.all(names.filter((n) =&gt; n !== APP_SHELL).map(caches.delete.bind(caches)));
+  })());
+});
+
+self.addEventListener("fetch", (e) =&gt; {
+  const req = e.request;
+  if (req.mode === "navigate") {
+    // 导航请求：网络优先，失败回 offline 页
+    e.respondWith((async () =&gt; {
+      try { return await fetch(req); }
+      catch { return (await caches.match("/offline.html")) ?? Response.error(); }
+    })());
+    return;
+  }
+  // 其他：cache-first
+  e.respondWith(caches.match(req).then((r) =&gt; r ?? fetch(req)));
+});</code></pre>
+
+        <h3>SW 更新提示</h3>
+        <pre><code class="language-typescript">const reg = await navigator.serviceWorker.register("/sw.js");
+reg.addEventListener("updatefound", () =&gt; {
+  const newSW = reg.installing;
+  newSW?.addEventListener("statechange", () =&gt; {
+    if (newSW.state === "installed" &amp;&amp; navigator.serviceWorker.controller) {
+      // 有新版本且当前已被旧 SW 控制
+      showUpdateToast(() =&gt; {
+        newSW.postMessage({ type: "SKIP_WAITING" });
+      });
+    }
+  });
+});
+
+// sw.js
+self.addEventListener("message", (e) =&gt; {
+  if (e.data?.type === "SKIP_WAITING") self.skipWaiting();
+});
+
+navigator.serviceWorker.addEventListener("controllerchange", () =&gt; {
+  // 新 SW 接管，刷新页面
+  location.reload();
+});</code></pre>
+
+        <h3>跨标签广播登出</h3>
+        <pre><code class="language-typescript">const authChannel = new BroadcastChannel("auth");
+
+export async function logout() {
+  await fetch("/api/logout", { method: "POST" });
+  authChannel.postMessage({ type: "LOGOUT" });
+  window.location.href = "/login"; // 自己跳转
+}
+
+// 在 App 根组件监听
+authChannel.addEventListener("message", (e) =&gt; {
+  if (e.data.type === "LOGOUT") window.location.href = "/login";
+});</code></pre>
+
+        <h3>WebSocket 连接共享（SharedWorker 场景）</h3>
+        <pre><code class="language-javascript">// ws-shared.js（SharedWorker 脚本）
+let ws = null;
+const ports = new Set();
+
+function ensureWs() {
+  if (ws?.readyState &lt;= WebSocket.OPEN) return ws;
+  ws = new WebSocket("wss://api.example.com/stream");
+  ws.onmessage = (e) =&gt; ports.forEach((p) =&gt; p.postMessage({ type: "ws", data: e.data }));
+  return ws;
+}
+
+self.addEventListener("connect", (event) =&gt; {
+  const port = event.ports[0];
+  ports.add(port);
+  port.addEventListener("message", (e) =&gt; {
+    if (e.data.type === "send") ensureWs().send(e.data.payload);
+  });
+  port.addEventListener("close", () =&gt; ports.delete(port));
+  port.start();
+  ensureWs();
+});</code></pre>
+        <p>
+          优点：10 个标签共享一个 WS 连接，节省服务端连接数 + 带宽。缺点：SharedWorker 在移动浏览器支持差，需有
+          BroadcastChannel fallback。
+        </p>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <h3>类型化的 SW 通信</h3>
+        <pre><code class="language-typescript">// types.ts 共享
+type SWRequest =
+  | { type: "PREFETCH"; urls: string[] }
+  | { type: "CLEAR_CACHE"; name: string }
+  | { type: "SKIP_WAITING" };
+
+type SWResponse =
+  | { type: "PREFETCH_DONE"; failed: string[] }
+  | { type: "CACHE_CLEARED" };
+
+// 主线程
+async function ask&lt;T extends SWResponse&gt;(msg: SWRequest): Promise&lt;T&gt; {
+  const reg = await navigator.serviceWorker.ready;
+  return new Promise((resolve) =&gt; {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = (e) =&gt; resolve(e.data);
+    reg.active?.postMessage(msg, [channel.port2]);
+  });
+}
+
+// sw.js
+self.addEventListener("message", (event) =&gt; {
+  const msg = event.data;
+  const [port] = event.ports; // MessagePort 或 undefined
+  if (msg.type === "PREFETCH") {
+    event.waitUntil((async () =&gt; {
+      const failed: string[] = [];
+      const cache = await caches.open("prefetch");
+      for (const url of msg.urls) {
+        try { await cache.add(url); } catch { failed.push(url); }
+      }
+      port?.postMessage({ type: "PREFETCH_DONE", failed });
+    })());
+  }
+});</code></pre>
+
+        <h3>缓存版本化 + 清理</h3>
+        <pre><code class="language-javascript">const CACHE_VERSION = "v5";
+const CACHES = {
+  static: `static-${CACHE_VERSION}`,
+  images: `images-${CACHE_VERSION}`,
+  api: `api-${CACHE_VERSION}`,
+};
+
+self.addEventListener("activate", (e) =&gt; {
+  e.waitUntil((async () =&gt; {
+    const names = await caches.keys();
+    const expected = new Set(Object.values(CACHES));
+    await Promise.all(names.filter((n) =&gt; !expected.has(n)).map((n) =&gt; caches.delete(n)));
+    await self.clients.claim();
+  })());
+});</code></pre>
+
+        <h3>带 TTL 的缓存响应</h3>
+        <pre><code class="language-javascript">async function cacheWithTtl(request, ttlMs) {
+  const cache = await caches.open("api-v1");
+  const resp = await fetch(request);
+  if (!resp.ok) return resp;
+
+  // 在 Response header 注入过期时间
+  const body = await resp.clone().blob();
+  const headers = new Headers(resp.headers);
+  headers.set("x-cached-at", String(Date.now()));
+  headers.set("x-cached-ttl", String(ttlMs));
+  const stored = new Response(body, { status: resp.status, statusText: resp.statusText, headers });
+  await cache.put(request, stored);
+  return resp;
+}
+
+async function matchWithTtl(request) {
+  const cache = await caches.open("api-v1");
+  const resp = await cache.match(request);
+  if (!resp) return null;
+  const cachedAt = Number(resp.headers.get("x-cached-at"));
+  const ttl = Number(resp.headers.get("x-cached-ttl"));
+  if (Date.now() - cachedAt &gt; ttl) {
+    await cache.delete(request);
+    return null;
+  }
+  return resp;
+}</code></pre>
+
+        <!-- 05 常见陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="callout callout-warn">
+          <strong>陷阱 1：sw.js 自身被 HTTP 缓存</strong>
+          <p>
+            如果 CDN 把 <code>/sw.js</code> 缓存 1 小时，用户 1 小时内拿不到新版本 SW。<strong>必须</strong> 服务端对
+            sw.js 返回 <code>Cache-Control: no-cache</code> 或 <code>max-age=0</code>，且注册时用
+            <code>updateViaCache: "none"</code>。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 2：skipWaiting 导致 chunk 404</strong>
+          <p>
+            SPA 懒加载的 chunk 文件名带 hash，SW v2 激活后旧页面懒加载 v1 的 chunk，缓存里没有→ 404。要么保留最近 N
+            个版本的 chunk 缓存，要么更新时用"提示 + 刷新"替代 skipWaiting。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 3：event.waitUntil 之外的异步操作会被 kill</strong>
+          <p>
+            SW 进入 idle 会被浏览器终止。<code>install</code>/<code>activate</code>/<code>fetch</code>/<code>sync</code>
+            中的异步工作必须包在 <code>event.waitUntil(promise)</code> 内，否则 SW 睡眠后任务中断。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 4：fetch 拦截不跨 origin</strong>
+          <p>
+            SW 只能拦截同 scope 下的 fetch。跨源（CDN 图片、第三方 API）你仍然可以用
+            <code>fetch(crossOriginUrl)</code> 取回并缓存，但响应必须是 <code>cors</code> 模式且对方允许；否则拿到
+            opaque response（状态码 0，body 不可读）。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 5：Response.body 读一次即锁</strong>
+          <p>
+            <code>cache.put(req, resp)</code> 消费了 resp.body；同一响应想同时返给客户端必须
+            <code>resp.clone()</code>。忘记 clone 后 <code>event.respondWith(resp)</code> 会抛 "Response body is already
+            used"。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 6：Cache API 不尊重 HTTP Cache-Control</strong>
+          <p>
+            Cache API 是<strong>显式</strong>存储：你 put 了就永久在，直到你删除或用户清理。<code
+              >Cache-Control: no-store</code
+            >
+            不会阻止 SW 写入。过期策略全靠自己实现（上面的 TTL 示例）。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 7：调试时忘记关 "Update on reload"</strong>
+          <p>
+            DevTools Application → Service Workers 里勾了 "Update on
+            reload"，每次刷新都强制更新，线上行为不一致。定位线上 bug 时记得关掉。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 8：BroadcastChannel 发送者自己不收</strong>
+          <p>
+            发了 <code>bc.postMessage(...)</code> 想让自己和其他标签一起处理，但自己标签不触发。要么在
+            <code>postMessage</code> 后手动调函数，要么在 post 前先执行本地副作用。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 9：SharedWorker 移动端不可用</strong>
+          <p>
+            Chrome Android / Safari iOS 不支持 SharedWorker。用它做核心通信 → 移动端直接挂。BroadcastChannel +
+            单标签做主的选举模式是更安全的替代。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 10：postMessage Transferable 传完原对象不可用</strong>
+          <p>
+            <code>worker.postMessage(buffer, [buffer])</code> 转移 ArrayBuffer 所有权后，主线程
+            <code>buffer.byteLength === 0</code>。想共享不转移，去掉第二个参数让 structured clone
+            复制（开销大但原对象仍可用）。真正共享用 SharedArrayBuffer + Atomics。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://www.w3.org/TR/service-workers/" target="_blank" rel="noopener"
+              >W3C · Service Workers 规范</a
+            >
+          </li>
+          <li><a href="https://web.dev/learn/pwa/" target="_blank" rel="noopener">web.dev · Learn PWA</a></li>
+          <li><a href="https://developer.chrome.com/docs/workbox" target="_blank" rel="noopener">Workbox 文档</a></li>
+          <li>
+            <a href="https://jakearchibald.com/2014/offline-cookbook/" target="_blank" rel="noopener"
+              >Jake Archibald · Offline Cookbook</a
+            >（经典缓存策略合集）
+          </li>
+          <li>
+            <a href="https://developer.mozilla.org/en-US/docs/Web/API/BroadcastChannel" target="_blank" rel="noopener"
+              >MDN · BroadcastChannel</a
+            >
+          </li>
+          <li><strong>下一阶段</strong> → P7 · 高级专题（Binary/File/Blob、RAF/动画、Web Components、Regex 引擎）。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="07-indexeddb.html"
+            ><span class="label">← 上一章</span><span class="title">07 · IndexedDB</span></a
+          >
+          <a class="next" href="../07-advanced/index.html"
+            ><span class="label">下一阶段 →</span><span class="title">P7 · 高级专题</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

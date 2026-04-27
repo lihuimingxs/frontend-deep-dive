@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ESM 规范与模块图 · P4 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="ESM 规范加载三阶段（parse/link/evaluate）、live binding 语义、模块图与循环依赖的处理、module namespace object、import.meta、ES Module Record。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P4 目录</a>
+          <a href="https://javascript.info/modules-intro" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · 模块 & 元编程</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-esm.html">01 · ESM 规范与模块图</a></li>
+          <li><a href="02-cjs-interop.html">02 · CJS 与 ESM 互操作</a></li>
+          <li><a href="03-dynamic-import.html">03 · 动态 import</a></li>
+          <li><a href="04-tree-shaking.html">04 · Tree-shaking 原理</a></li>
+          <li><a href="05-import-maps.html">05 · import maps 与模块解析</a></li>
+          <li><a href="06-polyfills.html">06 · Polyfill 策略</a></li>
+          <li><a href="07-eval-function.html">07 · eval 与 new Function</a></li>
+          <li><a href="08-workers.html">08 · Web Workers</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-fundamentals/index.html">P1 · 语言基础</a></li>
+          <li><a href="../02-advanced/index.html">P2 · 高阶语言</a></li>
+          <li><a href="../03-async/index.html">P3 · 异步 & 错误处理</a></li>
+          <li><a href="../05-dom/index.html">P5 · DOM & 事件</a></li>
+          <li><a href="../06-network/index.html">P6 · 网络 & 存储</a></li>
+          <li><a href="../07-advanced/index.html">P7 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · 模块 & 元编程</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>ESM 规范与模块图</span>
+        </nav>
+
+        <h1>ESM 规范与模块图</h1>
+        <p class="lead">
+          ES Modules 是 JS 的原生模块系统。和 CJS 的"每次 require 就当场执行"不同，ESM
+          用<strong>三阶段加载模型</strong>：解析 → 链接 → 执行。理解这三个阶段能解释所有 ESM"看起来反常"的行为 ——
+          循环依赖为什么能工作、export 为什么是 live binding、为什么 import 语句必须在顶层。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> P1 对象 · P2 作用域</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/modules-intro" target="_blank" rel="noopener"
+              >Modules, introduction</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// ===== 导出 =====
+export const PI = 3.14;               // 命名导出
+export function add(a, b) { return a + b; }
+export default class App { }           // 默认导出（每模块至多一个）
+
+// 合并导出
+const x = 1, y = 2;
+export { x, y };
+export { x as X };                     // 重命名
+
+// 从其他模块再导出
+export { foo } from "./other.mjs";
+export * from "./other.mjs";           // 批量（不含 default）
+export { default as Foo } from "./other.mjs";
+
+// ===== 导入 =====
+import App, { PI, add as sum } from "./app.mjs";
+import * as ns from "./app.mjs";        // namespace import
+import "./side-effect.mjs";             // 只执行不导入
+const mod = await import("./lazy.mjs"); // 动态 import
+
+// ===== 元信息 =====
+import.meta.url;                        // 当前模块 URL
+import.meta.resolve("./x.mjs");         // 解析路径（新版支持）</code></pre>
+        </div>
+
+        <h3>如何启用 ESM</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>环境</th>
+              <th>启用方式</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>浏览器</td>
+              <td><code>&lt;script type="module" src="..."&gt;</code></td>
+            </tr>
+            <tr>
+              <td>Node.js</td>
+              <td>文件后缀 <code>.mjs</code>，或 package.json 设 <code>"type": "module"</code></td>
+            </tr>
+            <tr>
+              <td>TS/构建器</td>
+              <td>默认 ESM（Vite、Next.js、Bun、Deno 全部如此）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="three-phases">三阶段加载模型</h3>
+        <p>规范把 ESM 加载严格拆成三步，<strong>不能跨模块交织</strong>：</p>
+        <ol>
+          <li>
+            <strong>Parse（解析构造）</strong> —— 递归抓所有 <code>import</code> 依赖，建立
+            <em>module graph</em>。静态分析 <code>import/export</code> 语句，但不运行任何代码。
+          </li>
+          <li>
+            <strong>Link（链接）</strong> —— 为每个模块创建 <em>module environment record</em>；把 import 的"名字"和
+            export 的"槽"绑定到一起（<em>live binding</em>）。
+          </li>
+          <li>
+            <strong>Evaluate（执行）</strong> —— 按依赖拓扑顺序执行模块顶层代码。每个模块只执行一次（有 module 缓存）。
+          </li>
+        </ol>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// main.mjs
+import { counter, inc } from "./counter.mjs";
+console.log(counter);   // 0
+inc();
+console.log(counter);   // 1  ← 值跟着原始模块变
+
+// counter.mjs
+export let counter = 0;
+export function inc() { counter++; }</code></pre>
+        </div>
+        <p>
+          "counter 导出后还能变"这件事 CJS 做不到 —— CJS 的 <code>exports.x</code> 是值拷贝。ESM 是<strong
+            >live binding</strong
+          >：import 的是一个"引用槽"，不是"当前值"。
+        </p>
+
+        <h3 id="hoisting">import / export 被 hoist 到模块顶部</h3>
+        <p>
+          规范规定：<code>import</code> 和 <code>export</code> 声明<strong>只能在模块顶层</strong>（不能放 if/function
+          里）。因为 parse 阶段就要全部收集完毕。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// ❌ 语法错误：import 不能在函数里
+function load() {
+  import { x } from "./mod.mjs";   // SyntaxError
+}
+
+// ✓ 如果要条件/延迟加载，用动态 import（下一章详讲）
+async function load() {
+  const { x } = await import("./mod.mjs");
+}</code></pre>
+        </div>
+
+        <h3 id="live-binding">Live binding 的实现</h3>
+        <p>
+          <code>import { x } from "./m"</code> 里的 <code>x</code> 不是变量，是<strong
+            >对模块 <code>m</code> 的 <code>x</code> binding 的引用</strong
+          >。规范层面它是 ResolveBinding 到远端 Environment Record 的一条 link：
+        </p>
+        <ul>
+          <li><strong>读</strong>：始终拿到 m 当前的 x 值。</li>
+          <li>
+            <strong>写</strong>：<em>不允许</em>。<code>x = 1</code> 在 strict（ESM 默认严格）下抛 TypeError。import
+            变量是 const-like。
+          </li>
+          <li><strong>结构变化</strong>：无。名字集在 link 阶段就冻结了，运行时不能新增 export。</li>
+        </ul>
+
+        <h3 id="namespace-object">Module namespace object</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">import * as m from "./mod.mjs";
+
+m.x;                    // 访问 export
+m.default;              // 访问默认导出
+Object.keys(m);         // 全部 export 名
+typeof m;               // "object"
+m[Symbol.toStringTag];  // "Module"
+
+// ⚠ 限制
+m.foo = 1;              // TypeError（frozen）
+delete m.x;             // TypeError
+Object.isFrozen(m);     // true
+Object.getPrototypeOf(m);  // null  ← 特殊对象
+
+// 动态 import 返回的也是这种对象（见 P4-03）
+const m2 = await import("./mod.mjs");
+m2.x;                   // 同 m.x</code></pre>
+        </div>
+
+        <h3 id="module-graph">模块图与循环依赖</h3>
+        <p>
+          同一 URL 只解析/执行一次。如果 A import B，B import A —— Link 阶段就能绑定成功（虽然值 still undefined）：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// a.mjs
+import { b } from "./b.mjs";
+export const a = "A";
+console.log("a.mjs seeing b =", b);   // undefined（B 还没跑到 export b）
+
+// b.mjs
+import { a } from "./a.mjs";
+export const b = "B";
+console.log("b.mjs seeing a =", a);   // undefined（但 binding 已建立）
+
+// index.mjs
+import "./a.mjs";
+
+// 输出：
+// b.mjs seeing a = undefined         ← b 先跑（依赖深度优先）
+// a.mjs seeing b = "B"               ← 回到 a 时 b 已执行完</code></pre>
+        </div>
+        <p>
+          和 CJS 循环 require 的区别：ESM <strong>total live binding</strong> —— 先放 undefined
+          槽，后续访问时总能拿到最新值。CJS 是"你拿到的是<em>当下</em>的 exports 对象副本"，循环 require 常拿到半成品。
+        </p>
+
+        <h3 id="import-meta"><code>import.meta</code></h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 每个 ESM 里可用的元信息对象
+import.meta.url;            // "file:///abs/path/to/module.mjs"
+import.meta.resolve("./x.mjs");  // 解析得到的绝对 URL（现代浏览器 / Node 20+）
+
+// Node 特有
+import.meta.dirname;        // 所在目录绝对路径（Node 20.11+）
+import.meta.filename;       // 模块文件绝对路径
+
+// 读取同目录资源
+const configUrl = new URL("./config.json", import.meta.url);
+const config = await fetch(configUrl).then(r =&gt; r.json());
+
+// 检测是否主入口（替代 require.main === module）
+if (import.meta.main) { /* 作为 entry 运行 */ }  // Deno / 部分 runtime</code></pre>
+        </div>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">模块天然 singleton</h3>
+          <p>ESM 的 "同 URL 只执行一次 + 顶层 const" 让模块天然是 singleton，不用写 Singleton pattern：</p>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// db.mjs
+import { Pool } from "pg";
+export const pool = new Pool({ connectionString: process.env.DB_URL });
+
+// 其他任何模块 import 得到的都是同一个 pool
+import { pool } from "./db.mjs";</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Live binding 实现"模块级状态"</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// config.mjs
+export let locale = "zh-CN";
+export function setLocale(l) { locale = l; }
+
+// 任何 consumer
+import { locale, setLocale } from "./config.mjs";
+console.log(locale);     // "zh-CN"
+setLocale("en-US");
+console.log(locale);     // "en-US"  ← 自动更新
+// 注意：import 的 locale 是 const-like，但 setLocale 修改的是<strong>原模块</strong>的 let</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">顶层 await 做异步初始化</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// config.mjs
+const response = await fetch("/api/config");
+export const config = await response.json();
+
+// 使用方 —— import 会等 config.mjs 完成
+import { config } from "./config.mjs";
+// config 已就绪
+</code></pre>
+          </div>
+          <p style="margin-top: 8px">
+            规范术语 <em>Top-Level Await</em>（ES2022）。模块图会等 async 模块 fulfill 才继续。见 P3-05。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Browser 原生模块加载</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 现代浏览器直接支持，开发环境可零构建
+// &lt;script type="module" src="./main.mjs"&gt;&lt;/script&gt;
+
+// main.mjs
+import { render } from "./ui.mjs";
+import { api } from "./api.mjs";
+render(await api.load());
+
+// 浏览器会：
+// 1. 下载 main.mjs → 解析 → 发现 import ./ui.mjs 和 ./api.mjs
+// 2. 并发下载这两个
+// 3. 递归解析它们的依赖
+// 4. 全部 link 后按拓扑执行
+// 5. ⚠ 每个 import 都是一个独立 HTTP 请求（无 bundler），依赖多会很慢</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">import.meta.url 读取同目录资源</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// shader.mjs 需要读取同目录的 shader.glsl
+const shaderUrl = new URL("./shader.glsl", import.meta.url);
+const response = await fetch(shaderUrl);
+export const shaderSource = await response.text();
+
+// 这比 CJS 时代的 __dirname + fs.readFileSync 更通用
+// 浏览器和 Node 都能跑（前者 fetch URL, 后者 fs.readFile(fileURL)）</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-default-named">默认 + 命名导出混合</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// lib.mjs
+export default function main() { /* ... */ }    // 默认导出
+export const version = "1.0";                    // 命名导出
+export const utils = { /* ... */ };
+
+// 使用方
+import main, { version, utils } from "./lib.mjs";
+//       ↑ 默认 import       ↑ 命名 import（大括号内）
+
+// namespace import
+import * as lib from "./lib.mjs";
+lib.default;    // 默认导出
+lib.version;
+lib.utils;</code></pre>
+        </div>
+
+        <h3 id="ex-re-export">Re-export（桶文件）</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// index.mjs（把多模块聚合成一个入口）
+export { Button } from "./Button.mjs";
+export { Input } from "./Input.mjs";
+export * from "./hooks.mjs";              // 批量（不含默认）
+export { default as Modal } from "./Modal.mjs";   // 别名重出
+
+// 使用
+import { Button, Input, useStorage, Modal } from "./ui";
+
+// ⚠ 注意桶文件对 tree-shaking 的影响（见 P4-04）</code></pre>
+        </div>
+
+        <h3 id="ex-conditional-import">条件加载（静态 + 动态混合）</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// ❌ 不能条件 static import
+// if (process.env.NODE_ENV === "dev") import { devTools } from "./dev.mjs";
+
+// ✓ 动态 import
+let devTools = null;
+if (process.env.NODE_ENV === "development") {
+  ({ devTools } = await import("./dev.mjs"));
+}
+
+// 或 lazy 一次：
+let loadDev;
+async function getDev() {
+  loadDev ??= import("./dev.mjs");
+  return await loadDev;
+}</code></pre>
+        </div>
+
+        <h3 id="ex-circular">安全处理循环依赖</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// a.mjs
+import { helper } from "./b.mjs";
+export function doA() {
+  return helper();            // ⚠ 顶层调用会 undefined，但函数<em>内</em>调用没事
+}
+
+// b.mjs
+import { doA } from "./a.mjs";
+export function helper() { return "h"; }
+// export function dangerous() { return doA(); }  // 也 OK（运行时）
+// doA();    // ❌ 顶层立即调用：a 还没执行完，doA 是 TDZ</code></pre>
+        </div>
+
+        <!-- 05 陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>import</code> 不能在顶层之外</div>
+          <p>静态 import 只在模块顶层。函数里、if 里、try 里都不行。要动态就用 <code>await import()</code>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>import</code> 绑定不可赋值</div>
+          <p>
+            <code>import { x } from "./m"; x = 1;</code> 在 strict（ESM 默认）抛 TypeError。想"修改 m 的 x"必须导出
+            setter 或改 x 为普通 let + 提供 setter。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">ESM 在浏览器的 MIME 类型</div>
+          <p>
+            浏览器要求 <code>type="module"</code> 脚本的 <code>Content-Type</code> 是 <code>text/javascript</code> /
+            <code>application/javascript</code>。服务器返回 <code>text/plain</code> 的 .js 文件会被拒绝加载。Vite/Next
+            dev 服务器都处理好了；自建静态服务要检查。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">ESM 的 script <strong>默认 defer</strong></div>
+          <p>
+            <code>&lt;script type="module"&gt;</code> 行为等同于 <code>defer</code>：HTML 解析完才执行。不会阻塞
+            parsing。不用手写 <code>defer</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Node 里 <code>__dirname</code> / <code>__filename</code> 在 ESM 不可用</div>
+          <p>
+            ESM 下用 <code>import.meta.dirname</code> / <code>import.meta.filename</code>（Node 20.11+）或
+            <code>new URL(".", import.meta.url).pathname</code>。Node 22+ 也允许
+            <code>require(esm)</code>（有限制）但最佳实践仍是 import.meta。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">循环依赖顶层调用是 TDZ</div>
+          <p>
+            上面
+            <code>a.mjs</code>
+            例子：函数<em>内</em>调用循环导入的函数没事（运行时已链接好）；<strong>顶层</strong>立刻调用会触发
+            TDZ（依赖方还未执行完）。把初始化搬进 function 或用懒求值。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Re-export 破坏 tree-shaking</div>
+          <p>
+            桶文件 <code>export * from "./big.mjs"</code> 让打包器认为"整个 big 被用" —— 即使你只用其中一个。加
+            <code>sideEffects: false</code> 让打包器大胆裁剪。详细在 P4-04。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>import * as m</code> 的 <code>m</code> 是 frozen 的</div>
+          <p>
+            试图 <code>m.foo = 1</code> 在严格模式抛 TypeError。这是规范对命名空间对象的保护 ——
+            模块导出集不能运行时扩展。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">相对路径必须带 <code>./</code></div>
+          <p>
+            浏览器 ESM 里 <code>import x from "utils.mjs"</code>（无 ./）是 bare specifier，需要 import map 解析。写
+            <code>./utils.mjs</code> 才是相对路径。Node 同理（ESM 里）。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-modules" target="_blank" rel="noopener">ECMA-262 · 16.2 Modules</a>
+          </li>
+          <li>
+            <a
+              href="https://html.spec.whatwg.org/multipage/webappapis.html#integration-with-the-javascript-module-system"
+              target="_blank"
+              rel="noopener"
+              >HTML · Integration with the JavaScript module system</a
+            >
+          </li>
+          <li>
+            <a href="https://nodejs.org/api/esm.html" target="_blank" rel="noopener">Node.js · ECMAScript modules</a>
+          </li>
+          <li>
+            <a href="https://hacks.mozilla.org/2018/03/es-modules-a-cartoon-deep-dive/" target="_blank" rel="noopener"
+              >Lin Clark · ES modules: A cartoon deep-dive</a
+            >
+            — 经典三阶段图解
+          </li>
+          <li><strong>下一步</strong> → <a href="02-cjs-interop.html">02 · CJS 与 ESM 互操作</a>。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../03-async/08-node-eventloop-errors.html"
+            ><span class="label">← 上一章</span><span class="title">P3-08 · Node Event Loop + 错误收口</span></a
+          >
+          <a class="next" href="02-cjs-interop.html"
+            ><span class="label">下一章 →</span><span class="title">02 · CJS 与 ESM 互操作</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>私有字段与装饰器 · P2 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="class 私有字段 #name 的规范语义与 brand check、静态私有字段、in 操作符的 brand 检测、Stage 3 装饰器（class/method/accessor/field）的 context 对象与 initializer、TS legacy decorators 与新规范的区别。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P2 目录</a>
+          <a href="https://javascript.info/private-protected-properties-methods" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · 高阶语言</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-scope-tdz.html">01 · 作用域与 TDZ</a></li>
+          <li><a href="02-closures.html">02 · 闭包内存模型</a></li>
+          <li><a href="03-this.html">03 · this 四规则</a></li>
+          <li><a href="04-bind-call-apply.html">04 · bind / call / apply</a></li>
+          <li><a href="05-prototype.html">05 · 原型链</a></li>
+          <li><a href="06-class.html">06 · class 与继承</a></li>
+          <li><a href="07-private-decorators.html">07 · 私有字段与装饰器</a></li>
+          <li><a href="08-proxy-reflect.html">08 · Proxy 与 Reflect</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-fundamentals/index.html">P1 · 语言基础</a></li>
+          <li><a href="../03-async/index.html">P3 · 异步 & 错误处理</a></li>
+          <li><a href="../04-modules/index.html">P4 · 模块 & 元编程</a></li>
+          <li><a href="../05-dom/index.html">P5 · DOM & 事件</a></li>
+          <li><a href="../06-network/index.html">P6 · 网络 & 存储</a></li>
+          <li><a href="../07-advanced/index.html">P7 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · 高阶语言</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>私有字段与装饰器</span>
+        </nav>
+
+        <h1>私有字段与装饰器</h1>
+        <p class="lead">
+          ES2022 加入的 <code>#field</code> 是<strong>真正的</strong>语言级私有（不是靠约定），实现上借助编译期的
+          PrivateName。Stage 3 装饰器（ES2025 候选、TypeScript 5.0+ 支持）重新设计了一套 context-based
+          装饰器模型，比早期 TypeScript <code>experimentalDecorators</code> 更干净。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 06 class</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/private-protected-properties-methods" target="_blank" rel="noopener"
+              >Private and protected properties</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================= -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <h3>私有字段 —— <code>#</code> 前缀</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">class Counter {
+  #count = 0;                           // 实例私有字段
+  #notify;                              // 私有方法
+  static #total = 0;                    // 静态私有字段
+
+  constructor(notify) { this.#notify = notify; }
+
+  #notifyChange() { this.#notify?.(this.#count); }     // 私有方法
+
+  inc() {
+    this.#count++;
+    Counter.#total++;
+    this.#notifyChange();
+  }
+
+  // 静态工厂里用 #private 访问另一实例的私有字段（同 class 内可见）
+  static fromPair(a, b) {
+    const c = new Counter();
+    c.#count = a + b;
+    return c;
+  }
+}
+
+const c = new Counter();
+c.inc();
+c.#count;                // SyntaxError: 只在 class body 内合法
+c["#count"];             // undefined（不是普通属性名）</code></pre>
+        </div>
+
+        <h3>Stage 3 装饰器 —— 4 种形式</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">@logged                          // class 装饰器
+class Service {
+  @readonly VERSION = "1.0";     // field 装饰器
+  @memoize                       // method 装饰器
+  compute(x) { /* ... */ }
+  @trace
+  accessor value = 0;            // accessor 装饰器（配合 accessor 关键字）
+}</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 =========================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="private-semantics">#field 的规范语义</h3>
+        <p>
+          <code>#name</code> 不是"字符串键"，而是<strong>私有名称（Private Name）</strong>—— 编译期为每个
+          <code>#name</code> 生成一个唯一 identity，运行时通过 <code>PrivateFieldGet</code>/<code>PrivateFieldSet</code>
+          操作访问，跳过所有普通属性机制。
+        </p>
+        <ul>
+          <li>
+            <strong>不存在于 <code>this</code> 作为普通属性</strong>：<code>Object.keys</code>、<code>in</code>、<code
+              >Reflect.ownKeys</code
+            >
+            都看不见它。
+          </li>
+          <li>
+            <strong>不能动态访问</strong>：<code>obj["#x"]</code> 是读取名为 <code>"#x"</code> 的字符串键，返回
+            undefined。
+          </li>
+          <li><strong>跨实例可见（同 class 内）</strong>：在 class body 里拿到另一个同类实例也能读它的 #field。</li>
+          <li><strong>不继承</strong>：子类不能访问父类的 #field（封装的核心意义）。</li>
+        </ul>
+
+        <h3 id="brand-check">Brand check: <code>#x in obj</code></h3>
+        <p>
+          想知道一个对象是不是"<em>确实</em> 这个 class 的实例"，最可靠的方法不是
+          <code>instanceof</code>（可绕过），而是检查它有没有这个 class 的某个私有字段：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">class Safe {
+  #brand;
+  static isSafe(obj) {
+    return #brand in obj;               // ES2022：类内部可用的 brand check
+  }
+}
+
+const real = new Safe();
+const fake = Object.create(Safe.prototype);
+Safe.isSafe(real);         // true
+Safe.isSafe(fake);         // false   ← instanceof 会返回 true，但 brand 检测失败</code></pre>
+        </div>
+
+        <h3 id="private-vs-symbol">和 Symbol "伪私有"的区别</h3>
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th>Symbol key</th>
+              <th>#private field</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>访问方式</td>
+              <td><code>obj[symbol]</code></td>
+              <td><code>obj.#name</code>（仅 class body 内）</td>
+            </tr>
+            <tr>
+              <td>外部能否读</td>
+              <td>能（拿到 Symbol 引用）</td>
+              <td>绝对不能</td>
+            </tr>
+            <tr>
+              <td>Reflect.ownKeys 可见</td>
+              <td>是</td>
+              <td>否</td>
+            </tr>
+            <tr>
+              <td>能挂非 class 对象</td>
+              <td>能</td>
+              <td>不能（只在 class 字段声明）</td>
+            </tr>
+            <tr>
+              <td>性能</td>
+              <td>普通属性访问</td>
+              <td>引擎有专门 slot 优化，常常更快</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 id="decorator-signature">装饰器的签名</h3>
+        <p>
+          Stage 3 装饰器是函数：<code>decorator(target, context)</code>。<code>context</code>
+          是个对象，字段取决于装饰目标：
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>装饰目标</th>
+              <th>target</th>
+              <th>context.kind</th>
+              <th>返回值</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>class</td>
+              <td>class 本身</td>
+              <td><code>"class"</code></td>
+              <td>可返回新 class 替换</td>
+            </tr>
+            <tr>
+              <td>method</td>
+              <td>方法函数</td>
+              <td><code>"method"</code></td>
+              <td>可返回新函数替换</td>
+            </tr>
+            <tr>
+              <td>accessor</td>
+              <td><code>{ get, set }</code></td>
+              <td><code>"accessor"</code></td>
+              <td>可返回新 <code>{ get, set, init? }</code></td>
+            </tr>
+            <tr>
+              <td>field</td>
+              <td><code>undefined</code>（无值）</td>
+              <td><code>"field"</code></td>
+              <td>可返回 <code>init</code> 函数，对初始值做变换</td>
+            </tr>
+            <tr>
+              <td>getter/setter</td>
+              <td>对应函数</td>
+              <td><code>"getter"</code>/<code>"setter"</code></td>
+              <td>替换函数</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          <code>context</code> 还有 <code>name</code>、<code>static</code>（是否静态）、<code>private</code>（是否
+          #private）、<code>access.get/set</code>（取/赋值的"万能钥匙"）、<code>addInitializer(fn)</code>（注册 class
+          初始化完后运行的钩子）等。
+        </p>
+
+        <h3 id="decorator-order">装饰器应用顺序</h3>
+        <ol>
+          <li>
+            成员装饰器按<strong>从里到外</strong>、<strong>从下到上</strong>应用：<br />
+            <code>@a @b foo() {}</code> 等价 <code>a(b(foo))</code>。
+          </li>
+          <li>所有成员处理完后，才应用 class 装饰器。</li>
+          <li>最后依次运行 <code>addInitializer</code> 注册的钩子。</li>
+        </ol>
+
+        <h3 id="legacy-vs-stage3">Legacy（TS < 5）vs Stage 3 装饰器</h3>
+        <p>旧版 TypeScript 的装饰器是基于 Property Descriptor + reflect-metadata 的模型，签名完全不同：</p>
+        <ul>
+          <li>Legacy：<code>method(target, propKey, descriptor)</code>；返回 descriptor。</li>
+          <li>Stage 3：<code>method(fn, context)</code>；返回函数或 undefined。</li>
+        </ul>
+        <p>
+          <strong>TypeScript 5.0+ 默认使用 Stage 3</strong>；显式 <code>"experimentalDecorators": true</code> 切回
+          legacy。NestJS、Angular、TypeORM 等<em>重度依赖</em> legacy + reflect-metadata，暂不能升级；新项目推荐 Stage
+          3。
+        </p>
+
+        <!-- 03 应用场景 =========================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">封装内部状态</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">class EventEmitter {
+  #listeners = new Map();
+
+  on(event, fn) {
+    if (!this.#listeners.has(event)) this.#listeners.set(event, new Set());
+    this.#listeners.get(event).add(fn);
+    return () =&gt; this.#listeners.get(event)?.delete(fn);
+  }
+
+  emit(event, ...args) {
+    this.#listeners.get(event)?.forEach(fn =&gt; fn(...args));
+  }
+}
+
+// #listeners 对外完全不可见
+// JSON.stringify(emitter) 是 "{}"，不泄漏</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">brand check 做类型守卫</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">class ApiResponse {
+  #brand;
+  constructor(data) { this.data = data; }
+  static is(v) { return typeof v === "object" &amp;&amp; v !== null &amp;&amp; #brand in v; }
+}
+
+if (ApiResponse.is(maybeRes)) {
+  // TypeScript 里还可以 assert is ApiResponse
+  maybeRes.data;
+}
+
+// 比 instanceof 更可靠（跨 realm 也可以，因为 #brand 的 identity 仍是同一个）</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">@memoize 装饰器（Stage 3）</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">function memoize(fn, context) {
+  if (context.kind !== "method") throw new Error("only for methods");
+  const cache = new WeakMap();
+  return function (...args) {
+    const key = JSON.stringify(args);
+    let byThis = cache.get(this);
+    if (!byThis) { byThis = new Map(); cache.set(this, byThis); }
+    if (byThis.has(key)) return byThis.get(key);
+    const result = fn.apply(this, args);
+    byThis.set(key, result);
+    return result;
+  };
+}
+
+class Math {
+  @memoize
+  factorial(n) { return n &lt; 2 ? n : n * this.factorial(n - 1); }
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">@autobind 装饰器</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">function autobind(fn, context) {
+  if (context.kind !== "method") throw new Error("only methods");
+  context.addInitializer(function () {
+    this[context.name] = fn.bind(this);    // 在 class 初始化完后执行
+  });
+}
+
+class Component {
+  #state = { count: 0 };
+
+  @autobind
+  handleClick() { this.#state.count++; }
+}
+
+const c = new Component();
+const h = c.handleClick;
+h();                                       // this 已绑定，不丢</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">@deprecated 装饰器</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">function deprecated(hint) {
+  return function (fn, context) {
+    if (context.kind !== "method") throw new Error("only methods");
+    return function (...args) {
+      console.warn(`[deprecated] ${context.name}: ${hint}`);
+      return fn.apply(this, args);
+    };
+  };
+}
+
+class API {
+  @deprecated("use fetchUsers")
+  getUsers() { /* ... */ }
+}</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 =========================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-private-methods">私有方法与静态私有方法</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">class Parser {
+  #buffer = [];
+
+  // 私有方法
+  #flush() { const s = this.#buffer.join(""); this.#buffer.length = 0; return s; }
+
+  // 静态私有方法
+  static #cleanup(s) { return s.trim().toLowerCase(); }
+
+  push(chunk) { this.#buffer.push(Parser.#cleanup(chunk)); }
+  parse() { return this.#flush(); }
+}</code></pre>
+        </div>
+
+        <h3 id="ex-class-decorator">class 装饰器</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function singleton(Klass, context) {
+  if (context.kind !== "class") throw new Error("only class");
+  let instance;
+  return class extends Klass {
+    constructor(...args) {
+      if (instance) return instance;
+      super(...args);
+      instance = this;
+    }
+  };
+}
+
+@singleton
+class Config {
+  value = 0;
+}
+
+new Config() === new Config();     // true</code></pre>
+        </div>
+
+        <h3 id="ex-accessor"><code>accessor</code> 关键字 + 装饰器</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// accessor x = 0  等价于
+// #x = 0; get x() { return this.#x; } set x(v) { this.#x = v; }
+
+function logged(target, context) {
+  if (context.kind !== "accessor") return;
+  return {
+    get() {
+      console.log(`get ${context.name}`);
+      return target.get.call(this);
+    },
+    set(v) {
+      console.log(`set ${context.name} = ${v}`);
+      target.set.call(this, v);
+    },
+    init(initialValue) {           // 初始化时的 hook
+      return initialValue;
+    },
+  };
+}
+
+class Box {
+  @logged accessor value = 0;
+}
+const b = new Box();
+b.value;                            // get value
+b.value = 10;                       // set value = 10</code></pre>
+        </div>
+
+        <h3 id="ex-field-decorator">field 装饰器</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function capitalize(_, context) {
+  if (context.kind !== "field") return;
+  return function (initialValue) {      // 返回的 initializer 会替换字段的初始值
+    return typeof initialValue === "string"
+      ? initialValue.toUpperCase()
+      : initialValue;
+  };
+}
+
+class User {
+  @capitalize name = "alice";
+}
+new User().name;                    // "ALICE"</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 =========================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>obj["#x"]</code> 不等于 <code>obj.#x</code></div>
+          <p>
+            前者是字符串键 <code>"#x"</code>，undefined。<code>#x</code> 是语法结构（PrivateName），只能在 class body
+            内用点号语法访问。没有动态访问私有字段的方法 —— 这是<strong>设计目标</strong>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Proxy 透传私有字段问题</div>
+          <p>
+            ES2022 前，<code>new Proxy(new Foo(), {})</code> 然后调用 foo 方法时访问 <code>this.#field</code> 会报
+            "cannot read private member"。ES2022 规范调整后，<strong>大多数情况</strong>已可正常工作。但若 Proxy 的
+            target 变了（不是原 instance），仍可能失败。详细见 P2-08。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>static #field</code> 在子类 <code>this</code> 访问失败</div>
+          <p>
+            <code>class A { static #x = 1; static get() { return this.#x; } }</code>。<code>class B extends A {}</code
+            >。<code>B.get()</code> 抛 TypeError —— 因为 <code>this</code> 是 B，不是 A，而 #x 只属于
+            A。规避：在静态方法里显式用 <code>A.#x</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">装饰器的顺序陷阱</div>
+          <p>
+            <code>@a @b method() {}</code> 按"从下到上"应用 → 先 <code>b(method)</code> 然后
+            <code>a(b(method))</code>。和 Python / TypeScript 装饰器一致。但别按阅读顺序臆想。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>addInitializer</code> 的 this 是实例</div>
+          <p>
+            <code>context.addInitializer(function () { ... })</code> —— 回调里
+            <code>this</code> 是新实例，在所有字段初始化<strong>之后</strong>运行。是实现 @autobind
+            的正确位置。用箭头函数会丢 this。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Legacy TS 装饰器 ≠ Stage 3</div>
+          <p>
+            从 legacy 升 Stage 3 不是无痛。NestJS/Angular/TypeORM 等框架目前只支持
+            legacy；自己写的装饰器也要按新签名重写。TypeScript 5.0+ 默认是 Stage 3，选 legacy 要
+            <code>"experimentalDecorators": true</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">装饰器 + 继承的微妙</div>
+          <p>
+            父类方法上的装饰器产生的"包装函数"在子类的 <code>super.method()</code> 调用里仍生效（因为方法在 prototype
+            上）。但如果子类覆盖方法，父类的装饰器就绕过了。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">static block 的变量不泄漏</div>
+          <p>
+            <code>class X { static { const tmp = ...; X.data = tmp; } }</code> 里的
+            <code>tmp</code> 在块外不可见。static block 就是一个 class-scoped 的初始化块。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================ -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/proposal-class-fields/" target="_blank" rel="noopener"
+              >TC39 · Class Fields（Private 语义）</a
+            >
+          </li>
+          <li>
+            <a href="https://github.com/tc39/proposal-decorators" target="_blank" rel="noopener"
+              >TC39 · Decorators 提案（Stage 3）</a
+            >
+          </li>
+          <li>
+            <a href="https://www.typescriptlang.org/docs/handbook/decorators.html" target="_blank" rel="noopener"
+              >TypeScript 5.0 Decorators 文档</a
+            >
+          </li>
+          <li>
+            <a href="https://github.com/tc39/proposal-class-brand-check" target="_blank" rel="noopener"
+              >TC39 · #x in obj Brand Check</a
+            >
+          </li>
+          <li><strong>下一步</strong> → <a href="08-proxy-reflect.html">08 · Proxy 与 Reflect</a> — P2 最后一章。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="06-class.html"
+            ><span class="label">← 上一章</span><span class="title">06 · class 与继承</span></a
+          >
+          <a class="next" href="08-proxy-reflect.html"
+            ><span class="label">下一章 →</span><span class="title">08 · Proxy 与 Reflect</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

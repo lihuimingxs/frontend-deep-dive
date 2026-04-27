@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Web Components · P7 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="Custom Elements 生命周期、Shadow DOM 隔离与 slot 组合、&lt;template&gt; / Declarative Shadow DOM、form-associated custom elements、CSS :part / :host / ::slotted，与 React/Vue 的互操作。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P7 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · 高级专题</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-binary.html">01 · ArrayBuffer / TypedArray</a></li>
+          <li><a href="02-blob-file.html">02 · Blob / File / FormData</a></li>
+          <li><a href="03-streams.html">03 · Streams API</a></li>
+          <li><a href="04-canvas.html">04 · Canvas / OffscreenCanvas</a></li>
+          <li><a href="05-animation.html">05 · Animation & RAF</a></li>
+          <li><a href="06-web-components.html">06 · Web Components</a></li>
+          <li><a href="07-regex.html">07 · 正则表达式引擎</a></li>
+          <li><a href="08-intl.html">08 · Intl 国际化</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-fundamentals/index.html">P1 · 语言基础</a></li>
+          <li><a href="../02-advanced/index.html">P2 · 高阶语言</a></li>
+          <li><a href="../03-async/index.html">P3 · 异步 & 错误处理</a></li>
+          <li><a href="../04-modules/index.html">P4 · 模块 & 元编程</a></li>
+          <li><a href="../05-dom/index.html">P5 · DOM & 事件</a></li>
+          <li><a href="../06-network/index.html">P6 · 网络 & 存储</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · 高级专题</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Web Components</span>
+        </nav>
+
+        <h1>Web Components</h1>
+        <p class="lead">
+          Web Components 是<strong>浏览器原生的组件化模型</strong>：<code>customElements.define()</code>
+          注册自定义标签、<code>attachShadow</code> 隔离样式与 DOM、<code>&lt;slot&gt;</code>
+          组合内容。它是框架无关的：同一个 <code>&lt;my-dialog&gt;</code> 能在 React / Vue / Svelte / 纯 HTML
+          下工作。本章讲清生命周期、Shadow DOM 的样式隔离规则、以及与 React 的互操作陷阱。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P5 DOM</span>
+          <span
+            ><strong>规范</strong>
+            <a href="https://html.spec.whatwg.org/multipage/custom-elements.html" target="_blank" rel="noopener"
+              >HTML · Custom Elements</a
+            >
+            · <a href="https://dom.spec.whatwg.org/#shadow-trees" target="_blank" rel="noopener">Shadow DOM</a></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ul>
+          <li>Custom Elements 名字必须包含连字符（<code>my-button</code>），与原生标签区分。</li>
+          <li>
+            两类：<strong>autonomous</strong>（继承 <code>HTMLElement</code>）和
+            <strong>customized built-in</strong>（继承 <code>HTMLButtonElement</code> 等，Safari 不支持）。
+          </li>
+          <li>
+            生命周期：<code>constructor</code> → <code>connectedCallback</code> →
+            <code>attributeChangedCallback</code> → <code>disconnectedCallback</code> → <code>adoptedCallback</code>。
+          </li>
+          <li>
+            Shadow DOM <strong>隔离样式</strong>：外部 CSS 不穿透进来（除了 inherited 属性和 custom
+            properties），内部样式不泄漏出去。
+          </li>
+          <li><code>&lt;slot&gt;</code> 让父组件塞入内容（composition），默认匿名 slot 或 <code>name="xxx"</code>。</li>
+          <li>
+            <strong>Declarative Shadow DOM</strong>（<code>&lt;template shadowrootmode="open"&gt;</code>）支持 SSR，2023
+            起 Chrome / Safari / Firefox 全支持。
+          </li>
+          <li>
+            <strong>form-associated custom elements</strong>（<code>formAssociated = true</code>）可参与 form
+            提交、validity。
+          </li>
+        </ul>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+        <h3>最小 Custom Element</h3>
+        <pre><code class="language-javascript">class MyCounter extends HTMLElement {
+  #count = 0;
+  #btn;
+
+  static observedAttributes = ["start"];
+
+  constructor() {
+    super();
+    // 不能访问 attributes / children（可能还未 parse）
+    const shadow = this.attachShadow({ mode: "open" });
+    shadow.innerHTML = `
+      &lt;style&gt;
+        button { font: inherit; padding: 8px 12px; }
+        :host([disabled]) button { opacity: 0.5; pointer-events: none; }
+      &lt;/style&gt;
+      &lt;button type="button"&gt;0&lt;/button&gt;
+    `;
+    this.#btn = shadow.querySelector("button");
+    this.#btn.addEventListener("click", () =&gt; this.#increment());
+  }
+
+  connectedCallback() {
+    // 插入到 DOM 时调用；可读 attributes
+    this.#render();
+  }
+
+  disconnectedCallback() {
+    // 从 DOM 移除时清理（取消订阅、移除外部监听）
+  }
+
+  attributeChangedCallback(name, oldValue, newValue) {
+    if (name === "start") {
+      this.#count = Number(newValue) || 0;
+      this.#render();
+    }
+  }
+
+  adoptedCallback() {
+    // 元素被移到新 document（iframe 间移动）
+  }
+
+  #increment() {
+    this.#count++;
+    this.#render();
+    this.dispatchEvent(new CustomEvent("change", { detail: this.#count, bubbles: true }));
+  }
+
+  #render() {
+    this.#btn.textContent = this.#count;
+  }
+}
+
+customElements.define("my-counter", MyCounter);</code></pre>
+
+        <pre><code class="language-html">&lt;my-counter start="10"&gt;&lt;/my-counter&gt;
+&lt;script&gt;
+  document.querySelector("my-counter").addEventListener("change", (e) =&gt; {
+    console.log(e.detail); // 11, 12, ...
+  });
+&lt;/script&gt;</code></pre>
+
+        <h3>生命周期顺序</h3>
+        <pre><code class="language-text">new MyCounter()                ← constructor（不操作 attributes/children）
+  ↓
+Parser/JS 插入到文档
+  ↓
+attributeChangedCallback(name)  ← 每个 observed attribute 初始值 = null → 现值
+  ↓
+connectedCallback()            ← DOM 完整、可操作
+  ↓
+[... 运行中 ...]
+  ↓
+disconnectedCallback()
+  ↓
+[也许 adoptedCallback → 另一 connectedCallback]</code></pre>
+
+        <h3>Shadow DOM 隔离规则</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>项</th>
+              <th>穿透 shadow？</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>querySelector（light）</td>
+              <td>❌ 外部查不到内部节点</td>
+            </tr>
+            <tr>
+              <td>外部 CSS <code>p { color: red }</code></td>
+              <td>❌ 不影响 shadow 内 <code>p</code></td>
+            </tr>
+            <tr>
+              <td>inherited CSS（<code>color</code>、<code>font</code>）</td>
+              <td>✅ 透传</td>
+            </tr>
+            <tr>
+              <td>CSS custom properties（<code>--x</code>）</td>
+              <td>✅ 透传</td>
+            </tr>
+            <tr>
+              <td>事件（默认 bubbles）</td>
+              <td>✅ 穿透到外部（<code>composed: true</code> 时）</td>
+            </tr>
+            <tr>
+              <td>focus</td>
+              <td>✅ 穿透（元素可接受焦点）</td>
+            </tr>
+            <tr>
+              <td>form 提交 / validation</td>
+              <td>❌ 需 form-associated（下述）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Shadow 内的样式选择器</h3>
+        <pre><code class="language-css">/* :host = shadow 宿主元素 */
+:host { display: block; }
+:host([disabled]) { opacity: 0.5; }
+:host(.active) { border-color: blue; }
+
+/* :host-context(selector) = 宿主 matches 某父元素 */
+:host-context(.dark-theme) { color: white; }
+
+/* ::slotted(selector) = 被 slot 投影的元素（仅一层深度） */
+::slotted(h2) { font-size: 1.5em; }
+::slotted([slot="icon"]) { color: red; }
+
+/* ::part(name) = 暴露给外部的"样式锚点" */
+::part(button) { ... } /* 外部写 */
+&lt;button part="button"&gt;Click&lt;/button&gt; /* 内部标记 */</code></pre>
+
+        <h3>Slot 组合</h3>
+        <pre><code class="language-html">&lt;!-- 定义 --&gt;
+&lt;template id="dialog-template"&gt;
+  &lt;style&gt;
+    header { background: #eee; }
+    footer { background: #fafafa; }
+  &lt;/style&gt;
+  &lt;header&gt;&lt;slot name="title"&gt;&lt;/slot&gt;&lt;/header&gt;
+  &lt;main&gt;&lt;slot&gt;&lt;!-- 默认内容 --&gt;&lt;/slot&gt;&lt;/main&gt;
+  &lt;footer&gt;&lt;slot name="actions"&gt;&lt;/slot&gt;&lt;/footer&gt;
+&lt;/template&gt;
+
+&lt;!-- 使用 --&gt;
+&lt;my-dialog&gt;
+  &lt;h2 slot="title"&gt;Confirm&lt;/h2&gt;
+  &lt;p&gt;Are you sure?&lt;/p&gt;
+  &lt;button slot="actions" type="button"&gt;OK&lt;/button&gt;
+  &lt;button slot="actions" type="button"&gt;Cancel&lt;/button&gt;
+&lt;/my-dialog&gt;</code></pre>
+
+        <h3>Declarative Shadow DOM（SSR）</h3>
+        <pre><code class="language-html">&lt;!-- 服务端直接返回，无需 JS 就能渲染 shadow --&gt;
+&lt;my-card&gt;
+  &lt;template shadowrootmode="open"&gt;
+    &lt;style&gt;h2 { color: blue }&lt;/style&gt;
+    &lt;h2&gt;&lt;slot name="title"&gt;&lt;/slot&gt;&lt;/h2&gt;
+    &lt;slot&gt;&lt;/slot&gt;
+  &lt;/template&gt;
+  &lt;span slot="title"&gt;Hello&lt;/span&gt;
+  &lt;p&gt;content&lt;/p&gt;
+&lt;/my-card&gt;</code></pre>
+        <p>
+          浏览器解析 <code>&lt;template shadowrootmode&gt;</code> 时自动 attachShadow + 填入内容，JS 端
+          <code>customElements.define</code> 后升级到完整元素。配合
+          <code>&lt;link rel="stylesheet"&gt;</code> 可让样式提前应用（避免 FOUC）。
+        </p>
+
+        <h3>Form-Associated Custom Element</h3>
+        <pre><code class="language-javascript">class MyInput extends HTMLElement {
+  static formAssociated = true;
+  static observedAttributes = ["value"];
+
+  #internals;
+
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" }).innerHTML = `&lt;input type="text"&gt;`;
+    this.#internals = this.attachInternals();
+    const input = this.shadowRoot.querySelector("input");
+    input.addEventListener("input", () =&gt; {
+      this.#internals.setFormValue(input.value);
+      this.#internals.setValidity(
+        input.value ? {} : { valueMissing: true },
+        "请输入值",
+      );
+    });
+  }
+
+  // 被 form.reset() 调用
+  formResetCallback() { this.shadowRoot.querySelector("input").value = ""; }
+  formDisabledCallback(disabled) { /* ... */ }
+  formStateRestoreCallback(state, mode) { /* 历史恢复 */ }
+}
+customElements.define("my-input", MyInput);</code></pre>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <h3>设计系统的跨框架组件</h3>
+        <pre><code class="language-typescript">// 同一个 &lt;design-button&gt; 能在 React/Vue/纯 HTML 用
+class DesignButton extends HTMLElement {
+  static observedAttributes = ["variant", "disabled"];
+  // ... 基于 attribute 渲染
+}
+customElements.define("design-button", DesignButton);
+
+// React 使用（React 19+ 支持传 props 映射到 attribute）
+&lt;design-button variant="primary"&gt;Save&lt;/design-button&gt;
+
+// Vue 使用（vue.config: isCustomElement）
+&lt;design-button :variant="variant"&gt;Save&lt;/design-button&gt;</code></pre>
+        <p>
+          Lit、FAST、Stencil 是流行的 WC 开发库，都生成标准的 custom element，可在任何框架使用。Shoelace / Spectrum /
+          Material Web 都是基于 WC 的设计系统。
+        </p>
+
+        <h3>第三方小部件嵌入</h3>
+        <p>
+          Stripe Elements、Google Maps、Intercom chat widget 等越来越多用 Web Components + Shadow
+          DOM：样式不被宿主站点污染，也不污染宿主。iframe 曾经是隔离方案，但 WC 无 iframe 的跨源通信问题。
+        </p>
+
+        <h3>渐进增强</h3>
+        <pre><code class="language-html">&lt;!-- 老浏览器或 JS 挂之前：显示基本 html --&gt;
+&lt;video-player src="a.mp4"&gt;
+  &lt;video controls src="a.mp4"&gt;&lt;/video&gt; &lt;!-- fallback --&gt;
+&lt;/video-player&gt;
+
+&lt;script&gt;
+  class VideoPlayer extends HTMLElement {
+    connectedCallback() {
+      // 替换 fallback 为自定义 UI
+      this.attachShadow({ mode: "open" });
+      // ...
+    }
+  }
+  customElements.define("video-player", VideoPlayer);
+&lt;/script&gt;</code></pre>
+
+        <h3>富文本编辑器组件</h3>
+        <pre><code class="language-javascript">class RichEditor extends HTMLElement {
+  static formAssociated = true;
+
+  constructor() {
+    super();
+    const shadow = this.attachShadow({ mode: "open" });
+    shadow.innerHTML = `
+      &lt;div part="toolbar" role="toolbar"&gt;
+        &lt;button type="button" data-cmd="bold"&gt;B&lt;/button&gt;
+        &lt;button type="button" data-cmd="italic"&gt;I&lt;/button&gt;
+      &lt;/div&gt;
+      &lt;div part="editor" contenteditable="true"&gt;&lt;/div&gt;
+    `;
+    this.internals = this.attachInternals();
+    this.editor = shadow.querySelector('[part="editor"]');
+    this.editor.addEventListener("input", () =&gt; {
+      this.internals.setFormValue(this.editor.innerHTML);
+    });
+    shadow.querySelectorAll("button").forEach(btn =&gt; {
+      btn.addEventListener("click", () =&gt; document.execCommand(btn.dataset.cmd));
+    });
+  }
+}
+customElements.define("rich-editor", RichEditor);</code></pre>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <h3>响应式 Custom Element（属性 ↔ 属性同步）</h3>
+        <pre><code class="language-javascript">class MyToggle extends HTMLElement {
+  static observedAttributes = ["checked"];
+
+  get checked() { return this.hasAttribute("checked"); }
+  set checked(v) {
+    if (v) this.setAttribute("checked", "");
+    else this.removeAttribute("checked");
+  }
+
+  attributeChangedCallback(name, _old, val) {
+    if (name === "checked") this.#render();
+  }
+
+  connectedCallback() { this.#render(); this.#bind(); }
+
+  #render() {
+    this.shadowRoot.innerHTML = `
+      &lt;style&gt;
+        :host { display: inline-block; cursor: pointer; }
+        .track { width: 32px; height: 18px; border-radius: 9px; background: #ccc; }
+        :host([checked]) .track { background: #3b82f6; }
+      &lt;/style&gt;
+      &lt;div class="track"&gt;&lt;/div&gt;`;
+  }
+
+  #bind() {
+    this.addEventListener("click", () =&gt; {
+      this.checked = !this.checked;
+      this.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+
+  constructor() { super(); this.attachShadow({ mode: "open" }); }
+}
+customElements.define("my-toggle", MyToggle);</code></pre>
+
+        <h3>Lit 最小示例（推荐生产用）</h3>
+        <pre><code class="language-typescript">import { LitElement, html, css } from "lit";
+import { property, customElement } from "lit/decorators.js";
+
+@customElement("my-greeting")
+export class MyGreeting extends LitElement {
+  static styles = css`h1 { color: var(--primary, blue); }`;
+
+  @property() name = "World";
+
+  render() {
+    return html`&lt;h1&gt;Hello, ${this.name}!&lt;/h1&gt;`;
+  }
+}</code></pre>
+        <p>
+          Lit（Google 出品）提供响应式 property、模板字符串 HTML、样式隔离，产物是标准 Web
+          Component。对长期项目和跨框架设计系统非常合适。
+        </p>
+
+        <h3>与 React 互操作（React 19+）</h3>
+        <pre><code class="language-typescript">// React 18 及以前只能 setAttribute 字符串；19 支持 property 赋值
+// 传递对象/数组必须用 ref 手动设置
+
+function App() {
+  const ref = useRef&lt;HTMLElement&gt;(null);
+
+  useEffect(() =&gt; {
+    if (ref.current) {
+      ref.current.data = complexObject; // 作为 property 赋值
+    }
+  }, [complexObject]);
+
+  return (
+    &lt;my-chart
+      ref={ref}
+      // 字符串 attribute 可直接写
+      theme="dark"
+      // React 19+ 会尝试用 property
+      labels={labels}
+    /&gt;
+  );
+}</code></pre>
+
+        <!-- 05 常见陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="callout callout-warn">
+          <strong>陷阱 1：constructor 里访问 attributes / children</strong>
+          <p>
+            HTML parser 可能还未把 attributes / children 解析完。移到 <code>connectedCallback</code>。observedAttributes
+            的初始值会通过 <code>attributeChangedCallback</code> 传达。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 2：name 不带连字符</strong>
+          <p>
+            <code>customElements.define("mybutton", ...)</code> 抛
+            SyntaxError。名字必须含连字符（"-"），且不能是已保留的（如 <code>annotation-xml</code>）。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 3：事件 composed: false 无法穿透 shadow</strong>
+          <p>
+            默认 <code>new Event("change")</code> 的 composed 是 false，shadow 外监听不到。要广播事件加
+            <code>{ bubbles: true, composed: true }</code>。<code>click</code> 等原生事件默认 composed: true。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 4：External CSS 不影响 shadow 内</strong>
+          <p>
+            用 <code>&lt;style&gt;</code> 内联到 shadow 里，或用 <code>:host</code> 让外部通过 attribute 控制，或用 CSS
+            custom properties（<code>--brand-color</code>）。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 5：React 传 boolean / object 作为 attribute</strong>
+          <p>
+            React 18 会 toString 后 setAttribute → <code>attr="true"</code> 或
+            <code>attr="[object Object]"</code>。React 19 / Preact 支持 property 赋值，或用 ref 手动设。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 6：form-associated 在 Safari 16 以下不可用</strong>
+          <p>formAssociated 2022 才全浏览器支持。旧 Safari 必须 fallback：用 hidden input 同步值到 form。</p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 7：Shadow DOM 性能</strong>
+          <p>
+            每个 shadow root 是独立的"树"，选择器全部重新匹配。一个页面几千个 Web Component 可能比普通 DOM 慢。量大用
+            <code>closedShadow</code>（外部不可查）或避免 shadow。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 8：Adopted Stylesheets 跨 shadow 复用</strong>
+          <p>
+            多个 shadow root 各自内联 <code>&lt;style&gt;</code> 会重复解析。用
+            <code>const sheet = new CSSStyleSheet(); sheet.replaceSync(css); shadow.adoptedStyleSheets = [sheet];</code>
+            共享。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 9：slotchange 事件没触发</strong>
+          <p>
+            <code>slot.addEventListener("slotchange", ...)</code> 只在 slot 被赋值/取消赋值时触发，不在 slotted
+            元素内部改变时。需要后者用 <code>MutationObserver</code>。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 10：upgrade 顺序</strong>
+          <p>
+            HTML parser 遇到 <code>&lt;my-el&gt;</code> 时 <code>customElements.define</code> 还没执行，元素暂是
+            "undefined"；等 define 被调用后<strong>升级</strong>（调用 constructor + connectedCallback）。要等
+            <code>customElements.whenDefined("my-el")</code> 再操作属性。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://html.spec.whatwg.org/multipage/custom-elements.html" target="_blank" rel="noopener"
+              >HTML · Custom Elements</a
+            >
+          </li>
+          <li><a href="https://lit.dev/" target="_blank" rel="noopener">Lit · 轻量 WC 框架</a></li>
+          <li>
+            <a href="https://web.dev/articles/declarative-shadow-dom" target="_blank" rel="noopener"
+              >web.dev · Declarative Shadow DOM</a
+            >
+          </li>
+          <li>
+            <a href="https://developer.chrome.com/docs/css-ui/shadow-parts" target="_blank" rel="noopener"
+              >Chrome · CSS ::part</a
+            >
+          </li>
+          <li><strong>下一步</strong> → <a href="07-regex.html">07 · 正则表达式引擎</a>。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="05-animation.html"
+            ><span class="label">← 上一章</span><span class="title">05 · Animation & RAF</span></a
+          >
+          <a class="next" href="07-regex.html"
+            ><span class="label">下一章 →</span><span class="title">07 · 正则表达式引擎</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

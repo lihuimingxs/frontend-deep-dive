@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>资源加载时机 · P5 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="DOMContentLoaded / load / beforeunload / pagehide 事件时机、&lt;script&gt; 的 defer / async / type=module 语义、preload / prefetch / preconnect / modulepreload、Core Web Vitals（LCP/FCP/INP）与加载策略。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · DOM & 事件</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-dom-tree.html">01 · DOM 树与 Node 接口</a></li>
+          <li><a href="02-dom-query.html">02 · DOM 查询与遍历</a></li>
+          <li><a href="03-dom-mutation.html">03 · DOM 修改与安全</a></li>
+          <li><a href="04-event-propagation.html">04 · 事件传播三阶段</a></li>
+          <li><a href="05-delegation-custom.html">05 · 事件委托与自定义事件</a></li>
+          <li><a href="06-observers.html">06 · 各种 Observer</a></li>
+          <li><a href="07-forms.html">07 · Form 控件与验证</a></li>
+          <li><a href="08-loading.html">08 · 资源加载时机</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-fundamentals/index.html">P1 · 语言基础</a></li>
+          <li><a href="../02-advanced/index.html">P2 · 高阶语言</a></li>
+          <li><a href="../03-async/index.html">P3 · 异步 & 错误处理</a></li>
+          <li><a href="../04-modules/index.html">P4 · 模块 & 元编程</a></li>
+          <li><a href="../06-network/index.html">P6 · 网络 & 存储</a></li>
+          <li><a href="../07-advanced/index.html">P7 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · DOM & 事件</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>资源加载时机</span>
+        </nav>
+
+        <h1>资源加载时机</h1>
+        <p class="lead">
+          浏览器加载一个页面从 HTML 请求开始到可交互之间有多个关键时刻：<strong
+            >DOMContentLoaded → load → 首次绘制 → LCP</strong
+          >。script 标签的 <code>defer</code>/<code>async</code>/<code>type=module</code> 决定 JS
+          何时执行。preload/prefetch/preconnect 是 performance 工具链的核心。本章把这些时序 + Core Web Vitals 串起来。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> P3 Event Loop · P4 模块</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/onload-ondomcontentloaded" target="_blank" rel="noopener"
+              >Page lifecycle events</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <h3>页面生命周期事件</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>事件</th>
+              <th>触发时机</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>DOMContentLoaded</code></td>
+              <td>HTML 解析完成，DOM 树构建完（含 defer 脚本）</td>
+              <td>初始化 JS</td>
+            </tr>
+            <tr>
+              <td><code>load</code></td>
+              <td>所有资源（图片、样式、子 iframe 等）加载完</td>
+              <td>依赖图片/样式尺寸的逻辑</td>
+            </tr>
+            <tr>
+              <td><code>pageshow</code></td>
+              <td>页面可见（初次 + 从 bfcache 恢复）</td>
+              <td>bfcache 恢复后的重新初始化</td>
+            </tr>
+            <tr>
+              <td><code>pagehide</code></td>
+              <td>页面即将不可见（进入 bfcache 或关闭）</td>
+              <td>代替 unload 上报</td>
+            </tr>
+            <tr>
+              <td><code>beforeunload</code></td>
+              <td>用户要离开（可弹确认）</td>
+              <td>未保存提示（谨慎用）</td>
+            </tr>
+            <tr>
+              <td><code>visibilitychange</code></td>
+              <td>标签页切换 / 最小化</td>
+              <td>暂停计时器、停止上报</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>&lt;script&gt; 标签的 4 种形态</h3>
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-js">&lt;!-- 1. 默认：阻塞解析 + 下载 + 执行 --&gt;
+&lt;script src=&quot;a.js&quot;&gt;&lt;/script&gt;
+
+&lt;!-- 2. async：异步下载，下载完<strong>立即执行</strong>（仍可能阻塞 parser） --&gt;
+&lt;script async src=&quot;a.js&quot;&gt;&lt;/script&gt;
+
+&lt;!-- 3. defer：异步下载，HTML 解析完<strong>按顺序</strong>执行 --&gt;
+&lt;script defer src=&quot;a.js&quot;&gt;&lt;/script&gt;
+
+&lt;!-- 4. module：默认 defer + CORS + 严格模式 + import/export --&gt;
+&lt;script type=&quot;module&quot; src=&quot;a.js&quot;&gt;&lt;/script&gt;
+&lt;!-- 5. module + async：下载完立即执行 --&gt;
+&lt;script type=&quot;module&quot; async src=&quot;a.js&quot;&gt;&lt;/script&gt;</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="parsing-timeline">HTML 解析时序</h3>
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>&lt;html&gt; 开始解析
+ ↓
+ 遇到 &lt;script&gt;（默认）    → 暂停解析，下载，执行，继续
+ 遇到 &lt;script async&gt;     → 下载并行，下载完暂停解析立即执行
+ 遇到 &lt;script defer&gt;     → 下载并行，到 DOMContentLoaded 前按序执行
+ 遇到 &lt;link rel=stylesheet&gt; → 下载不阻塞解析，但<strong>阻塞 script 执行</strong>和<strong>渲染</strong>
+ 遇到 &lt;img&gt;              → 下载并行，不阻塞
+ ↓
+ DOM 树构建完（含 defer scripts 执行完）
+ → 触发 DOMContentLoaded
+ ↓
+ 所有资源（img / iframe / css / async script 等）加载完
+ → 触发 load
+ ↓
+ 浏览器渲染：FCP（首次内容绘制）→ LCP（最大内容绘制）</code></pre>
+        </div>
+
+        <h3 id="defer-vs-async"><code>defer</code> vs <code>async</code></h3>
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th><code>default</code></th>
+              <th><code>async</code></th>
+              <th><code>defer</code></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>下载</td>
+              <td>阻塞 parser</td>
+              <td>异步</td>
+              <td>异步</td>
+            </tr>
+            <tr>
+              <td>执行</td>
+              <td>立即</td>
+              <td>下载完立即（可能在 DOMContentLoaded 前或后）</td>
+              <td>DOMContentLoaded 之前，按声明顺序</td>
+            </tr>
+            <tr>
+              <td>多个 script 顺序</td>
+              <td>按声明顺序</td>
+              <td><strong>下载顺序</strong>（不一定按声明）</td>
+              <td>按声明顺序</td>
+            </tr>
+            <tr>
+              <td>inline script 可用？</td>
+              <td>可以</td>
+              <td>✗（只对外部 src 有效）</td>
+              <td>✗（同上）</td>
+            </tr>
+          </tbody>
+        </table>
+        <p><strong>工程选择</strong>：</p>
+        <ul>
+          <li>主应用脚本 → <code>defer</code> 或 <code>type=module</code>（默认 defer）</li>
+          <li>第三方埋点、无依赖的 → <code>async</code></li>
+          <li>inline 的初始化代码 → 放 body 尾或用 DOMContentLoaded</li>
+        </ul>
+
+        <h3 id="module-specifics">Module script 特殊性</h3>
+        <ul>
+          <li><strong>默认 defer</strong>：不阻塞解析，等 HTML 完再执行。</li>
+          <li><strong>严格模式</strong>：自动。</li>
+          <li><strong>每个模块执行一次</strong>：同一 URL 多次 import 只加载 parse 一次。</li>
+          <li><strong>跨源要 CORS</strong>：加 <code>crossorigin</code> 属性并服务端返回 CORS 头。</li>
+          <li><strong>支持 top-level await</strong>（ES2022）。</li>
+          <li>
+            <strong>nomodule</strong>：老浏览器 fallback 用 <code>&lt;script nomodule src="legacy.js"&gt;</code>。
+          </li>
+        </ul>
+
+        <h3 id="preload-prefetch">资源预加载指令</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>link rel</th>
+              <th>含义</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>preload</code></td>
+              <td><strong>当前页</strong>必需资源，高优先级下载（但不执行）</td>
+            </tr>
+            <tr>
+              <td><code>modulepreload</code></td>
+              <td>preload + 建 ESM module graph（执行前准备好）</td>
+            </tr>
+            <tr>
+              <td><code>prefetch</code></td>
+              <td><strong>下一页</strong>可能用，低优先级预取到缓存</td>
+            </tr>
+            <tr>
+              <td><code>preconnect</code></td>
+              <td>对指定域名提前 DNS + TLS 握手</td>
+            </tr>
+            <tr>
+              <td><code>dns-prefetch</code></td>
+              <td>仅 DNS 查询（preconnect 的子集）</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-js">&lt;!-- 当前页关键 JS：高优先级下载 --&gt;
+&lt;link rel=&quot;preload&quot; href=&quot;/app.js&quot; as=&quot;script&quot; crossorigin&gt;
+
+&lt;!-- 当前页关键字体：避免字体闪烁 --&gt;
+&lt;link rel=&quot;preload&quot; href=&quot;/fonts/main.woff2&quot; as=&quot;font&quot; type=&quot;font/woff2&quot; crossorigin&gt;
+
+&lt;!-- ES 模块 --&gt;
+&lt;link rel=&quot;modulepreload&quot; href=&quot;/js/main.mjs&quot;&gt;
+&lt;link rel=&quot;modulepreload&quot; href=&quot;/js/utils.mjs&quot;&gt;
+
+&lt;!-- 下一页可能要访问的 API --&gt;
+&lt;link rel=&quot;preconnect&quot; href=&quot;https://api.example.com&quot;&gt;
+&lt;link rel=&quot;preconnect&quot; href=&quot;https://cdn.example.com&quot;&gt;
+
+&lt;!-- 下一页资源（低优先级） --&gt;
+&lt;link rel=&quot;prefetch&quot; href=&quot;/next-page.html&quot; as=&quot;document&quot;&gt;</code></pre>
+        </div>
+
+        <h3 id="core-web-vitals">Core Web Vitals</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>指标</th>
+              <th>含义</th>
+              <th>好的阈值</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>LCP</strong>（Largest Contentful Paint）</td>
+              <td>最大内容绘制时间</td>
+              <td>&lt; 2.5s</td>
+            </tr>
+            <tr>
+              <td><strong>INP</strong>（Interaction to Next Paint）</td>
+              <td>交互到下次渲染的延迟（2024 起替代 FID）</td>
+              <td>&lt; 200ms</td>
+            </tr>
+            <tr>
+              <td><strong>CLS</strong>（Cumulative Layout Shift）</td>
+              <td>累积布局偏移</td>
+              <td>&lt; 0.1</td>
+            </tr>
+            <tr>
+              <td>FCP（First Contentful Paint）</td>
+              <td>首次内容绘制</td>
+              <td>&lt; 1.8s</td>
+            </tr>
+            <tr>
+              <td>TTFB（Time to First Byte）</td>
+              <td>首字节时间</td>
+              <td>&lt; 800ms</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">DOMContentLoaded vs load 选择</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// DOM 就绪就跑（不等图片）—— 大部分 init 代码
+document.addEventListener("DOMContentLoaded", () =&gt; {
+  hydrateReactApp();
+  bindGlobalShortcuts();
+});
+
+// 图片 / iframe 也完事才跑（依赖尺寸的代码）
+window.addEventListener("load", () =&gt; {
+  measureHeroImage();
+  calculateLayout();
+});
+
+// 现代：直接把 script 放 body 尾 + defer，document.readyState 已经是 "interactive" 或 "complete"
+// 不用监听事件，直接执行</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">脚本位置与类型的选择</h3>
+          <div class="code-block">
+            <span class="code-label">html</span>
+            <pre class="code"><code class="lang-js">&lt;!-- 头部：关键主应用（defer 最安全） --&gt;
+&lt;head&gt;
+  &lt;script type=&quot;module&quot; src=&quot;/src/main.mjs&quot;&gt;&lt;/script&gt;
+  &lt;!-- 默认 defer，加载时机最优 --&gt;
+
+  &lt;!-- 埋点 / 分析（async） --&gt;
+  &lt;script async src=&quot;https://analytics.com/tag.js&quot;&gt;&lt;/script&gt;
+
+  &lt;!-- 关键资源预加载 --&gt;
+  &lt;link rel=&quot;modulepreload&quot; href=&quot;/src/main.mjs&quot;&gt;
+&lt;/head&gt;
+
+&lt;!-- Body 尾：内联初始化 --&gt;
+&lt;body&gt;
+  ...
+  &lt;script&gt;
+    // 这里可以直接操作 DOM，HTML 已全部解析
+    document.body.classList.add(&quot;loaded&quot;);
+  &lt;/script&gt;
+&lt;/body&gt;</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">bfcache 友好</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 浏览器 back/forward 时可能从 bfcache 恢复（完整状态）
+window.addEventListener("pageshow", (e) =&gt; {
+  if (e.persisted) {
+    // 从 bfcache 恢复：重新启动定时器、拉新数据
+    refreshData();
+  }
+});
+window.addEventListener("pagehide", (e) =&gt; {
+  if (e.persisted) {
+    // 进入 bfcache：清定时器但保留 state
+    clearTimers();
+  }
+});
+
+// ⚠ beforeunload / unload 事件阻止 bfcache
+// 能不用就不用。要上报用 pagehide + navigator.sendBeacon</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">离开页面前上报</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">window.addEventListener("visibilitychange", () =&gt; {
+  if (document.visibilityState === "hidden") {
+    // 移动端切后台、PC 切标签都会触发
+    navigator.sendBeacon("/api/track", JSON.stringify(pendingEvents));
+    pendingEvents = [];
+  }
+});
+
+// pagehide 也是（更彻底：页面即将不可见或关闭）
+window.addEventListener("pagehide", () =&gt; {
+  navigator.sendBeacon("/api/track", JSON.stringify(pendingEvents));
+});
+
+// sendBeacon：非阻塞 POST，浏览器保证在关闭前发出
+// 不像 fetch 可能被页面卸载打断</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Intersection + preload = 渐进加载</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 用户滚动接近目标时 preload 下一个模块的 chunk
+const sentinel = document.querySelector("#load-sentinel");
+new IntersectionObserver(([entry]) =&gt; {
+  if (entry.isIntersecting) {
+    const link = document.createElement("link");
+    link.rel = "modulepreload";
+    link.href = "/chunks/next-feature.mjs";
+    document.head.append(link);
+  }
+}, { rootMargin: "500px" }).observe(sentinel);
+
+// 用户点击时 import() 已经缓存</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-ready">ready 工具函数</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function ready(fn) {
+  if (document.readyState !== "loading") fn();
+  else document.addEventListener("DOMContentLoaded", fn, { once: true });
+}
+
+// Promise 版
+function ready() {
+  if (document.readyState !== "loading") return Promise.resolve();
+  return new Promise(r =&gt; document.addEventListener("DOMContentLoaded", r, { once: true }));
+}
+
+// 用法
+await ready();
+initApp();</code></pre>
+        </div>
+
+        <h3 id="ex-cwv">Core Web Vitals 上报</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 用 web-vitals 库（最简单）
+import { onLCP, onINP, onCLS, onFCP, onTTFB } from "web-vitals";
+
+function report(metric) {
+  navigator.sendBeacon("/rum", JSON.stringify({
+    name: metric.name,
+    value: metric.value,
+    delta: metric.delta,
+    id: metric.id,
+  }));
+}
+
+onLCP(report);
+onINP(report);
+onCLS(report);
+onFCP(report);
+onTTFB(report);</code></pre>
+        </div>
+
+        <h3 id="ex-preload-api">preload 的 API 创建</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function preloadScript(url) {
+  const link = document.createElement("link");
+  link.rel = "modulepreload";
+  link.href = url;
+  link.crossOrigin = "anonymous";
+  document.head.append(link);
+  return new Promise((resolve, reject) =&gt; {
+    link.onload = resolve;
+    link.onerror = reject;
+  });
+}
+
+// 用户 hover 时预取
+btn.addEventListener("mouseenter", () =&gt; {
+  preloadScript("/heavy-feature.mjs");
+}, { once: true });</code></pre>
+        </div>
+
+        <h3 id="ex-visibility-pause">visibility-aware 动画</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">let rafId;
+function loop() {
+  draw();
+  rafId = requestAnimationFrame(loop);
+}
+
+document.addEventListener("visibilitychange", () =&gt; {
+  if (document.visibilityState === "hidden") {
+    cancelAnimationFrame(rafId);
+  } else {
+    loop();
+  }
+});
+loop();
+
+// 游戏 / 动画 / 实时显示都应该这样做 —— 省电 + 减 CPU</code></pre>
+        </div>
+
+        <!-- 05 陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">CSS 阻塞 script 执行</div>
+          <p>
+            <code>&lt;link rel="stylesheet"&gt;</code> 后面的 script 要等样式加载完才跑（避免在 JS
+            里读取样式出错）。想非阻塞用 <code>media="print" onload="this.media='all'"</code> 技巧或关键 CSS inline。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>async</code> script 顺序不保证</div>
+          <p>两个 async script 先下载完的先执行。如果 A 依赖 B 不能都用 async。要按序用 defer 或动态 import。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>module</code> 在 Safari 早期版本有 bug</div>
+          <p>
+            Safari 10.1 是第一个支持 ESM 的，但早期有重复执行、fetch 错误等问题。现代已稳定，但保险起见还是构建工具做
+            transpile。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>beforeunload</code> 阻止 bfcache</div>
+          <p>
+            加了 <code>beforeunload</code> 事件 → 浏览器不缓存页面 → back/forward 慢。如果只是"提示未保存"，用
+            localStorage 恢复 + pagehide 保存。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>unload</code> 不可靠</div>
+          <p>
+            移动端常常不触发（用户直接杀进程）。Safari iOS 有时也不触发。上报一律用 <code>visibilitychange</code> →
+            hidden 时 sendBeacon。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">preload 太多反而慢</div>
+          <p>
+            preload 让资源抢高优先级，过多会挤占带宽 / CPU，导致关键资源延迟。只 preload
+            真正"当前页会用"的关键资源（通常 2-3 个字体 / 关键 JS）。Lighthouse 会提示"preload 的资源未被使用"。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">字体 preload 忘记 <code>crossorigin</code></div>
+          <p>
+            字体文件需要 CORS（规范规定）。<code>&lt;link rel="preload" as="font"&gt;</code> 必须加
+            <code>crossorigin</code>，否则浏览器当作两个不同资源下载两次。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">动态注入 script 不走 defer / async</div>
+          <p>
+            <code>document.createElement("script"); s.src = "..."; document.body.append(s)</code> 默认是
+            async。想按序执行要手动等前一个 load 完。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a
+              href="https://html.spec.whatwg.org/multipage/scripting.html#the-script-element"
+              target="_blank"
+              rel="noopener"
+              >HTML · &lt;script&gt; 元素规范</a
+            >
+          </li>
+          <li>
+            <a href="https://web.dev/articles/vitals" target="_blank" rel="noopener">web.dev · Core Web Vitals</a>
+          </li>
+          <li>
+            <a href="https://web.dev/articles/bfcache" target="_blank" rel="noopener">web.dev · Back/forward cache</a>
+          </li>
+          <li><a href="https://github.com/GoogleChrome/web-vitals" target="_blank" rel="noopener">web-vitals 库</a></li>
+          <li>
+            <strong>P5 完</strong>。下一步 → <a href="../06-network/index.html">P6 · 网络 & 存储</a>（Fetch / WebSocket
+            / SSE / CORS / Cookie / IndexedDB / Service Worker）。
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="07-forms.html"
+            ><span class="label">← 上一章</span><span class="title">07 · Form 控件与验证</span></a
+          >
+          <a class="next" href="../06-network/01-fetch.html"
+            ><span class="label">下一阶段 →</span><span class="title">P6 · 01 Fetch API</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

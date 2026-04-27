@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Polyfill 策略 · P4 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="core-js / @babel/preset-env 的 usage vs entry 模式、useBuiltIns 决策、polyfill.io 的风险、@rollup/plugin-polyfill、modern baseline + differential serving、只给需要的浏览器发 polyfill。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · 模块 & 元编程</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-esm.html">01 · ESM 规范与模块图</a></li>
+          <li><a href="02-cjs-interop.html">02 · CJS 与 ESM 互操作</a></li>
+          <li><a href="03-dynamic-import.html">03 · 动态 import</a></li>
+          <li><a href="04-tree-shaking.html">04 · Tree-shaking 原理</a></li>
+          <li><a href="05-import-maps.html">05 · import maps 与模块解析</a></li>
+          <li><a href="06-polyfills.html">06 · Polyfill 策略</a></li>
+          <li><a href="07-eval-function.html">07 · eval 与 new Function</a></li>
+          <li><a href="08-workers.html">08 · Web Workers</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-fundamentals/index.html">P1 · 语言基础</a></li>
+          <li><a href="../02-advanced/index.html">P2 · 高阶语言</a></li>
+          <li><a href="../03-async/index.html">P3 · 异步 & 错误处理</a></li>
+          <li><a href="../05-dom/index.html">P5 · DOM & 事件</a></li>
+          <li><a href="../06-network/index.html">P6 · 网络 & 存储</a></li>
+          <li><a href="../07-advanced/index.html">P7 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · 模块 & 元编程</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Polyfill 策略</span>
+        </nav>
+
+        <h1>Polyfill 策略</h1>
+        <p class="lead">
+          Polyfill 是"用 JS 代码在老浏览器上实现新 API"。问题不在于 polyfill 本身，而在<strong>选择策略</strong>：全量
+          polyfill 浪费 modern 浏览器；按需 polyfill 需要编译期分析；polyfill.io 省事但有信任问题。本章讲每种策略的取舍
+          + modern baseline + differential serving。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~18 分钟</span>
+          <span><strong>前置</strong> 01 ESM · Babel/构建基础</span>
+          <span
+            ><strong>core-js 文档</strong>
+            <a href="https://github.com/zloirock/core-js" target="_blank" rel="noopener">zloirock/core-js</a></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <h3>Polyfill vs Transpile 的区别</h3>
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th>Polyfill</th>
+              <th>Transpile</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>解决的问题</td>
+              <td>新 <strong>API</strong>（<code>Array.prototype.at</code>, <code>Promise.any</code>）</td>
+              <td>新 <strong>语法</strong>（<code>?.</code>, <code>async/await</code>, class fields）</td>
+            </tr>
+            <tr>
+              <td>实现</td>
+              <td>运行时 JS 代码</td>
+              <td>编译时重写源码</td>
+            </tr>
+            <tr>
+              <td>代价</td>
+              <td>包体积 + 运行时开销</td>
+              <td>仅包体积</td>
+            </tr>
+            <tr>
+              <td>工具</td>
+              <td>core-js / polyfill.io</td>
+              <td>Babel / SWC / tsc</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>主流方案</h3>
+        <ul>
+          <li><strong>core-js</strong>：最全的 polyfill 库。配 <code>@babel/preset-env</code> 自动按需注入。</li>
+          <li>
+            <strong>polyfill.io</strong>（已关停） / <strong>polyfill-library</strong>：按 UA 返回差异化 polyfill
+            bundle。
+          </li>
+          <li><strong>unbundled + modulepreload</strong>：浏览器不支持某特性时异步加载 polyfill chunk。</li>
+          <li>
+            <strong>baseline + differential serving</strong>：给 modern 浏览器发 modern bundle、给老的发带 polyfill 的
+            legacy bundle。
+          </li>
+        </ul>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="core-js-modes">core-js + Babel 的 3 种模式</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// babel.config.js
+
+// 模式 1：entry —— 在入口文件 import "core-js" 一次
+presets: [
+  ["@babel/preset-env", {
+    useBuiltIns: "entry",
+    corejs: "3.39",
+    targets: { browsers: ["&gt;0.5%", "not dead"] }
+  }]
+]
+// 消费者代码：
+// import "core-js/stable";
+// import "regenerator-runtime/runtime";
+// Babel 按 targets 把这两行<strong>展开</strong>成必要的 polyfill import
+// 优点：可控、可预测
+// 缺点：不管代码用不用，target 需要的都注入
+
+// 模式 2：usage —— Babel 扫描源码用了什么，只注入相关 polyfill
+presets: [
+  ["@babel/preset-env", {
+    useBuiltIns: "usage",
+    corejs: "3.39",
+    targets: { ... }
+  }]
+]
+// 优点：只注入实际用到的
+// 缺点：第三方包的 polyfill 需求可能漏掉（Babel 默认不扫 node_modules）
+
+// 模式 3：false —— 不自动 polyfill（自己管理）
+useBuiltIns: false</code></pre>
+        </div>
+
+        <h3 id="babel-runtime">@babel/plugin-transform-runtime 的意义</h3>
+        <p>
+          Babel 转某些语法（async/await、generator、spread）需要"helper 函数"。默认把这些 helper 内联到每个文件 →
+          体积膨胀。<code>@babel/plugin-transform-runtime</code> 把 helper 抽到独立包
+          <code>@babel/runtime</code>，各文件共用：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// plugin-transform-runtime 还做另外两件事：
+// 1. "沙箱化" polyfill（corejs: 3）—— 把 Array.from 等<strong>内置</strong>改成从 _corejs 引用
+//    避免污染全局原型
+// 2. regenerator-runtime 挪到单独模块
+
+// 库作者应该用 transform-runtime（不污染全局）
+// 应用作者用 preset-env 的 useBuiltIns: "usage"（更小 bundle）</code></pre>
+        </div>
+
+        <h3 id="modern-legacy">Modern + Legacy 双产物</h3>
+        <p>Vite 内置 <code>@vitejs/plugin-legacy</code>、Webpack 有 <code>@module/nomodule</code> 模式。思路：</p>
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-js">&lt;!-- Modern 浏览器（2017+ 都支持 type=&quot;module&quot;）--&gt;
+&lt;script type=&quot;module&quot; src=&quot;/dist/index-modern.js&quot;&gt;&lt;/script&gt;
+&lt;!-- Modern bundle: 不带 polyfill, 体积小, ES2022+ 语法 --&gt;
+
+&lt;!-- Legacy 浏览器（IE 等老的）--&gt;
+&lt;script nomodule src=&quot;/dist/index-legacy.js&quot;&gt;&lt;/script&gt;
+&lt;!-- Legacy bundle: 带 polyfill, ES5 语法 --&gt;
+
+&lt;!-- 现代浏览器忽略 nomodule 脚本；老浏览器忽略 type=&quot;module&quot; 脚本
+     结果：各取所需，无浪费 --&gt;</code></pre>
+        </div>
+
+        <h3 id="baseline">Web Platform Baseline</h3>
+        <p>
+          Web.dev 推动的 "baseline" 概念：某个 feature 在 Chrome / Safari / Firefox / Edge 都支持达 30 个月后，视为
+          <strong>Baseline: widely available</strong>。以 baseline 为"不 polyfill"的下限：
+        </p>
+        <ul>
+          <li>
+            <strong>Baseline 2023</strong>：支持
+            <code>Array.prototype.at</code>、<code>Object.hasOwn</code>、结构化克隆、<code>AbortSignal.timeout</code>
+            等。
+          </li>
+          <li>
+            <strong>Baseline 2024</strong>：<code>Array.prototype.toSorted</code> /
+            <code>toReversed</code>、<code>groupBy</code>、<code>Set</code> 集合运算等。
+          </li>
+        </ul>
+        <p>生产决策：<strong>支持 baseline + 1-2 年前的浏览器</strong>，polyfill 需求几乎为零。</p>
+
+        <h3 id="polyfill-io-risk">polyfill.io 的历史教训</h3>
+        <p>
+          2024 年 6 月，<code>cdn.polyfill.io</code> 被转手给不明实体，开始给部分用户返回恶意脚本。Cloudflare
+          自建替代、Google Fonts 下架引用。<strong>教训</strong>：
+        </p>
+        <ul>
+          <li>任何 <code>&lt;script src="cdn-不受自己控制"&gt;</code> 都是<strong>供应链风险</strong>。</li>
+          <li>用 SRI（<code>integrity</code> 属性）可以部分缓解。</li>
+          <li>
+            最佳实践：<strong>polyfill 打进自己的 bundle</strong>，或用受信 CDN（cloudflare.com 自建的
+            polyfill.io、jspm.io）。
+          </li>
+        </ul>
+
+        <h3 id="async-polyfill">异步加载 polyfill 的模式</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 特性检测 + 动态加载
+async function ensurePolyfills() {
+  const tasks = [];
+  if (!("at" in Array.prototype)) {
+    tasks.push(import("core-js/actual/array/at"));
+  }
+  if (typeof structuredClone === "undefined") {
+    tasks.push(import("core-js/actual/structured-clone"));
+  }
+  await Promise.all(tasks);
+}
+
+ensurePolyfills().then(() =&gt; import("./app.mjs"));
+
+// 优点：新浏览器零加载
+// 缺点：额外的特性检测代码 + 一次异步加载延迟</code></pre>
+        </div>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">应用型：Vite + 默认 legacy plugin</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// vite.config.ts
+import legacy from "@vitejs/plugin-legacy";
+export default {
+  plugins: [
+    legacy({
+      targets: ["defaults", "not IE 11"],   // browserslist 语法
+      additionalLegacyPolyfills: ["regenerator-runtime/runtime"],
+    })
+  ]
+};
+
+// 自动生成 modern + legacy 双产物
+// index.html 自动插入 module / nomodule
+// 产物体积 modern vs legacy 可能差 2-3 倍</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">库型：只声明依赖，不 bundle polyfill</h3>
+          <div class="code-block">
+            <span class="code-label">json</span>
+            <pre class="code"><code class="lang-js">// library package.json
+{
+  "peerDependencies": {
+    "core-js": "^3.39"
+  },
+  "engines": {
+    "node": "&gt;=18"
+  }
+}
+
+// 在 README 里写明：
+// "如果要支持 ES2022 之前的环境，请手动 import core-js"
+
+// 库<strong>不应</strong>自己 bundle polyfill —— 会和应用重复</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Modern Only：完全不 polyfill</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// package.json
+{
+  "browserslist": [
+    "last 2 Chrome versions",
+    "last 2 Firefox versions",
+    "last 2 Safari versions",
+    "not dead"
+  ]
+}
+
+// 适合：企业内部应用、对 browser 有硬要求的产品
+// 完全不引 core-js，bundle 体积小 40-60%
+// Babel preset-env 会按 browserslist 决定要 transpile 什么</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">特性检测 + lazy polyfill</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// app.mjs
+async function bootstrap() {
+  // 检测 + 按需 polyfill
+  if (!window.structuredClone) {
+    await import("core-js/actual/structured-clone");
+  }
+  if (!Array.prototype.toSorted) {
+    await import("core-js/actual/array/to-sorted");
+  }
+  const { main } = await import("./main.mjs");
+  main();
+}
+bootstrap();
+
+// 适合：想"不 bundle polyfill 但兼容部分老浏览器"的 SSG / 静态站</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Node 版本差异 polyfill</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// Node 17 没有 structuredClone，18+ 有
+import { structuredClone as polyfill } from "structured-clone";
+const clone = globalThis.structuredClone ?? polyfill;
+
+// 更严格：
+const structuredClone = globalThis.structuredClone
+  ?? (await import("structured-clone")).default;
+
+// package.json 锁定最低 Node 版本
+{ "engines": { "node": "&gt;=18" } }</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-babelrc">现代 Babel 配置模板</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// babel.config.js（应用，非库）
+module.exports = {
+  presets: [
+    ["@babel/preset-env", {
+      modules: false,                    // 保留 ESM 让 bundler tree-shake
+      useBuiltIns: "usage",              // 按需注入 core-js
+      corejs: { version: "3.39", proposals: false },
+      bugfixes: true,                    // 启用现代 bugfix 逻辑
+    }]
+  ]
+};
+
+// .browserslistrc 或 package.json "browserslist"
+// &gt; 0.25%
+// not dead
+// not IE 11
+
+// 库 —— 用 transform-runtime 不污染全局
+module.exports = {
+  presets: [
+    ["@babel/preset-env", { modules: false, targets: { esmodules: true } }]
+  ],
+  plugins: [
+    ["@babel/plugin-transform-runtime", {
+      corejs: { version: 3, proposals: false },
+      helpers: true,
+      regenerator: true,
+    }]
+  ]
+};</code></pre>
+        </div>
+
+        <h3 id="ex-feature-detect">特性检测模板</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 通用模式：globalThis 先查、原型先查
+function supports(obj, prop) {
+  return obj != null &amp;&amp; (prop in obj);
+}
+
+const hasTopLevelAwait = (async () =&gt; { try { await 0; return true; } catch { return false; } })();
+const hasStructuredClone = typeof structuredClone === "function";
+const hasAt = supports(Array.prototype, "at");
+const hasGroupBy = supports(Map, "groupBy");
+
+// 封装成 feature detect 模块供全局查
+export const features = {
+  structuredClone: hasStructuredClone,
+  arrayAt: hasAt,
+  // ...
+};</code></pre>
+        </div>
+
+        <h3 id="ex-node-shim">Node 内置 polyfill shim</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// shim.mjs
+if (typeof globalThis.fetch === "undefined") {
+  const { default: fetch, Headers, Request, Response } = await import("node-fetch");
+  globalThis.fetch = fetch;
+  globalThis.Headers = Headers;
+  globalThis.Request = Request;
+  globalThis.Response = Response;
+}
+
+if (typeof globalThis.AbortSignal?.timeout !== "function") {
+  const origTimeout = globalThis.AbortSignal?.timeout;
+  globalThis.AbortSignal = globalThis.AbortSignal ?? {};
+  globalThis.AbortSignal.timeout = function (ms) {
+    const c = new AbortController();
+    setTimeout(() =&gt; c.abort(new DOMException("timeout", "TimeoutError")), ms);
+    return c.signal;
+  };
+}
+
+// 入口文件首行 import "./shim.mjs"</code></pre>
+        </div>
+
+        <h3 id="ex-csp">CSP 与 polyfill</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// CSP 严格（'strict-dynamic' + nonce）时：
+// - polyfill.io 等外部脚本不能执行（除非加允许域）
+// - eval-based polyfill 不能用（unsafe-eval 禁止）
+// - 推荐：polyfill 打进同源 bundle，用 nonce 的 &lt;script&gt;
+
+// CSP 示例
+// Content-Security-Policy:
+//   script-src 'nonce-abc123' 'strict-dynamic';
+//   &lt;script nonce=&quot;abc123&quot; src=&quot;/static/index.js&quot;&gt;&lt;/script&gt;
+// 允许 index.js 加载的子脚本（含 dynamic import 的 chunk）</code></pre>
+        </div>
+
+        <!-- 05 陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">polyfill 污染全局</div>
+          <p>
+            <code>useBuiltIns: "entry"/"usage"</code> + <code>core-js/stable</code> 会给
+            <code>Array.prototype</code> 加真实方法。库作者这样做会和应用冲突 → 用
+            <code>@babel/plugin-transform-runtime</code> 的沙箱化 corejs。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">browserslist 同时出现在多处</div>
+          <p>
+            <code>package.json browserslist</code>、<code>.browserslistrc</code>、<code>babel targets</code>
+            都可以配。优先级混乱导致 polyfill 不按预期。<strong>选一处</strong>，其他工具都读它。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>useBuiltIns: "usage"</code> 不扫 node_modules</div>
+          <p>
+            Babel 默认只 transpile 你的源码，第三方 CJS / ESM 包不扫。如果某包用了新 API 但没 polyfill →
+            老浏览器报错。解决：在 exclude 里去掉该包，或对 <code>node_modules</code> 开启 transpile。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">多 polyfill 源冲突</div>
+          <p>
+            项目里同时 <code>import "core-js"</code> 和 <code>import "airbnb-browser-shims"</code> → 两个包都给
+            Array.prototype 打方法，版本不同行为可能不同。选一家。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">polyfill 和 tree-shaking</div>
+          <p>
+            <code>import "core-js/stable"</code> 是副作用 import —— 不能 shake。<strong>必须列在 sideEffects</strong>
+            里，或用 preset-env 的 auto-inject 模式。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Regenerator runtime 意外巨大</div>
+          <p>
+            某些编译组合把 <code>regenerator-runtime</code> 每个文件都嵌入 → bundle 里出现多份。用
+            <code>@babel/plugin-transform-runtime</code> 统一到一份。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">IE 11 的 polyfill 重担</div>
+          <p>
+            支持 IE11 意味着：ES5 transpile + 大量 polyfill（Promise / fetch / URL / Array methods / ...）。bundle
+            体积膨胀 2-3 倍。2025+ 项目基本都已 drop IE 11（MS 也 EOL 了）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">不要用 polyfill.io 这类 UA-based CDN</div>
+          <p>
+            2024 供应链事件后这类服务信任度大降。要用 CDN-based polyfill，选
+            <code>cdnjs.cloudflare.com</code> 等有声誉、可审计、可固定版本号的。加
+            <code>integrity="sha384-..."</code> 子资源完整性校验。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://github.com/zloirock/core-js" target="_blank" rel="noopener">core-js README</a></li>
+          <li>
+            <a href="https://babeljs.io/docs/babel-preset-env" target="_blank" rel="noopener">@babel/preset-env</a>
+          </li>
+          <li><a href="https://web.dev/baseline/" target="_blank" rel="noopener">web.dev · Baseline</a></li>
+          <li>
+            <a href="https://sansec.io/research/polyfill-supply-chain-attack" target="_blank" rel="noopener"
+              >Sansec · polyfill.io 供应链事件</a
+            >
+          </li>
+          <li><strong>下一步</strong> → <a href="07-eval-function.html">07 · eval 与 new Function</a>。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="05-import-maps.html"
+            ><span class="label">← 上一章</span><span class="title">05 · import maps 与模块解析</span></a
+          >
+          <a class="next" href="07-eval-function.html"
+            ><span class="label">下一章 →</span><span class="title">07 · eval 与 new Function</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

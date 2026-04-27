@@ -1,0 +1,966 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>06 · Classes · Part 1 · TypeScript 深度学习</title>
+    <meta
+      name="description"
+      content="TypeScript class 全谱：字段初始化、strictPropertyInitialization、可见性修饰符（软隐私 vs #field 硬隐私）、parameter properties、abstract class、this 类型、Liskov 在结构化类型下的行为、static 与泛型 class。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%233178c6'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETS%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>TypeScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.62 0.13 245); color: #fff">TS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">TS 首页</a>
+          <a href="index.html">Part 1 目录</a>
+          <a href="https://www.typescriptlang.org/docs/handbook/2/classes.html" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Part 1 · Handbook 基础</h3>
+        <ul>
+          <li><a href="index.html">Part 概览</a></li>
+          <li><a href="01-basics.html">01 · The Basics 与类型系统本质</a></li>
+          <li><a href="02-everyday-types.html">02 · Everyday Types</a></li>
+          <li><a href="03-narrowing.html">03 · Narrowing 与控制流分析</a></li>
+          <li><a href="04-functions.html">04 · Functions</a></li>
+          <li><a href="05-objects.html">05 · Object Types</a></li>
+          <li><a href="06-classes.html">06 · Classes</a></li>
+        </ul>
+        <h3>其他 Part</h3>
+        <ul>
+          <li><a href="../02-type-manipulation/index.html">Part 2 · 类型操作</a></li>
+          <li><a href="../03-reference/index.html">Part 3 · Reference</a></li>
+          <li><a href="../04-project/index.html">Part 4 · 工程化</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TypeScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Part 1 · Handbook 基础</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>06 · Classes</span>
+        </nav>
+
+        <h1>06 · Classes</h1>
+        <p class="lead">
+          TS 在 ES class 之上叠加了一层<strong>类型系统能力</strong>：可见性修饰符、abstract、this 类型、parameter properties、字段初始化检查。本章拆解每一项 TS 增强、它们与 ES 标准（特别是 <code>#field</code> 硬隐私）的互动、以及 Liskov 替换原则在结构化类型下的实际行为。重点回答：<strong>private 到底"私有"到什么程度、为什么 implements 不会自动给方法加类型、为什么基类构造器调用 override 方法是危险的、abstract class 的 constructor type 为什么不能 new</strong>。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~32 分钟</span>
+          <span><strong>前置</strong> <a href="04-functions.html">04 Functions</a> +
+            <a href="../../javascript/02-advanced/06-class.html">JS · class 与继承</a></span>
+          <span
+            ><strong>对应 typescriptlang.org</strong>
+            <a href="https://www.typescriptlang.org/docs/handbook/2/classes.html" target="_blank" rel="noopener"
+              >Handbook · Classes</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>TS class 比 JS class 多了什么：</p>
+        <table>
+          <thead>
+            <tr><th>能力</th><th>JS class</th><th>TS class</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>实例字段</td><td>✓</td><td>✓ + 类型注解 + readonly</td></tr>
+            <tr><td>构造器</td><td>✓</td><td>✓ + parameter properties 简写</td></tr>
+            <tr><td>method / accessor</td><td>✓</td><td>✓ + getter/setter 可不同类型</td></tr>
+            <tr><td>static</td><td>✓</td><td>✓</td></tr>
+            <tr><td>extends / super</td><td>✓</td><td>✓ + implements 关键字</td></tr>
+            <tr><td>硬私有 <code>#field</code></td><td>✓</td><td>✓（等价支持）</td></tr>
+            <tr><td>软私有 <code>private</code></td><td>✗</td><td>✓ <strong>仅编译期</strong></td></tr>
+            <tr><td>protected</td><td>✗</td><td>✓ <strong>仅编译期</strong></td></tr>
+            <tr><td>abstract</td><td>✗</td><td>✓ <strong>仅编译期</strong></td></tr>
+            <tr><td>this 类型 / parameter</td><td>✗</td><td>✓</td></tr>
+            <tr><td>泛型 class</td><td>✗</td><td>✓</td></tr>
+            <tr><td>override 关键字</td><td>✗</td><td>✓（noImplicitOverride）</td></tr>
+          </tbody>
+        </table>
+        <p>
+          标"仅编译期"的能力：编译产物里完全消失，运行时和普通 JS 字段无区别。这是后续讨论"软隐私"的基础。
+        </p>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>1. <code>private</code> 是软隐私，<code>#field</code> 是硬隐私</h3>
+        <p>
+          TS 的 <code>private</code> 修饰符<strong>只在编译期</strong>阻止访问，运行时和普通字段无区别：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">class Counter {
+  private count = 0;
+  inc() { this.count++; }
+}
+
+const c = new Counter();
+// c.count;          // ❌ TS 编译错：'count' is private
+(c as any).count;    // ✓ 运行时拿到 0 — TS 类型是擦的
+console.log(JSON.stringify(c));   // {"count":0}  仍序列化出来！</code></pre>
+        </div>
+        <p>
+          ES2022 标准的 <code>#field</code> 是<strong>真正的运行时隐私</strong>，由 V8 等引擎在私有字段表里实现：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">class Counter {
+  #count = 0;
+  inc() { this.#count++; }
+}
+
+const c = new Counter();
+// c.#count;             // ❌ TS 编译错
+// (c as any).#count;    // ❌ 语法错（# 必须直接拿 class 内可见）
+// c["#count"];          // ❌ undefined（# 不是字符串 key）
+
+console.log(JSON.stringify(c));   // {}  真的看不到</code></pre>
+        </div>
+        <table>
+          <thead>
+            <tr><th></th><th><code>private</code></th><th><code>#field</code></th></tr>
+          </thead>
+          <tbody>
+            <tr><td>编译期阻止外部访问</td><td>✓</td><td>✓</td></tr>
+            <tr><td>运行时阻止外部访问</td><td>✗ <code>(o as any).x</code> 可绕</td><td>✓</td></tr>
+            <tr><td>JSON.stringify 输出</td><td>✓ 输出</td><td>✗ 不输出</td></tr>
+            <tr><td>子类访问父类同名</td><td>✗</td><td>✗ <strong>每个 class 独立的 # 命名空间</strong></td></tr>
+            <tr><td>反射 / Object.keys</td><td>看得到</td><td>看不到</td></tr>
+          </tbody>
+        </table>
+        <p>
+          <strong>实用建议</strong>：
+        </p>
+        <ul>
+          <li><strong>新代码用 <code>#field</code></strong>：真正的隐私，受 ES 标准保护，工具链一致</li>
+          <li><strong>遗留代码用 <code>private</code></strong>：性能略好（无 WeakMap 实现）、调试器看得见、和 legacy decorator 兼容</li>
+          <li><strong>不要混用</strong>：一个 class 内部要么全 #，要么全 private</li>
+        </ul>
+
+        <h3>2. <code>implements</code> 不会自动给方法加类型</h3>
+        <p>
+          <code>implements</code> 只<strong>检查</strong>已存在的结构是否符合接口，不会反向<strong>推断</strong>方法签名：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">interface Greet {
+  greet(name: string): string;
+}
+
+class A implements Greet {
+  greet(name) {     // ❌ Parameter 'name' implicitly has an 'any' type
+    return `Hi ${name}`;
+  }
+}
+
+// ✅ 必须显式注解
+class B implements Greet {
+  greet(name: string): string {
+    return `Hi ${name}`;
+  }
+}</code></pre>
+        </div>
+        <p>
+          为什么这样设计？因为 implements 仅仅是<strong>"声明这个 class 满足这个 shape"</strong>的标签。它不是 ES 标准的一部分，只是给类型系统的 hint。如果它会反向推断，就破坏了"声明独立、检查独立"的原则。
+        </p>
+        <p>
+          <strong>规避</strong>：用 abstract class（如果你能控制基类）、或者写 helper 类型从 interface 提取签名。多数情况老老实实写注解。
+        </p>
+
+        <h3>3. class 同时占据类型空间和值空间</h3>
+        <p>
+          01 章已经讲过 <strong>类型与值是两个独立命名空间</strong>。class 是<strong>同时占两边</strong>的特殊声明：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">class User {
+  constructor(public name: string) {}
+  greet() { return `Hi ${this.name}` }
+}
+
+// 类型空间：User 表示"实例类型"
+function f(u: User) { return u.greet() }
+
+// 值空间：User 表示"构造器函数"
+const ctor: typeof User = User;
+const alice = new ctor("Alice");
+
+// 反向取类型
+type UserConstructor = typeof User;             // new (name: string) =&gt; User
+type UserInstance = InstanceType&lt;typeof User&gt;;  // User</code></pre>
+        </div>
+        <p>
+          <code>typeof ClassName</code> 和 <code>ClassName</code> 是不同的类型：前者是构造器（newable），后者是实例类型。这是 18 章 declaration files 写带 class 的库 <code>.d.ts</code> 时的关键。
+        </p>
+
+        <h3>4. Liskov 在结构化类型下的实际表现</h3>
+        <p>
+          Liskov substitution principle（LSP）：子类可以替换父类。在 TS 的结构化类型下，<strong>替换是默认安全的</strong>，因为只要形状兼容就互通：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">class Animal {
+  name: string = "";
+  move(distance: number) { console.log(distance); }
+}
+
+class Dog extends Animal {
+  bark() { console.log("woof") }
+  // override 时：可以加新字段，但已有签名要兼容
+  move(distance: number) { console.log(`Dog ran ${distance}`) }
+}
+
+const a: Animal = new Dog();   // ✓ Dog 是 Animal 的子类型（结构兼容 + extends）
+a.move(10);                     // 实际调 Dog.move（运行时多态）</code></pre>
+        </div>
+        <p>
+          注意 <strong>method override 默认双变（bivariant）</strong>，参数可以"更窄"的不安全用法默认通过：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">class Base {
+  process(x: Animal) {}
+}
+
+class Bad extends Base {
+  // 方法 override 默认 bivariant：参数 Dog 比 Animal 窄不报错
+  process(x: Dog) { x.bark() }
+}
+
+const b: Base = new Bad();
+b.process(new Animal());   // 编译过 → 运行时 bark is not a function</code></pre>
+        </div>
+        <p>
+          <strong>开 <code>strictFunctionTypes</code> 也救不了 method override</strong>（仅函数类型生效，不对方法签名生效）。要严格，TS 5.0 起可用 <code>override</code> 关键字 + <code>noImplicitOverride</code>，至少防止"我以为我 override 了，其实拼错了"。
+        </p>
+
+        <h3>5. <code>override</code> 关键字与 <code>noImplicitOverride</code></h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">class Base {
+  greet() { return "Hello" }
+}
+
+class Sub extends Base {
+  override greet() { return "Hi" }   // ✓ 明确表示"覆盖父类"
+
+  override grret() { return "x" }    // ❌ 'grret' has no equivalent in 'Base'
+  //                                   拼错时立刻报错
+}</code></pre>
+        </div>
+        <p>
+          配合 tsconfig:
+        </p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-js">{ "compilerOptions": { "noImplicitOverride": true } }</code></pre>
+        </div>
+        <p>
+          打开后<strong>所有 override 都必须加 <code>override</code> 关键字</strong>，否则编译错。这是中大型 OOP 项目的标配。
+        </p>
+
+        <h3>6. abstract class 的 constructor type 不能 new</h3>
+        <p>
+          abstract class 不能直接实例化：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">abstract class Shape {
+  abstract area(): number;
+  describe() { return `Area: ${this.area()}` }
+}
+
+const s = new Shape();   // ❌ Cannot create an instance of an abstract class
+
+class Circle extends Shape {
+  constructor(public radius: number) { super() }
+  area() { return Math.PI * this.radius ** 2 }
+}
+const c = new Circle(5);   // ✓</code></pre>
+        </div>
+        <p>
+          但<strong>从 abstract class 取 constructor type 时</strong>需要用特殊工具：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// ❌ 想写 factory 接受 Shape 类型的 constructor
+function factory(C: new () =&gt; Shape) { return new C() }
+factory(Shape);   // ❌ Cannot assign an abstract constructor type to a non-abstract one
+
+// ✅ 用 abstract construct signature
+function factory(C: abstract new () =&gt; Shape) { return new C() }
+factory(Shape);   // 类型上能传，但仍不能 new abstract — TS 5.0 把这个矛盾点拉清晰</code></pre>
+        </div>
+        <p>
+          实际生产代码里 <code>abstract new</code> 几乎只在写"接受 class 但不实例化"的工具时用到（如打印继承树、生成 schema）。
+        </p>
+
+        <h3>7. Parameter properties：构造器参数同时声明字段</h3>
+        <p>
+          一个 TS 独有的简写：在构造器参数前加可见性修饰符或 <code>readonly</code>，自动声明同名字段并赋值：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 等价的两种写法
+class A {
+  constructor(public name: string, private age: number, readonly id: string) {}
+}
+// 编译器自动展开为：
+class B {
+  public name: string;
+  private age: number;
+  readonly id: string;
+  constructor(name: string, age: number, id: string) {
+    this.name = name;
+    this.age = age;
+    this.id = id;
+  }
+}</code></pre>
+        </div>
+        <p>
+          NestJS / Angular 的 DI 系统大量使用 parameter properties + 装饰器，节省样板。但<strong>有副作用</strong>：让构造器变"半声明半实现"，新人读起来略费解；不能在赋值前做计算或验证。
+
+        </p>
+
+        <h3>8. <code>strictPropertyInitialization</code> 与 definite assignment</h3>
+        <p>
+          严格模式下，所有非 optional 实例字段必须在构造器结束前赋值：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">class User {
+  name: string;       // ❌ Property 'name' has no initializer and is not definitely assigned in the constructor
+  constructor() {
+    // 没赋值
+  }
+}
+
+// 解决方式
+class User {
+  name: string = "";          // ✓ 字段初始化
+  // 或
+  constructor(public name: string) {}   // ✓ parameter property 自动赋值
+  // 或
+  name?: string;              // ✓ 显式 optional
+  // 或
+  name!: string;              // ✓ definite assignment assertion（"我担保会赋值"）
+  init() { this.name = "..." }
+}</code></pre>
+        </div>
+        <p>
+          <code>!:</code> 是<strong>开发者承诺</strong>，类似非空断言：告诉 TS"虽然你看不到这里赋值，但运行时一定会赋"。常见场景是 ORM Entity（外部 hydrate 字段）：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// TypeORM 模式
+@Entity()
+class User {
+  @PrimaryGeneratedColumn()
+  id!: number;     // ! 因为 ORM 在 hydrate 时填值
+
+  @Column()
+  email!: string;
+}</code></pre>
+        </div>
+
+        <h3>9. Getter / setter 类型可不同（TS 4.3+）</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">class Thermostat {
+  private _temp = 20;
+
+  get temp(): number {
+    return this._temp;
+  }
+
+  // setter 接受多种输入，存储时统一
+  set temp(value: number | string) {
+    this._temp = typeof value === "string" ? parseFloat(value) : value;
+  }
+}
+
+const t = new Thermostat();
+t.temp = "25.5";    // ✓ string 输入
+t.temp = 30;         // ✓ number 输入
+const c = t.temp;    // c: number（getter 返回 number）</code></pre>
+        </div>
+        <p>
+          TS 4.3 之前 setter 必须接受 getter 同类型。新版本允许 setter 接受<strong>更宽</strong>的输入（让外部赋值更灵活），getter 返回<strong>更窄</strong>（让读取更精确）。这是「输入位置逆变 / 输出位置协变」原则的应用。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · NestJS Controller / Service / DI</h3>
+          <p>
+            class + 装饰器 + parameter properties + DI 是 NestJS 的核心套路：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">@Injectable()
+class UserService {
+  constructor(
+    @InjectRepository(User) private userRepo: Repository&lt;User&gt;,
+    private logger: LoggerService,
+  ) {}
+
+  async findById(id: string): Promise&lt;User | null&gt; {
+    this.logger.debug(`Finding user ${id}`);
+    return this.userRepo.findOneBy({ id });
+  }
+}
+
+@Controller("users")
+class UserController {
+  constructor(private userService: UserService) {}
+
+  @Get(":id")
+  async getUser(@Param("id") id: string): Promise&lt;User&gt; {
+    const u = await this.userService.findById(id);
+    if (!u) throw new NotFoundException();
+    return u;
+  }
+}</code></pre>
+          </div>
+          <p>
+            这种代码<strong>仍依赖 legacy decorator + emitDecoratorMetadata</strong>。Stage 3 标准装饰器还没补齐 metadata reflection 能力（详见 14 章）。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 自定义 Error 层次</h3>
+          <p>
+            class 最简单也最有价值的应用：建立有类型的错误体系：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">class AppError extends Error {
+  constructor(message: string, public readonly cause?: unknown) {
+    super(message);
+    this.name = this.constructor.name;
+  }
+}
+
+class NotFoundError extends AppError {
+  constructor(public readonly resource: string, public readonly id: string) {
+    super(`${resource} not found: ${id}`);
+  }
+}
+
+class ValidationError extends AppError {
+  constructor(message: string, public readonly field: string) { super(message) }
+}
+
+// 业务代码
+async function getUser(id: string): Promise&lt;User&gt; {
+  const u = await db.users.findById(id);
+  if (!u) throw new NotFoundError("User", id);
+  return u;
+}
+
+// 调用方
+try {
+  const u = await getUser("xxx");
+} catch (e) {
+  if (e instanceof NotFoundError) console.log(`${e.resource}/${e.id}`);
+  else if (e instanceof ValidationError) console.log(e.field);
+  else if (e instanceof AppError) console.log(e.cause);
+  else throw e;   // 未知错误重抛
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 状态机基类 + 子类</h3>
+          <p>
+            abstract class 适合表达"骨架已定，细节由子类填"的设计：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">abstract class State&lt;Ctx&gt; {
+  constructor(protected ctx: Ctx) {}
+  abstract enter(): void;
+  abstract exit(): void;
+  abstract handle(event: string): State&lt;Ctx&gt; | null;
+}
+
+class Idle extends State&lt;App&gt; {
+  enter() { console.log("idle") }
+  exit() {}
+  handle(e: string) {
+    if (e === "start") return new Loading(this.ctx);
+    return null;
+  }
+}
+
+class Loading extends State&lt;App&gt; {
+  enter() { console.log("loading") }
+  exit() {}
+  handle(e: string) {
+    if (e === "done") return new Idle(this.ctx);
+    return null;
+  }
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · TypeORM Entity 与 definite assignment</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">@Entity()
+class Article {
+  @PrimaryGeneratedColumn("uuid")
+  id!: string;             // ! ORM hydrate
+
+  @Column({ length: 200 })
+  title!: string;
+
+  @Column("text")
+  content!: string;
+
+  @ManyToOne(() =&gt; User)
+  author!: User;
+
+  @CreateDateColumn()
+  createdAt!: Date;
+
+  @UpdateDateColumn()
+  updatedAt!: Date;
+}</code></pre>
+          </div>
+          <p>
+            <code>!</code> 在 ORM 场景几乎是标配。也可以全部用 <code>?</code> 标 optional，但读取时永远要判空，反而更累。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>所有可见性 + 类型增强一览</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">class Item {
+  // 字段
+  public name: string;          // public 是默认，可省
+  protected sku: string;        // 子类可见
+  private cost: number;          // 仅当前类（软隐私）
+  #internalId: string;            // 真正硬隐私（# field）
+  readonly createdAt: Date;     // 不可重新赋值
+  static count = 0;              // 静态字段
+
+  constructor(name: string, sku: string, cost: number) {
+    this.name = name;
+    this.sku = sku;
+    this.cost = cost;
+    this.#internalId = crypto.randomUUID();
+    this.createdAt = new Date();
+    Item.count++;
+  }
+
+  // method
+  public describe(): string {
+    return `${this.name} (${this.sku})`;
+  }
+
+  // accessor
+  get displayCost(): string {
+    return `$${this.cost.toFixed(2)}`;
+  }
+
+  // static method
+  static get total(): number {
+    return Item.count;
+  }
+}</code></pre>
+        </div>
+
+        <h3>泛型 class</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">class Stack&lt;T&gt; {
+  private items: T[] = [];
+
+  push(item: T): void {
+    this.items.push(item);
+  }
+
+  pop(): T | undefined {
+    return this.items.pop();
+  }
+
+  peek(): T | undefined {
+    return this.items.at(-1);
+  }
+
+  get size(): number {
+    return this.items.length;
+  }
+}
+
+const s = new Stack&lt;number&gt;();
+s.push(1);
+s.push(2);
+const top = s.pop();    // top: number | undefined
+
+// ⚠️ 类型参数无法用在 static 成员上
+class Foo&lt;T&gt; {
+  // static x: T;     // ❌ Static members cannot reference class type parameters
+  static factory&lt;U&gt;(): Foo&lt;U&gt; { return new Foo() }   // ✓ 自带泛型 OK
+}</code></pre>
+        </div>
+
+        <h3>this 类型与 builder pattern</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// this 类型让链式调用在子类也能精确返回子类型
+class QueryBuilder {
+  protected conditions: string[] = [];
+
+  where(condition: string): this {
+    this.conditions.push(condition);
+    return this;
+  }
+
+  build(): string {
+    return `WHERE ${this.conditions.join(" AND ")}`;
+  }
+}
+
+class UserQueryBuilder extends QueryBuilder {
+  byEmail(email: string): this {
+    return this.where(`email = '${email}'`);
+  }
+}
+
+// 链式调用类型仍精确
+const q = new UserQueryBuilder()
+  .where("active = true")
+  .byEmail("a@b.c")        // 不会因为前面的 .where 退化成 QueryBuilder
+  .build();</code></pre>
+        </div>
+
+        <h3>this is X type guard（自定义类型守卫 method）</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">class FileSystemEntity {
+  constructor(public path: string) {}
+
+  isFile(): this is File {
+    return this instanceof File;
+  }
+
+  isDirectory(): this is Directory {
+    return this instanceof Directory;
+  }
+}
+
+class File extends FileSystemEntity {
+  constructor(path: string, public size: number) { super(path) }
+}
+
+class Directory extends FileSystemEntity {
+  constructor(path: string, public children: FileSystemEntity[]) { super(path) }
+}
+
+function process(entry: FileSystemEntity) {
+  if (entry.isFile()) {
+    console.log(entry.size);     // ✓ entry 收窄为 File
+  } else if (entry.isDirectory()) {
+    console.log(entry.children); // ✓ entry 收窄为 Directory
+  }
+}</code></pre>
+        </div>
+
+        <h3>abstract class 完整示例</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">abstract class Notifier {
+  // abstract 方法 — 子类必须实现
+  abstract send(message: string): Promise&lt;void&gt;;
+
+  // 共用逻辑 — 子类继承
+  async notify(user: { email: string }, message: string): Promise&lt;void&gt; {
+    const formatted = `[${new Date().toISOString()}] ${message}`;
+    await this.send(formatted);
+  }
+}
+
+class EmailNotifier extends Notifier {
+  async send(message: string): Promise&lt;void&gt; {
+    await fetch("/api/email", { method: "POST", body: message });
+  }
+}
+
+class SlackNotifier extends Notifier {
+  async send(message: string): Promise&lt;void&gt; {
+    await fetch("/api/slack", { method: "POST", body: message });
+  }
+}
+
+const n: Notifier = Math.random() &gt; 0.5 ? new EmailNotifier() : new SlackNotifier();
+await n.notify({ email: "a@b.c" }, "hello");</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 基类构造器调用被子类 override 的方法</div>
+          <p>
+            JS 的字段初始化在<strong>子类构造器调 super() 之后才发生</strong>。如果基类构造器调用了被子类 override 的方法，子类还没初始化的字段会是 undefined：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">class Base {
+  constructor() {
+    this.greet();   // 多态调用 — 调到子类的 greet
+  }
+  greet() { console.log("base") }
+}
+
+class Sub extends Base {
+  prefix = "hi";   // 子类字段
+  greet() {
+    console.log(`${this.prefix} sub`);
+    //          ^^^^^^^^^^^^^^^^^^ 此时 this.prefix 是 undefined！
+  }
+}
+
+new Sub();   // 输出 "undefined sub"，不是 "hi sub"</code></pre>
+          </div>
+          <p>
+            <strong>根因</strong>：执行顺序是 <code>super() → 子类字段初始化 → 子类构造器体</code>。基类构造器跑的时候，子类字段还没被赋值。
+          </p>
+          <p>
+            <strong>规避</strong>：不在基类构造器调用 abstract / 可被 override 的方法。需要"模板方法"模式时，用 <code>init()</code> 之类显式 method 让调用方决定时机。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · private 字段在 JSON.stringify 仍输出</div>
+          <p>
+            <code>private</code> 是软隐私，<code>JSON.stringify</code> 不知情：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">class User {
+  constructor(public name: string, private passwordHash: string) {}
+}
+const u = new User("Alice", "hash_xxx");
+JSON.stringify(u);   // {"name":"Alice","passwordHash":"hash_xxx"}  泄露！</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：
+          </p>
+          <ul>
+            <li>用 <code>#field</code>：JSON.stringify 不会输出</li>
+            <li>实现 <code>toJSON()</code> method 显式控制序列化</li>
+            <li>API 返回前用 zod / class-transformer 等做 DTO 转换</li>
+          </ul>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · this 丢失绑定（method 拿出来调用）</div>
+          <p>
+            04 章已经讲过，class method 上同样存在：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">class Counter {
+  count = 0;
+  inc() { this.count++ }
+}
+
+const c = new Counter();
+const fn = c.inc;
+fn();   // 运行时炸：this 是 undefined
+
+// ✅ 解 1：箭头函数 field（自动绑定 this）
+class Counter {
+  count = 0;
+  inc = () =&gt; { this.count++ };   // 编译产物：每个实例自带一个 inc 函数
+}
+
+// ✅ 解 2：bind
+const fn = c.inc.bind(c);
+
+// ✅ 解 3：声明 this 参数让 TS 拦住误用
+class Counter {
+  count = 0;
+  inc(this: Counter) { this.count++ }
+}</code></pre>
+          </div>
+          <p>
+            React 类组件大量用方案 1（箭头 field）。性能代价：每个实例多一个函数对象，无法走 prototype。绝大多数场景代价可以忽略。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · static 成员引用 class type parameter</div>
+          <p>
+            泛型参数<strong>不能</strong>用在 static 成员上：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">class Box&lt;T&gt; {
+  static empty: T;   // ❌ Static members cannot reference class type parameters
+}</code></pre>
+          </div>
+          <p>
+            <strong>原因</strong>：<code>T</code> 是<strong>实例</strong>泛型参数，每个实例可以是不同 T。但 static 成员属于 class 自身，只有一份 —— 没法对应到具体某个 T。
+          </p>
+          <p>
+            <strong>规避</strong>：让 static method 自带泛型，或者把泛型迁到 method 层：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">class Box&lt;T&gt; {
+  static create&lt;U&gt;(value: U): Box&lt;U&gt; { return new Box&lt;U&gt;(value) }
+  constructor(public value: T) {}
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · implements 不会推断方法参数类型</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">interface Repository&lt;T&gt; {
+  findById(id: string): Promise&lt;T | null&gt;;
+}
+
+class UserRepo implements Repository&lt;User&gt; {
+  // ❌ id 隐式 any（implements 不传播类型）
+  async findById(id) { return null }
+}
+
+// ✅ 必须显式注解
+class UserRepo implements Repository&lt;User&gt; {
+  async findById(id: string): Promise&lt;User | null&gt; { return null }
+}</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：abstract class 比 interface 更"DRY"——参数类型可以从 abstract method 自动继承到 override：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">abstract class Repository&lt;T&gt; {
+  abstract findById(id: string): Promise&lt;T | null&gt;;
+}
+
+class UserRepo extends Repository&lt;User&gt; {
+  async findById(id) { return null }   // ✓ id 自动推 string
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · readonly + class 字段并不阻止内部 mutation</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">class Container {
+  readonly items: number[] = [];
+
+  add(x: number) {
+    this.items.push(x);   // ✓ 通过 — readonly 只阻止重新赋值，不阻止改内部
+  }
+
+  // this.items = [];      // ❌ Cannot assign — 这才是 readonly 拦的
+}</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：要阻止数组也变，类型用 <code>readonly number[]</code>。深 readonly 自定义类型（10 章 mapped type）。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://www.typescriptlang.org/docs/handbook/2/classes.html" target="_blank" rel="noopener"
+              >TypeScript Handbook · Classes</a
+            > —— 官方对应章节
+          </li>
+          <li>
+            <a href="https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-3.html#override-and-the---noimplicitoverride-flag" target="_blank" rel="noopener"
+              >TS 4.3 · override 关键字与 noImplicitOverride</a
+            >
+          </li>
+          <li>
+            <a href="https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-3.html#separate-write-types-on-properties" target="_blank" rel="noopener"
+              >TS 4.3 · setter 与 getter 类型分离</a
+            >
+          </li>
+          <li>
+            <a href="https://github.com/tc39/proposal-class-fields" target="_blank" rel="noopener"
+              >TC39 · Class Fields Proposal</a
+            > —— <code>#field</code> 硬隐私的 ES 标准
+          </li>
+          <li>
+            <a href="../index.html">→ 回到 Part 1 概览</a> · 接下来进入
+            <a href="../02-type-manipulation/index.html">Part 2 · 类型操作</a>（核心难点 6 章）
+          </li>
+          <li>
+            JS 衔接 →
+            <a href="../../javascript/02-advanced/06-class.html">JS · class 与继承</a> 配合理解 super / 字段初始化时机
+          </li>
+          <li>
+            JS 衔接 →
+            <a href="../../javascript/02-advanced/07-private-decorators.html">JS · 私有字段与装饰器</a>
+            配合理解 #field 与 legacy decorator
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="05-objects.html">
+            <span class="label">← 上一章</span>
+            <span class="title">05 · Object Types</span>
+          </a>
+          <a class="next" href="../02-type-manipulation/index.html">
+            <span class="label">下一 Part →</span>
+            <span class="title">Part 2 · 类型操作</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,905 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>19 · 项目配置 · Part 4 · TypeScript 深度学习</title>
+    <meta
+      name="description"
+      content="tsconfig.json 30+ 选项按家族详解：项目结构、strict 13 子 flag、module 家族（target / module / moduleResolution）、output、JSX、lib/types、Project References + 增量构建。新项目模板与陷阱清单。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%233178c6'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETS%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>TypeScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.62 0.13 245); color: #fff">TS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">TS 首页</a>
+          <a href="index.html">Part 4 目录</a>
+          <a href="https://www.typescriptlang.org/tsconfig" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Part 4 · 工程化</h3>
+        <ul>
+          <li><a href="index.html">Part 概览</a></li>
+          <li><a href="18-declaration-files.html">18 · Declaration Files</a></li>
+          <li><a href="19-tsconfig.html">19 · 项目配置</a></li>
+          <li><a href="20-migration.html">20 · Migration & Interop</a></li>
+        </ul>
+        <h3>其他 Part</h3>
+        <ul>
+          <li><a href="../01-handbook-basics/index.html">Part 1 · Handbook 基础</a></li>
+          <li><a href="../02-type-manipulation/index.html">Part 2 · 类型操作</a></li>
+          <li><a href="../03-reference/index.html">Part 3 · Reference</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TypeScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Part 4 · 工程化</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>19 · 项目配置</span>
+        </nav>
+
+        <h1>19 · 项目配置</h1>
+        <p class="lead">
+          tsconfig.json 有 100+ 选项。本章把常用 30+ 个按<strong>家族分组</strong>讲：项目结构、strict（13 子 flag）、module（输出 vs 解析）、output、JSX、lib/types、Project References。每个选项都给出"它解决什么工程问题"。最后给出 4 套可直接复用的模板（Vite / Next.js / Node ESM / Library）。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~40 分钟</span>
+          <span><strong>前置</strong>
+            <a href="../03-reference/13-modules.html">13 Modules</a> +
+            <a href="18-declaration-files.html">18 Declaration Files</a></span>
+          <span
+            ><strong>对应 typescriptlang.org</strong>
+            <a href="https://www.typescriptlang.org/tsconfig" target="_blank" rel="noopener">tsconfig 参考</a></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>tsconfig 的最小有效形态（适合 Vite / Next.js）：</p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-js">{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force"
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"]
+}</code></pre>
+        </div>
+        <p>
+          每个 tsconfig 都做三件事：<strong>选项</strong>（compilerOptions）、<strong>包含哪些文件</strong>（include / files / exclude）、<strong>继承谁</strong>（extends）。
+        </p>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>1. 项目结构：files / include / exclude / extends</h3>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-js">{
+  "extends": "@my/tsconfig/base.json",   // 继承基础配置
+  // 5.0+ 支持数组多继承（后写覆盖前写）：
+  // "extends": ["@my/tsconfig/base.json", "@my/tsconfig/strict.json"],
+
+  "files": ["src/index.ts"],            // 显式列文件（少用）
+
+  "include": [                          // glob 模式
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "types/**/*.d.ts"
+  ],
+
+  "exclude": [                          // 排除（默认含 node_modules）
+    "node_modules",
+    "dist",
+    "**/*.test.ts"
+  ]
+}</code></pre>
+        </div>
+        <p>
+          关键细节：
+        </p>
+        <ul>
+          <li><code>files</code> 和 <code>include</code> 至少存在一个，否则 tsc 报错</li>
+          <li><code>exclude</code> 不影响"被代码 import 的文件"（即使在 exclude 里，import 它仍会编译）</li>
+          <li><strong>extends 数组继承</strong>（5.0+）按从前到后顺序，后者覆盖前者；适合做"base + 严格度叠加"</li>
+        </ul>
+
+        <h3>2. strict 家族：13 个独立 flag 的总开关</h3>
+        <p>
+          <code>"strict": true</code> 等价于打开下面这一组：
+        </p>
+        <table>
+          <thead>
+            <tr><th>flag</th><th>作用</th><th>关掉的代价</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>noImplicitAny</code></td>
+              <td>禁止隐式 any</td>
+              <td>到处都是 any 黑洞</td>
+            </tr>
+            <tr>
+              <td><code>strictNullChecks</code></td>
+              <td>null / undefined 必须显式</td>
+              <td>放弃 90% null 安全</td>
+            </tr>
+            <tr>
+              <td><code>strictFunctionTypes</code></td>
+              <td>函数参数严格逆变（仅函数类型）</td>
+              <td>method 不安全口子继续开</td>
+            </tr>
+            <tr>
+              <td><code>strictBindCallApply</code></td>
+              <td>bind/call/apply 检查参数</td>
+              <td>可传任意参数</td>
+            </tr>
+            <tr>
+              <td><code>strictPropertyInitialization</code></td>
+              <td>类字段必须初始化或 ?</td>
+              <td>构造器后字段可能 undefined</td>
+            </tr>
+            <tr>
+              <td><code>alwaysStrict</code></td>
+              <td>emit "use strict"</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td><code>useUnknownInCatchVariables</code></td>
+              <td>catch (e) 推 unknown 而非 any</td>
+              <td>e.x 直接通过</td>
+            </tr>
+            <tr>
+              <td><code>noImplicitThis</code></td>
+              <td>禁止 this 隐式 any</td>
+              <td>this 传染 any</td>
+            </tr>
+            <tr>
+              <td><code>strictBuiltinIteratorReturn</code></td>
+              <td>5.6+：内置迭代器 return 类型严格</td>
+              <td>—</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          外加（不在 strict 里但<strong>常配套</strong>打开）：
+        </p>
+        <ul>
+          <li><code>noUncheckedIndexedAccess</code> —— <code>arr[i]</code> 推 <code>T | undefined</code>。痛苦但收益巨大</li>
+          <li><code>exactOptionalPropertyTypes</code> —— <code>{ foo?: string }</code> 不允许显式 <code>undefined</code></li>
+          <li><code>noImplicitReturns</code> / <code>noFallthroughCasesInSwitch</code> —— 控制流检查</li>
+          <li><code>noUnusedLocals</code> / <code>noUnusedParameters</code> —— ESLint 也能管，但 tsc 内置</li>
+          <li><code>allowUnreachableCode</code> / <code>allowUnusedLabels</code> —— 默认 undefined（warn），设 false 严格</li>
+        </ul>
+        <p>
+          <strong>实用建议</strong>：新项目<strong>直接 <code>strict: true</code></strong>，按需关单个 flag。老项目从 <code>noImplicitAny</code> + <code>strictNullChecks</code> 起步，再逐项叠加。
+        </p>
+
+        <h3>3. module 家族：<code>target</code> / <code>module</code> / <code>moduleResolution</code></h3>
+        <p>
+          这三个最容易混淆 — <strong>它们是三件不同的事</strong>：
+        </p>
+        <table>
+          <thead>
+            <tr><th>选项</th><th>决定</th><th>常用值</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>target</code></td>
+              <td>降级到哪个 ES 版本（语法）</td>
+              <td><code>ES2017</code> / <code>ES2020</code> / <code>ES2022</code> / <code>ESNext</code></td>
+            </tr>
+            <tr>
+              <td><code>module</code></td>
+              <td>输出哪种 module 格式</td>
+              <td><code>CommonJS</code> / <code>ESNext</code> / <code>NodeNext</code> / <code>Preserve</code></td>
+            </tr>
+            <tr>
+              <td><code>moduleResolution</code></td>
+              <td>如何解析 import 找文件</td>
+              <td><code>Node10</code> / <code>Node16</code> / <code>NodeNext</code> / <code>Bundler</code></td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          典型组合：
+        </p>
+        <ul>
+          <li><strong>Vite / Next.js</strong>：<code>module: "ESNext", moduleResolution: "Bundler"</code></li>
+          <li><strong>Node 22 ESM</strong>：<code>module: "NodeNext", moduleResolution: "NodeNext"</code></li>
+          <li><strong>Node CJS 老库</strong>：<code>module: "CommonJS", moduleResolution: "Node10"</code></li>
+          <li><strong>跨平台 lib</strong>：<code>module: "ESNext", moduleResolution: "Bundler"</code> + 用 tsup / unbuild 输出双格式</li>
+        </ul>
+        <p>
+          相关辅助选项：
+        </p>
+        <ul>
+          <li><code>esModuleInterop</code> + <code>allowSyntheticDefaultImports</code>：CJS / ESM 互通垫片（13 章）</li>
+          <li><code>isolatedModules</code>：让 babel/swc/esbuild 单文件 transpile 安全。<strong>用 bundler 时必开</strong></li>
+          <li><code>verbatimModuleSyntax</code>（5.0+）：替代旧 <code>importsNotUsedAsValues</code>。要求所有仅类型 import/export 显式标 <code>type</code></li>
+          <li><code>moduleDetection: "force"</code>：所有 .ts 都按 module 处理（避免 13 章讲的"全局脚本"陷阱）</li>
+          <li><code>resolveJsonModule</code>：允许 import .json 文件</li>
+          <li><code>resolvePackageJsonExports</code> / <code>resolvePackageJsonImports</code>：尊重 package.json 的 exports / imports 字段</li>
+        </ul>
+
+        <h3>4. <code>paths</code> 与 <code>baseUrl</code></h3>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-js">{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@app/*": ["apps/app/src/*"],
+      "@shared": ["packages/shared/src/index.ts"]
+    }
+  }
+}</code></pre>
+        </div>
+        <p>
+          ⚠️ <strong>paths 只影响 tsc 类型检查，不影响运行时</strong>。Vite / webpack / Next.js 各自必须配 alias。否则编译过运行 module not found：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript · vite.config.js</span>
+          <pre class="code"><code class="lang-js">import { defineConfig } from "vite";
+import path from "path";
+
+export default defineConfig({
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "src"),
+      "@app": path.resolve(__dirname, "apps/app/src"),
+    },
+  },
+});</code></pre>
+        </div>
+        <p>
+          有专门工具<strong>从 tsconfig 同步到 bundler</strong>：vite-tsconfig-paths / unplugin-tsconfig-paths。Next.js 自动读取 tsconfig 的 paths（不需要 next.config.js 手动配）。
+        </p>
+
+        <h3>5. output 家族</h3>
+        <table>
+          <thead>
+            <tr><th>选项</th><th>作用</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>outDir</code></td><td>编译产物目录（如 "dist"）</td></tr>
+            <tr><td><code>rootDir</code></td><td>源根目录（影响产物层级）</td></tr>
+            <tr><td><code>declaration</code></td><td>生成 .d.ts</td></tr>
+            <tr><td><code>declarationMap</code></td><td>生成 .d.ts.map（IDE 跳转）</td></tr>
+            <tr><td><code>sourceMap</code></td><td>生成 .js.map（debug）</td></tr>
+            <tr><td><code>inlineSourceMap</code></td><td>source map 内联到 .js</td></tr>
+            <tr><td><code>noEmit</code></td><td>不输出文件（仅 type check）</td></tr>
+            <tr><td><code>noEmitOnError</code></td><td>错误时不输出（生产构建建议开）</td></tr>
+            <tr><td><code>removeComments</code></td><td>产物去注释</td></tr>
+            <tr><td><code>incremental</code></td><td>增量编译（缓存到 .tsbuildinfo）</td></tr>
+            <tr><td><code>tsBuildInfoFile</code></td><td>缓存路径自定义</td></tr>
+            <tr><td><code>composite</code></td><td>开启 Project References（强制 declaration）</td></tr>
+          </tbody>
+        </table>
+
+        <h3>6. lib / types：精确控制运行时类型可见</h3>
+        <p>
+          <code>lib</code> 决定 TS 知道哪些标准库 API 存在。默认值由 <code>target</code> 决定（如 target ES2020 自动含 ES2020 所有 lib）：
+        </p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-js">{
+  "compilerOptions": {
+    // 浏览器 + ES2022（不含 Node 的 process / Buffer 等）
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+
+    // Node 项目（不含 DOM 的 window / document）
+    // "lib": ["ES2022"]
+  }
+}</code></pre>
+        </div>
+        <p>
+          可选的常用 lib：
+        </p>
+        <ul>
+          <li><code>DOM</code> / <code>DOM.Iterable</code> —— 浏览器</li>
+          <li><code>ES2015</code> / <code>ES2017</code> / <code>ES2020</code> / <code>ES2022</code> / <code>ESNext</code> —— ES 版本</li>
+          <li><code>WebWorker</code> —— Worker 上下文（不含 window）</li>
+          <li><code>ScriptHost</code> —— 老的 Windows Script Host（极少用）</li>
+        </ul>
+        <p>
+          <code>types</code>：白名单加载 @types/*（详见 18 章）：
+        </p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-js">{
+  "compilerOptions": {
+    "types": ["node", "vite/client", "@testing-library/jest-dom"]
+    // 仅这几个 @types 包被加载（默认是全部加载）
+  }
+}</code></pre>
+        </div>
+
+        <h3>7. JSX 选项</h3>
+        <p>
+          16 章已展开。tsconfig 相关：
+        </p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-js">{
+  "compilerOptions": {
+    "jsx": "react-jsx",            // preserve | react | react-jsx | react-jsxdev | react-native
+    "jsxImportSource": "react",     // 自定义 runtime（@emotion/react / preact 等）
+    "jsxFactory": "h",              // jsx: react 时使用的函数（默认 React.createElement）
+    "jsxFragmentFactory": "Fragment"
+  }
+}</code></pre>
+        </div>
+
+        <h3>8. Project References：大型 monorepo 增量构建</h3>
+        <p>
+          标准 tsc 是<strong>整体重编译</strong>。一个文件改动会触发所有依赖它的文件重检。在大型 monorepo（数百 package）这是不可接受的。
+        </p>
+        <p>
+          Project References 把项目拆成多个子项目，每个有独立 tsconfig + 独立产物（带 <code>.tsbuildinfo</code> 缓存）。<code>tsc -b</code> 按依赖顺序构建，未变文件直接走缓存：
+        </p>
+        <div class="code-block">
+          <span class="code-label">json · 项目根 tsconfig.json</span>
+          <pre class="code"><code class="lang-js">{
+  "files": [],
+  "references": [
+    { "path": "./packages/shared" },
+    { "path": "./packages/agent-core" },
+    { "path": "./apps/web" }
+  ]
+}</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">json · packages/shared/tsconfig.json</span>
+          <pre class="code"><code class="lang-js">{
+  "compilerOptions": {
+    "composite": true,         // ← 必须，开启 Project References 模式
+    "declaration": true,        // 强制 — 让其他 package 能拿到类型
+    "declarationMap": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src"]
+}</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">json · apps/web/tsconfig.json</span>
+          <pre class="code"><code class="lang-js">{
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "dist"
+  },
+  "references": [
+    { "path": "../../packages/shared" },
+    { "path": "../../packages/agent-core" }
+  ],
+  "include": ["src"]
+}</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-js"># 构建（按依赖顺序）
+tsc -b
+
+# 仅类型检查
+tsc -b --noEmit   # 5.6+ 支持
+# 或
+tsc -b --dry      # 显示要构建什么
+
+# 清理缓存
+tsc -b --clean
+
+# Watch 模式
+tsc -b --watch</code></pre>
+        </div>
+        <p>
+          一旦配好，构建速度可以从分钟级降到秒级。代价：每个 package 都得有独立 tsconfig，初始 setup 较麻烦。Bun / pnpm / Nx 等 monorepo 工具有自己的 incremental 机制，简单项目不一定要 Project References。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">模板 A · Vite + React 19</h3>
+          <div class="code-block">
+            <span class="code-label">json · tsconfig.json</span>
+            <pre class="code"><code class="lang-js">{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "resolveJsonModule": true,
+
+    "baseUrl": ".",
+    "paths": { "@/*": ["src/*"] },
+    "types": ["vite/client"]
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"]
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">模板 B · Next.js 16</h3>
+          <div class="code-block">
+            <span class="code-label">json · tsconfig.json</span>
+            <pre class="code"><code class="lang-js">{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "preserve",                  // Next 自己处理 JSX
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "isolatedModules": true,
+    "incremental": true,                // Next 推荐增量
+    "moduleDetection": "force",
+    "resolveJsonModule": true,
+    "allowJs": true,                    // Next 默认（next.config.js 等）
+
+    "baseUrl": ".",
+    "paths": { "@/*": ["./src/*"] },
+
+    "plugins": [{ "name": "next" }]     // Next 类型插件
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules"]
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">模板 C · Node 22 + ESM 服务端</h3>
+          <div class="code-block">
+            <span class="code-label">json · tsconfig.json</span>
+            <pre class="code"><code class="lang-js">{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],                  // 没有 DOM
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+
+    "outDir": "dist",
+    "rootDir": "src",
+    "declaration": true,
+    "sourceMap": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "resolveJsonModule": true,
+
+    "types": ["node"]
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+}</code></pre>
+          </div>
+          <div class="code-block">
+            <span class="code-label">json · package.json</span>
+            <pre class="code"><code class="lang-js">{
+  "type": "module",                       // ← Node ESM 必须
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts"       // tsx 直接跑 .ts
+  }
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">模板 D · 发布给用户的 Library</h3>
+          <div class="code-block">
+            <span class="code-label">json · tsconfig.json</span>
+            <pre class="code"><code class="lang-js">{
+  "compilerOptions": {
+    "target": "ES2020",                  // 给低端目标留点缓冲
+    "lib": ["ES2020", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+
+    "strict": true,
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
+
+    "outDir": "dist",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "removeComments": false,             // 保留 JSDoc 给用户
+
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force"
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+}</code></pre>
+          </div>
+          <p>
+            实际打包用 tsup / unbuild 等工具自动产出双格式 + .d.ts。tsc 只做 typecheck（<code>tsc --noEmit</code>）。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>extends 数组继承（5.0+）做"base + 严格度"分层</h3>
+        <div class="code-block">
+          <span class="code-label">json · tsconfig.base.json</span>
+          <pre class="code"><code class="lang-js">{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true
+  }
+}</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">json · tsconfig.strict.json</span>
+          <pre class="code"><code class="lang-js">{
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true
+  }
+}</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">json · 项目 tsconfig.json</span>
+          <pre class="code"><code class="lang-js">{
+  "extends": [
+    "./tsconfig.base.json",
+    "./tsconfig.strict.json"
+  ],
+  "compilerOptions": {
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "paths": { "@/*": ["src/*"] }
+  },
+  "include": ["src"]
+}</code></pre>
+        </div>
+
+        <h3>多 tsconfig 用于不同环境</h3>
+        <div class="code-block">
+          <span class="code-label">bash · 文件结构</span>
+          <pre class="code"><code class="lang-js">tsconfig.json              # 默认（dev / IDE）
+tsconfig.build.json        # 生产构建（noEmit: false, declarations）
+tsconfig.test.json         # 测试（含 *.test.ts）
+tsconfig.app.json          # app 子项目（Project References）</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">bash · package.json scripts</span>
+          <pre class="code"><code class="lang-js">{
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest --typecheck.tsconfig=tsconfig.test.json"
+  }
+}</code></pre>
+        </div>
+
+        <h3>noUncheckedIndexedAccess 的实际影响</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// noUncheckedIndexedAccess: true
+
+const arr = ["a", "b", "c"];
+arr[0].toUpperCase();   // ❌ 'arr[0]' is possibly 'undefined'
+
+// 必须显式处理
+const first = arr[0];
+if (first) first.toUpperCase();   // ✓
+arr[0]?.toUpperCase();              // ✓ 更简洁
+
+// Map / Record 同理
+const map: Record&lt;string, number&gt; = { a: 1 };
+const v = map["b"];                 // v: number | undefined
+v.toFixed(2);                        // ❌ 必须先判 undefined
+
+// 这个开关让数组 / 字典访问完全反映 JS 真实行为
+// 痛苦但准确 — 推荐打开</code></pre>
+        </div>
+
+        <h3>tsc 命令行常用</h3>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-js"># 类型检查（不输出文件）
+tsc --noEmit
+
+# 看一个变量的类型
+echo 'const x = 1; type Q = typeof x' &gt; tmp.ts &amp;&amp; tsc --noEmit --strict tmp.ts
+
+# Watch 模式
+tsc --watch
+tsc -w
+
+# 显示扩展诊断（看类型检查时间）
+tsc --extendedDiagnostics
+
+# 生成详细 trace（用 chrome://tracing 看）
+tsc --generateTrace ./trace --incremental false
+
+# 列出实际加载的文件
+tsc --listFiles
+tsc --listFilesOnly
+tsc --explainFiles    # 解释为什么每个文件被加载
+
+# Project References 构建
+tsc -b
+tsc -b --watch
+tsc -b --clean
+tsc -b --dry</code></pre>
+        </div>
+
+        <h3>性能调优诊断</h3>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-js">tsc --extendedDiagnostics
+
+# 输出示例：
+# Files:                          1234
+# Lines of Library:               43210
+# Lines of Definitions:           87654
+# Lines of TypeScript:            54321
+# Total time:                     12.34s
+# I/O Read time:                  0.45s
+# Parse time:                     1.23s
+# Bind time:                      0.89s
+# Check time:                     8.76s    ← 这里大说明类型检查慢
+# Emit time:                      0.99s
+# Symbols created:                123456
+# Types instantiated:             7890123  ← 太多说明类型实例化爆炸（08-12 章高级类型）</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · paths 在运行时不生效</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// tsconfig.paths: { "@/*": ["src/*"] }
+import { foo } from "@/utils";   // ✓ tsc 识别
+
+// 编译产物：
+// const { foo } = require("@/utils");
+// 运行时：Cannot find module '@/utils'
+//
+// 因为 tsc 不会 rewrite 路径！</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：
+          </p>
+          <ul>
+            <li>用 bundler（Vite / webpack / Next）配 alias，让运行时也能解析</li>
+            <li>用 <a href="https://github.com/justkey007/tsc-alias" target="_blank" rel="noopener">tsc-alias</a> 在 build 后 rewrite</li>
+            <li>用 <a href="https://github.com/dividab/tsconfig-paths" target="_blank" rel="noopener">tsconfig-paths</a> 在 Node 启动时 register hook</li>
+            <li>用 <code>tsx</code> / <code>bun</code> 直接跑 .ts，它们原生支持 paths</li>
+          </ul>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · target ES5 + 现代 API</div>
+          <p>
+            01 章已讲。<code>target</code> 只降语法不引入 polyfill：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// tsconfig: { target: "ES5", lib: ["ES2020"] }
+// 编译过：lib 让 TS 知道 Promise / Map 类型
+// 但产物保留 new Promise(...) — 老浏览器没 Promise 运行时炸</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：现代项目 <code>target: "ES2022"</code>（覆盖 95%+ 浏览器，2024+）。需要老浏览器用 babel + core-js 注入 polyfill。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · composite + 大量循环依赖</div>
+          <p>
+            开 <code>composite: true</code> 后，Project References 强制 <code>declaration: true</code>。<strong>循环依赖</strong>会让 tsc 编译爆炸：
+          </p>
+          <div class="code-block">
+            <span class="code-label">bash</span>
+            <pre class="code"><code class="lang-js">error TS6310: Referenced project '...' may not disable emit</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：拆 monorepo 时把"shared types"单独成一个零依赖 package；其他 package 仅<strong>类型层</strong> import 它（用 <code>import type</code>），运行时无依赖。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · skipLibCheck: false 让第三方 .d.ts 错误也报</div>
+          <p>
+            默认 <code>skipLibCheck: true</code> 跳过 node_modules/<code>**/*.d.ts</code> 的检查。关掉后任何第三方库 .d.ts 错误都会报到你的项目里：
+          </p>
+          <div class="code-block">
+            <span class="code-label">bash</span>
+            <pre class="code"><code class="lang-js">node_modules/some-pkg/dist/index.d.ts(42,5): error TS2403:
+  Subsequent variable declarations must have the same type...
+# 你的代码完全没动 — 但因为 some-pkg 的 .d.ts 有错就编译失败</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：永远 <code>skipLibCheck: true</code>。第三方 .d.ts 错由库自己负责。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · isolatedModules 禁止某些写法</div>
+          <p>
+            <code>isolatedModules: true</code> 让 babel/swc 单文件 transpile 安全，代价是禁止某些"跨文件类型信息"的写法：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// ❌ const enum
+// 单文件 transpile 时不知道 enum 值，无法内联
+const enum Color { Red, Green }
+console.log(Color.Red);
+
+// ✅ 改普通 enum 或 as const union
+const Color = { Red: 0, Green: 1 } as const;
+type Color = typeof Color[keyof typeof Color];
+
+// ❌ 不带 type 的"仅类型 export"
+import { Helper } from "./helper";
+export { Helper };   // ⚠️ 如果 Helper 仅用作类型，这里也要标 type
+
+// ✅
+export type { Helper } from "./helper";</code></pre>
+          </div>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · verbatimModuleSyntax 强制 import type</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// verbatimModuleSyntax: true 下
+
+import { User } from "./types";   // ❌ 'User' is a type-only import; emit will preserve it
+//                                   编译后会保留 import "./types"，触发副作用
+
+// ✅
+import type { User } from "./types";
+// 或
+import { type User } from "./types";   // inline type modifier</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：项目级开 verbatimModuleSyntax 后用 codemod 工具（ts-morph / jscodeshift）一次性把所有仅类型 import 加 <code>type</code>。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://www.typescriptlang.org/tsconfig" target="_blank" rel="noopener">tsconfig 全选项参考</a> —— 100+ 选项官方说明
+          </li>
+          <li>
+            <a href="https://www.typescriptlang.org/docs/handbook/project-references.html" target="_blank" rel="noopener"
+              >Handbook · Project References</a
+            >
+          </li>
+          <li>
+            <a href="https://github.com/tsconfig/bases" target="_blank" rel="noopener"
+              >@tsconfig/bases</a
+            > —— Vite / Next.js / Node 等场景的官方推荐 tsconfig
+          </li>
+          <li>
+            <a
+              href="https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-0.html#supporting-multiple-configuration-files-in-extends"
+              target="_blank"
+              rel="noopener"
+              >TS 5.0 · extends 数组继承</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-0.html#--moduleresolution-bundler"
+              target="_blank"
+              rel="noopener"
+              >TS 5.0 · moduleResolution: Bundler</a
+            >
+          </li>
+          <li>
+            下一章 →
+            <a href="20-migration.html">20 Migration & Interop</a> 落地实战收官
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="18-declaration-files.html">
+            <span class="label">← 上一章</span>
+            <span class="title">18 · Declaration Files</span>
+          </a>
+          <a class="next" href="20-migration.html">
+            <span class="label">下一章 →</span>
+            <span class="title">20 · Migration & Interop</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
