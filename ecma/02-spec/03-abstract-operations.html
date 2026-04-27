@@ -1,0 +1,895 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>B3 · 抽象操作与算法记法（§5、§7）· ECMAScript 深度学习</title>
+    <meta
+      name="description"
+      content="ECMA-262 §7 核心抽象操作精读：ToPrimitive 11 步、ToBoolean/ToNumeric/ToString/ToObject、IsLooselyEqual（== 的 11 步算法）、SameValue/SameValueZero 三种相等比较、Get/Set/HasProperty 对象操作族、GetIterator/IteratorNext 迭代器族。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c84a1f'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EES%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>ECMAScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.16 35); color: #fff">ES</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">ES 首页</a>
+          <a href="index.html">Track B 目录</a>
+          <a href="https://262.ecma-international.org/15.0/index.html#sec-abstract-operations" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Track B · ECMA-262 规范精读</h3>
+        <ul>
+          <li><a href="index.html">Track 概览</a></li>
+          <li><a href="01-how-to-read.html">B1 · 怎么读规范</a></li>
+          <li><a href="02-data-types.html">B2 · 数据类型与值（§6）</a></li>
+          <li><a href="03-abstract-operations.html" class="active">B3 · 抽象操作（§5、§7）</a></li>
+          <li><span class="sidebar-pending">B4 · 内部槽与方法（§10）⏳</span></li>
+          <li><span class="sidebar-pending">B5 · 执行上下文（§9）⏳</span></li>
+          <li><span class="sidebar-pending">B6 · 提案旅程 ⏳</span></li>
+        </ul>
+        <h3>另一轨</h3>
+        <ul>
+          <li><a href="../01-history/index.html">Track A · 历史脉络（已完成）</a></li>
+        </ul>
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../javascript/index.html">JavaScript 深度学习</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">ECMAScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Track B · 规范精读</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>B3 · 抽象操作</span>
+        </nav>
+
+        <h1>B3 · 抽象操作与算法记法（§5、§7）</h1>
+        <p class="lead">
+          ECMA-262 §7 定义了几十个<strong>抽象操作</strong>（Abstract Operations）—— 规范层的"<strong>内部函数</strong>"。它们没有被用户直接调用，但<strong>每个 JS 表达式背后都在执行它们</strong>：你写 <code>x + y</code> 就调了 <code>ToPrimitive</code>；写 <code>x == y</code> 就调了 <code>IsLooselyEqual</code> 的 11 步算法；写 <code>for (const x of iter)</code> 就调了 <code>GetIterator</code> + <code>IteratorNext</code>。本章把<strong>最高频出现的几十个抽象操作</strong>按家族讲透——读完后，规范文本里 80% 的抽象操作引用你都能秒读。
+        </p>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 本章交叉规则</div>
+          <p>
+            <code>typeof</code>、<code>+</code> 多义、<code>==</code> 反直觉、<code>NaN</code> 行为等"现象级"内容在 <a href="../../javascript/01-fundamentals/01-types.html">JS · 数据类型系统</a> 已详述。本章<strong>从规范层视角重新讲</strong>——把"<em>现象</em>"还原成"<strong>抽象操作的 step-by-step 算法</strong>"。读完之后，你能照规范步骤<strong>逐行 trace</strong> 任何 JS 转换/比较行为。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> <a href="01-how-to-read.html">B1 · 怎么读规范</a> + <a href="02-data-types.html">B2 · 数据类型与值</a></span>
+          <span><strong>对应 ECMA-262</strong>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-abstract-operations" target="_blank" rel="noopener">§7 Abstract Operations</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>§7 把"<em>JS 表达式背后的算法</em>"切成几十个具名抽象操作</strong>。每个都有精确的 step-by-step 定义。理解它们就理解了 JS 行为的源头。
+          </li>
+          <li>
+            <strong>核心 4 大家族</strong>：① <strong>类型转换</strong>（ToPrimitive / ToBoolean / ToString / ToObject 等）② <strong>比较</strong>（IsLooselyEqual / IsStrictlyEqual / SameValue / SameValueZero）③ <strong>对象操作</strong>（Get / Set / HasProperty）④ <strong>迭代器</strong>（GetIterator / IteratorNext）。
+          </li>
+          <li>
+            <strong>最反直觉的两个算法是 <code>ToPrimitive</code> 和 <code>IsLooselyEqual</code></strong>——它们各 11 步左右，每一步都是为<strong>历史兼容</strong>服务的。本章给完整 step trace。
+          </li>
+        </ol>
+
+        <p>规范里典型的抽象操作引用样式：</p>
+
+        <div class="code-block">
+          <span class="code-label">规范引用样式</span>
+          <pre class="code"><code class="lang-js">// "Let _result_ be ? ToString(_value_)."
+//   ↑ ? 处理 abrupt completion（B1 讲过）
+
+// "Let _O_ be ? ToObject(! ToPropertyKey(_key_))."
+//   ↑ 嵌套调用：内层 ! 断言不会失败，外层 ? 传播失败
+
+// "If SameValue(_x_, _y_) is true, return ..."
+//   ↑ 调用谓词，返回 boolean 直接用</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>类型转换族（§7.1）</h3>
+        <p>
+          类型转换是规范<strong>最频繁</strong>的抽象操作。每个数学/字符串/对象操作背后都至少调一次。
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 28%">操作</th>
+              <th style="width: 110px">spec §</th>
+              <th>触发位置</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong><code>ToPrimitive(input, hint)</code></strong></td>
+              <td>§7.1.1</td>
+              <td><code>+</code>、<code>==</code>、模板字符串、对象作为属性 key</td>
+            </tr>
+            <tr>
+              <td><code>ToBoolean(arg)</code></td>
+              <td>§7.1.2</td>
+              <td><code>if</code>、<code>!</code>、<code>&amp;&amp;</code>、<code>||</code> 等逻辑上下文</td>
+            </tr>
+            <tr>
+              <td><code>ToNumeric(arg)</code></td>
+              <td>§7.1.3</td>
+              <td>数学运算 <code>-</code> <code>*</code> <code>%</code> 等（统一处理 Number 和 BigInt）</td>
+            </tr>
+            <tr>
+              <td><code>ToNumber(arg)</code></td>
+              <td>§7.1.4</td>
+              <td><code>Number(x)</code>、<code>+x</code>、<code>x &lt; y</code> 比较</td>
+            </tr>
+            <tr>
+              <td><code>ToInt32(arg)</code> / <code>ToUint32(arg)</code></td>
+              <td>§7.1.6/7</td>
+              <td>位运算 <code>|</code> <code>&amp;</code> <code>^</code> <code>~</code> <code>&lt;&lt;</code> <code>&gt;&gt;</code> <code>&gt;&gt;&gt;</code></td>
+            </tr>
+            <tr>
+              <td><code>ToString(arg)</code></td>
+              <td>§7.1.17</td>
+              <td><code>String(x)</code>、模板字符串内插、<code>+</code> 含字符串时</td>
+            </tr>
+            <tr>
+              <td><code>ToObject(arg)</code></td>
+              <td>§7.1.18</td>
+              <td><code>"abc".length</code>（原始值取属性时装箱）、<code>new Object(x)</code></td>
+            </tr>
+            <tr>
+              <td><code>ToPropertyKey(arg)</code></td>
+              <td>§7.1.19</td>
+              <td><code>obj[key]</code> 的 key 处理（结果是 String 或 Symbol）</td>
+            </tr>
+            <tr>
+              <td><code>RequireObjectCoercible(arg)</code></td>
+              <td>§7.2.1</td>
+              <td>断言 arg 不是 null/undefined（原始值取属性前的检查）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h4>ToPrimitive —— 最复杂的转换 ⭐</h4>
+        <p>
+          <code>ToPrimitive(input, hint)</code> 是<strong>把对象转成原始值</strong>的统一入口。<strong>hint</strong> 是"<em>调用方期望什么类型</em>"的提示：
+        </p>
+        <ul>
+          <li><strong><code>"number"</code></strong> hint —— 数学运算（<code>obj * 2</code>）</li>
+          <li><strong><code>"string"</code></strong> hint —— 字符串拼接（<code>String(obj)</code>、<code>`${obj}`</code>）</li>
+          <li><strong><code>"default"</code></strong> hint —— <code>+</code>、<code>==</code> 用（不知道想要什么类型）</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">spec · §7.1.1 ToPrimitive 完整算法</span>
+          <pre class="code"><code class="lang-js">// ToPrimitive ( input [, preferredType] )
+// 1. If input is an Object, then
+//    a. Let _exoticToPrim_ be ? GetMethod(_input_, @@toPrimitive).
+//    b. If _exoticToPrim_ is not undefined, then
+//       i.   If preferredType is not present, let _hint_ be "default".
+//       ii.  Else if preferredType is string, let _hint_ be "string".
+//       iii. Else, let _hint_ be "number".
+//       iv.  Let _result_ be ? Call(_exoticToPrim_, _input_, « _hint_ »).
+//       v.   If _result_ is not an Object, return _result_.
+//       vi.  Throw a TypeError exception.
+//    c. If preferredType is not present, let preferredType be number.
+//    d. Return ? OrdinaryToPrimitive(_input_, preferredType).
+// 2. Return input.
+
+// 翻译：先看对象有没有 [Symbol.toPrimitive] 方法（自定义优先），
+//       没有的话走 OrdinaryToPrimitive（默认行为）。
+//       原始值直接返回。
+
+// OrdinaryToPrimitive ( O, hint )
+// 1. If hint is string, let _methodNames_ be « "toString", "valueOf" ».
+// 2. Else, let _methodNames_ be « "valueOf", "toString" ».
+// 3. For each name in _methodNames_, do
+//    a. Let _method_ be ? Get(O, name).
+//    b. If IsCallable(_method_) is true, then
+//       i.  Let _result_ be ? Call(_method_, O).
+//       ii. If _result_ is not an Object, return _result_.
+// 4. Throw a TypeError exception.
+
+// 翻译：默认按 [valueOf, toString] 顺序（hint=number/default）
+//       或 [toString, valueOf] 顺序（hint=string）
+//       依次调用，第一个返回原始值的就用。
+//       都失败抛 TypeError。</code></pre>
+        </div>
+
+        <p>
+          <strong>关键洞察</strong>：JS 用户能通过 3 种方式控制对象怎么转原始值：
+        </p>
+        <ol>
+          <li><strong>定义 <code>[Symbol.toPrimitive]</code> 方法</strong>（最优先，能根据 hint 返回不同值）</li>
+          <li><strong>覆盖 <code>valueOf</code></strong>（数学/比较场景）</li>
+          <li><strong>覆盖 <code>toString</code></strong>（字符串场景）</li>
+        </ol>
+
+        <h4>ToBoolean / ToNumber / ToString —— 一表速查</h4>
+        <p>每个原始类型在每个转换的结果（§7.1.2 / §7.1.4 / §7.1.17）：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 18%">类型</th>
+              <th>ToBoolean</th>
+              <th>ToNumber</th>
+              <th>ToString</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>undefined</code></td>
+              <td>false</td>
+              <td>NaN ⚠️</td>
+              <td>"undefined"</td>
+            </tr>
+            <tr>
+              <td><code>null</code></td>
+              <td>false</td>
+              <td>0</td>
+              <td>"null"</td>
+            </tr>
+            <tr>
+              <td>Boolean</td>
+              <td>原值</td>
+              <td>true→1, false→0</td>
+              <td>"true" / "false"</td>
+            </tr>
+            <tr>
+              <td>Number</td>
+              <td>0/NaN→false, 其他→true</td>
+              <td>原值</td>
+              <td>"123" 等</td>
+            </tr>
+            <tr>
+              <td>BigInt</td>
+              <td>0n→false, 其他→true</td>
+              <td>TypeError ⚠️</td>
+              <td>"123" （不带 n）</td>
+            </tr>
+            <tr>
+              <td>String</td>
+              <td>""→false, 其他→true</td>
+              <td>parsable→数字, 否则 NaN</td>
+              <td>原值</td>
+            </tr>
+            <tr>
+              <td>Symbol</td>
+              <td>true</td>
+              <td>TypeError ⚠️</td>
+              <td>TypeError（要用 String(s)）</td>
+            </tr>
+            <tr>
+              <td>Object</td>
+              <td>true（包括 <code>new Boolean(false)</code>）</td>
+              <td>ToPrimitive(o, "number") 后再转</td>
+              <td>ToPrimitive(o, "string") 后再转</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>反直觉点</strong>：
+        </p>
+        <ul>
+          <li><code>Number(undefined) === NaN</code>（不是 0！）</li>
+          <li><code>Number(null) === 0</code>（不是 NaN！）</li>
+          <li><code>Boolean(new Boolean(false)) === true</code>（对象 always true，包装类的"假"被淹没）</li>
+          <li><code>Number(1n)</code> 抛 TypeError（BigInt 不能隐式转 Number，要用显式 <code>Number(1n)</code> 才行——但跨界仍危险）</li>
+        </ul>
+
+        <h4>ToInt32 / ToUint32 —— 位运算的隐式转换</h4>
+        <p>
+          位运算（<code>|</code>、<code>&amp;</code>、<code>^</code>、<code>~</code>、<code>&lt;&lt;</code>、<code>&gt;&gt;</code>、<code>&gt;&gt;&gt;</code>）在 JS 里是 <strong>32-bit 整数运算</strong>——不管输入是什么 Number，都先 ToInt32 / ToUint32 截到 32 位整数：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 位运算的隐式转换</span>
+          <pre class="code"><code class="lang-js">// ToInt32 流程（§7.1.6）：
+// 1. ToNumber(value)
+// 2. NaN/±0/±∞ → 0
+// 3. 取符号 + 绝对值，向 0 取整
+// 4. 模 2^32，再调整到 [-2^31, 2^31) 区间
+
+// 实际行为：
+3.7 | 0;                  // 3（向 0 取整 —— 比 Math.trunc 快的写法）
+"42" | 0;                 // 42（先 ToNumber 再 ToInt32）
+"abc" | 0;                // 0（NaN → 0）
+2 ** 32 | 0;              // 0（4294967296 mod 2^32 = 0）
+2 ** 31 | 0;              // -2147483648（溢出到负数区）
+true | 0;                 // 1（Boolean → Number → ToInt32）
+
+// 这就是为什么 |0 是历史悠久的"取整"技巧 —— 比 Math.floor 快，
+// 且对超大数会"环绕"（modular arithmetic）。但只能处理 ≤ 32 位整数。
+
+// ToUint32（§7.1.7）：把负数补码后映射到 [0, 2^32) 区间
+-1 &gt;&gt;&gt; 0;               // 4294967295（无符号右移 0 = ToUint32 的常用技巧）
+
+// Array.length 的范围就是 [0, 2^32 - 1]，用的就是 ToUint32 检查。</code></pre>
+        </div>
+
+        <h3>比较族（§7.2）</h3>
+        <p>
+          B2 已介绍过 3 种相等比较算法。这里给完整规范层算法：
+        </p>
+
+        <h4>IsLooselyEqual（== 的 11 步） ⭐</h4>
+        <p>
+          这是规范<strong>最反直觉的算法</strong>。<strong>每一步都是为兼容 1995-2009 年间的真实 web 代码服务</strong>。完整流程：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">spec · §7.2.13 IsLooselyEqual ( x, y )</span>
+          <pre class="code"><code class="lang-js">// 1. If Type(x) is the same as Type(y), then
+//    a. Return IsStrictlyEqual(x, y).
+//    （同类型走 === 算法）
+//
+// 2. If x is null and y is undefined, return true.
+// 3. If x is undefined and y is null, return true.
+//    （null/undefined 互等，是唯二跨类型相等）
+//
+// 4. NOTE: This step is replaced in section B.3.7.2.
+//    （Annex B 的 document.all hack —— 浏览器才有）
+//
+// 5. If x is a Number and y is a String, return ! IsLooselyEqual(x, ! ToNumber(y)).
+// 6. If x is a String and y is a Number, return ! IsLooselyEqual(! ToNumber(x), y).
+//    （String 和 Number 比 → 把 String 转 Number 再比）
+//
+// 7. If x is a BigInt and y is a String, then
+//    a. Let _n_ be StringToBigInt(y).
+//    b. If _n_ is undefined, return false.
+//    c. Return ! IsLooselyEqual(x, _n_).
+// 8. If x is a String and y is a BigInt, return ! IsLooselyEqual(y, x).
+//    （BigInt vs String：尝试把 String 解析成 BigInt）
+//
+// 9. If x is a Boolean, return ! IsLooselyEqual(! ToNumber(x), y).
+// 10. If y is a Boolean, return ! IsLooselyEqual(x, ! ToNumber(y)).
+//     （Boolean → Number 后再比）
+//
+// 11. If x is either a String, a Number, a BigInt, or a Symbol and y is an Object,
+//     return ! IsLooselyEqual(x, ? ToPrimitive(y)).
+// 12. If x is an Object and y is either a String, a Number, a BigInt, or a Symbol,
+//     return ! IsLooselyEqual(? ToPrimitive(x), y).
+//     （原始值 vs Object → ToPrimitive(Object) 后再比）
+//
+// 13. If x is a BigInt and y is a Number, or if x is a Number and y is a BigInt, then
+//     a. If x is not finite or y is not finite, return false.
+//     b. If ℝ(x) = ℝ(y), return true; otherwise return false.
+//     （BigInt vs Number：转成数学实数比较）
+//
+// 14. Return false.</code></pre>
+        </div>
+
+        <p>
+          <strong>"反直觉案例的根因"</strong>：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · == 反直觉解析</span>
+          <pre class="code"><code class="lang-js">// "" == 0
+//   step 5: ToNumber("") === 0 → IsLooselyEqual(0, 0) → true ✅
+
+// "0" == false
+//   step 10: ToNumber(false) === 0 → IsLooselyEqual("0", 0)
+//   step 6: ToNumber("0") === 0 → IsLooselyEqual(0, 0) → true ✅
+
+// [] == false
+//   step 10: ToNumber(false) === 0 → IsLooselyEqual([], 0)
+//   step 12: ToPrimitive([]) === "" → IsLooselyEqual("", 0)
+//   step 5: ToNumber("") === 0 → IsLooselyEqual(0, 0) → true ✅
+
+// [] == ![]
+//   ![] === false（[] 是 truthy，所以 !truthy 是 false）
+//   再走上面 [] == false 的路径 → true ⚠️
+
+// null == undefined → step 2/3 直接 true
+// null == 0 → 没走特殊规则，类型不同 → false（!）
+
+// NaN == NaN
+//   step 1: 同类型，走 IsStrictlyEqual → IsStrictlyEqual 第 5 条 NaN ≠ NaN → false ⚠️</code></pre>
+        </div>
+
+        <p>
+          <strong>实际工程</strong>：永远用 <code>===</code>，唯一例外是 <code>x == null</code>（同时检查 null 和 undefined，依赖 step 2/3 特殊规则）。
+        </p>
+
+        <h4>SameValue / SameValueZero / IsStrictlyEqual 对比</h4>
+        <p>
+          B2 给过对比表，这里从规范算法层视角再讲一遍：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 26%">算法</th>
+              <th style="width: 110px">spec §</th>
+              <th>+0 vs -0</th>
+              <th>NaN vs NaN</th>
+              <th>用在</th>
+            </tr>
+            <tr>
+              <th></th>
+              <th></th>
+              <th></th>
+              <th></th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>IsStrictlyEqual</code></td>
+              <td>§7.2.16</td>
+              <td><strong>相等</strong></td>
+              <td>不等</td>
+              <td><code>===</code></td>
+            </tr>
+            <tr>
+              <td><code>SameValue</code></td>
+              <td>§7.2.12</td>
+              <td>不等</td>
+              <td><strong>相等</strong></td>
+              <td><code>Object.is</code>、PropertyDescriptor 比较</td>
+            </tr>
+            <tr>
+              <td><code>SameValueZero</code></td>
+              <td>§7.2.11</td>
+              <td><strong>相等</strong></td>
+              <td><strong>相等</strong></td>
+              <td><code>Map</code>/<code>Set</code> key、<code>Array.includes</code></td>
+            </tr>
+            <tr>
+              <td><code>SameValueNonNumber</code></td>
+              <td>§7.2.10</td>
+              <td>—</td>
+              <td>—</td>
+              <td>非 Number 类型的内部比较（其他算法处理 Number 后委托给它）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>对象操作族（§7.3）</h3>
+        <p>
+          <strong>调度层 vs 实现层</strong>的核心模式：用户操作（如 <code>obj.x</code>）→ 调用<strong>调度层抽象操作</strong>（如 <code>Get</code>）→ 委托给对象的<strong>内部方法</strong>（如 <code>O.[[Get]]</code>）→ 普通对象走 <code>OrdinaryGet</code>，Proxy 走 <code>ProxyGet</code>，等等。
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 28%">操作</th>
+              <th style="width: 110px">spec §</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>Get(O, P)</code></td>
+              <td>§7.3.2</td>
+              <td>取属性。等价 <code>O.[[Get]](P, O)</code></td>
+            </tr>
+            <tr>
+              <td><code>GetV(V, P)</code></td>
+              <td>§7.3.3</td>
+              <td>原始值的属性查询：先 ToObject 再 Get（处理 <code>"abc".length</code>）</td>
+            </tr>
+            <tr>
+              <td><code>Set(O, P, V, Throw)</code></td>
+              <td>§7.3.4</td>
+              <td>设属性。Throw=true 时严格失败抛错</td>
+            </tr>
+            <tr>
+              <td><code>CreateDataProperty</code></td>
+              <td>§7.3.5</td>
+              <td>新建 Data 属性（writable/enumerable/configurable 都是 true）</td>
+            </tr>
+            <tr>
+              <td><code>CreateDataPropertyOrThrow</code></td>
+              <td>§7.3.7</td>
+              <td>同上，但失败抛 TypeError（用于"必须成功"场景）</td>
+            </tr>
+            <tr>
+              <td><code>DefinePropertyOrThrow</code></td>
+              <td>§7.3.8</td>
+              <td>定义属性 with 完整 descriptor</td>
+            </tr>
+            <tr>
+              <td><code>HasProperty(O, P)</code></td>
+              <td>§7.3.12</td>
+              <td>等价 <code>P in O</code>（沿原型链）</td>
+            </tr>
+            <tr>
+              <td><code>HasOwnProperty(O, P)</code></td>
+              <td>§7.3.13</td>
+              <td>不沿原型链。<code>Object.hasOwn(O, P)</code> 内部调它</td>
+            </tr>
+            <tr>
+              <td><code>Call(F, V, args)</code></td>
+              <td>§7.3.14</td>
+              <td>调用函数。等价 <code>F.[[Call]](V, args)</code></td>
+            </tr>
+            <tr>
+              <td><code>Construct(F, args, newTarget)</code></td>
+              <td>§7.3.15</td>
+              <td>等价 <code>new F(...args)</code>。处理 <code>NewTarget</code></td>
+            </tr>
+            <tr>
+              <td><code>SpeciesConstructor(O, defaultCtor)</code></td>
+              <td>§7.3.23</td>
+              <td>取构造器（考虑 <code>Symbol.species</code>）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>详细对象内部方法（11 个 essential internal methods + Ordinary 默认实现 + 7 种 Exotic）</strong>—— 详见 B4（编写中）。
+        </p>
+
+        <h3>迭代器操作族（§7.4）</h3>
+        <p>
+          <strong>每个 <code>for...of</code>、<code>...spread</code>、<code>new Map(iter)</code> 背后都在调这些抽象操作</strong>。规范用它们统一处理"<em>可迭代对象</em>"。
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 28%">操作</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>GetIterator(obj, hint)</code></td>
+              <td>取迭代器。hint = sync/async</td>
+            </tr>
+            <tr>
+              <td><code>IteratorNext(iter, value)</code></td>
+              <td>调 <code>iter.next(value)</code>，返回 IteratorResult Record</td>
+            </tr>
+            <tr>
+              <td><code>IteratorComplete(result)</code></td>
+              <td>取 <code>result.done</code></td>
+            </tr>
+            <tr>
+              <td><code>IteratorValue(result)</code></td>
+              <td>取 <code>result.value</code></td>
+            </tr>
+            <tr>
+              <td><code>IteratorClose(iter, completion)</code></td>
+              <td>提前退出迭代时调 <code>iter.return()</code> 清理</td>
+            </tr>
+            <tr>
+              <td><code>IteratorStep(iter)</code></td>
+              <td>组合操作：next + 检查 done</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>关键场景</strong>：<code>for (const x of iter) { if (cond) break; }</code> ——<strong>break 时会调 <code>IteratorClose</code></strong>（让 generator 走到 finally / 自定义清理）。这是<strong>规范级保证</strong>，不是引擎实现细节。
+        </p>
+
+        <h3>类型谓词（§7.2）</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">谓词</th>
+              <th>检查什么</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>IsCallable(v)</code></td>
+              <td>v 有 <code>[[Call]]</code> 内部方法（即可调用）</td>
+            </tr>
+            <tr>
+              <td><code>IsConstructor(v)</code></td>
+              <td>v 有 <code>[[Construct]]</code>（即可 <code>new</code>）</td>
+            </tr>
+            <tr>
+              <td><code>IsArray(v)</code></td>
+              <td>v 是 Array exotic 或 Proxy 包装的 Array（<strong>跨 Realm 工作！</strong>）</td>
+            </tr>
+            <tr>
+              <td><code>IsRegExp(v)</code></td>
+              <td>v 是 RegExp，或<strong>有 <code>Symbol.match</code> 属性</strong>（鸭子类型）</td>
+            </tr>
+            <tr>
+              <td><code>IsPropertyKey(v)</code></td>
+              <td>v 是 String 或 Symbol</td>
+            </tr>
+            <tr>
+              <td><code>IsIntegralNumber(v)</code></td>
+              <td>v 是有限整数 Number</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>关键洞察</strong>：<code>IsCallable</code> 和 <code>IsConstructor</code> 是<strong>独立的</strong>——箭头函数有 <code>[[Call]]</code> 但没有 <code>[[Construct]]</code>，所以 <code>new (() =&gt; {})</code> 抛 TypeError。class 有两者，普通 function 也有两者。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 写自定义 Symbol.toPrimitive 实现</h3>
+          <p>
+            写一个 <code>Money</code> 类，希望它在 <code>+ * /</code> 算术里返回数字、在字符串拼接里返回带货币的格式化串：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · Money 类</span>
+            <pre class="code"><code class="lang-js">class Money {
+  constructor(amount, currency) {
+    this.amount = amount;
+    this.currency = currency;
+  }
+  [Symbol.toPrimitive](hint) {
+    if (hint === 'number') return this.amount;
+    if (hint === 'string') return `${this.amount.toFixed(2)} ${this.currency}`;
+    return `${this.amount.toFixed(2)} ${this.currency}`;  // default 也用字符串
+  }
+}
+
+const price = new Money(99.5, 'USD');
++price;            // 99.5 (hint='number')
+`${price}`;        // "99.50 USD" (hint='string')
+price + ' for VIP'; // "99.50 USD for VIP" (hint='default' → 走字符串)
+price * 2;         // 199 (hint='number')
+
+// 如果不实现 [Symbol.toPrimitive]，会走 OrdinaryToPrimitive 调 valueOf/toString —— 通常返回 "[object Object]"</code></pre>
+          </div>
+          <p>这是 Date 对象支持算术（<code>new Date() - new Date('2024-01-01')</code>）的同款机制。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 调试 === 不工作的根因</h3>
+          <p>
+            "<em>明明两个值看起来一样，<code>===</code> 返回 false</em>" 的常见原因：
+          </p>
+          <ol>
+            <li>有 <code>NaN</code>：用 <code>Number.isNaN(x)</code> 或 <code>Object.is(x, y)</code> 处理</li>
+            <li>跨 Realm（iframe / vm）：两个 Object 来自不同 Realm，<code>===</code> 仍可能 true（同一个引用），但 <code>arr instanceof Array</code> 会 false（不同 Realm 的 prototype）—— 详见 <a href="../01-history/03-execution-model.html">A3 执行模型</a></li>
+            <li><code>+0 vs -0</code>：<code>Object.is(-0, 0)</code> 是 false 但 <code>===</code> 是 true</li>
+            <li>对象身份 vs 结构：两个不同的 <code>{ a: 1 }</code> <code>===</code> 是 false——要结构相等用 lodash <code>_.isEqual</code></li>
+          </ol>
+          <p>
+            <strong>诊断流程</strong>：① 先看 <code>Object.is</code> —— 如果它和 <code>===</code> 不一致，说明涉及 NaN 或 +0/-0；② 再看 <code>typeof</code> —— 类型不同直接 false；③ 再看 <code>x &amp;&amp; x.constructor === y &amp;&amp; y.constructor</code> —— 跨 Realm 的话不同。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 读 lodash _.isEqual 源码理解 SameValueZero</h3>
+          <p>
+            lodash 的 <code>_.isEqual(a, b)</code> 做<strong>深度结构比较</strong>，叶子节点用 SameValueZero（<code>+0 = -0</code>，<code>NaN = NaN</code>），中间走属性枚举递归。源码大致结构：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 简化版 isEqual</span>
+            <pre class="code"><code class="lang-js">function isEqual(a, b) {
+  // SameValueZero —— 处理 NaN/+0/-0
+  if (a === b) return true;
+  if (a !== a &amp;&amp; b !== b) return true;  // 都是 NaN
+
+  // 类型不同直接 false
+  if (typeof a !== typeof b) return false;
+  if (typeof a !== 'object' || a === null || b === null) return false;
+
+  // 深度递归
+  const keysA = Reflect.ownKeys(a);
+  const keysB = Reflect.ownKeys(b);
+  if (keysA.length !== keysB.length) return false;
+
+  return keysA.every(k =&gt; isEqual(a[k], b[k]));
+}
+
+// 实际 lodash 还要处理：
+// - Date / RegExp / Map / Set / Buffer 等特殊类型
+// - 循环引用（用 WeakMap 记录已访问对）
+// - Symbol key
+// 这些都是规范层 SameValueZero 之上的工程加固</code></pre>
+          </div>
+          <p>
+            读 lodash 这种"<em>无数 corner case 工业级实现</em>"前先理解规范层的 SameValueZero / Object Equality 概念，源码读起来快很多。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>解 [] + {} 的完整 trace</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 经典面试题逐步推演</span>
+          <pre class="code"><code class="lang-js">[] + {}    // 输出 "[object Object]"
+
+// 完整 trace（按 §13.10 BinaryAdditionExpression）：
+// 1. lref = [], rref = {} （都是 Reference Record，但这里是字面量产生的"值"）
+// 2. lprim = ? ToPrimitive([], hint=default) → 走 OrdinaryToPrimitive(arr, "number")
+//    → 先调 valueOf —— Array.prototype.valueOf 返回 this（不是原始值）→ skip
+//    → 再调 toString —— Array.prototype.toString → ""（空数组转字符串）
+//    → 返回 ""
+// 3. rprim = ? ToPrimitive({}, hint=default) → OrdinaryToPrimitive(obj, "number")
+//    → 先调 valueOf —— Object.prototype.valueOf 返回 this（不是原始值）→ skip
+//    → 再调 toString —— Object.prototype.toString → "[object Object]"
+//    → 返回 "[object Object]"
+// 4. 因为 lprim 或 rprim 是 String：
+//    return ! ToString(lprim) + ! ToString(rprim) = "" + "[object Object]" = "[object Object]"
+
+{} + []    // 在某些上下文是 0（!）
+// 这是因为 {} 在语句开头被解析为「空块」，
+// + [] 被当作一元 + 运算 → ToNumber([]) → ToPrimitive(arr, "number") → "" → ToNumber("") → 0
+// 加括号 ({} + []) 才是字符串拼接，得 "[object Object]"
+
+// 教训：
+// 1. + 是有歧义的运算符；
+// 2. ToPrimitive 默认 hint 偏向 number 但 Date 例外（Date 默认 hint 是 "string"）；
+// 3. 规范用 valueOf → toString 顺序（除 hint=string 外）。</code></pre>
+        </div>
+
+        <h3>对照规范读 IsArray 算法</h3>
+
+        <div class="code-block">
+          <span class="code-label">spec · §7.2.2 IsArray 完整算法</span>
+          <pre class="code"><code class="lang-js">// IsArray ( argument )
+// 1. If argument is not an Object, return false.
+// 2. If argument is an Array exotic object, return true.
+// 3. If argument is a Proxy exotic object, then
+//    a. Perform ? ValidateNonRevokedProxy(argument).
+//    b. Let target be argument.[[ProxyTarget]].
+//    c. Return ? IsArray(target).
+// 4. Return false.
+
+// 翻译：
+// - 普通对象不是 Array → false
+// - Array exotic 对象（含跨 Realm 的）→ true ✅
+// - Proxy 包装的 Array → 递归看包装的 target ✅
+//
+// 这就是为什么 Array.isArray 能跨 Realm 工作 —— 它只看「是不是 Array exotic」，
+// 不查原型链，不依赖某个 Realm 的 Array.prototype。
+
+// 对比 instanceof 失败的原因：
+// arr instanceof Array  → 检查 Array.prototype 是否在 arr 的原型链上
+// 跨 Realm 的 arr 的原型链指向 otherRealm.Array.prototype，不等于本 Realm 的 Array.prototype
+// 所以 false ⚠️</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：Number(undefined) 期望 0</div>
+          <p>
+            <code>Number(undefined) === NaN</code>，<code>Number(null) === 0</code>。两者反对称。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：用 <code>Number(x) || 0</code> 或者 <code>+(x ?? 0)</code> 提供 fallback。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：== 期待"宽松相等"，结果跟 ToPrimitive 顺序相关</div>
+          <p>
+            <code>obj == 0</code> 时，<code>obj</code> 怎么转成原始值？取决于<strong>它的 valueOf / toString 实现</strong>。如果它返回 string，会再走一遍 String/Number 比较。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：永远用 <code>===</code>。如果你真要"宽松相等"，<strong>显式</strong>转换：<code>Number(obj) === 0</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：箭头函数被 new 抛 TypeError</div>
+          <p>
+            <code>new (() =&gt; {})()</code> → <code>TypeError: () =&gt; {} is not a constructor</code>。原因：箭头函数<strong>没有 <code>[[Construct]]</code> 内部方法</strong>，<code>IsConstructor</code> 返回 false。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：知道 IsCallable 和 IsConstructor 是独立的。<strong>能调用</strong>不等于<strong>能 new</strong>——箭头函数、<code>method() {}</code> 简写、bound function、Generator 都是 callable 但不是 constructor。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：BigInt 不能和 Number 隐式混算</div>
+          <p>
+            <code>1n + 1</code> 抛 <code>TypeError: Cannot mix BigInt and other types, use explicit conversions</code>。规范层是<strong>故意</strong>这样设计的——避免精度丢失（Number 有精度上限，BigInt 没有）。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：明确转换：<code>BigInt(1) + 1n</code> 或 <code>1n + BigInt(1)</code>。但 BigInt → Number 仍可能丢精度，<strong>跨界要谨慎</strong>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：用 instanceof Array 检查跨 Realm 数组</div>
+          <p>
+            来自 iframe / Worker / vm 的数组，<code>instanceof Array</code> 失败（不同 Realm 的 prototype）。<code>Array.isArray</code> 用 <code>IsArray</code> 抽象操作，<strong>跨 Realm 工作</strong>。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：检查"<em>这是不是数组</em>"统一用 <code>Array.isArray(x)</code>，永远不要用 <code>x instanceof Array</code>。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范本体</h3>
+        <ul>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-type-conversion" target="_blank" rel="noopener">ECMA-262 §7.1 Type Conversion</a> —— 类型转换族完整定义
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-testing-and-comparison-operations" target="_blank" rel="noopener">ECMA-262 §7.2 Testing and Comparison Operations</a> —— 比较族 + 类型谓词
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-operations-on-objects" target="_blank" rel="noopener">ECMA-262 §7.3 Operations on Objects</a> —— 对象操作族
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-operations-on-iterator-objects" target="_blank" rel="noopener">ECMA-262 §7.4 Operations on Iterator Objects</a> —— 迭代器操作族
+          </li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="02-data-types.html">B2 数据类型与值（§6）</a></li>
+          <li>下一步：<strong>B4 内部槽与方法（§10）</strong>（编写中）—— 11 个 essential internal methods + Ordinary 默认实现 + 7 种 Exotic Object（Array/String/Module/Proxy/Bound/TypedArray）</li>
+        </ul>
+
+        <h3>跨主题参考</h3>
+        <ul>
+          <li><a href="../../javascript/01-fundamentals/01-types.html">JS · 数据类型系统</a> —— 装箱/拆箱完整链路</li>
+          <li><a href="../01-history/02-design-principles.html#internals">A2 设计原则</a> —— 弱类型设计的"为什么"</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="02-data-types.html">
+            <span class="label">← 上一章</span>
+            <span class="title">B2 · 数据类型与值（§6）</span>
+          </a>
+          <a class="next" href="index.html">
+            <span class="label">下一步 →</span>
+            <span class="title">B4 · 内部槽与方法（🚧 编写中，先看 Track 概览）</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
