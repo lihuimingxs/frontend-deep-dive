@@ -7,10 +7,10 @@
 | 主题             | 状态        | 来源                                                                | 章节数            |
 | ---------------- | ----------- | ------------------------------------------------------------------- | ----------------- |
 | **JavaScript**   | ✅ 完成     | [javascript.info](https://javascript.info/)                         | 62 章 / 7 阶段    |
-| **TypeScript**   | 🚧 编写中   | [typescriptlang.org/docs](https://www.typescriptlang.org/docs/)     | 20 章 / 4 Part    |
+| **TypeScript**   | ✅ 完成     | [typescriptlang.org/docs](https://www.typescriptlang.org/docs/)     | 20 章 / 4 Part    |
+| **ECMAScript**   | 🚧 编写中   | [ecma-international.org/ecma-262](https://ecma-international.org/publications-and-standards/standards/ecma-262/) | 11 章 / 2 轨（历史脉络 + 规范精读）|
 | **Tailwind CSS** | ⏳ 规划中   | [tailwindcss.com/docs](https://tailwindcss.com/docs)                | 待定              |
 | **V8 Engine**    | ⏳ 规划中   | [v8.dev/docs](https://v8.dev/docs)                                  | 待定              |
-| **ECMA-262**     | ⏳ 规划中   | [tc39.es/ecma262](https://tc39.es/ecma262/)                         | 待定              |
 
 ## 如何打开
 
@@ -58,16 +58,21 @@ docs/learning/deep-dive/
 │   ├── 06-network/             # P6 网络 & 存储
 │   └── 07-advanced/            # P7 高级专题
 │
-├── typescript/                 # 🚧 TypeScript 主题（编写中）
+├── typescript/                 # ✅ TypeScript 主题（20 章）
 │   ├── index.html              # TS hub
 │   ├── 01-handbook-basics/     # Part 1 · Handbook 基础（6 章）
 │   ├── 02-type-manipulation/   # Part 2 · 类型操作（6 章）
 │   ├── 03-reference/           # Part 3 · Reference（5 章）
 │   └── 04-project/             # Part 4 · 工程化（3 章）
 │
+├── ecma/                       # 🚧 ECMAScript 主题（编写中，2 轨独立）
+│   ├── index.html              # ES hub
+│   ├── outline.md              # 写作蓝本
+│   ├── 01-history/             # Track A · 历史脉络与设计（5 章）
+│   └── 02-spec/                # Track B · ECMA-262 规范精读（6 章）
+│
 ├── tailwindcss/                # ⏳ 规划中
-├── v8/                         # ⏳ 规划中
-└── ecma/                       # ⏳ 规划中
+└── v8/                         # ⏳ 规划中
 ```
 
 每个主题目录下都有 `index.html`（主题首页）+ 阶段子目录；阶段目录下有 `index.html`（阶段概览 + 侧边栏）+ 编号章节文件。
@@ -121,8 +126,9 @@ docs/learning/deep-dive/
 ## 状态与路线图
 
 - ✅ JavaScript（62 章，2026-04 完成）
-- 🚧 TypeScript（4 Part / 20 章，编写中）
-- ⏳ Tailwind CSS / V8 / ECMA-262（规划中，需后续单独研究）
+- ✅ TypeScript（20 章 / 4 Part 完成）
+- 🚧 ECMAScript（2 轨独立：历史脉络 5 章 + 规范精读 6 章；A1 标准发展史已写完）
+- ⏳ Tailwind CSS / V8（规划中，需后续单独研究）
 
 ## 与 Mira 项目的关系
 
