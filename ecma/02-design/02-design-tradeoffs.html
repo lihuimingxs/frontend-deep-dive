@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>A2 · 设计原则与语言特性 ——「它是什么？」 · ECMAScript 深度学习</title>
+    <title>设计权衡：类型 / 作用域 / 错误 / 迭代 / 模块 · P2 · ECMAScript 深度学习</title>
     <meta
       name="description"
-      content="ECMAScript 的设计基因：三大灵感来源（Self/Scheme/Java）、原型对象模型、动态弱类型、词法作用域、错误处理、迭代协议、模块系统、Symbol 扩展点。讲清楚为什么 JS 是「原型的 Self」而不是「类的 Java」。"
+      content="ES1 → ES2025 的核心设计决策清单：动态弱类型为什么不修复、词法作用域如何走到 let/const + TDZ、错误处理为什么 ES3 才进、迭代协议为什么用统一抽象、ESM 静态结构的核心承诺、Symbol 作为「协议钩子」的扩展点设计。"
     />
     <link rel="stylesheet" href="../../assets/styles.css" />
     <link
@@ -27,7 +27,7 @@
         <nav class="site-nav" aria-label="主导航">
           <a href="../../index.html">← 深度学习</a>
           <a href="../index.html">ES 首页</a>
-          <a href="index.html">Track A 目录</a>
+          <a href="index.html">P2 目录</a>
           <a href="https://262.ecma-international.org/15.0/index.html#sec-overview" target="_blank" rel="noopener">原站</a>
         </nav>
         <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
@@ -39,18 +39,20 @@
 
     <div id="main" class="chapter-layout">
       <aside class="sidebar" aria-label="章节导航">
-        <h3>Track A · 历史脉络与设计</h3>
+        <h3>P2 · 设计原则与灵感</h3>
         <ul>
-          <li><a href="index.html">Track 概览</a></li>
-          <li><a href="01-standards-history.html">A1 · 标准发展史</a></li>
-          <li><a href="02-design-principles.html" class="active">A2 · 设计原则与语言特性</a></li>
-          <li><a href="03-execution-model.html">A3 · 执行模型</a></li>
-          <li><a href="04-async-evolution.html">A4 · 异步演进</a></li>
-          <li><a href="05-modern-ecosystem.html">A5 · 现代生态</a></li>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-three-inspirations.html">01 · 三大灵感与原型对象模型</a></li>
+          <li><a href="02-design-tradeoffs.html" class="active">02 · 设计权衡：类型/作用域/错误/迭代/模块</a></li>
         </ul>
-        <h3>另一轨</h3>
+        <h3>其他阶段</h3>
         <ul>
-          <li><a href="../02-spec/index.html">Track B · 规范精读</a></li>
+          <li><a href="../01-standards/index.html">P1 · 标准与演化</a></li>
+          <li><a href="../03-spec-reading/index.html">P3 · 怎么读规范</a></li>
+          <li><a href="../04-data-types/index.html">P4 · §6 数据类型与值</a></li>
+          <li><a href="../05-abstract-ops/index.html">P5 · §7 抽象操作</a></li>
+          <li><a href="../06-internal-slots/index.html">P6 · §10 内部槽与方法</a></li>
+          <li><a href="../07-execution/index.html">P7 · §9 执行模型与并发</a></li>
         </ul>
         <h3>跨主题</h3>
         <ul>
@@ -64,146 +66,48 @@
           <span class="breadcrumb-sep">/</span>
           <a href="../index.html">ECMAScript</a>
           <span class="breadcrumb-sep">/</span>
-          <a href="index.html">Track A · 历史脉络与设计</a>
+          <a href="index.html">P2 · 设计原则与灵感</a>
           <span class="breadcrumb-sep">/</span>
-          <span>A2 · 设计原则与语言特性</span>
+          <span>02 · 设计权衡</span>
         </nav>
 
-        <h1>A2 · 设计原则与语言特性 ——「它是什么？」</h1>
+        <h1>设计权衡：类型 / 作用域 / 错误 / 迭代 / 模块 ——「它是什么？·下篇」</h1>
         <p class="lead">
-          ECMAScript 的"基因"是三股血脉的合体：<strong>Self</strong>（原型继承）+ <strong>Scheme</strong>（一等函数 + 词法作用域）+ <strong>Java</strong>（C 风格语法外衣）。理解这一点能解释 90% 的"JS 怎么这么古怪"的疑问——它不是一门设计糟糕的语言，而是<strong>三种范式的杂交品种</strong>，外衣像 Java 但内核完全不是 Java。本章从这个根因出发，覆盖原型对象模型、动态弱类型、词法作用域闭包，以及 ES2015 之后系统补全的几个关键设计：错误处理、迭代协议、模块系统、Symbol 扩展点。
+          上一章（<a href="01-three-inspirations.html">P2.1 三大灵感与原型对象模型</a>）讲了 JS 的"基因图谱"——为什么是原型而不是类。本章继续讲<strong>从 ES1 到 ES2025 的核心设计决策清单</strong>：为什么是动态弱类型、为什么走词法作用域、为什么 <code>try</code>/<code>catch</code> 直到 ES3 才加、为什么 ES2015 引入了"统一的迭代协议"、为什么 ESM 必须 top-level、Symbol 为什么不只是"unique key"。每条决策都有"当时的选项 + 选择的理由 + 至今无法修复的代价"。
         </p>
 
         <div class="callout info" style="margin: 16px 0">
           <div class="callout-title">📐 本章交叉规则</div>
           <p>
-            本章涉及的具体机制（闭包、原型链、TDZ、Symbol、Iterator、ESM）在 <a href="../../javascript/index.html">JavaScript 深度学习</a> 已有详细章节。本章对每个机制做 <strong>1-3 句话短重述 + 链回</strong>，正文集中讲<strong>"为什么这样设计、当时有哪些选项、TC39 怎么选的"</strong>。如果你对某个机制的运行细节有疑问，跟随链接去 JS 主题获得完整解释，再回来看历史决策。
+            本章涉及的具体机制（类型系统、TDZ、Symbol、Iterator、ESM、错误处理）在 <a href="../../javascript/index.html">JavaScript 深度学习</a> 已有详细章节。本章对每个机制做 <strong>1-3 句话短重述 + 链回</strong>，正文集中讲<strong>"为什么这样设计、当时有哪些选项、TC39 怎么选的"</strong>。
           </p>
         </div>
 
         <div class="chapter-meta">
-          <span><strong>阅读时长</strong> ~35 分钟</span>
-          <span><strong>前置</strong> <a href="01-standards-history.html">A1 标准发展史</a> + 任意 JavaScript 经验</span>
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> <a href="01-three-inspirations.html">P2.1 三大灵感与原型对象模型</a></span>
           <span><strong>对应 ECMA-262</strong>
-            <a href="https://262.ecma-international.org/15.0/index.html#sec-overview" target="_blank" rel="noopener">§4 Overview</a>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-overview" target="_blank" rel="noopener">§4 Overview</a> + §6 / §13 / §15 / §16
           </span>
         </div>
 
         <!-- 01 速览 ================================================== -->
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
-        <p>三句话定义 ECMAScript 的设计本质：</p>
+        <p>三句话定义 ECMAScript 的核心设计权衡：</p>
         <ol>
           <li>
-            <strong>JS 不是"类的 Java"，是"原型的 Self"</strong>。class 关键字（ES2015）只是原型链 + 构造器函数的语法糖，不是真正的"基于类"系统。
+            <strong>动态 + 弱类型是"脚本语言"语境的必然选择</strong>。类型绑定到值不绑定到变量；任何类型转换都不报错（<code>"5" + 3 === "53"</code>）；这是 1995 年"网页设计师写 200 行表单校验"语境下的最优解，因向后兼容至今无法修复。
           </li>
           <li>
-            <strong>动态 + 弱类型</strong>。类型绑定到值不绑定到变量；任何类型间转换都不抛错（<code>+</code> 多义、<code>==</code> 抽象相等）；这是"脚本语言宽容度"决策的延续。
+            <strong>词法作用域 + 一等函数 = 必然有闭包；<code>let</code>/<code>const</code> + TDZ 把"先声明后使用"从最佳实践升级为强制约束</strong>。这是 30 年来 JS 最重要的"修复型决策"，把 <code>var</code> hoisting 的"邪道"妥协补回来。
           </li>
           <li>
-            <strong>词法作用域 + 一等函数 = 必然有闭包</strong>。闭包不是"高级特性"，是这两条决策的必然副产物——规范层根本没"闭包"这个词，它是函数对象 + <code>[[Environment]]</code> 内部槽的组合。
+            <strong>Symbol、Iterator、Module 三组 ES2015 决策共用同一个原则：用最小新机制解锁最大表达力</strong>——Symbol 给语言留出"协议钩子"，Iterator 让 6 个特性共享一套接口，ESM 用静态结构换 tree-shaking + 循环依赖可预期。
           </li>
         </ol>
 
-        <p>对比看一眼"JS 长得像 Java 但不是 Java"：</p>
-
-        <div class="code-block">
-          <span class="code-label">java · "类的 Java"</span>
-          <pre class="code"><code class="lang-js">// Java
-class User {
-  String name;
-  User(String name) { this.name = name; }
-  void greet() { System.out.println("Hi, " + name); }
-}
-User u = new User("Alice");
-u.greet();
-// 这里 User 是「类型」，u 是「实例」，类型在编译期决定。</code></pre>
-        </div>
-
-        <div class="code-block">
-          <span class="code-label">javascript · "原型的 Self" 穿着 Java 衣服</span>
-          <pre class="code"><code class="lang-js">// 表面也叫 class，但底层完全不同
-class User {
-  constructor(name) { this.name = name; }
-  greet() { console.log("Hi, " + this.name); }
-}
-const u = new User("Alice");
-u.greet();
-
-// 实际等价于：
-function User(name) { this.name = name; }
-User.prototype.greet = function () { console.log("Hi, " + this.name); };
-const u2 = new User("Alice");
-
-// 「class」只是函数 + prototype 对象的语法糖。
-// User 同时是值（构造器函数）和「类型」（拥有 prototype 的对象）。
-// 修改 User.prototype.greet 会立刻影响所有已创建的 u —— 这在 Java 是不可能的。</code></pre>
-        </div>
-
         <!-- 02 底层逻辑 ============================================== -->
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
-
-        <h3>三大灵感来源（Eich 自述）</h3>
-        <p>
-          Brendan Eich 在 1995 年 5 月用 10 天写出 JS 原型时，参考了三种当时知名的语言。<strong>这是有据可查的设计决策</strong>，不是后人附会——Eich 在多次访谈和博客中明确列出过：
-        </p>
-
-        <table>
-          <thead>
-            <tr>
-              <th style="width: 90px">来源</th>
-              <th style="width: 200px">借了什么</th>
-              <th>具体表现</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><strong>Self</strong></td>
-              <td>原型继承 + 对象 = 属性包</td>
-              <td>没有 class（只有原型）；对象就是 key-value 集合；动态加属性；<code>__proto__</code> 链查找</td>
-            </tr>
-            <tr>
-              <td><strong>Scheme</strong></td>
-              <td>一等函数 + 词法作用域</td>
-              <td>函数是值（可赋值、可传参、可返回）；闭包；<code>let</code>（虽然 ES2015 才正式加）；尾调用；表达式优先</td>
-            </tr>
-            <tr>
-              <td><strong>Java</strong></td>
-              <td>C 风格语法外衣 + 营销蹭名</td>
-              <td><code>{ }</code> 块、<code>;</code> 结尾、<code>function</code> 声明、<code>new</code> 关键字、<code>throw</code>/<code>try</code>/<code>catch</code>、原始类型大小写约定（<code>String</code> vs <code>string</code>）</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <p>
-          关键观察：<strong>Java 只贡献了语法外衣，不贡献语义</strong>。语义全部来自 Self（对象模型）和 Scheme（求值模型）。这就是为什么从 Java/C# 转 JS 的工程师最容易踩坑——语法看起来熟悉，但每个语义细节都是反 Java 直觉的。
-        </p>
-
-        <p>
-          这种"借皮不借骨"的设计被 Eich 自己评价为"<em>I had to make it look like Java but be different enough that it complemented Java rather than competed with it</em>"——管理层要求"看起来像 Java"以便营销，但 Eich 把语义留给了 Self + Scheme。结果 JavaScript 在心智层面始终是分裂的："写起来像 Java，跑起来像 Self+Scheme"。
-        </p>
-
-        <h3>原型对象模型（Self 血脉）</h3>
-        <p>
-          JS 没有"类"，对象就是属性的集合，每个对象有一个内部槽 <code>[[Prototype]]</code> 指向另一个对象（或 <code>null</code>）。属性查找时，如果当前对象没有，沿 <code>[[Prototype]]</code> 链向上找——这就是<strong>原型链</strong>。
-        </p>
-
-        <p>
-          <strong>短重述</strong>：原型链查找算法叫 <code>OrdinaryGet</code>（ECMA-262 §10.1.8），步骤是"在自己的属性表里找 → 找不到沿 <code>[[Prototype]]</code> 上溯 → 直到 <code>null</code> 返回 <code>undefined</code>"。<code>__proto__</code> 是访问 <code>[[Prototype]]</code> 的访问器糖（ES2015 才正式纳入规范，之前是事实标准）；每个函数都有 <code>prototype</code> 属性（用于 <code>new</code> 时设置实例的 <code>[[Prototype]]</code>），但 <code>prototype</code> 和 <code>[[Prototype]]</code> 是<strong>两个完全不同的东西</strong>。
-        </p>
-
-        <p>
-          <strong>详细机制请参考</strong> <a href="../../javascript/02-advanced/05-prototype.html">JS · 02-advanced/05-prototype</a>（含完整属性查找算法、Shadowing 规则、<code>Object.create</code> 用法）和 <a href="../../javascript/02-advanced/06-class.html">06-class</a>（class 语法糖如何 desugar 成原型）。本章只回答<strong>设计层面的"为什么"</strong>：
-        </p>
-
-        <div class="callout info">
-          <div class="callout-title">💡 为什么是原型，不是类？</div>
-          <p>
-            1995 年的"轻量脚本语言"语境下，原型有两个决定性优势：① <strong>实现极简</strong>——10 天写不出完整的类系统，但能写出原型链；② <strong>动态性强</strong>——可以运行时给对象加方法、改方法、删方法（class-based 系统通常静态绑定）。Self 的影响起源是 Eich 想"<em>用最少的语言机制表达最多的抽象</em>"——原型是当时最经济的对象模型。
-          </p>
-          <p style="margin-top: 8px">
-            ES2015 加 <code>class</code> 是为了让 Java 工程师写起来更舒服 + 让 mixin / 多继承等模式有清晰语法，但<strong>底层模型从未改变</strong>。修改 <code>String.prototype</code> 仍然影响所有字符串实例（monkey patch）；这件事在真正基于类的语言里是做不到的。
-          </p>
-        </div>
 
         <h3>动态 + 弱类型</h3>
         <p>
@@ -211,7 +115,7 @@ const u2 = new User("Alice");
         </p>
 
         <p>
-          <strong>详细机制请参考</strong> <a href="../../javascript/01-fundamentals/01-types.html">JS · 01-fundamentals/01-types</a>（8 类型 + 装箱/拆箱机制 + ToPrimitive）。本章回答的"为什么"是：
+          <strong>详细机制请参考</strong> <a href="../../javascript/01-fundamentals/01-types.html">JS · 01-fundamentals/01-types</a>（8 类型 + 装箱/拆箱机制 + ToPrimitive）和 <a href="../05-abstract-ops/01-abstract-operations.html">P5 抽象操作</a>（<code>ToPrimitive</code> / <code>IsLooselyEqual</code> 等规范层算法）。本章回答的"为什么"是：
         </p>
 
         <p>
@@ -237,6 +141,7 @@ const u2 = new User("Alice");
         <ul>
           <li><a href="../../javascript/02-advanced/01-scope-tdz.html">JS · 02-advanced/01-scope-tdz</a> —— 作用域链、TDZ、<code>let</code>/<code>const</code>/<code>var</code> 的差异</li>
           <li><a href="../../javascript/02-advanced/02-closures.html">JS · 02-advanced/02-closures</a> —— 闭包内存模型、循环捕获问题、内存泄漏</li>
+          <li><a href="../07-execution/02-spec-execution-context.html">P7.2 Execution Context 与 Environment Record</a> —— 规范层视角，作用域链怎么变成机器结构</li>
         </ul>
 
         <p>本章回答的"为什么"是：</p>
@@ -251,7 +156,7 @@ const u2 = new User("Alice");
           </p>
         </div>
 
-        <h3>错误处理设计（PPT 未覆盖，规范层补全）</h3>
+        <h3>错误处理设计</h3>
         <p>
           <strong>关键事实</strong>：<code>try</code>/<code>catch</code>/<code>finally</code> 是 <strong>ES3（1999）</strong>才加的。ES1/ES2 时期 JS 的错误处理只有"<strong>出错就停</strong>"——脚本中断，控制台报错，页面其他脚本继续跑。这是为什么老 JS 代码里看不到 try/catch 的根因。
         </p>
@@ -288,7 +193,7 @@ const u2 = new User("Alice");
           <strong>对应 JS 章节</strong>：<a href="../../javascript/01-fundamentals/14-errors.html">JS · 01-fundamentals/14-errors</a> 详细讲了 Error 子类用途、自定义 Error、async 函数中的错误传播。
         </p>
 
-        <h3>迭代协议设计（PPT 未覆盖，规范层补全）</h3>
+        <h3>迭代协议设计</h3>
         <p>
           <strong>关键事实</strong>：ES2015 引入<strong>迭代协议</strong>（Iteration Protocol）不是为了"加个 <code>for...of</code> 循环"，而是为了用一个统一抽象解决<strong>多个特性的"取下一个"问题</strong>：
         </p>
@@ -339,10 +244,10 @@ Promise.all(range); // Promise resolved [1, 2, 3]
         </p>
 
         <p>
-          ES2025 加了 <strong>Iterator Helpers</strong>（<code>.map</code>/<code>.filter</code>/<code>.take</code>/<code>.toArray</code> 等），让迭代器有了类似数组的链式 API——这是迭代协议设计 10 年之后的"二期工程"，让懒求值（lazy evaluation）变得 ergonomic。
+          ES2025 加了 <strong>Iterator Helpers</strong>（<code>.map</code>/<code>.filter</code>/<code>.take</code>/<code>.toArray</code> 等），让迭代器有了类似数组的链式 API——这是迭代协议设计 10 年之后的"二期工程"，让懒求值（lazy evaluation）变得 ergonomic。详细 case study 见 <a href="../01-standards/03-proposal-journey.html">P1.3 提案旅程</a>。
         </p>
 
-        <h3>模块系统设计（PPT 未覆盖，规范层补全）</h3>
+        <h3>模块系统设计</h3>
         <p>
           <strong>关键事实</strong>：JS 在 2015 年才有<strong>原生模块系统</strong>。之前 18 年（1997-2015）没有，全靠社区方案：IIFE、CommonJS（Node.js）、AMD（RequireJS）、UMD（兼容多平台）。
         </p>
@@ -397,14 +302,14 @@ Promise.all(range); // Promise resolved [1, 2, 3]
         </p>
 
         <p>
-          <strong>ES2022 加了 Top-Level Await</strong>：在模块顶层可以直接 <code>await</code>，模块求值变成异步。这是"静态结构 + 异步初始化"的折中——规范层加了死锁检测算法（cycle + async 模块同时存在时），实现非常复杂（详见 A4 异步演进 + B5 §9 上下文）。
+          <strong>ES2022 加了 Top-Level Await</strong>：在模块顶层可以直接 <code>await</code>，模块求值变成异步。这是"静态结构 + 异步初始化"的折中——规范层加了死锁检测算法（cycle + async 模块同时存在时），实现非常复杂（详见 <a href="../07-execution/04-modules-tla.html">P7.4 模块系统与 Top-Level Await</a>）。
         </p>
 
         <p>
           <strong>详细机制请参考</strong> <a href="../../javascript/04-modules/01-esm.html">JS · 04-modules/01-esm</a>（ESM 完整规则）和 <a href="../../javascript/04-modules/02-cjs-interop.html">02-cjs-interop</a>（CJS/ESM 互通）。
         </p>
 
-        <h3>Symbol 与扩展点设计（PPT 未覆盖）</h3>
+        <h3>Symbol 与扩展点设计</h3>
         <p>
           <strong>关键事实</strong>：ES2015 引入 <code>Symbol</code> 不只是"unique key"，更核心的目的是<strong>给语言提供"可扩展协议钩子"</strong>。
         </p>
@@ -451,7 +356,7 @@ Promise.all(range); // Promise resolved [1, 2, 3]
             </tr>
             <tr>
               <td><code>Symbol.dispose</code> / <code>Symbol.asyncDispose</code></td>
-              <td>ES2025 <code>using</code> / <code>await using</code> 资源释放（A4 详述）</td>
+              <td>ES2025 <code>using</code> / <code>await using</code> 资源释放（详见 <a href="../07-execution/03-event-loop-async.html">P7.3</a>）</td>
             </tr>
           </tbody>
         </table>
@@ -468,23 +373,7 @@ Promise.all(range); // Promise resolved [1, 2, 3]
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
 
         <div class="scenario">
-          <h3 class="scenario-title">场景 A · 给 Java/C# 工程师讲 JS</h3>
-          <p>
-            最有效的切入点是<strong>"原型 vs 类"对比</strong>，而不是从语法开始。讲清楚"<code>class</code> 是糖、底层是原型链"之后，许多 JS 怪现象就有根因：
-          </p>
-          <ul>
-            <li>"为什么 <code>[].constructor === Array</code> 而不是某个 metadata？" → 因为没有 metadata，<code>constructor</code> 就是 prototype 上的一个普通属性
-            </li>
-            <li>"为什么修改 <code>Array.prototype</code> 影响所有数组？" → 因为它是单一对象，所有数组的原型链都指向它（monkey patch）
-            </li>
-            <li>"为什么 <code>instanceof</code> 在跨 iframe 时会 false？" → 因为每个 Realm 有自己的 <code>Array.prototype</code>，跨 Realm 的实例原型链指向另一个对象（详见 A3 执行模型）
-            </li>
-          </ul>
-          <p>把"语言古怪"重构为"<strong>不同的对象模型</strong>"，团队迁移阻力会小很多。</p>
-        </div>
-
-        <div class="scenario">
-          <h3 class="scenario-title">场景 B · 写自定义可迭代对象（流式 API）</h3>
+          <h3 class="scenario-title">场景 A · 写自定义可迭代对象（流式 API）</h3>
           <p>
             实现一个分页 API 客户端：让用户写 <code>for await (const page of api.pages())</code>，自动按需翻页。靠的就是 <code>Symbol.asyncIterator</code> 协议：
           </p>
@@ -513,7 +402,7 @@ for await (const user of api) {
         </div>
 
         <div class="scenario">
-          <h3 class="scenario-title">场景 C · 读懂老代码的 IIFE 模块模式</h3>
+          <h3 class="scenario-title">场景 B · 读懂老代码的 IIFE 模块模式</h3>
           <p>
             ES2015 之前没有原生模块，很多老库用 <strong>IIFE</strong>（Immediately Invoked Function Expression）模拟模块：
           </p>
@@ -571,95 +460,11 @@ m * 2;         // 200 (* 强制 hint = number)
 // new Date() - new Date('2024-01-01') 返回毫秒差</code></pre>
         </div>
 
-        <h3>Class 与原型的等价转换（揭穿语法糖）</h3>
-
-        <div class="code-block">
-          <span class="code-label">javascript · class 完全展开</span>
-          <pre class="code"><code class="lang-js">// === Class 写法 ===
-class Animal {
-  static species = 'unknown';
-  constructor(name) { this.name = name; }
-  greet() { return `Hi, ${this.name}`; }
-  static create(name) { return new Animal(name); }
-}
-
-class Dog extends Animal {
-  constructor(name) {
-    super(name);
-    this.kind = 'dog';
-  }
-  greet() { return super.greet() + '!'; }
-}
-
-// === 完全等价的"裸原型"写法 ===
-function Animal_v2(name) { this.name = name; }
-Animal_v2.species = 'unknown';
-Animal_v2.prototype.greet = function () { return `Hi, ${this.name}`; };
-Animal_v2.create = function (name) { return new Animal_v2(name); };
-
-function Dog_v2(name) {
-  Animal_v2.call(this, name);  // ← super(name) 的实质
-  this.kind = 'dog';
-}
-// 把 Dog_v2.prototype 的 [[Prototype]] 设为 Animal_v2.prototype（继承链）
-Object.setPrototypeOf(Dog_v2.prototype, Animal_v2.prototype);
-// 静态属性继承
-Object.setPrototypeOf(Dog_v2, Animal_v2);
-
-Dog_v2.prototype.greet = function () {
-  return Animal_v2.prototype.greet.call(this) + '!';  // ← super.greet() 的实质
-};
-
-// 两份代码运行行为完全相同：
-new Dog('Rex').greet();    // "Hi, Rex!"
-new Dog_v2('Rex').greet(); // "Hi, Rex!"</code></pre>
-        </div>
-
-        <p>
-          <strong>注意</strong>：class 并非<strong>纯</strong>语法糖，有几个微妙差异——class 内部默认 strict mode、不可在定义前调用、方法不可枚举、构造器没 <code>prototype</code> 属性。但<strong>底层模型</strong>仍是原型链。详细对比见 <a href="../../javascript/02-advanced/06-class.html">JS · 02-advanced/06-class</a>。
-        </p>
-
         <!-- 05 常见陷阱 ============================================== -->
         <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
 
         <div class="pitfall">
-          <div class="pitfall-title">⚠️ 陷阱 1：把 prototype 和 [[Prototype]] 混为一谈</div>
-          <p>
-            这两个名字看起来很像，<strong>但是完全不同的两个东西</strong>：
-          </p>
-          <ul>
-            <li>
-              <strong><code>prototype</code></strong>（小写、可见属性）—— <strong>只在函数对象上有</strong>。它是一个普通对象，会在 <code>new F()</code> 时被设为新实例的 <code>[[Prototype]]</code>。<code>F.prototype.foo = 1</code> 之后，<code>new F().foo</code> 是 1（沿原型链查到）。
-            </li>
-            <li>
-              <strong><code>[[Prototype]]</code></strong>（双方括号、内部槽）—— <strong>每个对象都有</strong>。它是属性查找时的"上溯指针"。访问方式：<code>Object.getPrototypeOf(obj)</code>（推荐）或 <code>obj.__proto__</code>（访问器糖，可读可写）。
-            </li>
-          </ul>
-          <p style="margin-top: 8px">
-            两者的关系：<code>new F()</code> 创建实例时把 <code>F.prototype</code><strong>赋给</strong>实例的 <code>[[Prototype]]</code>。换句话说，<code>F.prototype === instance.__proto__</code>。
-          </p>
-          <p style="margin-top: 8px">
-            <strong>规避</strong>：日常用 <code>Object.getPrototypeOf</code> / <code>Object.setPrototypeOf</code>，不直接用 <code>__proto__</code>（虽然合法，但访问器开销 + 可被覆盖）。函数的 <code>prototype</code> 属性<strong>永远是普通对象赋值</strong>，不会触发原型链。
-          </p>
-        </div>
-
-        <div class="pitfall">
-          <div class="pitfall-title">⚠️ 陷阱 2：以为 class 是新引入的对象模型</div>
-          <p>
-            <strong>不是</strong>。<code>class</code>（ES2015）只是语法糖，底层模型仍是原型链 + 构造器函数。这意味着：
-          </p>
-          <ul>
-            <li>修改 <code>String.prototype</code> 仍然影响所有字符串（monkey patch 仍然生效）</li>
-            <li><code>instanceof</code> 检查的是<strong>原型链</strong>，不是"名义类型"——跨 Realm 不工作</li>
-            <li>没有"类的私有方法"——ES2022 的 <code>#field</code> 是<strong>真私有</strong>（基于 PrivateName 内部槽），但 <code>private</code> 关键字（TS 才有）只是编译期约束</li>
-          </ul>
-          <p style="margin-top: 8px">
-            <strong>规避</strong>：从 Java/C# 来的工程师写 <code>instanceof</code> 检查时一定要想清楚 Realm 边界（详见 A3 执行模型），跨 iframe / vm context / Worker 通信场景<strong>用结构判断（鸭子类型）或 <code>Array.isArray</code> 这种 Realm-aware 的 API</strong>，不用 <code>instanceof</code>。
-          </p>
-        </div>
-
-        <div class="pitfall">
-          <div class="pitfall-title">⚠️ 陷阱 3：用 == 比较跨类型值</div>
+          <div class="pitfall-title">⚠️ 陷阱 1：用 == 比较跨类型值</div>
           <p>
             <code>==</code> 走 ECMA-262 §7.2.13 的 11 步抽象相等算法（<code>IsLooselyEqual</code>），结果常违反直觉：
           </p>
@@ -674,12 +479,12 @@ null == 0        // false（特殊规则——只 null/undefined 互等）
 NaN == NaN       // false（NaN 不等于自己）</code></pre>
           </div>
           <p style="margin-top: 8px">
-            <strong>规避</strong>：永远用 <code>===</code>。仅在<strong>明确想"<code>null</code> 或 <code>undefined</code>"</strong>时用 <code>x == null</code>（这是唯一推荐的 <code>==</code> 用法）。详细 <code>==</code> 算法见 B3 抽象操作（编写中）。
+            <strong>规避</strong>：永远用 <code>===</code>。仅在<strong>明确想"<code>null</code> 或 <code>undefined</code>"</strong>时用 <code>x == null</code>（这是唯一推荐的 <code>==</code> 用法）。详细 <code>==</code> 算法见 <a href="../05-abstract-ops/01-abstract-operations.html">P5 抽象操作</a>。
           </p>
         </div>
 
         <div class="pitfall">
-          <div class="pitfall-title">⚠️ 陷阱 4：以为 let/const 不 hoist</div>
+          <div class="pitfall-title">⚠️ 陷阱 2：以为 let/const 不 hoist</div>
           <p>
             <strong>let/const 仍然 hoist</strong>，但访问会因为 TDZ 抛 <code>ReferenceError</code>。这和 <code>var</code> 的 hoisting（访问得到 <code>undefined</code>）<strong>行为不同</strong>，但<strong>都是 hoisting</strong>：
           </p>
@@ -703,7 +508,7 @@ let x = 1;
 }</code></pre>
           </div>
           <p style="margin-top: 8px">
-            <strong>规避</strong>：理解"<strong>hoisting 是规范层的"作用域注册"，不是"代码搬运"</strong>"。详见 <a href="../../javascript/02-advanced/01-scope-tdz.html">JS · 02-advanced/01-scope-tdz</a>。
+            <strong>规避</strong>：理解"<strong>hoisting 是规范层的"作用域注册"，不是"代码搬运"</strong>"。详见 <a href="../../javascript/02-advanced/01-scope-tdz.html">JS · 02-advanced/01-scope-tdz</a> 和 <a href="../07-execution/02-spec-execution-context.html">P7.2 Execution Context</a>。
           </p>
         </div>
 
@@ -713,21 +518,18 @@ let x = 1;
         <h3>规范</h3>
         <ul>
           <li>
-            <a href="https://262.ecma-international.org/15.0/index.html#sec-overview" target="_blank" rel="noopener">ECMA-262 §4 Overview</a> —— 包含 §4.3 "originally designed as scripting language" 的官方自述
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-overview" target="_blank" rel="noopener">ECMA-262 §4 Overview</a> —— §4.3 "originally designed as scripting language" 的官方自述
           </li>
           <li>
             <a href="https://262.ecma-international.org/15.0/index.html#sec-well-known-symbols" target="_blank" rel="noopener">ECMA-262 §6.1.5.1 Well-Known Symbols</a> —— 全部 well-known symbols 定义
           </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-modules" target="_blank" rel="noopener">ECMA-262 §16.2 Modules</a> —— ESM 完整语法定义
+          </li>
         </ul>
 
-        <h3>Eich 自述与设计文献</h3>
+        <h3>外部读物</h3>
         <ul>
-          <li>
-            <a href="https://brendaneich.com/2008/04/popularity/" target="_blank" rel="noopener">Brendan Eich · "Popularity" (2008)</a> —— 三大灵感来源的早期表述
-          </li>
-          <li>
-            <a href="https://dl.acm.org/doi/10.1145/3386327" target="_blank" rel="noopener">Allen Wirfs-Brock · "JavaScript: The First 20 Years" (HOPL IV, 2020)</a> —— Self/Scheme/Java 影响在第 2、3 章详述
-          </li>
           <li>
             <a href="https://2ality.com/" target="_blank" rel="noopener">Axel Rauschmayer · 2ality.com</a> —— 大量 ES 设计决策的深度解读，特别是 ES2015 模块系统、迭代协议
           </li>
@@ -735,9 +537,9 @@ let x = 1;
 
         <h3>本主题内部</h3>
         <ul>
-          <li>上一章：<a href="01-standards-history.html">A1 标准发展史</a></li>
-          <li>下一步：<strong>A3 执行模型</strong>（编写中）—— Realm / Agent / Job 三层容器、Execution Context、Environment Record，回答"机器怎么跑？"</li>
-          <li>规范侧：<strong><a href="../02-spec/index.html">Track B · 规范精读</a></strong>—— B2 数据类型、B4 内部槽与方法（覆盖 <code>[[Prototype]]</code> 和 11 个 essential internal methods）</li>
+          <li>上一章：<a href="01-three-inspirations.html">P2.1 三大灵感与原型对象模型</a></li>
+          <li>下一阶段：<a href="../03-spec-reading/01-how-to-read.html">P3 怎么读规范</a> —— 把 800 页 ECMA-262 当伪代码读的元能力</li>
+          <li>规范侧：<a href="../04-data-types/01-data-types.html">P4 §6 数据类型与值</a>、<a href="../05-abstract-ops/01-abstract-operations.html">P5 §7 抽象操作</a> —— 类型、转换、比较的规范层算法</li>
         </ul>
 
         <h3>跨主题参考（本章引用了这些 JS 章节做"短重述链回"）</h3>
@@ -748,20 +550,18 @@ let x = 1;
           <li><a href="../../javascript/01-fundamentals/14-errors.html">JS · 错误处理</a></li>
           <li><a href="../../javascript/02-advanced/01-scope-tdz.html">JS · 作用域与 TDZ</a></li>
           <li><a href="../../javascript/02-advanced/02-closures.html">JS · 闭包内存模型</a></li>
-          <li><a href="../../javascript/02-advanced/05-prototype.html">JS · 原型链</a></li>
-          <li><a href="../../javascript/02-advanced/06-class.html">JS · class 与继承</a></li>
           <li><a href="../../javascript/04-modules/01-esm.html">JS · ES Modules</a></li>
         </ul>
 
         <!-- 底部翻页 ================================================== -->
         <nav class="chapter-nav" aria-label="章节翻页">
-          <a class="prev" href="01-standards-history.html">
+          <a class="prev" href="01-three-inspirations.html">
             <span class="label">← 上一章</span>
-            <span class="title">A1 · 标准发展史</span>
+            <span class="title">01 · 三大灵感与原型对象模型</span>
           </a>
-          <a class="next" href="03-execution-model.html">
-            <span class="label">下一章 →</span>
-            <span class="title">A3 · 执行模型</span>
+          <a class="next" href="../03-spec-reading/01-how-to-read.html">
+            <span class="label">下一阶段 →</span>
+            <span class="title">P3 · 怎么读规范</span>
           </a>
         </nav>
       </article>

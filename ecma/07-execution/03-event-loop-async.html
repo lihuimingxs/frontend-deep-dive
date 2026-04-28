@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>A4 · 异步演进 ——「单线程怎么并发？」 · ECMAScript 深度学习</title>
+    <title>Event Loop 与异步演进 · P7 · ECMAScript 深度学习</title>
     <meta
       name="description"
       content="ECMAScript 异步模型 30 年演化：回调 → Promise → async/await → 多线程。Event Loop 责任划分、Promise 状态机、async/await 用 ExecutionContext 暂停机制实现、SharedArrayBuffer + Atomics、ES2025 using/await using。"
@@ -27,7 +27,7 @@
         <nav class="site-nav" aria-label="主导航">
           <a href="../../index.html">← 深度学习</a>
           <a href="../index.html">ES 首页</a>
-          <a href="index.html">Track A 目录</a>
+          <a href="index.html">P7 目录</a>
           <a href="https://262.ecma-international.org/15.0/index.html#sec-control-abstraction-objects" target="_blank" rel="noopener">原站</a>
         </nav>
         <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
@@ -39,18 +39,22 @@
 
     <div id="main" class="chapter-layout">
       <aside class="sidebar" aria-label="章节导航">
-        <h3>Track A · 历史脉络与设计</h3>
+        <h3>P7 · §9 执行模型与并发</h3>
         <ul>
-          <li><a href="index.html">Track 概览</a></li>
-          <li><a href="01-standards-history.html">A1 · 标准发展史</a></li>
-          <li><a href="02-design-principles.html">A2 · 设计原则与语言特性</a></li>
-          <li><a href="03-execution-model.html">A3 · 执行模型</a></li>
-          <li><a href="04-async-evolution.html" class="active">A4 · 异步演进</a></li>
-          <li><a href="05-modern-ecosystem.html">A5 · 现代生态</a></li>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-execution-model.html">01 · 执行模型基础（容器与上下文）</a></li>
+          <li><a href="02-spec-execution-context.html">02 · §9 执行模型规范精读</a></li>
+          <li><a href="03-event-loop-async.html" class="active">03 · Event Loop 与异步演进</a></li>
+          <li><a href="04-modules-tla.html">04 · 模块系统与 Top-Level Await</a></li>
         </ul>
-        <h3>另一轨</h3>
+        <h3>其他阶段</h3>
         <ul>
-          <li><a href="../02-spec/index.html">Track B · 规范精读</a></li>
+          <li><a href="../01-standards/index.html">P1 · 标准与演化</a></li>
+          <li><a href="../02-design/index.html">P2 · 设计原则与灵感</a></li>
+          <li><a href="../03-spec-reading/index.html">P3 · 怎么读规范</a></li>
+          <li><a href="../04-data-types/index.html">P4 · §6 数据类型与值</a></li>
+          <li><a href="../05-abstract-ops/index.html">P5 · §7 抽象操作</a></li>
+          <li><a href="../06-internal-slots/index.html">P6 · §10 内部槽与方法</a></li>
         </ul>
         <h3>跨主题</h3>
         <ul>
@@ -65,14 +69,14 @@
           <span class="breadcrumb-sep">/</span>
           <a href="../index.html">ECMAScript</a>
           <span class="breadcrumb-sep">/</span>
-          <a href="index.html">Track A · 历史脉络与设计</a>
+          <a href="index.html">P7 · §9 执行模型与并发</a>
           <span class="breadcrumb-sep">/</span>
-          <span>A4 · 异步演进</span>
+          <span>03 · Event Loop 与异步演进</span>
         </nav>
 
-        <h1>A4 · 异步演进 ——「单线程怎么并发？」</h1>
+        <h1>Event Loop 与异步演进 ——「单线程怎么并发？」</h1>
         <p class="lead">
-          JS 是单 Agent 默认（A3 已讲），但 30 年里它把"单线程"做出了相当丰富的并发表达力：<strong>回调地狱</strong>（ES1-2014）→ <strong>Promise</strong>（ES2015）→ <strong>async/await</strong>（ES2017）→ <strong>异步迭代器 + AbortController</strong>（ES2018+）→ <strong>Top-Level Await + 真共享内存</strong>（ES2017+ 2022）→ <strong>资源管理 <code>await using</code></strong>（ES2025）。每一步都是"<em>不打破单线程心智，但让异步代码看起来更像同步</em>"的折中。本章串起这条演化路径，并补足 PPT 没讲的 6 个现代特性。
+          JS 是单 Agent 默认（<a href="01-execution-model.html">P7.1 已讲</a>），但 30 年里它把"单线程"做出了相当丰富的并发表达力：<strong>回调地狱</strong>（ES1-2014）→ <strong>Promise</strong>（ES2015）→ <strong>async/await</strong>（ES2017）→ <strong>异步迭代器 + AbortController</strong>（ES2018+）→ <strong>Top-Level Await + 真共享内存</strong>（ES2017+ 2022）→ <strong>资源管理 <code>await using</code></strong>（ES2025）。每一步都是"<em>不打破单线程心智，但让异步代码看起来更像同步</em>"的折中。本章串起这条演化路径，并补足现代特性的细节。
         </p>
 
         <div class="callout info" style="margin: 16px 0">
@@ -84,7 +88,7 @@
 
         <div class="chapter-meta">
           <span><strong>阅读时长</strong> ~40 分钟</span>
-          <span><strong>前置</strong> <a href="03-execution-model.html">A3 执行模型</a>（必读，本章建立在 ExecutionContext / Job 概念上）</span>
+          <span><strong>前置</strong> <a href="01-execution-model.html">P7.1 执行模型基础</a>（必读，本章建立在 ExecutionContext / Job 概念上）</span>
           <span><strong>对应 ECMA-262</strong>
             <a href="https://262.ecma-international.org/15.0/index.html#sec-control-abstraction-objects" target="_blank" rel="noopener">§27 Control Abstraction Objects</a>
           </span>
@@ -761,9 +765,9 @@ try {
 
         <h3>本主题内部</h3>
         <ul>
-          <li>上一章：<a href="03-execution-model.html">A3 执行模型</a></li>
-          <li>下一步：<strong>A5 现代生态</strong>（编写中）—— TC39 Stage 流程详解、ES2016-ES2025 全特性表、打包器目标版本策略</li>
-          <li>规范侧：<strong><a href="../02-spec/index.html">Track B · 规范精读</a></strong>—— B5 §9 上下文从规范层视角再讲 Job / HostEnqueuePromiseJob</li>
+          <li>上一章：<a href="02-spec-execution-context.html">P7.2 §9 执行模型规范精读</a></li>
+          <li>规范侧：<a href="02-spec-execution-context.html#jobs">P7.2 §9.8 Jobs and Host Operations</a> —— Job / HostEnqueuePromiseJob 的规范层细节</li>
+          <li>下一章：<a href="04-modules-tla.html">P7.4 模块系统与 Top-Level Await</a> —— Module 求值算法 + cycle 死锁检测</li>
         </ul>
 
         <h3>跨主题参考（本章引用了这些 JS 章节做"短重述链回"）</h3>
@@ -780,13 +784,13 @@ try {
 
         <!-- 底部翻页 ================================================== -->
         <nav class="chapter-nav" aria-label="章节翻页">
-          <a class="prev" href="03-execution-model.html">
+          <a class="prev" href="02-spec-execution-context.html">
             <span class="label">← 上一章</span>
-            <span class="title">A3 · 执行模型</span>
+            <span class="title">02 · §9 执行模型规范精读</span>
           </a>
-          <a class="next" href="05-modern-ecosystem.html">
+          <a class="next" href="04-modules-tla.html">
             <span class="label">下一章 →</span>
-            <span class="title">A5 · 现代生态</span>
+            <span class="title">04 · 模块系统与 Top-Level Await</span>
           </a>
         </nav>
       </article>

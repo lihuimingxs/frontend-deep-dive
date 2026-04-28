@@ -10,7 +10,7 @@
 |---|------|------------------|-------------|---------------------------------------------------------------------|-------------------|
 | ① | 语言 | **JavaScript**   | ✅ 完成     | [javascript.info](https://javascript.info/)                         | 62 章 / 7 阶段    |
 | ① | 语言 | **TypeScript**   | ✅ 完成     | [typescriptlang.org/docs](https://www.typescriptlang.org/docs/)     | 20 章 / 4 Part    |
-| ② | 规范 | **ECMAScript**   | ✅ 完成     | [ecma-international.org/ecma-262](https://ecma-international.org/publications-and-standards/standards/ecma-262/) | 11 章 / 2 轨 |
+| ② | 规范 | **ECMAScript**   | ✅ 完成     | [ecma-international.org/ecma-262](https://ecma-international.org/publications-and-standards/standards/ecma-262/) | 13 章 / 7 阶段 |
 | ③ | 引擎/生态 | **V8 Engine**    | ⏳ 规划中   | [v8.dev/docs](https://v8.dev/docs)                              | 待定              |
 | ③ | 引擎/生态 | **Node.js Runtime** | ⏳ 规划中 | [nodejs.org/docs](https://nodejs.org/docs)                     | 待定              |
 | ③ | 引擎/生态 | **Bun（Runtime + Toolchain）** ⭐ | ⏳ 规划中 · ecosystem | [bun.com/docs](https://bun.com/docs)              | 待定              |
@@ -80,11 +80,16 @@ docs/learning/deep-dive/
 │   ├── 03-reference/           # Part 3 · Reference（5 章）
 │   └── 04-project/             # Part 4 · 工程化（3 章）
 │
-├── ecma/                       # ✅ ECMAScript 主题（11 章完成，2 轨独立）
+├── ecma/                       # ✅ ECMAScript 主题（13 章 / 7 阶段）
 │   ├── index.html              # ES hub
 │   ├── outline.md              # 写作蓝本
-│   ├── 01-history/             # ✅ Track A · 历史脉络与设计（5 章）
-│   └── 02-spec/                # ✅ Track B · ECMA-262 规范精读（6 章）
+│   ├── 01-standards/           # ✅ P1 · 标准与演化（3 章）
+│   ├── 02-design/              # ✅ P2 · 设计原则与灵感（2 章）
+│   ├── 03-spec-reading/        # ✅ P3 · 怎么读规范（1 章）
+│   ├── 04-data-types/          # ✅ P4 · §6 数据类型与值（1 章）
+│   ├── 05-abstract-ops/        # ✅ P5 · §7 抽象操作（1 章）
+│   ├── 06-internal-slots/      # ✅ P6 · §10 内部槽与方法（1 章）
+│   └── 07-execution/           # ✅ P7 · §9 执行模型与并发（4 章）
 │
 ├── react/                      # ✅ React 主题（24 章 / 2 轨完成）
 │   ├── index.html              # React hub
@@ -151,7 +156,7 @@ docs/learning/deep-dive/
 
 - **JavaScript**（62 章，2026-04 完成）
 - **TypeScript**（20 章 / 4 Part 完成）
-- **ECMAScript**（11 章 / 2 轨完成 · Track A 历史脉络 5 章 + Track B 规范精读 6 章）
+- **ECMAScript**（13 章 / 7 阶段完成 · P1 标准与演化 3 章 + P2 设计原则 2 章 + P3-P6 规范精读 4 章 + P7 执行模型 4 章）
 - **React**（24 章 / 2 轨完成 · Track A 历史脉络 5 章 + Track B 官网精读 19 章 / 4 Part：心智模型 / Hooks 全谱 / 渲染并发 / 现代 React）
 
 ### ⏳ 规划中（14 / 18，按学习顺序）

@@ -1,7 +1,7 @@
 # ECMAScript 深度学习 · 章节大纲
 
-> 本文件是 ECMA 主题的写作蓝本。**两条独立轨道**：Track A · 历史脉络与设计 / Track B · ECMA-262 规范精读。
-> 编写日期：2026-04-27 | 目标版本：ECMA-262 第 16 版（ES2025） | 灵感来源：用户内部分享 PPT《ECMAScript 调研分享》
+> 本文件是 ECMA 主题的写作蓝本。**7 阶段 · 13 章**：先用 P1-P2 讲清"为什么 JS 长这样"（历史与设计），再用 P3-P7 训练"读 800 页规范"的元能力。
+> 编写日期：2026-04-27（首版，两轨结构）｜重构日期：2026-04-28（重组为 7 阶段，删除轨道概念）｜目标版本：ECMA-262 第 16 版（ES2025）
 
 ---
 
@@ -12,29 +12,39 @@
   - [262.ecma-international.org/15.0](https://262.ecma-international.org/15.0/)（ES2024 即时锚点版，最新稳定 HTML）
   - [ecma-international.org publications](https://ecma-international.org/publications-and-standards/standards/ecma-262/)（所有版本归档）
   - [tc39/proposals](https://github.com/tc39/proposals)（Stage 0-4 现状）
-  - 用户内部 PPT《ECMAScript 调研分享》（叙事脊柱原型）
+  - 用户内部 PPT《ECMAScript 调研分享》（叙事脊柱原型，仅作灵感来源）
 - **目标读者**：已学过 `javascript/` 和 `typescript/` 主题，想理解"语言为什么长这样、规范怎么读、机制怎么落到字节码"的研发工程师。
 
 ---
 
-## 设计原则：两轨独立，互不影响
+## 整体设计：7 阶段 · 依赖顺序组织
 
-**这是用户在 2026-04-27 明确的设计约束**：历史脉络与规范精读必须分开实现，**且历史轨道未来要被 JS / TS / React 三个主题平行复用**。
+仿 `javascript/` 主题的"分阶段学习"模板，章节按依赖顺序铺开，建议顺序读；熟悉历史的工程师可直接跳到 P3（怎么读规范）或 P7（执行模型）。
 
-- **Track A · 历史脉络与设计**（5 章）—— 来自 PPT 的"4 问"叙事脊柱 + 1 章生态现状。**这是"补充章"模板**：将来在 JS/TS/React 主题里复用同一 4 问结构，写出各自的"为什么存在 / 它是什么 / 机器怎么跑 / 单线程怎么并发"。
-- **Track B · ECMA-262 规范精读**（6 章）—— 教读者把 800 页规范读懂的"元能力"训练，覆盖 §6 数据类型、§7 抽象操作、§9 上下文、§10 内部槽等核心 clause，**也复述必要的语言特性以保持自洽**。
-- **两轨之间**只通过显式 `延伸阅读` 互相链接，**不在任何章节正文里互相依赖**。读者可以只看 A 不看 B（适合产品工程师），或只看 B 不看 A（适合编译器/规范贡献者）。
+| 阶段 | 章数 | 核心问题 |
+|---|---|---|
+| **P1 · 标准与演化** | 3 | ECMAScript 30 年怎么走过来、现在该用什么版本、提案怎么进标准 |
+| **P2 · 设计原则与灵感** | 2 | JS 的"基因"——三大灵感、原型对象、类型/作用域/错误/迭代协议怎么设计的 |
+| **P3 · 怎么读规范** | 1 | 把 800 页规范读懂的元能力：算法记法、`?`/`!` 简写、Annex B、Host hooks |
+| **P4 · §6 数据类型与值** | 1 | Reference Record / Completion Record / Property Descriptor 等规范内部类型 |
+| **P5 · §7 抽象操作** | 1 | ToPrimitive / ToObject / SameValueZero / 抽象相等等核心算法族 |
+| **P6 · §10 内部槽与方法** | 1 | 11 个 essential internal methods、Ordinary vs Exotic、Proxy 实现细节 |
+| **P7 · §9 执行模型与并发** | 4 | Realm / Agent / Job / Execution Context / Event Loop / 异步演进 / 模块求值 |
 
-### 与既有主题的边界 ——「短重述 + 链回」原则
+总计 **13 章 ≈ 65,000 字**，平均每章 5,000 字。
 
-**关键约定**（用户 2026-04-27 明确反馈）：当一个机制 / 概念在 `javascript/` 或 `typescript/` 已经讲透时，本主题章节里**不能直接略过**，而是：
+---
+
+## 与既有主题的边界 ——「短重述 + 链回」原则
+
+**关键约定**：当一个机制 / 概念在 `javascript/` 或 `typescript/` 已经讲透时，本主题章节里**不能直接略过**，而是：
 
 > ✅ **短重述**：用 1-3 句话点出"它是什么 + 关键性质"，让读者不被打断
 > ✅ **链回**：紧跟一句"详细的 X / Y / Z 请参考 [`javascript/{phase}/{chapter}`]"
 > ❌ **不要**写"详见 X"就完事——读者还没理解就被甩到另一个主题
 > ❌ **不要**完整抄一遍——那就违背了"轻量"
 
-举例（在 A4 讲 Promise 时）：
+举例（在 P7.3 讲 Promise 时）：
 
 > Promise 是一个状态机，状态从 `pending` 不可逆地迁移到 `fulfilled` 或 `rejected`。一旦 settled，状态永不再变。
 >
@@ -44,43 +54,96 @@
 
 ---
 
-### 内容覆盖原则 ——「PPT 是叙事，规范是知识」
+## 内容覆盖原则 ——「PPT 是叙事，规范是知识」
 
-**用户原话（2026-04-27）**："PPT 只参考讲解思路，说明了历史和核心特性，并没有太全面的知识点……我们要系统的学习，不能只看这些。"
+**用户原话**："PPT 只参考讲解思路，说明了历史和核心特性，并没有太全面的知识点……我们要系统的学习，不能只看这些。"
 
 落地为 3 条规则：
 
-- **A 轨用 PPT 的 4 问做骨架**（为什么存在 → 它是什么 → 机器怎么跑 → 单线程怎么并发），但每章的内容**按权威来源系统化补全**，不局限于 PPT 涉及的点。
-- **A 轨权威来源**：ECMA-262 §4 历史段、TC39 meeting notes、proposals 仓库、Eich 个人 blog、HTML 规范的 Event Loop / Job 部分。
-- **B 轨权威来源**：ECMA-262 16th edition (ES2025) 全文，按 clause 顺序系统化覆盖核心章节，不挑内容只挑深度。
+- **P1-P2 用 PPT 的叙事脊柱**（为什么存在 → 它是什么 → 机器怎么跑 → 单线程怎么并发），但每章的内容**按权威来源系统化补全**，不局限于 PPT 涉及的点。
+- **P1-P2 权威来源**：ECMA-262 §4 历史段、TC39 meeting notes、proposals 仓库、Eich 个人 blog、HTML 规范的 Event Loop / Job 部分。
+- **P3-P7 权威来源**：ECMA-262 16th edition (ES2025) 全文，按 clause 顺序系统化覆盖核心章节，不挑内容只挑深度。
 
-这意味着：**A2 设计原则**会讲 PPT 没提的"错误处理设计、迭代协议设计、模块系统设计"；**A4 异步**会讲 PPT 没提的"async iterator、AbortController、async 错误传播"；**B 轨**完整覆盖 §5-§10，而不是仅 PPT 涉及的部分。
+这意味着：**P2 设计原则**会讲 PPT 没提的"错误处理设计、迭代协议设计、模块系统设计"；**P7.3 异步演进**会讲 PPT 没提的"async iterator、AbortController、async 错误传播"；**P3-P7** 完整覆盖 §5-§10，而不是仅 PPT 涉及的部分。
 
 ---
 
-## 整体节奏建议
+## 节奏建议
 
 - **连读组**：
-  - A1 + A2 + A3 + A4（PPT 的 4 问是一条叙事弧，分开读会泄气）
-  - B1 + B2 + B3（怎么读 → §6 数据类型 → §7 抽象操作 是规范阅读的"线性入门"）
-  - B4 + B5（内部槽 → 执行上下文 是规范的"机器视角"双子章）
+  - P1.1 + P1.2 + P1.3（标准 30 年 → 现代版本 → 提案旅程，是一条完整故事弧）
+  - P2.1 + P2.2（设计基因要一口气讲完）
+  - P4 + P5（数据类型 → 抽象操作，是规范阅读的"线性入门"）
+  - P7.1 + P7.2（容器 → 执行上下文，规范的"机器视角"双子章）
 - **可独立跳读**：
-  - A5 生态现状可以单独看，作为新人入职 onboarding
-  - B6 提案旅程是一个独立 case study，不依赖前面任何 B 章
-- **建议阅读顺序**：
-  - 产品向工程师：A1 → A2 → A5（够用了）
-  - 框架/底层向工程师：A1-A4 全读 → B1 → B4 → B5
-  - TC39 兴趣 / 规范贡献者：A1 → B1-B6 全读
+  - P1.2 现代版本可以单独看，作为新人入职 onboarding
+  - P1.3 提案旅程是独立 case study
+  - P3 怎么读规范是元能力章，独立性强
+- **建议阅读路径**：
+  - 产品工程师：P1 全读 + P2 全读（够用了）
+  - 框架/底层工程师：P1-P2 全读 → P3 → P7 全读
+  - TC39 兴趣 / 规范贡献者：P1.1 → P3 → P4-P6 → P7
 
 ---
 
-# Track A · 历史脉络与设计（5 章）
+## 文件结构重组方案
 
-> 来自 PPT 的 4 问叙事脊柱，是"为什么 ECMAScript 长这样"的故事。也是 JS/TS/React 主题未来"补充章"的统一模板。
+旧结构（两轨）：
 
-## A1 · 标准发展史 ——「为什么存在？」
+```
+ecma/
+  01-history/                       (Track A · 5 章)
+    01-standards-history.html
+    02-design-principles.html
+    03-execution-model.html
+    04-async-evolution.html
+    05-modern-ecosystem.html
+  02-spec/                          (Track B · 6 章)
+    01-how-to-read.html
+    02-data-types.html
+    03-abstract-operations.html
+    04-internal-slots.html
+    05-execution-context.html
+    06-proposal-journey.html
+```
 
-- **定位**：PPT 第一章对应。讲清楚 ECMAScript 这个标准如何从"10 天写出的脚本"演化为今天 16 版的"通用编程语言标准"。
+新结构（7 阶段）：
+
+```
+ecma/
+  01-standards/                     (P1 · 标准与演化 · 3 章)
+    01-history.html                  ← 原 01-history/01-standards-history.html
+    02-modern-ecosystem.html         ← 原 01-history/05-modern-ecosystem.html
+    03-proposal-journey.html         ← 原 02-spec/06-proposal-journey.html
+  02-design/                        (P2 · 设计原则与灵感 · 2 章)
+    01-three-inspirations.html       ← 拆自 01-history/02-design-principles.html 上半
+    02-design-tradeoffs.html         ← 拆自 01-history/02-design-principles.html 下半
+  03-spec-reading/                  (P3 · 怎么读规范 · 1 章)
+    01-how-to-read.html              ← 原 02-spec/01-how-to-read.html
+  04-data-types/                    (P4 · §6 数据类型 · 1 章)
+    01-data-types.html               ← 原 02-spec/02-data-types.html
+  05-abstract-ops/                  (P5 · §7 抽象操作 · 1 章)
+    01-abstract-operations.html      ← 原 02-spec/03-abstract-operations.html
+  06-internal-slots/                (P6 · §10 内部槽 · 1 章)
+    01-internal-slots.html           ← 原 02-spec/04-internal-slots.html
+  07-execution/                     (P7 · §9 执行模型 · 4 章 · 三合一)
+    01-execution-model.html          ← 原 A3 · 执行模型基础（容器/上下文叙事）
+    02-spec-execution-context.html   ← 原 B5 · §9 规范精读（与 01 互补：narrative + spec）
+    03-event-loop-async.html         ← 原 A4 · Event Loop 与异步演进
+    04-modules-tla.html              ← 新建合成：A4 TLA 段 + B5 §9.10 Module Records
+```
+
+**P7 三合一**是最大的重构动作：原 Track A 的"机器怎么跑 / 单线程怎么并发"（叙事性）和 Track B §9（规范精读）讲的是同一组对象（Realm/Agent/Job），合并后按"对象族"拆 4 章，每章先叙事后规范，避免读者在两处看到同一概念。
+
+---
+
+# P1 · 标准与演化（3 章）
+
+> 这一阶段回答"ECMAScript 怎么走到今天的"。三章一条故事弧：发展史（已发生）→ 现代版本（现在该选什么）→ 提案旅程（未来怎么进来）。
+
+## P1.1 · 标准发展史
+
+- **定位**：讲清楚 ECMAScript 这个标准如何从"10 天写出的脚本"演化为今天 16 版的"通用编程语言标准"。
 - **关键知识点**：
   - **史前史（1995）**：Brendan Eich 在 Netscape 10 天写出 Mocha → LiveScript → 改名 JavaScript（蹭 Java 营销热度）
   - **第一阶段 · 1995-2004 · 标准化与僵局**：
@@ -99,7 +162,7 @@
   - **第三阶段 · 2015-至今 · 年度小步快跑**：
     - 2015-06：**ES2015 第 6 版**（class、let/const、模块、Promise、解构、箭头函数、Symbol、Iterator/Generator、Proxy/Reflect）—— 现代 JS 起点
     - **TC39 改革**：从"大爆炸式发布"切换为"年度发布 + Stage 流程"
-    - ES2016 → ES2025 共 10 个年度版本（详见 A5）
+    - ES2016 → ES2025 共 10 个年度版本（详见 P1.2）
     - 2024-06：ES2024 第 15 版（RegExp v flag、Promise.withResolvers、ArrayBuffer transfer）
     - 2025-06：ES2025 第 16 版（最新）
 - **底层逻辑要点**：
@@ -108,19 +171,88 @@
   - **JS 没有"版本号"，只有"宿主支持的 ES 子集"**：你写的 `??` 运算符在 Node 14- 跑不起来，不是因为"代码是 ES2020 的"，而是因为运行时引擎没有这个语法/runtime 表。
 - **应用场景**：
   - 老项目 polyfill 决策：搞清楚 corejs 和 babel-preset-env 的工作原理需要先理解"ES2015+ 是分散的特性集合，而不是一个版本"
-  - 团队定 baseline：根据用户浏览器市场份额选 ES 版本（A5 详述）
+  - 团队定 baseline：根据用户浏览器市场份额选 ES 版本（P1.2 详述）
   - 新人 onboarding：解释"为什么 JS 这么古怪"
 - **陷阱**：
   - ⚠️ **不存在"ES4"**（编辑号空缺）；提到 ES4 必标"abandoned"
   - ⚠️ ES2015 ≠ ES6 是同一个东西（年份命名取代序号命名是 TC39 改革的一部分）
   - 把 "JavaScript" 和 "ECMAScript" 当同义词（前者是商标 + 实现 + DOM，后者只是核心语言规范）
-- **关联章节**：A2（设计原则继承自 ES1）、A5（年度版本细节）、B1（规范怎么读）
+- **关联章节**：P2.1（设计原则继承自 ES1）、P1.2（年度版本细节）、P1.3（提案怎么进来）、P3（规范怎么读）
 - **预估字数**：5500-6500（含完整版本表）
 
-## A2 · 设计原则与语言特性 ——「它是什么？」
+## P1.2 · 现代生态与目标版本策略
 
-- **定位**：PPT 第二章对应，但内容**系统化扩展到 PPT 未覆盖的核心设计**。讲 ECMAScript 的"基因"：三大灵感来源、原型对象模型、动态弱类型、词法作用域、错误处理、迭代协议、模块系统等"从 ES1 到 ES2025 的核心设计决策"。
-- **与既有主题交叉的处理**：A2 涉及的所有具体机制（闭包、原型链、TDZ、Symbol 等）在 `javascript/` 都有详细章节。本章对每个机制做 **1-3 句话短重述 + 链回**，正文集中讲"为什么这样设计、当时有哪些选项、TC39 怎么选的"。
+- **定位**：实战章。把 P1.1 的"年度版本表"翻译成"团队怎么定 baseline、打包器怎么配、polyfill 怎么选"。
+- **关键知识点**：
+  - **ES2016-ES2025 全特性表**（按版本，每版核心特性）
+  - **打包器目标版本策略**：
+    - **客户端保守**：ES2020 baseline（可选链、空值合并、动态 import 已 99.9% 普及，面向公众 Web 应用）
+    - **客户端激进 / Electron**：ES2024 — bundle 更小，用户环境可控，top-level await 可用
+    - **服务端**：直接用 ES-Next 最新版（Node 22 LTS、Bun 全部支持，无需降级）
+  - **runtime feature detection**：caniuse、kangax compat-table、MDN BCD
+  - **polyfill vs transpile**：
+    - Babel / SWC 降语法（target 控制）
+    - core-js / regenerator-runtime 补 runtime API
+    - 区别：`?.` 是语法（必须 transpile）；`Array.prototype.at` 是 API（必须 polyfill）
+- **底层逻辑要点**：
+  - **"目标版本"决策不是技术问题，是产品问题**：取决于用户群分布。To B SaaS 可以 ES2024；toC 大众产品保守 ES2020。
+  - **Babel 的 `preset-env` + `core-js: 3` 是"按 browserslist 智能 polyfill"的事实标准**：理解 `.browserslistrc` 比改 Babel 配置重要。
+- **应用场景**：
+  - 团队 baseline 决策：根据 Sentry / Google Analytics 的浏览器分布数据
+  - 老项目升级：从 ES5 + Webpack 4 到 ES2020 + Vite 的迁移路径
+  - 写新库：决定 dist 的目标 ES 版本
+- **陷阱**：
+  - 把 polyfill 全打进主 bundle（没用 dynamic import）
+  - target 设太高导致老用户白屏（没监控 SyntaxError）
+  - 用 Stage 2 提案的语法（如 pipeline）—— 可能永远不进
+- **关联章节**：P1.1（版本历史）、P1.3（提案旅程）
+- **预估字数**：4500-5500
+
+## P1.3 · 提案旅程：从 Stage 0 到 §X（Case Study）
+
+- **定位**：综合实战章。**真实追踪一个特性从 Stage 0 到 §X 写入正文的完整路径**，让读者理解"提案怎么变成标准"。
+- **建议主线**：选 **Top-Level Await** 作为主 case（牵连 §9.10 + §27 + Module Records，内容丰富）+ **Records & Tuples** 作为反例（讲为什么卡 Stage 2 三年）。
+- **关键知识点**：
+  - **TC39 Stage 流程详解**：
+    - Stage 0 Strawperson（任何想法或讨论）
+    - Stage 1 Proposal（正式提案，问题 + 方案）
+    - Stage 2 Draft（首选方案，初始规范文本）
+    - Stage 3 Candidate（推荐实现，充分测试）
+    - Stage 4 Finished（≥2 引擎实现，纳入年度标准）
+  - **提案仓库结构**：README、explainer、polyfill、test262 case
+  - **Champion / Stage advancement requirements**
+  - **Spec text 编写**：`<emu-clause>` HTML、ecmarkup 工具
+  - **跨章节修改**：Top-Level Await 同时改了 §9.4、§9.10、§16、§27
+  - **实施 timeline**：V8 → SpiderMonkey → JSC → Node 集成
+  - **Stage 3 提案当前快照（写作时点）**：
+    - Records & Tuples（Stage 2，深 immutable，卡 3 年争议未决）
+    - Pipeline Operator `|>`（Stage 2，争议大）
+    - Decorator metadata（Stage 3，5.x 落地路径）
+    - Iterator Helpers（Stage 4 ES2025，已落地）
+    - Temporal（Stage 3，Date 替代品，浏览器 polyfill 中）
+- **底层逻辑要点**：
+  - **Stage 3 不等于"可以用"**：Stage 3 才能用 polyfill 实验，但浏览器原生还没；Stage 4 才能假设原生有。
+  - **规范修改是跨 clause 的**：一个特性常常牵动 §9（执行）、§16（脚本/模块）、§27（控制抽象）多个 clause——读 spec diff 比读 explainer 更接近真相。
+- **应用场景**：
+  - 想给 TC39 提 PR 的工程师入门
+  - 团队评估"要不要用 Stage 3 特性"时的决策框架
+  - 解释"为什么这个 polyfill 这样写"
+- **陷阱**：
+  - 以为 Stage 4 = 所有引擎已实现（其实是"≥2 个引擎"）
+  - 以为 polyfill 能 100% 还原原生行为（Top-Level Await 等无法 polyfill）
+- **关联章节**：P1.1、P1.2、P3、P7.4（TLA 落地的规范层细节）
+- **预估字数**：5500-6500
+
+---
+
+# P2 · 设计原则与灵感（2 章）
+
+> 这一阶段回答"JS 的基因是什么"。讲三大灵感来源、原型对象模型、动态弱类型、词法作用域、错误处理、迭代协议、模块系统等"从 ES1 到 ES2025 的核心设计决策"。
+> **与 `javascript/` 主题大量交叉**——本阶段对每个机制做 1-3 句话短重述 + 链回，正文聚焦"为什么这样设计、当时有哪些选项、TC39 怎么选的"。
+
+## P2.1 · 三大灵感与原型对象模型
+
+- **定位**：讲清楚 JS 的"基因图谱"——三大灵感来源是怎么塑造语言的，原型对象模型为什么是 JS 的核心。
 - **关键知识点**：
   - **三大灵感来源**（Eich 自述）：
     - **Self**：原型继承、对象 = 属性包（不是 class）
@@ -132,6 +264,25 @@
     - Shadowing 规则
     - `prototype` 属性 vs `[[Prototype]]` 内部槽（每个函数都有 `prototype`，每个对象都有 `[[Prototype]]`）
     - 函数即对象 + 函数的双重身份（`function f()` 同时是值和构造器）
+- **底层逻辑要点**：
+  - **JS 不是"类的 Java"，是"原型的 Self"**——理解这一点能解释 90% 的"奇怪"行为：为什么 `[].constructor === Array` 而不是某个 class metadata；为什么 `instanceof` 检查的是原型链而不是名义类型；为什么修改 `Array.prototype` 会影响所有数组（monkey patch）
+  - **ECMA-262 §4.3 自述**："originally designed to be used as a scripting language"——这句话解释了所有"宽容到出奇"的设计：自动分号插入、`==` 抽象相等、隐式转 string、对象自动装箱
+- **应用场景**：
+  - 给 Java/C# 工程师讲 JS：从"原型 vs 类"切入最有效
+  - 调试 `Object.getPrototypeOf` 链：理解 OrdinaryGet 的递归
+  - 老代码读懂"IIFE 模块模式"为什么这么写
+- **陷阱**：
+  - 把 `prototype` 和 `[[Prototype]]` 混为一谈
+  - 以为 `class` 是新引入的东西（其实是原型链 + 构造器的语法糖）
+- **关联章节**：
+  - JS 已有：`javascript/02-advanced/05-prototype`、`javascript/02-advanced/06-class`
+  - 内部：P2.2（其他设计决策）、P4（规范层 ToObject / Property Descriptor）、P6（OrdinaryGet 内部方法）
+- **预估字数**：3500-4000
+
+## P2.2 · 类型 / 作用域 / 错误 / 迭代 / 模块的设计权衡
+
+- **定位**：从 ES1 到 ES2025 的"设计决策清单"——为什么类型系统是动态弱类型、为什么用词法作用域、为什么 try/catch 直到 ES3 才进、为什么迭代协议在 ES2015 才统一。
+- **关键知识点**：
   - **类型系统**：
     - 8 个原始类型 + 引用类型
     - 装箱/拆箱（ToPrimitive / ToObject 的桥接）
@@ -140,180 +291,37 @@
   - **作用域与闭包**：
     - 词法作用域（Lexical Scope）vs 动态作用域
     - 闭包形成的本质：函数对象记住了创建时的 `[[Environment]]`
-    - **let/const 把"先声明后使用"从最佳实践变成语言强制约束**（PPT 标语）
+    - **let/const 把"先声明后使用"从最佳实践变成语言强制约束**
     - TDZ 是怎么从规范层落到引擎实现的
   - **表达式优先**：JS 的 statement 极少，绝大部分构造都是 expression（如 IIFE、三元、逗号）
-  - **错误处理设计**（PPT 未覆盖，规范层补全）：try/catch/finally 是 ES3 才加的（早期只有"出错就停"）；Error 类型层级；`throw` 任意值的容忍设计；ES2018 的 `try (error)` 可省略 binding；ES2022 的 Error.cause
-  - **迭代协议设计**（PPT 未覆盖，规范层补全）：`Symbol.iterator`、`@@iterator`、Iterator vs Iterable、ES2015 引入迭代协议是为了统一 `for...of` / spread / 解构 / `Map` 构造等多个特性的"取下一个"
-  - **模块系统设计**（PPT 未覆盖，规范层补全）：ES2015 ESM 的"静态结构"决策 vs CommonJS 的"运行时函数"——为什么 ESM 必须 top-level、为什么不能条件 import（除 dynamic import）、ES2022 Top-Level Await 的妥协
-  - **Symbol 与扩展点设计**：ES2015 引入 Symbol 不只是"unique key"，更是为了让语言提供"可扩展协议钩子"（@@toPrimitive、@@hasInstance、@@iterator、@@asyncIterator 等 well-known symbols）
+  - **错误处理设计**：try/catch/finally 是 ES3 才加的（早期只有"出错就停"）；Error 类型层级；`throw` 任意值的容忍设计；ES2018 的 `try (error)` 可省略 binding；ES2022 的 Error.cause
+  - **迭代协议设计**：`Symbol.iterator`、`@@iterator`、Iterator vs Iterable、ES2015 引入迭代协议是为了统一 `for...of` / spread / 解构 / `Map` 构造等多个特性的"取下一个"
+  - **模块系统设计**：ES2015 ESM 的"静态结构"决策 vs CommonJS 的"运行时函数"——为什么 ESM 必须 top-level、为什么不能条件 import（除 dynamic import）、ES2022 Top-Level Await 的妥协
+  - **Symbol 与扩展点设计**：ES2015 引入 Symbol 不只是"unique key"，更是为了让语言提供"可扩展协议钩子"（`@@toPrimitive`、`@@hasInstance`、`@@iterator`、`@@asyncIterator` 等 well-known symbols）
 - **底层逻辑要点**：
-  - **JS 不是"类的 Java"，是"原型的 Self"**——理解这一点能解释 90% 的"奇怪"行为：为什么 `[].constructor === Array` 而不是某个 class metadata；为什么 `instanceof` 检查的是原型链而不是名义类型；为什么修改 `Array.prototype` 会影响所有数组（monkey patch）
-  - **ECMA-262 §4.3 自述**："originally designed to be used as a scripting language"——这句话解释了所有"宽容到出奇"的设计：自动分号插入、`==` 抽象相等、隐式转 string、对象自动装箱
   - **`let/const` 的 TDZ 是规范层主动加的"安全网"**：底层是 lexical environment 在 `let x` 上把 binding 标记为 uninitialized，访问时检查 → 这不是 V8 的实现技巧，而是规范要求
   - **闭包不是"高级特性"，是函数 + 词法作用域的必然产物**：JS 没有"闭包功能"，闭包是规范文本写出来的副作用
+  - **迭代协议是"语言级 duck typing"**：任何对象只要实现 `[Symbol.iterator]() { return { next() { ... } } }` 就能用 `for...of`——这种用 well-known symbol 做扩展点的设计，是 JS 给 TC39 留的"未来 escape hatch"
 - **应用场景**：
-  - 给 Java/C# 工程师讲 JS：从"原型 vs 类"切入最有效
   - 调试 `this` 丢失：理解词法作用域和动态 `this` 的差异
-  - 老代码读懂"IIFE 模块模式"为什么这么写
+  - 自定义可迭代对象：实现 `[Symbol.iterator]` 让自家类型支持 `for...of`
+  - 写 ESM 库：理解为什么 named export 不能被条件 import
 - **陷阱**：
-  - 把 `prototype` 和 `[[Prototype]]` 混为一谈
-  - 以为 `class` 是新引入的东西（其实是原型链 + 构造器的语法糖）
   - 用 `==` 比较跨类型值
   - 在 var 时代踩 hoisting 坑后以为 let/const 也 hoist（其实 hoist 但 TDZ）
+  - 以为 ESM 的 import 是"运行时 require"（其实在 parse 阶段静态确定）
 - **关联章节**：
-  - JS 已有：`javascript/01-fundamentals/01-types`、`javascript/01-fundamentals/11-symbol`、`javascript/01-fundamentals/13-iterators`、`javascript/01-fundamentals/14-errors`、`javascript/02-advanced/02-closures`、`javascript/02-advanced/05-prototype`、`javascript/02-advanced/06-class`、`javascript/04-modules/01-esm`
-  - 内部：A3（执行上下文是这套设计的"机器化"）、B2（数据类型规范精确定义）
-- **预估字数**：6000-7000（系统化覆盖错误处理 / 迭代协议 / 模块系统 / Symbol 后增量）
-
-## A3 · 执行模型 ——「机器怎么跑？」
-
-- **定位**：PPT 第三章对应。把 A2 讲的"语言特性"翻译成"运行时机器结构"。**最难写的一章**——必须把 Realm / Agent / Job / ExecutionContext / EnvironmentRecord 这套规范术语讲透，否则后面 A4（异步）和 B5（spec 上下文章节）都没根。
-- **与既有主题交叉的处理**：作用域/闭包/this/strict mode 在 `javascript/02-advanced/` 已详述。本章对这些机制做 **1-3 句话短重述 + 链回**，正文聚焦在"规范层怎么定义这个机器、Host 与 ECMA-262 的责任划分"。
-- **关键知识点**：
-  - **三层容器**：
-    - **Agent**（≈ "线程"，主线程一个 Agent，每个 Worker 一个）：包含独立 Heap、Stack、Job Queue
-    - **Agent Cluster**：能共享 SharedArrayBuffer 的一组 Agent
-    - **Realm**（≈ "全局环境"）：每个 iframe / vm.createContext / Worker 一个 Realm，含独立的 `globalThis`、Intrinsics（`Array.prototype` 等）、global object
-    - **Job**：宿主投递给 Agent 的执行单元（脚本、Promise reaction、async 函数 step）
-  - **Execution Context**（执行上下文）：
-    - 函数调用栈的最小单元
-    - 内部槽：`[[Function]]` / `[[Realm]]` / `[[ScriptOrModule]]` / `LexicalEnvironment` / `VariableEnvironment` / `PrivateEnvironment` / `[[Generator]]`
-    - "running execution context"（栈顶）和"execution context stack"
-  - **Environment Record**（作用域链节点）：
-    - Declarative / Object / Function / Module / Global EnvironmentRecord 五种
-    - `[[OuterEnv]]` 链 = 词法作用域链
-    - `ResolveBinding` 抽象操作沿链查找
-  - **一次函数调用的完整生命周期**（PPT 精华页，章末小结）：
-    1. Agent + Realm 建立
-    2. 代码加载 + 全局执行（var hoisting / TDZ）
-    3. 函数调用 → 创建 ExecutionContext + LexicalEnvironment
-    4. 标识符解析（沿 OuterEnv 链）
-    5. 闭包形成（函数对象捕获 Environment）
-    6. 异步调度（Job Queue 投递）
-    7. 多 Agent 协同（Worker + postMessage）
-  - **strict mode 机制**（PPT 未覆盖，规范层补全）：`'use strict'` 不只是"严格模式"标志，规范层把 strict 信息存进 ExecutionContext 的 `[[Strict]]`、Reference Record 的 `[[Strict]]`，影响 `this` 默认值、`with`、`arguments` 同步、`delete` 行为、保留字。模块和 class body 自动 strict
-  - **生成器与协程的暂停机制**（PPT 未覆盖）：`yield` 是怎么"暂停"函数的——规范用 `[[Generator]]` 内部槽 + GeneratorContext 把 ExecutionContext "挂起"，恢复时把它压回栈顶。这是 async/await 的底层
-  - **模块加载与求值顺序**：`Source Text Module Record`、`[[CycleRoot]]`、async module 的 evaluation order（Top-Level Await 引入的复杂性）
-  - **Host 与 ECMA-262 的责任划分**：哪些是规范定义的（如 Job 抽象）、哪些是宿主实现的（如 setTimeout、I/O、UI 渲染）；HostEnqueuePromiseJob、HostMakeJobCallback、HostFinalizeImportMeta、HostResolveImportedModule 等 hook 的存在意义
-- **底层逻辑要点**：
-  - **JS 不是"单线程"——是"单 Agent 默认"**：浏览器主线程是一个 Agent，每个 Worker 是另一个 Agent。共享 Heap 仅在 Agent Cluster + SharedArrayBuffer 才发生。
-  - **闭包的实现 = 函数对象 + `[[Environment]]` 内部槽**：函数创建时把当前 LexicalEnvironment 存到 `[[Environment]]`；调用时这个 Env 成为新 Context 的 outer。这就是为什么内层函数能访问外层变量。
-  - **var 的 hoisting 不是"编译时把声明搬到顶部"**：是函数调用时 `FunctionDeclarationInstantiation` 算法**在执行上下文创建阶段**把 var 名预先 bind 到 VariableEnvironment 上。规范层根本不存在"搬运"这个动作。
-  - **Realm 隔离是 iframe / vm context 的本质**：跨 Realm 的 `Array` 不是同一个 `Array`，所以 `[] instanceof Array` 在跨 iframe 时会 false——这是"为什么 lodash 用 `Array.isArray`"的根因。
-- **应用场景**：
-  - 调试闭包内存泄漏：理解 `[[Environment]]` 引用为什么挂住整个外层 scope
-  - Node `vm` 模块写沙箱：每个 vm context 是新 Realm
-  - jsdom / happy-dom 测试环境：每个测试一个 Realm
-- **陷阱**：
-  - 以为函数有"this 作用域"（this 不在 LexicalEnvironment 里，在 ExecutionContext 上）
-  - 以为闭包"复制"了变量（其实共享 Environment Record 的同一个 binding）
-  - 跨 Realm 用 instanceof
-  - 把"call stack"和"execution context stack"混为一谈（前者是 V8 实现术语，后者是规范术语）
-- **关联章节**：
-  - JS 已有：`javascript/02-advanced/01-scope-tdz`、`javascript/02-advanced/02-closures`、`javascript/02-advanced/03-this`、`javascript/01-fundamentals/13-iterators`（生成器）、`javascript/04-modules/01-esm`（模块求值）
-  - 内部：A4（异步是 Job 在 Agent 上的调度）、B5（规范怎么写这套机器）
-- **预估字数**：7000-8000（**最难章，含一次调用生命周期完整图 + strict mode + 生成器暂停 + Host hook 划分**）
-
-## A4 · 异步演进 ——「单线程怎么并发？」
-
-- **定位**：PPT 第四章对应。讲 ECMAScript 异步模型从"回调"到"Promise"到"async/await"再到"多线程"的演进路径。**与 `javascript/03-async/` 高度交叉**——本章对每个机制做 **1-3 句话短重述 + 链回**，正文聚焦"为什么这样演进、规范层怎么改、各 ES 版本的取舍"。
-- **PPT 未覆盖、本章补全**：异步迭代器（`for await...of` + async generator）、AbortController 与可取消异步、async 函数的错误传播规则、Top-Level Await 的死锁检测、`Promise.try`（Stage 3 提案）、async dispose（ES2025 `await using`）。
-- **关键知识点**：
-  - **回调时代（ES1-5）**：setTimeout / setImmediate / Node-style callback / 回调地狱
-  - **Event Loop 的责任划分**：
-    - **HTML 规范**定义 task source、rendering steps、宏任务（setTimeout、I/O、UI）
-    - **ECMA-262 规范**定义 Job 抽象、HostEnqueuePromiseJob、microtask queue
-    - 浏览器的 "macrotask vs microtask" 是两份规范的合集
-  - **Promise（ES2015）**：
-    - 状态机：pending → fulfilled / rejected（**不可逆**）
-    - 解决 vs settle：`resolve(p)` 时外层 resolved 但未 settled
-    - PromiseReaction Records（规范层）
-  - **Promise 组合器**：`Promise.all`（短路失败）、`Promise.race`（短路任意 settle）、`Promise.any`（ES2021，短路成功）、`Promise.allSettled`（ES2020，全收集）、`Promise.withResolvers`（ES2024）
-  - **async/await（ES2017）**：
-    - Generator + Promise 的语法糖
-    - 隐式 try/catch（await 表达式抛错变 reject）
-    - Top-Level Await（ES2022 模块）
-  - **多线程突破口**：
-    - Worker（HTML 规范）→ 独立 Agent + 独立 Heap
-    - SharedArrayBuffer（ES2017，Spectre 后被禁，2020 配合 COOP/COEP 重启）
-    - Atomics（ES2017）
-  - **异步迭代器与 async generator**（PPT 未覆盖）：`Symbol.asyncIterator`、`for await...of`、async function* —— 处理 SSE / 文件流 / 分页 API 的官方答案
-  - **AbortController 与可取消异步**（PPT 未覆盖）：DOM 规范引入、ES 端通过 Promise reject 表达；为什么 ECMA-262 不直接定义"cancel"——与 Promise 不可逆性的设计张力
-  - **async 错误传播规则**（PPT 未覆盖）：await 表达式抛错 → reject；finally 在 await 链中的语义；UnhandledPromiseRejection 的 host hook
-  - **Top-Level Await 的死锁检测**（ES2022）：cycle + async module 组合时，规范如何检测并抛 SyntaxError / 运行时挂起
-  - **资源管理：`using` / `await using`**（ES2025）：`Symbol.dispose` / `Symbol.asyncDispose`、栈式资源释放——异步资源的 RAII 答案
-- **底层逻辑要点**：
-  - **JS 单线程的根因不是 ECMA-262 规定，是 HTML/DOM 设计**：DOM 不是线程安全的；如果 JS 多线程，UI 就要锁。Worker 是"用 message passing 绕过共享状态"的折中。
-  - **Promise 不是异步，是"延迟值"的容器**：你可以用 Promise 包同步值，then 仍然异步执行（HostEnqueuePromiseJob）——这才是 Promise 的核心抽象。
-  - **微任务优先于宏任务的根因**：HTML 规范要求"每个宏任务执行完后清空 microtask queue 再继续"——这是为了让 Promise.then 在同一帧内连续调度，避免 UI 抖动。
-  - **async/await 不是"暂停函数"，是 Generator 的状态机**：编译产物把每个 await 切成一个状态，await 后续代码作为 .then 回调注册。理解这点才能调试"为什么 async 函数 stack trace 不连续"。
-  - **SharedArrayBuffer 是 JS 第一次真正引入"共享内存"**：Atomics 提供原子操作（Atomics.wait/notify），打开了多线程计算密集型应用的可能性（守护进程、计算密集）。
-- **应用场景**：
-  - 排队/限流：手写 PQueue 或读 p-limit 源码
-  - 取消异步：AbortController 与 Promise 不可逆性的张力
-  - 异步迭代器：`for await...of` + async generator（处理 SSE / fs streams）
-  - WebGPU compute / FFmpeg.wasm：靠 SharedArrayBuffer + Atomics
-- **陷阱**：
-  - `await` 不在 async 函数里抛 `SyntaxError`（除非 Top-Level Await 模块）
-  - `Promise.all` 一个失败短路其他还在跑（资源泄漏）
-  - microtask 死循环把 UI 卡死（每个 then 又投递新 microtask）
-  - SharedArrayBuffer 跨 origin 必须 COOP/COEP 头
-  - async 函数返回 Promise 但抛错变 reject（不会冒泡到外层 try/catch）
-- **关联章节**：
-  - JS 已有：`javascript/03-async/*`（全部 8 章）
-  - 内部：A3（Job 在 Agent 上的调度）、B5（HostEnqueuePromiseJob）
-- **预估字数**：6500-7500（系统化补全 async iterator / AbortController / `using` / Top-Level Await 死锁后增量）
-
-## A5 · 现代生态 ——「我今天该用什么版本？」
-
-- **定位**：实战章。把 A1 的"年度版本表"翻译成"团队怎么定 baseline、打包器怎么配、polyfill 怎么选"。**不是 PPT 原内容**，是补充给现代工程师的实操章。
-- **关键知识点**：
-  - **TC39 Stage 流程详解**：
-    - Stage 0 Strawperson（任何想法或讨论）
-    - Stage 1 Proposal（正式提案，问题 + 方案）
-    - Stage 2 Draft（首选方案，初始规范文本）
-    - Stage 3 Candidate（推荐实现，充分测试）
-    - Stage 4 Finished（≥2 引擎实现，纳入年度标准）
-  - **ES2016-ES2025 全特性表**（按版本）
-  - **打包器目标版本策略**（PPT slide 8）：
-    - **客户端保守**：ES2020 baseline（可选链、空值合并、动态 import 已 99.9% 普及，面向公众 Web 应用）
-    - **客户端激进 / Electron**：ES2024 — bundle 更小，用户环境可控，top-level await 可用
-    - **服务端**：直接用 ES-Next 最新版（Node 22 LTS、Bun 全部支持，无需降级）
-  - **runtime feature detection**：caniuse、kangax compat-table、MDN BCD
-  - **polyfill vs transpile**：
-    - Babel / SWC 降语法（target 控制）
-    - core-js / regenerator-runtime 补 runtime API
-    - 区别：`?.` 是语法（必须 transpile）；`Array.prototype.at` 是 API（必须 polyfill）
-  - **Stage 3 提案当前快照（写作时点）**：
-    - Records & Tuples（Stage 2，深 immutable，卡 3 年争议未决）
-    - Pipeline Operator `|>`（Stage 2，争议大）
-    - Decorator metadata（Stage 3，5.x 落地路径）
-    - Iterator Helpers（Stage 4 ES2025，已落地）
-    - Temporal（Stage 3，Date 替代品，浏览器 polyfill 中）
-- **底层逻辑要点**：
-  - **"目标版本"决策不是技术问题，是产品问题**：取决于用户群分布。To B SaaS 可以 ES2024；toC 大众产品保守 ES2020。
-  - **Stage 3 不等于"可以用"**：Stage 3 才能用 polyfill 实验，但浏览器原生还没；Stage 4 才能假设原生有。
-  - **Babel 的 `preset-env` + `core-js: 3` 是"按 browserslist 智能 polyfill"的事实标准**：理解 .browserslistrc 比改 Babel 配置重要。
-- **应用场景**：
-  - 团队 baseline 决策：根据 Sentry / Google Analytics 的浏览器分布数据
-  - 老项目升级：从 ES5 + Webpack 4 到 ES2020 + Vite 的迁移路径
-  - 写新库：决定 dist 的目标 ES 版本
-- **陷阱**：
-  - 把 polyfill 全打进主 bundle（没用 dynamic import）
-  - target 设太高导致老用户白屏（没监控 SyntaxError）
-  - 用 Stage 2 提案的语法（如 pipeline）—— 可能永远不进
-- **关联章节**：
-  - 内部：A1（版本历史）、B6（提案旅程 case study）
-- **预估字数**：4500-5500
+  - JS 已有：`javascript/01-fundamentals/01-types`、`javascript/01-fundamentals/11-symbol`、`javascript/01-fundamentals/13-iterators`、`javascript/01-fundamentals/14-errors`、`javascript/02-advanced/02-closures`、`javascript/04-modules/01-esm`
+  - 内部：P2.1、P5（ToPrimitive / ToObject 算法）、P7.2（执行上下文是这套设计的"机器化"）、P7.4（模块求值）
+- **预估字数**：4000-5000
 
 ---
 
-# Track B · ECMA-262 规范精读（6 章）
+# P3 · 怎么读规范（1 章）
 
-> 教读者把 800 页规范读懂的"元能力"。**不复述语言特性**——那是 `javascript/` 的工作。本轨只讲"规范的语法糖"。
+> 这一阶段是规范阅读的"元能力训练"——读懂规范本身的"语法"。是后续 P4-P7 的入门钥匙。
 
-## B1 · 怎么读规范 —— 元能力训练
+## P3.1 · 规范阅读元能力
 
 - **定位**：规范阅读入门。读懂规范本身的"语法"。
 - **关键知识点**：
@@ -324,7 +332,7 @@
   - **抽象操作（Abstract Operations）的命名约定**：CamelCase 是用户可见的（`Array.from`），无前缀的是规范内部（`ToObject`、`OrdinaryGet`）
   - **算法步骤记法**：
     - "1. Let _x_ be ..." → 局部变量
-    - "If _x_ is ...,then ..." → 条件
+    - "If _x_ is ..., then ..." → 条件
     - "Assert: ..." → 不变量声明，违反是规范 bug
     - "? GetV(...)" → 简写，等价于 `let result = GetV(...); if (result is abrupt completion) return result`
     - "! GetV(...)" → 断言不会 throw
@@ -341,9 +349,16 @@
   - 跳过 §5 记法约定直接读 §6 → 后面看不懂"? Op()"
   - 把 Annex B 当主规范（写出非 web 环境跑不了的代码）
 - **延伸阅读**：[TC39 How We Work](https://tc39.es/process-document/)、[Spec Test 262](https://github.com/tc39/test262)
+- **关联章节**：P1.3（提案旅程也用规范工具）、P4-P7（具体应用）
 - **预估字数**：4000-5000
 
-## B2 · 数据类型与值（§6）
+---
+
+# P4 · §6 数据类型与值（1 章）
+
+> 这一阶段把规范内部的"类型系统"讲透——不只是用户可见的 8 种 Language Type，更是规范内部的 Reference Record / Completion Record 等"幕后角色"。
+
+## P4.1 · 数据类型与值（§6）
 
 - **定位**：覆盖 ECMA-262 §6.1（Language Types）+ §6.2（Specification Types）。
 - **关键知识点**：
@@ -352,7 +367,7 @@
     - **Reference Record**（旧名 Reference Type）—— `obj.x` 表达式的中间结果，含 `[[Base]]`、`[[ReferencedName]]`、`[[Strict]]`
     - **Completion Record** —— 所有抽象操作的返回类型，含 `[[Type]]`(normal/break/continue/return/throw)、`[[Value]]`、`[[Target]]`
     - **Property Descriptor** —— `Object.getOwnPropertyDescriptor` 暴露的就是它
-    - **Environment Record** —— 见 A3 / B5
+    - **Environment Record** —— 见 P7.2
     - **Abstract Closure** —— 规范内部的"匿名函数"
     - **Data Block / Shared Data Block** —— ArrayBuffer / SharedArrayBuffer 的规范表达
   - **Number 内部**：double-precision IEEE-754、`+0` vs `-0`、NaN 不等于自己、Number.EPSILON
@@ -370,12 +385,18 @@
   - 误以为 `String.length` 是字符数（其实是 UTF-16 unit 数）
   - 用 `===` 区分 `+0`/`-0`（其实相等，要用 `Object.is`）
   - 不知道 Reference Record，看不懂"为什么 `(0, obj.x)()` 丢失 this"
-- **关联章节**：A2、B3
+- **关联章节**：P2.2、P5
 - **预估字数**：4500-5500
 
-## B3 · 抽象操作与算法记法（§5、§7）
+---
 
-- **定位**：把 §7 的核心抽象操作（type conversion、testing、object operations、operations on iterators）讲透。
+# P5 · §7 抽象操作（1 章）
+
+> 这一阶段把 §7 的核心抽象操作（type conversion、testing、object operations、operations on iterators）讲透。
+
+## P5.1 · 抽象操作与算法记法（§5、§7）
+
+- **定位**：把 §7 的核心抽象操作讲透。
 - **关键知识点**：
   - **类型转换族**：
     - `ToPrimitive(input [, hint])` —— `==`、`+` 的核心
@@ -400,12 +421,18 @@
 - **陷阱**：
   - 用 `==` 期望"宽松相等"（结果跟 ToPrimitive 顺序相关）
   - 写 `Number(undefined)` 期望 0（其实 NaN）
-- **关联章节**：A2、B2
+- **关联章节**：P2.2、P4
 - **预估字数**：4000-5000
 
-## B4 · 内部槽与内部方法（§6.1.7、§10）
+---
 
-- **定位**：覆盖对象的 essential internal methods（`[[GetPrototypeOf]]` / `[[Get]]` / `[[Set]]` 等 11 个）+ ordinary vs exotic 区分。
+# P6 · §10 内部槽与方法（1 章）
+
+> 这一阶段覆盖对象的 essential internal methods + ordinary vs exotic 区分。Proxy 的本质就在这里。
+
+## P6.1 · 内部槽与内部方法（§6.1.7、§10）
+
+- **定位**：覆盖对象的 11 个 essential internal methods + ordinary vs exotic 区分。
 - **关键知识点**：
   - **11 个 essential internal methods**：`[[GetPrototypeOf]]` / `[[SetPrototypeOf]]` / `[[IsExtensible]]` / `[[PreventExtensions]]` / `[[GetOwnProperty]]` / `[[DefineOwnProperty]]` / `[[HasProperty]]` / `[[Get]]` / `[[Set]]` / `[[Delete]]` / `[[OwnPropertyKeys]]`
   - **Ordinary Object** —— 默认实现（OrdinaryGet 等），属性表是 List + 原型链委托
@@ -430,84 +457,176 @@
 - **陷阱**：
   - 把 Proxy 当"hook"用（其实任何 trap 不实现都要回落 ordinary，行为可能反直觉）
   - 用 `Object.assign` 复制 Array 当作 deep clone（exotic 行为不复制）
-- **关联章节**：A2、B5
+- **关联章节**：P2.1（原型对象模型）、P7.2（function 内部槽）
 - **预估字数**：4500-5500
 
-## B5 · 可执行代码与执行上下文（§9）
+---
 
-- **定位**：覆盖 §9（Executable Code and Execution Contexts）的全部子章节。**与 A3 视角不同**：A3 是"语言机制"，B5 是"规范层数据结构"——讲 §9 怎么把这套机制写成 algorithm steps。
+# P7 · §9 执行模型与并发（4 章 · 三合一）
+
+> 这一阶段把 ECMAScript 的"运行时机器"讲透——Realm / Agent / Job / Execution Context / Environment Record / Event Loop / 模块求值 全部覆盖。
+>
+> **三合一设计**：原 Track A 的"机器怎么跑 / 单线程怎么并发"（叙事）和 Track B §9（规范）讲的是同一组对象。本阶段不再分两版，按对象族拆 4 章，每章先从机制叙事切入，再展开规范字段。
+>
+> 与 `javascript/02-advanced/` 和 `javascript/03-async/` 高度交叉——本阶段对每个机制做 1-3 句话短重述 + 链回，正文聚焦"规范层怎么定义这个机器、Host 与 ECMA-262 的责任划分"。
+
+## P7.1 · 三层容器：Realm / Agent / Job
+
+- **定位**：覆盖 §9.3 Realms、§9.5 Agents、§9.6 Agent Clusters、§9.8 Jobs。**最难写的章之一**——Realm/Agent/Job 一旦讲不清，后续三章都没根。
 - **关键知识点**：
-  - **§9.1 Environment Records** —— Declarative / Object / Function / Module / Global EnvironmentRecord 五种的方法签名
-  - **§9.2 PrivateEnvironment Records** —— class private fields 的作用域链
-  - **§9.3 Realms** —— `[[Intrinsics]]` 表（每个 Realm 一份 `Array.prototype`）、`[[GlobalObject]]`、`[[GlobalEnv]]`
-  - **§9.4 Execution Contexts** —— stack 数据结构、running execution context
-  - **§9.5 Agents** —— `[[CanBlock]]` / `[[Signifier]]` / `[[IsLockFree1]]` / `[[CandidateExecution]]`
-  - **§9.6 Agent Clusters**
-  - **§9.7 Forward Progress**
-  - **§9.8 Jobs and Host Operations to Enqueue Jobs** —— HostEnqueuePromiseJob、HostEnqueueGenericJob、HostEnqueueTimeoutJob
+  - **三层容器**：
+    - **Agent**（≈ "线程"，主线程一个 Agent，每个 Worker 一个）：包含独立 Heap、Stack、Job Queue。`[[CanBlock]]` / `[[Signifier]]` / `[[IsLockFree1]]` / `[[CandidateExecution]]`
+    - **Agent Cluster**：能共享 SharedArrayBuffer 的一组 Agent
+    - **Realm**（≈ "全局环境"）：每个 iframe / vm.createContext / Worker 一个 Realm，含独立的 `globalThis`、Intrinsics（`Array.prototype` 等）、global object。`[[Intrinsics]]` 表 / `[[GlobalObject]]` / `[[GlobalEnv]]`
+    - **Job**：宿主投递给 Agent 的执行单元（脚本、Promise reaction、async 函数 step）
+  - **§9.7 Forward Progress** —— 规范层对"任务必须最终完成"的语义保证
+  - **§9.8 Jobs and Host Operations to Enqueue Jobs**：HostEnqueuePromiseJob、HostEnqueueGenericJob、HostEnqueueTimeoutJob
   - **§9.9 InitializeHostDefinedRealm**
-  - **§9.10 Source Text Module Records** —— ESM 的规范层（cycle handling、async module evaluation order）
-- **底语逻辑要点**：
-  - **§9 是规范里"机器视角"最浓的一章**：把 A3 讲的所有概念都翻成规范字段。
-  - **Host Hooks 是规范层暴露给宿主（浏览器、Node）的扩展点**：`HostMakeJobCallback` / `HostPromiseRejectionTracker` / `HostFinalizeImportMeta` 等——这些 hook 决定了"为什么浏览器和 Node 行为不一样"。
-  - **Module evaluation 是 ECMA-262 中最复杂的算法之一**：cycle 检测 + async module + top-level await 三者交织。
+  - **Host 与 ECMA-262 的责任划分**：哪些是规范定义的（如 Job 抽象）、哪些是宿主实现的（如 setTimeout、I/O、UI 渲染）
+- **底层逻辑要点**：
+  - **JS 不是"单线程"——是"单 Agent 默认"**：浏览器主线程是一个 Agent，每个 Worker 是另一个 Agent。共享 Heap 仅在 Agent Cluster + SharedArrayBuffer 才发生。
+  - **Realm 隔离是 iframe / vm context 的本质**：跨 Realm 的 `Array` 不是同一个 `Array`，所以 `[] instanceof Array` 在跨 iframe 时会 false——这是"为什么 lodash 用 `Array.isArray`"的根因。
+  - **Job 是规范层抽象，microtask 是浏览器实现**：Job 包含很多种（PromiseJob / CleanupFinalizationRegistry / async function step），microtask 是"PromiseJob + 类似物"的浏览器侧名称。
+- **应用场景**：
+  - Node `vm` 模块写沙箱：每个 vm context 是新 Realm
+  - jsdom / happy-dom 测试环境：每个测试一个 Realm
+  - 写跨 Worker 通信库：理解 Agent Cluster 的边界
+- **陷阱**：
+  - 跨 Realm 用 `instanceof`
+  - 把 Job 等同于 microtask（其实 Job 包含很多种）
+  - 以为 Realm 之间共享 Intrinsics（其实独立）
+- **关联章节**：P7.2（Execution Context 在 Agent 上跑）、P7.3（Event Loop 调度 Job）、P2.1（原型对象模型每个 Realm 一份）
+- **预估字数**：5000-6000
+
+## P7.2 · Execution Context 与 Environment Record
+
+- **定位**：覆盖 §9.1 Environment Records、§9.2 PrivateEnvironment Records、§9.4 Execution Contexts。**这是"作用域链"和"调用栈"的规范字段化**。
+- **关键知识点**：
+  - **Execution Context**（执行上下文）：
+    - 函数调用栈的最小单元
+    - 内部槽：`[[Function]]` / `[[Realm]]` / `[[ScriptOrModule]]` / `LexicalEnvironment` / `VariableEnvironment` / `PrivateEnvironment` / `[[Generator]]`
+    - "running execution context"（栈顶）和"execution context stack"
+  - **Environment Record**（作用域链节点）：
+    - Declarative / Object / Function / Module / Global EnvironmentRecord 五种
+    - `[[OuterEnv]]` 链 = 词法作用域链
+    - `ResolveBinding` 抽象操作沿链查找
+  - **PrivateEnvironment Records** —— class private fields 的作用域链
+  - **strict mode 机制**：`'use strict'` 不只是"严格模式"标志，规范层把 strict 信息存进 ExecutionContext 的 `[[Strict]]`、Reference Record 的 `[[Strict]]`，影响 `this` 默认值、`with`、`arguments` 同步、`delete` 行为、保留字。模块和 class body 自动 strict
+  - **生成器与协程的暂停机制**：`yield` 是怎么"暂停"函数的——规范用 `[[Generator]]` 内部槽 + GeneratorContext 把 ExecutionContext "挂起"，恢复时把它压回栈顶。这是 async/await 的底层
+  - **一次函数调用的完整生命周期**（章末小结，文字版流程图）：
+    1. Agent + Realm 建立
+    2. 代码加载 + 全局执行（var hoisting / TDZ）
+    3. 函数调用 → 创建 ExecutionContext + LexicalEnvironment
+    4. 标识符解析（沿 OuterEnv 链）
+    5. 闭包形成（函数对象捕获 Environment）
+    6. 异步调度（Job Queue 投递，详见 P7.3）
+    7. 多 Agent 协同（Worker + postMessage，详见 P7.1）
+- **底层逻辑要点**：
+  - **闭包的实现 = 函数对象 + `[[Environment]]` 内部槽**：函数创建时把当前 LexicalEnvironment 存到 `[[Environment]]`；调用时这个 Env 成为新 Context 的 outer。这就是为什么内层函数能访问外层变量。
+  - **var 的 hoisting 不是"编译时把声明搬到顶部"**：是函数调用时 `FunctionDeclarationInstantiation` 算法**在执行上下文创建阶段**把 var 名预先 bind 到 VariableEnvironment 上。规范层根本不存在"搬运"这个动作。
+  - **TDZ 是 Declarative EnvironmentRecord 的"uninitialized binding" 状态**：let 声明创建 binding 但不初始化；访问触发 ReferenceError。这是规范明确写的，不是 V8 实现技巧。
+- **应用场景**：
+  - 调试闭包内存泄漏：理解 `[[Environment]]` 引用为什么挂住整个外层 scope
+  - 调试 class private field 跨 instance 访问
+  - 理解 generator 暂停/恢复的内存模型
+- **陷阱**：
+  - 以为函数有"this 作用域"（this 不在 LexicalEnvironment 里，在 ExecutionContext 上）
+  - 以为闭包"复制"了变量（其实共享 Environment Record 的同一个 binding）
+  - 把"call stack"和"execution context stack"混为一谈（前者是 V8 实现术语，后者是规范术语）
+- **关联章节**：
+  - JS 已有：`javascript/02-advanced/01-scope-tdz`、`javascript/02-advanced/02-closures`、`javascript/02-advanced/03-this`、`javascript/01-fundamentals/13-iterators`（生成器）
+  - 内部：P7.1、P7.3、P6（function 内部槽）
+- **预估字数**：5500-6500（**最难章 · 含一次调用生命周期完整流程**）
+
+## P7.3 · Event Loop 与异步演进
+
+- **定位**：覆盖 ECMAScript 异步模型从"回调"到"Promise"到"async/await"再到"多线程"的演进路径，外加 §9.7-§9.8 的规范字段。**与 `javascript/03-async/` 高度交叉**——对每个机制做 1-3 句话短重述 + 链回，正文聚焦"为什么这样演进、规范层怎么改、各 ES 版本的取舍"。
+- **关键知识点**：
+  - **回调时代（ES1-5）**：setTimeout / setImmediate / Node-style callback / 回调地狱
+  - **Event Loop 的责任划分**：
+    - **HTML 规范**定义 task source、rendering steps、宏任务（setTimeout、I/O、UI）
+    - **ECMA-262 规范**定义 Job 抽象、HostEnqueuePromiseJob、microtask queue
+    - 浏览器的 "macrotask vs microtask" 是两份规范的合集
+  - **Promise（ES2015）**：
+    - 状态机：pending → fulfilled / rejected（**不可逆**）
+    - 解决 vs settle：`resolve(p)` 时外层 resolved 但未 settled
+    - PromiseReaction Records（规范层）
+  - **Promise 组合器**：`Promise.all`（短路失败）、`Promise.race`（短路任意 settle）、`Promise.any`（ES2021，短路成功）、`Promise.allSettled`（ES2020，全收集）、`Promise.withResolvers`（ES2024）、`Promise.try`（Stage 3）
+  - **async/await（ES2017）**：
+    - Generator + Promise 的语法糖
+    - 隐式 try/catch（await 表达式抛错变 reject）
+  - **多线程突破口**：
+    - Worker（HTML 规范）→ 独立 Agent + 独立 Heap
+    - SharedArrayBuffer（ES2017，Spectre 后被禁，2020 配合 COOP/COEP 重启）
+    - Atomics（ES2017）
+  - **异步迭代器与 async generator**：`Symbol.asyncIterator`、`for await...of`、async function* —— 处理 SSE / 文件流 / 分页 API 的官方答案
+  - **AbortController 与可取消异步**：DOM 规范引入、ES 端通过 Promise reject 表达；为什么 ECMA-262 不直接定义"cancel"——与 Promise 不可逆性的设计张力
+  - **async 错误传播规则**：await 表达式抛错 → reject；finally 在 await 链中的语义；UnhandledPromiseRejection 的 host hook（HostPromiseRejectionTracker）
+  - **资源管理：`using` / `await using`**（ES2025）：`Symbol.dispose` / `Symbol.asyncDispose`、栈式资源释放——异步资源的 RAII 答案
+- **底层逻辑要点**：
+  - **JS 单线程的根因不是 ECMA-262 规定，是 HTML/DOM 设计**：DOM 不是线程安全的；如果 JS 多线程，UI 就要锁。Worker 是"用 message passing 绕过共享状态"的折中。
+  - **Promise 不是异步，是"延迟值"的容器**：你可以用 Promise 包同步值，then 仍然异步执行（HostEnqueuePromiseJob）——这才是 Promise 的核心抽象。
+  - **微任务优先于宏任务的根因**：HTML 规范要求"每个宏任务执行完后清空 microtask queue 再继续"——这是为了让 `Promise.then` 在同一帧内连续调度，避免 UI 抖动。
+  - **async/await 不是"暂停函数"，是 Generator 的状态机**：编译产物把每个 await 切成一个状态，await 后续代码作为 .then 回调注册。理解这点才能调试"为什么 async 函数 stack trace 不连续"。
+- **应用场景**：
+  - 排队/限流：手写 PQueue 或读 p-limit 源码
+  - 取消异步：AbortController 与 Promise 不可逆性的张力
+  - 异步迭代器：`for await...of` + async generator（处理 SSE / fs streams）
+  - WebGPU compute / FFmpeg.wasm：靠 SharedArrayBuffer + Atomics
+- **陷阱**：
+  - `await` 不在 async 函数里抛 `SyntaxError`（除非 Top-Level Await 模块）
+  - `Promise.all` 一个失败短路其他还在跑（资源泄漏）
+  - microtask 死循环把 UI 卡死（每个 then 又投递新 microtask）
+  - SharedArrayBuffer 跨 origin 必须 COOP/COEP 头
+  - async 函数返回 Promise 但抛错变 reject（不会冒泡到外层 try/catch）
+- **关联章节**：
+  - JS 已有：`javascript/03-async/*`（全部 8 章）
+  - 内部：P7.1（Job 在 Agent 上调度）、P7.4（Top-Level Await 死锁）
+- **预估字数**：6000-7000（系统化补全 async iterator / AbortController / `using` 后增量）
+
+## P7.4 · 模块系统与 Top-Level Await
+
+- **定位**：覆盖 §9.10 Source Text Module Records 的全部子章节 + ES2022 Top-Level Await 的规范层细节。
+- **关键知识点**：
+  - **Source Text Module Record** —— ESM 的规范层数据结构
+  - **Module 加载三阶段**：Parse → Link → Evaluate（规范层 `LoadRequestedModules` / `Link` / `Evaluate`）
+  - **`[[CycleRoot]]`** —— 循环依赖的规范处理
+  - **Async Module Evaluation Order**：Top-Level Await 引入的复杂性
+  - **Top-Level Await 死锁检测**：cycle + async module 组合时，规范如何检测并抛 SyntaxError / 运行时挂起
+  - **Host hooks**：HostResolveImportedModule / HostFinalizeImportMeta / HostLoadImportedModule / HostImportModuleDynamically
+  - **Module Namespace Object** —— `import * as ns` 的规范产物（exotic object，frozen）
+- **底层逻辑要点**：
+  - **ESM 的"静态结构"是规范级承诺**：parse 阶段就能确定 import/export 关系，这让 tree-shaking、live binding、cycle detection 都成为可能。
+  - **Top-Level Await 的死锁 vs 挂起**：cycle 中两个 async module 互相 await 对方 → 规范要求挂起（不报错），靠宿主的 timeout / unhandled rejection 检测。
+  - **import.meta 的 host hook 设计**：规范不规定 `import.meta` 长什么样，由宿主（Browser / Node）填——这就是为什么 `import.meta.url` 在 Node 是 file:// 而在 Browser 是 https://。
 - **应用场景**：
   - 写 Node 内置模块 hook（`--experimental-loader`）需要懂 HostResolveImportedModule
   - 调试 Top-Level Await 死锁（cycle + async）
   - 给 jsdom / linkedom 等 DOM 实现写 polyfill
 - **陷阱**：
-  - 把 Job 等同于 microtask（其实 Job 包含很多种，microtask 是"PromiseJob + 类似物"的简称）
-  - 以为 Realm 之间共享 Intrinsics（其实独立）
-- **关联章节**：A3、A4
-- **预估字数**：5500-6500（**最难章之一**）
-
-## B6 · 提案 → 标准的旅程（Case Study）
-
-- **定位**：综合实战章。**真实追踪一个特性从 Stage 0 到 §X 写入正文的完整路径**，让读者把 B1-B5 的"工具"用一遍。
-- **候选 case**：
-  - **Promise**（已 Stage 4，2015 进 §27.2）—— 历史价值高
-  - **async/await**（已 Stage 4，2017 进 §15.8）—— 多步演化（Generator → async）
-  - **Top-Level Await**（已 Stage 4，2022 进 §16.2.1.5）—— 跨 §9.10 + §27.2 多章节牵连，最能展示规范修改的复杂性
-  - **Records & Tuples**（卡 Stage 2 三年）—— 反例，展示"为什么提案进不去"
-  - **Iterator Helpers**（已 Stage 4，2025 进 §27.1）—— 最近案例
-- **建议主线**：选 **Top-Level Await** 作为主 case（牵连 §9.10 + §27 + Module Records，内容丰富）+ **Records & Tuples** 作为反例（讲为什么卡）。
-- **关键知识点**：
-  - 提案仓库结构：README、explainer、polyfill、test262 case
-  - Champion / Stage advancement requirements
-  - Spec text 编写：`<emu-clause>` HTML、ecmarkup 工具
-  - 跨章节修改：Top-Level Await 同时改了 §9.4、§9.10、§16、§27
-  - 实施 timeline：V8 → SpiderMonkey → JSC → Node 集成
-- **应用场景**：
-  - 想给 TC39 提 PR 的工程师入门
-  - 团队评估"要不要用 Stage 3 特性"时的决策框架
-  - 解释"为什么这个 polyfill 这样写"
-- **陷阱**：
-  - 以为 Stage 4 = 所有引擎已实现（其实是"≥2 个引擎"）
-  - 以为 polyfill 能 100% 还原原生行为（Top-Level Await 等无法 polyfill）
-- **关联章节**：A1、A5、B1
-- **预估字数**：5500-6500
+  - 在 cycle 中用 Top-Level Await（容易死锁）
+  - 以为 `import * as ns` 返回普通对象（其实是 frozen Module Namespace exotic）
+  - 用 dynamic import 替代静态 import（失去 tree-shaking）
+- **关联章节**：
+  - JS 已有：`javascript/04-modules/01-esm`、`javascript/04-modules/02-cjs-interop`、`javascript/04-modules/03-dynamic-import`
+  - 内部：P1.3（Top-Level Await 是经典 case study）、P7.3（async module 的 Job 调度）
+- **预估字数**：4500-5500
 
 ---
 
 ## 写作约定
 
-### Track A 章节强调"叙事"
+### 章节内统一 6 段结构
 
-- 用时间线、对比、人物、动机切入
-- 每章末尾必须有"小结图"或"关键时间点表"
-- 引用要找原始来源（Eich blog、TC39 meeting notes、proposal repo）
+每章遵循：**速览 → 底层逻辑 → 应用场景 → 典型代码 → 常见陷阱 → 延伸阅读**。
 
-### Track B 章节强调"精确"
+### 叙事 vs 精确度的混合（区别 JS 主题）
 
-- 大量引用 §X.Y.Z 编号
-- 抽象操作严格用规范名（`OrdinaryGet` 而非"属性查找"）
-- 给出代码层和规范层的对照（"`obj.x` → `GetValue(Reference Record { ... })`"）
+ECMA 主题相比 `javascript/` 有以下额外约定：
 
-### 必须强调"独立性"的设计
-
-- 每章 `延伸阅读` 末尾标 **Track A** 或 **Track B**
-- A 章引用 B 章用"如果你也对规范层感兴趣 → B X"
-- 严禁让读 A 必须先读 B（反之亦然）
+- **「短重述 + 链回」** —— 当一个机制在 `javascript/` 主题已详述时（如 Promise 状态机、闭包内存模型、TDZ），本主题用 1-3 句话点到本质，紧跟一句"详细机制请参考 X"，避免读者反复跳跃
+- **规范字段精确名称** —— P3-P7 严格使用规范术语：`OrdinaryGet` 而非"属性查找"；`[[Prototype]]` 而非 `__proto__`（除非讨论可见 API）
+- **历史决策标注动机** —— P1-P2 每个设计决策都标"当时有哪些选项、TC39 怎么选的、根因是什么"；不只罗列特性
 
 ### 必须明确标注 ⚠️ 的内容
 
@@ -519,40 +638,65 @@
 
 ---
 
-## 风险提示
+## 与既有主题的关系
 
-### 可能写不下去 / 容易翻车的章节
+ECMA 主题**不重复** JS 主题已经讲透的运行时机制，但会在每个交叉点提供"短重述 + 链接"。常见对应：
 
-- **A3 执行模型**：Realm/Agent/Job/EnvironmentRecord 一旦讲不清，读者会迷路
-- **B5 §9 上下文**：规范字段堆积如山，必须挑核心展开，不能全列
-- **B6 case study**：选对 case 才能讲透；选错了变成"提案目录"
-
-### 写作顺序建议（时间紧张）
-
-- **第一批交付**：A1 + A2（读者立刻有完整 PPT 第一二章体验）
-- **第二批**：A3 + A4 + A5（A 轨完整闭环）
-- **第三批**：B1 + B2 + B3（规范阅读入门三件套）
-- **第四批**：B4 + B5 + B6（高阶规范 + case study）
-
-### 风险：A 轨复用到 JS / TS / React 时的坑
-
-通用原则：**4 问骨架不变，但每个主题各自系统化补全**（不局限于 PPT 涉及的点）。每条交叉引用都按"短重述 + 链回"原则处理。
-
-- **JS**：A 轨的 A2、A3、A4 与 `javascript/` 章节内容高度交叉 —— 复用 4 问模板时改成 V8/Engine 视角（Hidden Class、Inline Cache、TurboFan、Orinoco GC），机制细节链回 `javascript/` 对应章节，**正文聚焦"引擎为什么这样实现"**
-- **TS**：A1 改成 TS 起源（2012 / Anders Hejlsberg / 微软 / structural typing 决策）；A2 讲设计哲学（gradual typing / 不引入运行时）；A3 改成 TS 编译流水线（parse → bind → check → emit）；**A4 改写为"类型层计算（type-level programming）"**——TS 的"并发"是类型推导的并行/递归
-- **React**：A1 改成 React 起源（2013 / Facebook / 单向数据流 vs Angular 双向）；A2 讲 UI = f(state) 设计哲学；A3 改成 Fiber 架构（双缓冲、work loop、lane 模型）；A4 改成 Concurrent Mode + Suspense + Server Components
+- **P2 设计原则** → JS [类型系统](../javascript/01-fundamentals/01-types.html) / [原型链](../javascript/02-advanced/05-prototype.html) / [闭包](../javascript/02-advanced/02-closures.html)
+- **P7.2 执行上下文** → JS [作用域与 TDZ](../javascript/02-advanced/01-scope-tdz.html) / [this 四规则](../javascript/02-advanced/03-this.html)
+- **P7.3 异步演进** → JS [P3 · 异步 & 错误处理（全 8 章）](../javascript/03-async/index.html)
+- **P7.4 模块系统** → JS [P4 · 模块 & 元编程](../javascript/04-modules/index.html)
+- **P3 规范阅读** → JS / TS 章节中提到的 §X.Y.Z 都能在 P3-P7 找到对应
 
 ---
 
-## 子代理报告
+## 风险提示
 
-**最难写、最容易翻车**：A3 执行模型、B5 §9 上下文。建议把"一次函数调用的完整生命周期"画成文字版流程图（不依赖图片），读者能"逐行 trace"才算合格。
+### 重构风险（2026-04-28）
 
-**可以快速产出**：A5 现代生态、B1 怎么读规范、B3 抽象操作。套路成熟、概念正交。
+把两轨结构重组为 7 阶段，**最大的工作量在 P7 三合一**：原 A3 + A4 + B5 三章合并为 4 章（7.1-7.4），需要：
 
-**最有价值的一章**：A1 标准发展史。这是 PPT 的精华，也是后续 JS/TS/React 复用模板的"母本"。**写好这一章 = 半个主题立起来了**。
+- 保留原叙事章节的"为什么这样演进"主线
+- 保留原规范章节的精确字段表
+- 删除两份重复的 Realm/Agent/Job 介绍
+- 章末小结合并为一张"完整生命周期"流程图（P7.2 章末）
 
-**总规模估算**（考虑系统化补全后）：
-- Track A：5500 + 6500 + 7500 + 7000 + 5000 ≈ **31,500 字**
-- Track B：4500 + 5000 + 4500 + 5000 + 6000 + 6000 ≈ **31,000 字**
-- 总计：**~62,500 字 / 11 章**，平均每章 5,700 字。比 TS（20 章 / 约 95,000 字）轻量 1/3，符合"轻量但系统"的设计目标。
+### 拆分风险
+
+- 原 A2（设计原则单章）拆为 P2.1 + P2.2，需要保证两章衔接自然，不要变成"上下两半"硬切
+- 原 B6（提案旅程）从规范精读尾部移到 P1.3，要重新组织——它现在是"标准与演化"的收官，不是"规范精读"的尾注
+
+### 写不下去 / 容易翻车的章节
+
+- **P7.1 三层容器**：Realm/Agent/Job 一旦讲不清，后续三章都没根
+- **P7.2 执行上下文**：规范字段堆积如山，必须挑核心展开，不能全列
+- **P1.3 提案旅程**：选对 case 才能讲透；选错了变成"提案目录"
+
+### 可以快速产出的章节
+
+- P1.2 现代生态、P3 怎么读规范、P5 抽象操作。套路成熟、概念正交。
+
+### 风险：P1-P2 复用到 JS / TS / React 时的坑
+
+通用原则：**叙事脊柱不变（为什么存在 → 它是什么 → 机器怎么跑 → 单线程怎么并发），但每个主题各自系统化补全**（不局限于 PPT 涉及的点）。每条交叉引用都按"短重述 + 链回"原则处理。
+
+- **JS**：内容与 `javascript/` 章节高度交叉 —— 复用时改成 V8/Engine 视角（Hidden Class、Inline Cache、TurboFan、Orinoco GC），机制细节链回 `javascript/` 对应章节
+- **TS**：P1 改成 TS 起源（2012 / Anders Hejlsberg / 微软 / structural typing）；P2 讲设计哲学（gradual typing / 不引入运行时）；P7 改成 TS 编译流水线（parse → bind → check → emit）+ 类型层计算
+- **React**：P1 改成 React 起源（2013 / Facebook / 单向数据流）；P2 讲 UI = f(state) 设计哲学；P7 改成 Fiber 架构（双缓冲、work loop、lane 模型）+ Concurrent Mode + Suspense
+
+---
+
+## 总规模
+
+| 阶段 | 章数 | 字数估计 |
+|---|---|---|
+| P1 · 标准与演化 | 3 | 5500 + 5000 + 6000 ≈ 16,500 |
+| P2 · 设计原则 | 2 | 3700 + 4500 ≈ 8,200 |
+| P3 · 怎么读规范 | 1 | 4500 |
+| P4 · §6 数据类型 | 1 | 5000 |
+| P5 · §7 抽象操作 | 1 | 4500 |
+| P6 · §10 内部槽 | 1 | 5000 |
+| P7 · §9 执行模型 | 4 | 5500 + 6000 + 6500 + 5000 ≈ 23,000 |
+| **总计** | **13** | **≈ 66,700 字** |
+
+平均每章 5,100 字。比原 11 章 / 62,500 字略有扩张（主要是 P7 三合一时把原叙事 + 规范两份内容融合，少量重复部分被删除）。

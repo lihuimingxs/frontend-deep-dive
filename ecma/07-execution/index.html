@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>P7 · §9 执行模型与并发 · ECMAScript 深度学习</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c84a1f'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EES%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>ECMAScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.16 35); color: #fff">ES</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">ES 首页</a>
+          <a href="https://262.ecma-international.org/15.0/" target="_blank" rel="noopener">规范</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · §9 执行模型与并发</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-execution-model.html">01 · 执行模型基础（容器与上下文）</a></li>
+          <li><a href="02-spec-execution-context.html">02 · §9 执行模型规范精读</a></li>
+          <li><a href="03-event-loop-async.html">03 · Event Loop 与异步演进</a></li>
+          <li><a href="04-modules-tla.html">04 · 模块系统与 Top-Level Await</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-standards/index.html">P1 · 标准与演化</a></li>
+          <li><a href="../02-design/index.html">P2 · 设计原则与灵感</a></li>
+          <li><a href="../03-spec-reading/index.html">P3 · 怎么读规范</a></li>
+          <li><a href="../04-data-types/index.html">P4 · §6 数据类型与值</a></li>
+          <li><a href="../05-abstract-ops/index.html">P5 · §7 抽象操作</a></li>
+          <li><a href="../06-internal-slots/index.html">P6 · §10 内部槽与方法</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">ECMAScript 首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>P7 · §9 执行模型与并发</span>
+        </nav>
+        <h1>P7 · §9 执行模型与并发</h1>
+        <p class="lead">
+          ECMAScript 这台抽象机器的"VM 架构图"：<strong>Realm / Agent / Job</strong> 三层容器、<strong>Execution Context</strong> 与 <strong>Environment Record</strong> 五种、<strong>Event Loop</strong> 与 30 年异步演进（callback → Promise → async/await → using）、<strong>Source Text Module Records</strong> 4 阶段加载 + Top-Level Await 死锁检测。本阶段 4 章是叙事 + 规范精读双重视角——P7.1/P7.3 偏用户视角的故事弧，P7.2/P7.4 偏规范层的算法精确度。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>章节数</strong> 4 / 4 ✅</span>
+          <span><strong>对应 ECMA-262</strong> §9 Executable Code and Execution Contexts + §16.2 Modules + §27 Control Abstraction</span>
+          <span><strong>状态</strong> 全部完成</span>
+        </div>
+
+        <h2>本阶段覆盖</h2>
+        <ul>
+          <li><strong>三层容器</strong> —— Agent（线程级）/ Agent Cluster（共享 SAB 边界）/ Realm（全局环境，独立 Intrinsics）/ Job（异步执行单元）</li>
+          <li><strong>执行上下文</strong> —— ExecutionContext 内部槽、LexicalEnvironment / VariableEnvironment / PrivateEnvironment、running execution context</li>
+          <li><strong>Environment Record</strong> —— 5 种（Declarative / Function / Object / Module / Global）+ ResolveBinding 算法 + 闭包机制</li>
+          <li><strong>strict mode 与生成器</strong> —— <code>[[Strict]]</code> 字段、Generator 的 ExecutionContext 暂停机制（async/await 的底层）</li>
+          <li><strong>Event Loop</strong> —— ECMA-262 Job 抽象 vs HTML 规范 task source、microtask vs macrotask、HostEnqueuePromiseJob</li>
+          <li><strong>异步演进</strong> —— callback → Promise → async/await → 异步迭代器 → AbortController → SharedArrayBuffer + Atomics → ES2025 <code>using</code> / <code>await using</code></li>
+          <li><strong>模块系统</strong> —— Source Text Module Record 的 4 阶段算法（Parse → Load → Link → Evaluate）、cycle handling、TLA 死锁检测、Module Namespace exotic</li>
+        </ul>
+
+        <h2>章节清单</h2>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 60px">序号</th>
+              <th>标题</th>
+              <th>关键词</th>
+              <th style="width: 80px">状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>01</td>
+              <td><a href="01-execution-model.html">执行模型基础：Realm / Agent / Job 与执行上下文</a></td>
+              <td>三层容器 · ExecutionContext · 一次函数调用完整生命周期 · Host 责任划分</td>
+              <td>✅</td>
+            </tr>
+            <tr>
+              <td>02</td>
+              <td><a href="02-spec-execution-context.html">§9 执行模型规范精读</a></td>
+              <td>5 种 EnvironmentRecord · ResolveBinding · §9.1-§9.10 全章 · Host hooks</td>
+              <td>✅</td>
+            </tr>
+            <tr>
+              <td>03</td>
+              <td><a href="03-event-loop-async.html">Event Loop 与异步演进</a></td>
+              <td>Promise 状态机 · async/await · AbortController · SharedArrayBuffer · using</td>
+              <td>✅</td>
+            </tr>
+            <tr>
+              <td>04</td>
+              <td><a href="04-modules-tla.html">模块系统与 Top-Level Await</a></td>
+              <td>Module Record 4 阶段 · cycle handling · TLA 死锁检测 · Module Namespace</td>
+              <td>✅</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout warn">
+          <div class="callout-title">⚠️ 这是 P7 最难的一阶段</div>
+          <p>
+            P7.1 / P7.2 是同一台机器的两个视角：P7.1 用"用户视角"建立心智模型（含图、含完整生命周期 trace），P7.2 用"规范层数据结构视角"补字段细节。建议先读 P7.1 → P7.3，再回头读 P7.2 / P7.4 做规范精度的填充。如果只想知道"机器怎么跑"，读 P7.1 + P7.3 就够；想写 polyfill / 读引擎源码 / 追踪 TC39 提案，再读 P7.2 / P7.4。
+          </p>
+        </div>
+      </article>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

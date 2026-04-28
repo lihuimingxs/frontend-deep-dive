@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>模块系统与 Top-Level Await · P7 · ECMAScript 深度学习</title>
+    <meta
+      name="description"
+      content="ECMA-262 §9.10 Source Text Module Records 的 4 阶段加载算法（Parse → LoadRequestedModules → Link → Evaluate）、cycle handling 与 Top-Level Await 死锁检测、Module Namespace exotic、Host hook（HostResolveImportedModule / HostFinalizeImportMeta）。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c84a1f'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EES%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>ECMAScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.16 35); color: #fff">ES</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">ES 首页</a>
+          <a href="index.html">P7 目录</a>
+          <a href="https://262.ecma-international.org/15.0/index.html#sec-modules" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · §9 执行模型与并发</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-execution-model.html">01 · 执行模型基础（容器与上下文）</a></li>
+          <li><a href="02-spec-execution-context.html">02 · §9 执行模型规范精读</a></li>
+          <li><a href="03-event-loop-async.html">03 · Event Loop 与异步演进</a></li>
+          <li><a href="04-modules-tla.html" class="active">04 · 模块系统与 Top-Level Await</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-standards/index.html">P1 · 标准与演化</a></li>
+          <li><a href="../02-design/index.html">P2 · 设计原则与灵感</a></li>
+          <li><a href="../03-spec-reading/index.html">P3 · 怎么读规范</a></li>
+          <li><a href="../04-data-types/index.html">P4 · §6 数据类型与值</a></li>
+          <li><a href="../05-abstract-ops/index.html">P5 · §7 抽象操作</a></li>
+          <li><a href="../06-internal-slots/index.html">P6 · §10 内部槽与方法</a></li>
+        </ul>
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../javascript/index.html">JavaScript 深度学习</a></li>
+          <li><a href="../../javascript/04-modules/index.html">JS · P4 模块 & 元编程</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">ECMAScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · §9 执行模型与并发</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>04 · 模块系统与 Top-Level Await</span>
+        </nav>
+
+        <h1>模块系统与 Top-Level Await</h1>
+        <p class="lead">
+          P2.2 讲了 ESM 静态结构的<strong>设计决策</strong>，P7.3 讲了 Top-Level Await 的<strong>用户语义</strong>。本章把它们落到<strong>规范层</strong>——ECMA-262 §9.10 Source Text Module Records 的 4 阶段加载算法（Parse → LoadRequestedModules → Link → Evaluate）、循环依赖怎么不死锁、TLA 让 Evaluate 阶段变异步后规范如何检测潜在死锁、Module Namespace 为什么是 frozen exotic、import.meta 的 host hook 设计。读完这章，你能看懂 V8 / Node 加载 ESM 时的每一步、调试 Top-Level Await 死锁、写 Node loader hook。
+        </p>
+
+        <div class="callout warn" style="margin: 16px 0">
+          <div class="callout-title">⚠️ 这是 ECMA-262 中最复杂的算法之一</div>
+          <p>
+            模块加载牵动 §9.4 ExecutionContext、§9.10 Module Records、§16.2 Modules 三个 clause，再叠加 §27 Promise（因为 Evaluate 现在返回 Promise）和 HTML 规范的 fetch 流程。建议带着具体场景读：先想"我写 <code>import x from './a'</code>，浏览器从看到这一行到 <code>x</code> 可用，发生了什么 14 步？"再对照本章。
+          </p>
+        </div>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 本章交叉规则</div>
+          <p>
+            ESM 语法（<code>import</code> / <code>export</code> / 三阶段加载用户视角）在 <a href="../../javascript/04-modules/01-esm.html">JS · ESM</a> 已详述；ESM 设计决策（为什么静态结构）在 <a href="../02-design/02-design-tradeoffs.html#internals">P2.2 设计权衡</a> 已讲；TLA 用户视角在 <a href="03-event-loop-async.html">P7.3 Event Loop 与异步演进</a> 已介绍。本章只在<strong>规范层算法</strong>这一层补全。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> <a href="01-execution-model.html">P7.1 执行模型基础</a> + <a href="03-event-loop-async.html">P7.3 异步演进</a></span>
+          <span><strong>对应 ECMA-262</strong>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-modules" target="_blank" rel="noopener">§16.2 Modules</a> + <a href="https://262.ecma-international.org/15.0/index.html#sec-source-text-module-records" target="_blank" rel="noopener">§16.2.1.6 Source Text Module Records</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>ESM 加载 = 4 阶段算法</strong>：Parse（生成 Module Record）→ LoadRequestedModules（递归 fetch + parse 所有依赖）→ Link（绑定 import/export，分配 EnvironmentRecord）→ Evaluate（按拓扑顺序执行，TLA 时返回 Promise）。
+          </li>
+          <li>
+            <strong>循环依赖靠 <code>[[CycleRoot]]</code> 算法处理</strong>：进入第一个被访问的模块时记 cycle root，递归遇到正在求值的模块就<strong>跳过</strong>不再深入；这就是为什么 ESM cycle 行为可预期，CommonJS 不行。
+          </li>
+          <li>
+            <strong>Top-Level Await 让 Evaluate 阶段变异步</strong>，所以模块求值现在是 Promise；规范加了死锁检测算法（<code>[[CycleRoot]]</code> 和 <code>[[AsyncEvaluation]]</code> 字段）来识别"<em>cycle 中两个 async 模块互相 await 对方</em>"的情况。
+          </li>
+        </ol>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Source Text Module Record 的字段</h3>
+        <p>
+          每个 ES 模块在规范层是一个 <strong>Source Text Module Record</strong>（§16.2.1.6），关键字段如下：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 35%">字段</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>[[Realm]]</code></td>
+              <td>模块所在的 Realm</td>
+            </tr>
+            <tr>
+              <td><code>[[Environment]]</code></td>
+              <td>Module Environment Record（含所有 import/export binding）</td>
+            </tr>
+            <tr>
+              <td><code>[[Namespace]]</code></td>
+              <td>该模块的 Module Namespace exotic 对象（<code>import * as ns</code> 拿到的就是它）</td>
+            </tr>
+            <tr>
+              <td><code>[[Status]]</code></td>
+              <td>模块状态：<code>new</code> / <code>unlinked</code> / <code>linking</code> / <code>linked</code> / <code>evaluating</code> / <code>evaluating-async</code> / <code>evaluated</code></td>
+            </tr>
+            <tr>
+              <td><code>[[ECMAScriptCode]]</code></td>
+              <td>parse 后的 AST</td>
+            </tr>
+            <tr>
+              <td><code>[[RequestedModules]]</code></td>
+              <td>本模块依赖的所有模块说明符（按 import 出现顺序）</td>
+            </tr>
+            <tr>
+              <td><code>[[ImportEntries]]</code></td>
+              <td>所有 import 项（含 module specifier、import name、local name）</td>
+            </tr>
+            <tr>
+              <td><code>[[LocalExportEntries]]</code> / <code>[[IndirectExportEntries]]</code> / <code>[[StarExportEntries]]</code></td>
+              <td>三种 export 项（直接 export、re-export 单个、<code>export *</code>）</td>
+            </tr>
+            <tr>
+              <td><code>[[CycleRoot]]</code></td>
+              <td>循环依赖根模块（用于 Evaluate 阶段判断是否进入已访问的模块）</td>
+            </tr>
+            <tr>
+              <td><code>[[HasTLA]]</code></td>
+              <td>本模块是否包含 Top-Level Await（影响 Evaluate 是否异步）</td>
+            </tr>
+            <tr>
+              <td><code>[[AsyncEvaluation]]</code></td>
+              <td>当前是否处于异步 Evaluate 中</td>
+            </tr>
+            <tr>
+              <td><code>[[TopLevelCapability]]</code></td>
+              <td>异步 Evaluate 完成时要 fulfill 的 PromiseCapability</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>4 阶段加载算法</h3>
+
+        <h4>阶段 1 · Parse</h4>
+        <p>
+          源码 → AST → 创建 <code>Source Text Module Record</code>。这一步只解析<strong>本模块自身</strong>的 import/export 声明（不递归依赖）。<code>[[Status]]</code> 设为 <code>new</code>。
+        </p>
+
+        <h4>阶段 2 · LoadRequestedModules</h4>
+        <p>
+          递归处理 <code>[[RequestedModules]]</code>：每个模块说明符通过 <strong>Host hook <code>HostLoadImportedModule</code></strong> 解析为目标 Module Record。Host 决定怎么 fetch（浏览器走 HTTP、Node 走文件系统、Deno 可走 URL/cache）。所有依赖都 parse 完后，<code>[[Status]]</code> 变为 <code>unlinked</code>。
+        </p>
+
+        <h4>阶段 3 · Link（曾叫 Instantiate）</h4>
+        <p>
+          为每个模块创建 <strong>Module Environment Record</strong>，分配 import/export binding 槽位（但<strong>不赋值</strong>）。这一步关键是<strong>把 import 名字和源模块的 export 槽位连起来</strong>——实现"<strong>live binding</strong>"语义（导出值变了，导入端跟着变）。算法递归处理 cycle：进入正在 link 的模块就跳过（防止无限递归）。完成后 <code>[[Status]]</code> 变 <code>linked</code>。
+        </p>
+
+        <h4>阶段 4 · Evaluate ⭐</h4>
+        <p>
+          按<strong>后序遍历</strong>执行模块代码（先依赖后调用）。每个模块的 <code>[[ECMAScriptCode]]</code> 在它自己的 Module Environment 上运行，所有 binding 在这一阶段才被赋值。
+        </p>
+
+        <p>
+          <strong>有 TLA 的情况</strong>：如果模块 <code>[[HasTLA]]</code> 是 true（含 top-level <code>await</code>），Evaluate 不再同步——返回一个 Promise，等所有 await 完成后才 fulfill。<code>[[Status]]</code> 经过 <code>evaluating</code> → <code>evaluating-async</code> → <code>evaluated</code>。
+        </p>
+
+        <p>
+          <strong>cycle handling</strong>：进入正在 evaluate 的模块时，记下 <code>[[CycleRoot]]</code>，跳过不再深入；当 cycle 全部 evaluate 完后，再统一 fulfill。
+        </p>
+
+        <h3>Top-Level Await 死锁检测</h3>
+        <p>
+          TLA 让模块求值变异步，开了一个新的死锁口子：<strong>cycle 中两个 async 模块互相 await 对方导出的值</strong>。看一个例子：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · TLA cycle 死锁示例</span>
+          <pre class="code"><code class="lang-js">// a.js
+import { b } from './b.js';
+export const a = await Promise.resolve('A');
+console.log('a.js: b =', b);   // 永远跑不到
+
+// b.js
+import { a } from './a.js';
+export const b = await Promise.resolve('B');
+console.log('b.js: a =', a);   // 永远跑不到</code></pre>
+        </div>
+
+        <p>
+          规范的处理方式：在 Link 阶段检测 cycle 时记下所有参与 cycle 的模块；Evaluate 时如果发现 cycle 内有 <code>[[HasTLA]]</code> 模块，整个 cycle 用<strong>统一的 PromiseCapability</strong>等待——只有所有 cycle 模块都把自己的 await 完成后，cycle 才 fulfill。如果其中两个模块互相依赖对方<strong>还未生成</strong>的值，整个 cycle <strong>永久挂起</strong>（不抛错，但 Promise 永不 settle）。
+        </p>
+
+        <p>
+          这是规范有意的选择：抛错会让"<em>无害的 cycle</em>"也被毙掉；挂起则让宿主决定怎么处理（浏览器靠 unhandledrejection / Node 靠 timeout）。
+        </p>
+
+        <h3>Module Namespace Exotic Object</h3>
+        <p>
+          <code>import * as ns from './m.js'</code> 拿到的不是普通对象，是 <strong>Module Namespace exotic</strong>（§10.4.6）。它有几个特殊行为：
+        </p>
+        <ul>
+          <li><strong>frozen</strong>：所有属性都 non-writable + non-configurable，<code>Object.isFrozen(ns) === true</code></li>
+          <li><strong>live binding</strong>：访问 <code>ns.x</code> 实际是去源模块的 EnvironmentRecord 取值，源模块改了 <code>x</code> 这里立刻生效（普通对象做不到）</li>
+          <li><strong><code>[[Get]]</code> trap</strong>：未定义的 export 返回 <code>undefined</code>（不是 throw）</li>
+          <li><strong><code>typeof ns === "object"</code></strong>，但 <code>ns.constructor</code> 是 undefined（不挂在 Object.prototype 上）</li>
+          <li><strong><code>Symbol.toStringTag</code></strong> 为 <code>"Module"</code>，所以 <code>Object.prototype.toString.call(ns) === "[object Module]"</code></li>
+        </ul>
+
+        <p>
+          这些行为是为了<strong>让 Module Namespace 看起来像一个静态命名空间</strong>，而不是普通可变对象——你不能 <code>ns.newProp = 1</code>，也不能 <code>delete ns.x</code>。详细见 <a href="../06-internal-slots/01-internal-slots.html">P6 内部槽与方法</a> 的 Exotic Object 列表。
+        </p>
+
+        <h3>Host Hooks（宿主扩展点）</h3>
+        <p>
+          §16.2 把模块加载的几个关键步骤交给宿主实现：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 35%">Host Hook</th>
+              <th>触发时机 / 用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>HostLoadImportedModule</code></td>
+              <td>LoadRequestedModules 阶段，宿主决定怎么 fetch / parse 一个 specifier</td>
+            </tr>
+            <tr>
+              <td><code>HostResolveImportedModule</code>（旧 API，仍兼容）</td>
+              <td>解析 specifier 到 Module Record（同步路径）</td>
+            </tr>
+            <tr>
+              <td><code>HostFinalizeImportMeta</code></td>
+              <td>每个模块的 <code>import.meta</code> 对象由宿主填——浏览器填 <code>url</code>，Node 填 <code>url</code> + <code>resolve()</code>，Deno 填更多</td>
+            </tr>
+            <tr>
+              <td><code>HostImportModuleDynamically</code></td>
+              <td>用户调 <code>import('./x.js')</code>（dynamic import）时触发</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>这就是为什么浏览器和 Node 的模块行为不一样</strong>——规范只规定了"<em>什么时候调 hook</em>"，"<em>hook 干什么</em>"完全交给宿主。Node 的 <code>--experimental-loader</code> 就是给开发者一个改 <code>HostLoadImportedModule</code> 行为的口子。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 调试 Top-Level Await 死锁</h3>
+          <p>
+            生产环境一个模块在浏览器加载后<strong>永久挂起</strong>，没有报错。常见原因是 cycle + TLA：
+          </p>
+          <ul>
+            <li>用 Chrome DevTools "Sources" 标签的 "Module loader" 视图查看模块依赖图</li>
+            <li>找出 cycle 中所有 <code>[[HasTLA]]</code> 模块（含 top-level await 的）</li>
+            <li>检查 cycle 内是否有"模块 A await 模块 B 导出的值，但模块 B 还在 await 模块 A 导出的值"——这就是死锁</li>
+            <li>修复：把 await 移到函数里（懒求值），或重构 cycle</li>
+          </ul>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 写 Node loader hook</h3>
+          <p>
+            Node 的 <code>--experimental-loader</code> 让你用一个 ESM 模块覆盖 <code>HostLoadImportedModule</code>。常见用途：
+          </p>
+          <ul>
+            <li>TypeScript on-the-fly 编译（拦截 <code>.ts</code> 路径）</li>
+            <li>自定义协议（<code>npm:</code>、<code>github:</code>）</li>
+            <li>测试时 mock 依赖（让 <code>./api</code> 返回 fake 实现）</li>
+          </ul>
+          <p>
+            理解 <code>HostLoadImportedModule</code> 的输入（specifier + parent module + assertions）+ 输出（Module Record）就能写出 loader。Node 文档：<a href="https://nodejs.org/api/module.html#customization-hooks" target="_blank" rel="noopener">Customization hooks</a>。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 给 jsdom / linkedom 写 ESM polyfill</h3>
+          <p>
+            jsdom 实现 DOM API 时遇到的难点之一：<code>&lt;script type="module"&gt;</code> 怎么办？答案是<strong>实现 Module Record 的所有 host hook</strong>，让 V8 / SpiderMonkey 调你的 hook 而不是浏览器的。这是为什么 jsdom 的 module 支持仍然不完整——TLA、import.meta.resolve 等较新特性需要完整实现 4 阶段算法。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>观察 Module Namespace 的 frozen 行为</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · ns 是 frozen exotic</span>
+          <pre class="code"><code class="lang-js">// m.js
+export let counter = 0;
+export function inc() { counter++; }
+
+// app.js
+import * as ns from './m.js';
+
+console.log(ns.counter);  // 0
+ns.inc();
+console.log(ns.counter);  // 1（live binding 生效——ns 看到的是源模块当前值）
+
+// 但你不能写它
+ns.counter = 999;         // strict 下 TypeError；非 strict 下静默失败
+ns.newProp = 'x';         // 同上
+delete ns.counter;        // 同上
+Object.isFrozen(ns);      // true
+
+// 它甚至不在 Object.prototype 链上
+Object.getPrototypeOf(ns); // null
+ns.hasOwnProperty;         // undefined！
+Object.prototype.toString.call(ns);  // "[object Module]"</code></pre>
+        </div>
+
+        <h3>用 dynamic import 规避 cycle 死锁</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 把 await 推到运行时</span>
+          <pre class="code"><code class="lang-js">// 改写前（cycle + TLA 死锁）
+// a.js
+// import { b } from './b.js';
+// export const a = await fetchA();   // ← 死锁原因
+
+// 改写后（用 dynamic import 推迟到调用时）
+export async function getA() {
+  const { b } = await import('./b.js');  // 此时 b.js 已 evaluated
+  const a = await fetchA();
+  return { a, b };
+}
+
+// b.js 同理改写。两个模块的 top-level 不再 await，cycle 解开。</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：以为 import * as ns 返回普通对象</div>
+          <p>
+            <code>ns</code> 是 Module Namespace exotic，不是普通对象。<code>Object.assign({}, ns)</code> 可以拷出一份普通对象但<strong>失去 live binding</strong>；<code>Object.keys(ns)</code> 能拿到 export 名字（这个支持），但 <code>ns instanceof Object</code> 是 <strong>false</strong>。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：把 ns 当"只读的属性视图"用，不 mutate、不当作普通对象传递；需要拷贝时用 <code>{ ...ns }</code>（明确拷出一份普通对象）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：在 cycle 中用 Top-Level Await</div>
+          <p>
+            可能死锁。规范不会抛错，宿主也未必有超时——<strong>表现为 Promise 永久挂起</strong>，看起来像页面"卡在加载中"。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：① 拆 cycle（多数情况是设计问题）；② 把 await 移到函数里（不在 top-level）；③ 用 dynamic import 推迟初始化。Node 的 <code>process.on('unhandledRejection', ...)</code> 检测不到这种死锁——它根本没 reject。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：以为 dynamic import 能替代静态 import</div>
+          <p>
+            动态 import 失去 tree-shaking 能力——bundler 看到 <code>import('./x')</code> 就把整个 x 模块作为单独 chunk 打包，无法 tree-shake 你不用的 export。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：dynamic import 用于<strong>明确的代码分割</strong>（如路由懒加载），不要替代普通 import。需要全模块拆分时才动态。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范</h3>
+        <ul>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-modules" target="_blank" rel="noopener">ECMA-262 §16.2 Modules</a> —— 完整模块章节
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-source-text-module-records" target="_blank" rel="noopener">§16.2.1.6 Source Text Module Records</a> —— 4 阶段算法 + cycle handling
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-module-namespace-exotic-objects" target="_blank" rel="noopener">§10.4.6 Module Namespace Exotic Objects</a>
+          </li>
+          <li>
+            <a href="https://github.com/tc39/proposal-top-level-await" target="_blank" rel="noopener">tc39/proposal-top-level-await</a> —— TLA 提案 case study
+          </li>
+        </ul>
+
+        <h3>宿主侧实现</h3>
+        <ul>
+          <li>
+            <a href="https://nodejs.org/api/module.html#customization-hooks" target="_blank" rel="noopener">Node · Customization Hooks</a> —— 写 loader 的 API
+          </li>
+          <li>
+            <a href="https://html.spec.whatwg.org/multipage/webappapis.html#integration-with-the-javascript-module-system" target="_blank" rel="noopener">HTML 规范 · Module Integration</a> —— 浏览器对 ECMA-262 module hook 的实现
+          </li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="03-event-loop-async.html">P7.3 Event Loop 与异步演进</a> —— TLA 用户语义</li>
+          <li>设计哲学：<a href="../02-design/02-design-tradeoffs.html#internals">P2.2 设计权衡</a> —— ESM 静态结构 vs CommonJS 运行时函数的取舍</li>
+          <li>规范精读：<a href="02-spec-execution-context.html">P7.2 §9 执行模型规范精读</a> —— Module Environment Record 字段细节</li>
+          <li>提案 case study：<a href="../01-standards/03-proposal-journey.html">P1.3 提案旅程</a> —— Top-Level Await 跨多 clause 修改的过程</li>
+        </ul>
+
+        <h3>跨主题参考</h3>
+        <ul>
+          <li><a href="../../javascript/04-modules/01-esm.html">JS · ES Modules</a></li>
+          <li><a href="../../javascript/04-modules/02-cjs-interop.html">JS · CJS 互操作</a></li>
+          <li><a href="../../javascript/04-modules/03-dynamic-import.html">JS · Dynamic Import</a></li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="03-event-loop-async.html">
+            <span class="label">← 上一章</span>
+            <span class="title">03 · Event Loop 与异步演进</span>
+          </a>
+          <a class="next" href="../index.html">
+            <span class="label">🎉 完工 →</span>
+            <span class="title">返回 ECMAScript 主页</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>A3 · 执行模型 ——「机器怎么跑？」 · ECMAScript 深度学习</title>
+    <title>执行模型基础：Realm / Agent / Job · P7 · ECMAScript 深度学习</title>
     <meta
       name="description"
       content="ECMAScript 运行时机器结构：Realm / Agent / Job 三层容器、Execution Context 与 Environment Record 五种、一次函数调用的完整生命周期。讲清楚规范层怎么定义这台机器、Host 与 ECMA-262 的责任划分。"
@@ -27,7 +27,7 @@
         <nav class="site-nav" aria-label="主导航">
           <a href="../../index.html">← 深度学习</a>
           <a href="../index.html">ES 首页</a>
-          <a href="index.html">Track A 目录</a>
+          <a href="index.html">P7 目录</a>
           <a href="https://262.ecma-international.org/15.0/index.html#sec-executable-code-and-execution-contexts" target="_blank" rel="noopener">原站</a>
         </nav>
         <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
@@ -39,18 +39,22 @@
 
     <div id="main" class="chapter-layout">
       <aside class="sidebar" aria-label="章节导航">
-        <h3>Track A · 历史脉络与设计</h3>
+        <h3>P7 · §9 执行模型与并发</h3>
         <ul>
-          <li><a href="index.html">Track 概览</a></li>
-          <li><a href="01-standards-history.html">A1 · 标准发展史</a></li>
-          <li><a href="02-design-principles.html">A2 · 设计原则与语言特性</a></li>
-          <li><a href="03-execution-model.html" class="active">A3 · 执行模型</a></li>
-          <li><a href="04-async-evolution.html">A4 · 异步演进</a></li>
-          <li><a href="05-modern-ecosystem.html">A5 · 现代生态</a></li>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-execution-model.html" class="active">01 · 执行模型基础（容器与上下文）</a></li>
+          <li><a href="02-spec-execution-context.html">02 · §9 执行模型规范精读</a></li>
+          <li><a href="03-event-loop-async.html">03 · Event Loop 与异步演进</a></li>
+          <li><a href="04-modules-tla.html">04 · 模块系统与 Top-Level Await</a></li>
         </ul>
-        <h3>另一轨</h3>
+        <h3>其他阶段</h3>
         <ul>
-          <li><a href="../02-spec/index.html">Track B · 规范精读</a></li>
+          <li><a href="../01-standards/index.html">P1 · 标准与演化</a></li>
+          <li><a href="../02-design/index.html">P2 · 设计原则与灵感</a></li>
+          <li><a href="../03-spec-reading/index.html">P3 · 怎么读规范</a></li>
+          <li><a href="../04-data-types/index.html">P4 · §6 数据类型与值</a></li>
+          <li><a href="../05-abstract-ops/index.html">P5 · §7 抽象操作</a></li>
+          <li><a href="../06-internal-slots/index.html">P6 · §10 内部槽与方法</a></li>
         </ul>
         <h3>跨主题</h3>
         <ul>
@@ -64,33 +68,33 @@
           <span class="breadcrumb-sep">/</span>
           <a href="../index.html">ECMAScript</a>
           <span class="breadcrumb-sep">/</span>
-          <a href="index.html">Track A · 历史脉络与设计</a>
+          <a href="index.html">P7 · §9 执行模型与并发</a>
           <span class="breadcrumb-sep">/</span>
-          <span>A3 · 执行模型</span>
+          <span>01 · 执行模型基础</span>
         </nav>
 
-        <h1>A3 · 执行模型 ——「机器怎么跑？」</h1>
+        <h1>执行模型基础：Realm / Agent / Job 与执行上下文 ——「机器怎么跑？」</h1>
         <p class="lead">
-          A2 讲了 ECMAScript 的"语言特性"——表层用户能看到的那些。本章把它们翻译成"<strong>运行时机器结构</strong>"：当一段代码真的在跑的时候，规范层定义了哪些数据结构、它们如何嵌套、谁推谁出栈、闭包靠什么活下来、<code>this</code> 从哪来、<code>setTimeout</code> 谁在调度。这是 JS 这台抽象机器的"<strong>VM 架构图</strong>"，比"语言特性"更接近金属，比"V8 实现"更稳定（V8 重写过 4 次，规范没变）。
+          P2 讲了 ECMAScript 的"语言特性"——表层用户能看到的那些。本章把它们翻译成"<strong>运行时机器结构</strong>"：当一段代码真的在跑的时候，规范层定义了哪些数据结构、它们如何嵌套、谁推谁出栈、闭包靠什么活下来、<code>this</code> 从哪来、<code>setTimeout</code> 谁在调度。这是 JS 这台抽象机器的"<strong>VM 架构图</strong>"，比"语言特性"更接近金属，比"V8 实现"更稳定（V8 重写过 4 次，规范没变）。
         </p>
 
         <div class="callout warn" style="margin: 16px 0">
           <div class="callout-title">⚠️ 本章是最难的一章</div>
           <p>
-            Realm / Agent / Job / ExecutionContext / EnvironmentRecord 是规范的"机器术语"，不是"语言特性"。绝大多数 JS 工程师从没遇到过它们——但它们是后续 <a href="index.html">A4 异步演进</a>、<a href="../02-spec/index.html">B5 §9 上下文</a>、以及一切"<em>为什么 vm 沙箱要这样写、为什么跨 iframe 的 <code>Array</code> 不等</em>"问题的根因。建议至少读两遍，第二遍带着具体场景（如"我写一个 setTimeout 时发生了什么？"）回头对照。
+            Realm / Agent / Job / ExecutionContext / EnvironmentRecord 是规范的"机器术语"，不是"语言特性"。绝大多数 JS 工程师从没遇到过它们——但它们是后续 <a href="03-event-loop-async.html">P7.3 Event Loop 与异步演进</a>、<a href="02-spec-execution-context.html">P7.2 §9 规范精读</a>、以及一切"<em>为什么 vm 沙箱要这样写、为什么跨 iframe 的 <code>Array</code> 不等</em>"问题的根因。建议至少读两遍，第二遍带着具体场景（如"我写一个 setTimeout 时发生了什么？"）回头对照。
           </p>
         </div>
 
         <div class="callout info" style="margin: 16px 0">
           <div class="callout-title">📐 本章交叉规则</div>
           <p>
-            作用域、闭包、<code>this</code>、TDZ 在 <a href="../../javascript/index.html">JavaScript 主题</a> 已详述。本章对这些机制做<strong>1-3 句话短重述 + 链回</strong>，正文聚焦"<strong>规范层怎么定义这台机器、Host 与 ECMA-262 的责任划分</strong>"。
+            作用域、闭包、<code>this</code>、TDZ 在 <a href="../../javascript/index.html">JavaScript 主题</a> 已详述。本章对这些机制做<strong>1-3 句话短重述 + 链回</strong>，正文聚焦"<strong>规范层怎么定义这台机器、Host 与 ECMA-262 的责任划分</strong>"。如果你想深入到 <code>OrdinaryGet</code> / <code>ResolveBinding</code> 等抽象操作的逐步算法，请配合 <a href="02-spec-execution-context.html">P7.2 §9 规范精读</a>。
           </p>
         </div>
 
         <div class="chapter-meta">
           <span><strong>阅读时长</strong> ~45 分钟</span>
-          <span><strong>前置</strong> <a href="02-design-principles.html">A2 设计原则</a></span>
+          <span><strong>前置</strong> <a href="../02-design/02-design-tradeoffs.html">P2.2 设计权衡</a>（作用域 + 闭包基础）</span>
           <span><strong>对应 ECMA-262</strong>
             <a href="https://262.ecma-international.org/15.0/index.html#sec-executable-code-and-execution-contexts" target="_blank" rel="noopener">§9 Executable Code and Execution Contexts</a>
           </span>
@@ -545,7 +549,7 @@ setTimeout(() =&gt; {
         </ul>
 
         <p>
-          <strong>详细机制请参考</strong> <a href="../../javascript/04-modules/01-esm.html">JS · ES Modules</a>（导入/导出语法、live binding 行为）。模块系统的<strong>设计决策</strong>（为什么是静态结构 vs 运行时函数）已在 <a href="02-design-principles.html#internals">A2 设计原则</a> 讨论。
+          <strong>详细机制请参考</strong> <a href="../../javascript/04-modules/01-esm.html">JS · ES Modules</a>（导入/导出语法、live binding 行为）。模块系统的<strong>设计决策</strong>（为什么是静态结构 vs 运行时函数）已在 <a href="../02-design/02-design-tradeoffs.html">P2.2 设计权衡</a> 讨论；模块求值的规范层细节在 <a href="04-modules-tla.html">P7.4 模块系统与 Top-Level Await</a> 展开。
         </p>
 
         <h3>Host 与 ECMA-262 的责任划分</h3>
@@ -798,9 +802,10 @@ console.log('sync');
 
         <h3>本主题内部</h3>
         <ul>
-          <li>上一章：<a href="02-design-principles.html">A2 设计原则与语言特性</a></li>
-          <li>下一步：<strong>A4 异步演进</strong>（编写中）—— Job Queue 在 Agent 上的调度、Promise 状态机、async/await 如何用 ExecutionContext 暂停机制实现</li>
-          <li>规范侧：<strong><a href="../02-spec/index.html">Track B · 规范精读</a></strong>—— B5 §9 上下文从规范层视角再讲一遍这些数据结构</li>
+          <li>上一阶段：<a href="../06-internal-slots/01-internal-slots.html">P6 · §10 内部槽与方法</a></li>
+          <li>规范侧：<a href="02-spec-execution-context.html">P7.2 §9 执行模型规范精读</a> —— 从规范层视角再讲一遍 Realm/Agent/Job/Environment Record（含 ResolveBinding 等抽象操作的逐步算法）</li>
+          <li>下一章：<a href="03-event-loop-async.html">P7.3 Event Loop 与异步演进</a> —— Job Queue 在 Agent 上的调度、Promise 状态机、async/await 如何用 ExecutionContext 暂停机制实现</li>
+          <li>模块求值：<a href="04-modules-tla.html">P7.4 模块系统与 Top-Level Await</a> —— Source Text Module Records 的 4 阶段算法 + cycle 死锁检测</li>
         </ul>
 
         <h3>跨主题参考（本章引用了这些 JS 章节做"短重述链回"）</h3>
@@ -814,13 +819,13 @@ console.log('sync');
 
         <!-- 底部翻页 ================================================== -->
         <nav class="chapter-nav" aria-label="章节翻页">
-          <a class="prev" href="02-design-principles.html">
-            <span class="label">← 上一章</span>
-            <span class="title">A2 · 设计原则与语言特性</span>
+          <a class="prev" href="../06-internal-slots/01-internal-slots.html">
+            <span class="label">← 上一阶段</span>
+            <span class="title">P6 · §10 内部槽与方法</span>
           </a>
-          <a class="next" href="04-async-evolution.html">
+          <a class="next" href="02-spec-execution-context.html">
             <span class="label">下一章 →</span>
-            <span class="title">A4 · 异步演进</span>
+            <span class="title">02 · §9 执行模型规范精读</span>
           </a>
         </nav>
       </article>

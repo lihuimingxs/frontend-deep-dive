@@ -37,7 +37,7 @@
 - React Hooks 的闭包陷阱 → 短重述 + 链回 `javascript/02-advanced/02-closures`
 - `useEffect` 内的 Promise / async → 短重述 + 链回 `javascript/03-async/`
 - React Props 的 TypeScript 泛型 → 短重述 + 链回 `typescript/01-handbook-basics/04-functions` / `02-type-manipulation/07-generics`
-- Fiber 的微任务调度 → 短重述 + 链回 `ecma/01-history/04-async-evolution` + `javascript/03-async/02-microtask-macrotask`
+- Fiber 的微任务调度 → 短重述 + 链回 `ecma/07-execution/03-event-loop-async` + `javascript/03-async/02-microtask-macrotask`
 
 ### 内容覆盖原则 ——「react.dev 系统化 + RFC 设计动机」
 
@@ -147,7 +147,7 @@
 ## A3 · Fiber 架构 ——「机器怎么跑？」⭐ 最难章
 
 - **定位**：讲清楚 2016 年 Fiber 重写的<strong>具体机制</strong>。这是 React 内部最神秘也最重要的部分——理解后所有"<em>为什么 useEffect 在 commit 后跑</em>" / "<em>为什么 Concurrent 能时间切片</em>" / "<em>为什么 Suspense 能 throw promise</em>" 都有了根因。
-- **与既有主题交叉的处理**：调度相关（microtask / requestIdleCallback）<strong>短重述 + 链回</strong> `javascript/03-async/` 和 `ecma/01-history/04-async-evolution`，正文聚焦 Fiber 自己的数据结构。
+- **与既有主题交叉的处理**：调度相关（microtask / requestIdleCallback）<strong>短重述 + 链回</strong> `javascript/03-async/` 和 `ecma/07-execution/03-event-loop-async`，正文聚焦 Fiber 自己的数据结构。
 - **关键知识点**：
   - **Fiber 节点 = 工作单元**：每个 React 元素对应一个 Fiber 节点
     - 关键字段：<code>type</code> / <code>stateNode</code>（DOM 节点 / class 实例）/ <code>child</code> / <code>sibling</code> / <code>return</code>（parent）/ <code>memoizedState</code>（hooks 链表）/ <code>memoizedProps</code> / <code>flags</code>（要做什么操作）/ <code>lanes</code>（优先级）
