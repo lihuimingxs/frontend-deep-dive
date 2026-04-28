@@ -1,0 +1,976 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>B7 · useEffect 完整生命周期 · React 深度学习</title>
+    <meta
+      name="description"
+      content="React 最难 Hook 完整心智模型：「同步外部系统」核心心智、完整生命周期（mount → effect → cleanup → effect → unmount）、依赖数组浅比较、cleanup 模式、闭包陷阱、useLayoutEffect 区分、StrictMode 双重触发、React 19 useEffectEvent 提案、何时不用 useEffect。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2361dafb'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23000000'%3EReact%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>React 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.13 220); color: #fff">R</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">React 首页</a>
+          <a href="index.html">Track B 目录</a>
+          <a href="https://react.dev/reference/react/useEffect" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Track B · 官网知识精读</h3>
+        <ul>
+          <li><a href="index.html">Track 概览</a></li>
+        </ul>
+        <h4 style="margin-top: 12px; color: var(--text-muted)">Part 1 · 心智模型</h4>
+        <ul>
+          <li><a href="01-rendering-model.html">B1 · 渲染模型</a></li>
+          <li><a href="02-jsx.html">B2 · JSX</a></li>
+          <li><a href="03-components-props.html">B3 · 组件与 Props</a></li>
+          <li><a href="04-state-basics.html">B4 · State 基础</a></li>
+          <li><a href="05-conditional-list-event-form.html">B5 · 条件 / 列表 / 事件 / Form</a></li>
+        </ul>
+        <h4 style="margin-top: 12px; color: var(--text-muted)">Part 2 · Hooks 全谱</h4>
+        <ul>
+          <li><a href="06-use-state-deep.html">B6 · useState 深度</a></li>
+          <li><a href="07-use-effect.html" class="active">B7 · useEffect ⭐</a></li>
+          <li><span class="sidebar-pending">B8 · useReducer / useContext ⏳</span></li>
+          <li><span class="sidebar-pending">B9 · useMemo / useCallback ⏳</span></li>
+          <li><span class="sidebar-pending">B10 · useRef ⏳</span></li>
+          <li><span class="sidebar-pending">B11 · 自定义 Hooks ⏳</span></li>
+        </ul>
+        <h3>另一轨</h3>
+        <ul>
+          <li><a href="../01-history/index.html">Track A · 历史脉络（已完成）</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">React</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Track B · 官网知识精读</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>B7 · useEffect ⭐</span>
+        </nav>
+
+        <h1>B7 · useEffect 完整生命周期 ⭐</h1>
+        <p class="lead">
+          <code>useEffect</code> 是 React 中<strong>最难掌握的 Hook</strong>—— 闭包陷阱、依赖数组、cleanup、StrictMode 双重触发、useLayoutEffect 区分、Server Components 时代角色变化。这章用大篇幅把所有 useEffect 心智讲透。<strong>核心论断</strong>：useEffect 不是"<em>componentDidMount 替代品</em>"，是<strong>"<em>同步 React state 到外部系统</em>"</strong> 的工具。理解这点之前所有 useEffect 用法都是似懂非懂；理解后所有"<em>什么时候用 useEffect</em>"问题都有清晰答案。
+        </p>
+
+        <div class="callout warn" style="margin: 16px 0">
+          <div class="callout-title">⚠️ 这是 Track B 最难的一章</div>
+          <p>
+            useEffect 陷阱密度全 React 最高—— 无限循环、stale closure、跑两次、cleanup 时机、依赖错配。建议<strong>读两遍</strong>，第二遍带着具体场景（如"<em>怎么订阅 WebSocket</em>" / "<em>怎么 fetch 用户数据</em>"）回头对照。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~40 分钟</span>
+          <span><strong>前置</strong> <a href="04-state-basics.html">B4 State 基础</a> + <a href="06-use-state-deep.html">B6 useState 深度</a> + <a href="../../javascript/02-advanced/02-closures.html">JS · 闭包</a>（强烈推荐）</span>
+          <span><strong>对应 react.dev</strong>
+            <a href="https://react.dev/reference/react/useEffect" target="_blank" rel="noopener">useEffect API</a> ·
+            <a href="https://react.dev/learn/synchronizing-with-effects" target="_blank" rel="noopener">Synchronizing with Effects</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>useEffect 的心智模型是"<em>同步外部系统</em>"</strong>，不是"<em>componentDidMount 等生命周期替代</em>"。每个 useEffect 描述<strong>"<em>当 X 变化时，让外部系统也跟着变</em>"</strong>—— 外部系统包括 DOM API（document.title）/ 浏览器订阅（事件 listener）/ 网络订阅（WebSocket / SSE）/ 第三方库（Map SDK / Chart.js）/ 本地存储（localStorage）等。
+          </li>
+          <li>
+            <strong>完整生命周期 5 阶段</strong>：① mount 后 effect 跑 ② state/props 变化触发 cleanup（如果有）→ effect 重跑 ③ 重复 ② ④ unmount 时跑最后一次 cleanup。<strong>cleanup 在 React 18 StrictMode 开发环境会跑两次</strong>—— 强迫你写正确的 cleanup。
+          </li>
+          <li>
+            <strong>3 条铁律</strong>：① <strong>把 effect 内用到的所有响应式值都列入依赖数组</strong>（state / props / context）—— 否则 stale closure ② <strong>每个订阅必须有 cleanup</strong> —— 否则内存泄漏 + 重复订阅 ③ <strong>不要把"<em>事件响应</em>"放 useEffect</strong>—— 那是 event handler 的工作。
+          </li>
+        </ol>
+
+        <p>看一段最小代码识别 useEffect 三要素：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · useEffect 完整骨架</span>
+          <pre class="code"><code class="lang-js">function ChatRoom({ roomId }) {
+  const [messages, setMessages] = useState([]);
+
+  useEffect(() =&gt; {
+    // ① 副作用代码（连接外部系统）
+    const ws = new WebSocket(`wss://api.com/chat/${roomId}`);
+    ws.onmessage = (e) =&gt; setMessages(prev =&gt; [...prev, JSON.parse(e.data)]);
+
+    // ② cleanup（断开外部系统）—— 在 effect 重跑或组件 unmount 时调
+    return () =&gt; ws.close();
+
+  }, [roomId]);   // ③ 依赖数组：roomId 变化时 cleanup + 重跑 effect
+
+  return &lt;ul&gt;{messages.map(m =&gt; &lt;li key={m.id}&gt;{m.text}&lt;/li&gt;)}&lt;/ul&gt;;
+}
+
+// 心智解读：
+// "当 roomId 变化时，让 WebSocket 连接也跟着切换"
+// = "同步 React state（roomId）到外部系统（WebSocket 连接）"
+// 不是 "组件 mount 时连接 WebSocket" —— 这只是其中一个阶段</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>心智模型：「同步外部系统」</h3>
+        <p>
+          <strong>这是 useEffect 最重要的概念</strong>—— 也是大部分 useEffect bug 的根源。
+        </p>
+
+        <div class="callout success">
+          <div class="callout-title">📐 useEffect 不是"生命周期替代品"</div>
+          <p>
+            React 16.x class 时代，<code>componentDidMount</code> / <code>componentDidUpdate</code> / <code>componentWillUnmount</code> 是 3 个独立 hook，开发者把订阅 / 取消订阅 / fetch 等逻辑分散在三个方法里。<br>
+            React 16.8 Hooks 时代，<code>useEffect</code> 把"<em>订阅 + 取消订阅</em>"统一到一个 effect 里——不再按"<em>组件何时</em>" 分，而是按"<em>同步什么</em>" 分。<br>
+            <strong>新人最常见的错误</strong> 是用 class 心智写 useEffect：把所有"<em>组件 mount 时的初始化</em>" 都堆在一个 useEffect。结果遇到状态变化要重跑时陷入"<em>怎么改</em>" 的迷茫。
+          </p>
+        </div>
+
+        <p>
+          <strong>正确心智</strong>：每个 useEffect 描述<strong>一个独立的"<em>同步关系</em>"</strong>。多个独立关系应该<strong>拆成多个 useEffect</strong>。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 不要用 class 心智写 useEffect</span>
+          <pre class="code"><code class="lang-js">// ❌ class 心智：所有 init 在一个 useEffect
+function Component({ userId, theme }) {
+  useEffect(() =&gt; {
+    // 同步用户数据
+    fetchUser(userId).then(setUser);
+    // 应用主题
+    document.body.className = theme;
+    // 注册全局事件
+    window.addEventListener('resize', handleResize);
+    return () =&gt; window.removeEventListener('resize', handleResize);
+  }, [userId, theme]);
+  // 问题：theme 变了也会重新 fetchUser！userId 变了也会重新设 className
+}
+
+// ✅ 同步系统心智：每个独立同步关系一个 useEffect
+function Component({ userId, theme }) {
+  // 同步关系 1：userId → user data
+  useEffect(() =&gt; {
+    fetchUser(userId).then(setUser);
+  }, [userId]);
+
+  // 同步关系 2：theme → body className
+  useEffect(() =&gt; {
+    document.body.className = theme;
+  }, [theme]);
+
+  // 同步关系 3：window resize → state（无依赖，挂载时建立 + 卸载时清理）
+  useEffect(() =&gt; {
+    window.addEventListener('resize', handleResize);
+    return () =&gt; window.removeEventListener('resize', handleResize);
+  }, []);
+}
+
+// 拆分后：每个 effect 只管一件事，依赖最小，不互相干扰</code></pre>
+        </div>
+
+        <h3>完整生命周期 5 阶段</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · useEffect 完整生命周期</span>
+          <pre class="code"><code class="lang-js">function Component({ id }) {
+  useEffect(() =&gt; {
+    console.log('Effect ran with id:', id);
+    return () =&gt; console.log('Cleanup with id:', id);
+  }, [id]);
+  return null;
+}
+
+// 完整时序（生产环境）：
+//
+// Step 1: mount —— 组件首次挂载
+//   - render 函数体跑
+//   - commit 阶段：DOM 更新
+//   - 浏览器 paint
+//   - effect 跑（passive effect 异步，不阻塞 paint）
+//   - console: "Effect ran with id: 1"
+//
+// Step 2: 父更新让 id 变成 2
+//   - render 函数体跑（用新 id）
+//   - commit 阶段：DOM 更新
+//   - 浏览器 paint
+//   - cleanup 跑（用上次 effect 的闭包）
+//   - console: "Cleanup with id: 1"
+//   - effect 重跑（用新 id）
+//   - console: "Effect ran with id: 2"
+//
+// Step 3: id 不变（仅 state 变化导致重渲染）
+//   - render + commit
+//   - 因为依赖 [id] 没变 → cleanup 不跑、effect 不跑
+//   - console: 无输出
+//
+// Step 4: unmount —— 组件销毁
+//   - cleanup 跑
+//   - console: "Cleanup with id: 2"
+
+// 开发环境（StrictMode）多 1 步：
+//   mount 时跑两遍：mount → effect → cleanup → effect
+//   帮你检测 cleanup 是否正确</code></pre>
+        </div>
+
+        <p>
+          <strong>关键观察</strong>：
+        </p>
+        <ul>
+          <li><strong>cleanup 用上次 effect 的闭包</strong>—— 这是 cleanup 能"<em>断开正确的 WebSocket / 移除正确的 listener</em>"的根因</li>
+          <li><strong>effect 在 commit 之后异步跑</strong>—— 不阻塞浏览器 paint（A3 详述）</li>
+          <li><strong>依赖不变跳过 cleanup + effect</strong>—— 这是 React.memo / useMemo / useCallback 配合 effect 优化的基础</li>
+        </ul>
+
+        <h3>依赖数组规则 ⭐</h3>
+        <p>
+          依赖数组是 useEffect <strong>最容易出错</strong>的部分：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 24%">写法</th>
+              <th>含义</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>不写</strong> <code>useEffect(() =&gt; {})</code></td>
+              <td>每次 render 都跑（极少用）</td>
+            </tr>
+            <tr>
+              <td><strong>空数组</strong> <code>useEffect(() =&gt; {}, [])</code></td>
+              <td>仅 mount 时跑一次（cleanup 仅 unmount 时跑）</td>
+            </tr>
+            <tr>
+              <td><strong>有依赖</strong> <code>useEffect(() =&gt; {}, [a, b])</code></td>
+              <td>mount + 任一依赖 Object.is 不等时重跑</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>依赖比较用 Object.is 浅比较</strong>—— 与 useState 同款（B6）。注意：
+        </p>
+        <ul>
+          <li><strong>原始值（数字 / 字符串 / boolean）</strong>—— Object.is 比较值</li>
+          <li><strong>对象 / 数组 / 函数</strong>—— 比较引用！每次 render 创建新引用 → effect 每次都重跑</li>
+          <li><strong>NaN vs NaN</strong>—— Object.is 等（不会重跑）</li>
+          <li><strong>+0 vs -0</strong>—— Object.is 不等（会重跑）</li>
+        </ul>
+
+        <p>
+          <strong>「<em>把 effect 用到的所有响应式值都列入依赖</em>」是规则</strong>—— ESLint <code>react-hooks/exhaustive-deps</code> 强制：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 依赖数组完整规则</span>
+          <pre class="code"><code class="lang-js">function Chat({ roomId, theme }) {
+  const [messages, setMessages] = useState([]);
+
+  // ❌ 漏依赖 —— stale closure
+  useEffect(() =&gt; {
+    const ws = new WebSocket(`wss://api.com/${roomId}`);
+    ws.onmessage = (e) =&gt; {
+      console.log('theme:', theme);    // theme 是 effect 创建时的快照！
+    };
+    return () =&gt; ws.close();
+  }, [roomId]);   // 漏 theme
+
+  // ✅ 完整依赖 —— theme 变化也重连 ws（语义上对的）
+  useEffect(() =&gt; {
+    const ws = new WebSocket(`wss://api.com/${roomId}`);
+    ws.onmessage = (e) =&gt; {
+      console.log('theme:', theme);
+    };
+    return () =&gt; ws.close();
+  }, [roomId, theme]);  // ✅ ESLint 通过
+
+  // 但 theme 变化重连 ws 没必要 —— 见 React 19 useEffectEvent 解决方案
+}
+
+// ESLint exhaustive-deps 自动检测：
+// - state / props / context / 自定义 Hook 返回值都要列入
+// - setState（dispatch）/ useRef / 模块级常量 不需要列（引用稳定 / 非响应式）
+
+// 永远不要 disable lint 跳过这个规则！
+// 99% 的"我必须 disable" 案例都是 effect 写错了，正确的写法是：
+// 1. 重构让函数 / 对象不必每次 render 创建新引用（useMemo / useCallback）
+// 2. 用 useEffectEvent（19 提案）拿"非响应式" 的最新值
+// 3. 拆分成多个 effect（每个 effect 关心更少依赖）
+// 4. 把 state 提升到组件外（useReducer / Zustand）</code></pre>
+        </div>
+
+        <h3>cleanup 模式</h3>
+        <p>
+          每个 effect <strong>建立外部连接</strong>就必须有 cleanup <strong>断开</strong>。常见模式：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · cleanup 经典 5 种模式</span>
+          <pre class="code"><code class="lang-js">// 1. 事件 listener
+useEffect(() =&gt; {
+  const handler = (e) =&gt; doSomething(e);
+  window.addEventListener('keydown', handler);
+  return () =&gt; window.removeEventListener('keydown', handler);
+}, []);
+
+// 2. WebSocket / EventSource
+useEffect(() =&gt; {
+  const ws = new WebSocket(url);
+  ws.onmessage = handleMessage;
+  return () =&gt; ws.close();
+}, [url]);
+
+// 3. 定时器
+useEffect(() =&gt; {
+  const id = setInterval(() =&gt; doSomething(), 1000);
+  return () =&gt; clearInterval(id);
+}, []);
+
+// 4. AbortController（fetch 取消）
+useEffect(() =&gt; {
+  const controller = new AbortController();
+  fetch(`/api/users/${userId}`, { signal: controller.signal })
+    .then(r =&gt; r.json())
+    .then(setUser)
+    .catch(err =&gt; { if (err.name !== 'AbortError') throw err; });
+  return () =&gt; controller.abort();
+}, [userId]);
+// 当 userId 快速变化时，旧请求自动取消 —— 避免"<em>响应顺序竞态</em>" bug
+
+// 5. 第三方 SDK / 库
+useEffect(() =&gt; {
+  const map = new MapSDK(containerRef.current, { center });
+  return () =&gt; map.destroy();
+}, [center]);
+
+// 关键原则：每个 setUp 必须有 tearDown
+// "如果我创建了它，我必须负责销毁它"</code></pre>
+        </div>
+
+        <h3>闭包陷阱（短重述）</h3>
+        <p>
+          <strong>短重述</strong>：组件每次 render 创建新闭包，effect 函数捕获的 state / props 是<strong>那次 render 的快照</strong>。详细机制见 <a href="../../javascript/02-advanced/02-closures.html">JS · 闭包</a> + B4 stale state 章节。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · useEffect 中的闭包陷阱</span>
+          <pre class="code"><code class="lang-js">// ❌ 经典 stale closure
+function Counter() {
+  const [count, setCount] = useState(0);
+
+  useEffect(() =&gt; {
+    const id = setInterval(() =&gt; {
+      console.log('count:', count);   // 永远是 effect 创建时的 count
+    }, 1000);
+    return () =&gt; clearInterval(id);
+  }, []);                              // 空依赖 —— effect 仅初次创建
+
+  // 用户点击 button 多次，count 实际更新了，但日志永远是初始值
+
+  return &lt;button onClick={() =&gt; setCount(c =&gt; c + 1)}&gt;{count}&lt;/button&gt;;
+}
+
+// 解 1：把 count 加进依赖（每次 count 变都 cleanup + 重新 setInterval）
+// 缺点：interval 时间会"重置"
+
+// 解 2：用 ref 拿最新 count（B10 详述）
+const countRef = useRef(count);
+useEffect(() =&gt; { countRef.current = count; });
+useEffect(() =&gt; {
+  const id = setInterval(() =&gt; {
+    console.log('count:', countRef.current);  // 永远最新
+  }, 1000);
+  return () =&gt; clearInterval(id);
+}, []);
+
+// 解 3（19+ 推荐）：useEffectEvent
+// 见下文 React 19 useEffectEvent 节</code></pre>
+        </div>
+
+        <h3>useLayoutEffect vs useEffect</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 24%">维度</th>
+              <th>useEffect</th>
+              <th>useLayoutEffect</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>触发时机</td>
+              <td>commit 后<strong>异步</strong>（passive effect）</td>
+              <td>commit 中<strong>同步</strong>（layout phase）</td>
+            </tr>
+            <tr>
+              <td>是否阻塞浏览器 paint</td>
+              <td>不阻塞</td>
+              <td><strong>阻塞</strong>（用户看不到中间状态）</td>
+            </tr>
+            <tr>
+              <td>性能影响</td>
+              <td>对帧率友好</td>
+              <td>慢的 layout effect 让帧率掉</td>
+            </tr>
+            <tr>
+              <td>SSR 行为</td>
+              <td>SSR 不跑（仅客户端）</td>
+              <td>SSR 不跑 + 警告（服务器无 layout）</td>
+            </tr>
+            <tr>
+              <td>典型场景</td>
+              <td>数据 fetch / 订阅 / 同步外部</td>
+              <td>同步 DOM 测量后修改避免闪烁（如 tooltip 位置）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="code-block">
+          <span class="code-label">javascript · useLayoutEffect 必要场景</span>
+          <pre class="code"<code class="lang-js">// ✅ useLayoutEffect 必要：测量 + 调整 避免 paint 闪烁
+function Tooltip({ text, target }) {
+  const tooltipRef = useRef(null);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+
+  // ⚠️ 用 useEffect 会闪烁：
+  //    paint 1 frame（tooltip 在 (0,0)）→ effect 算位置 setState → paint 2 frame
+  // ✅ 用 useLayoutEffect：
+  //    layout phase 算位置 setState → 重新 layout → paint（用户看到正确位置）
+  useLayoutEffect(() =&gt; {
+    const targetRect = target.getBoundingClientRect();
+    const tooltipRect = tooltipRef.current.getBoundingClientRect();
+    setPosition({
+      top: targetRect.bottom + 5,
+      left: targetRect.left + (targetRect.width - tooltipRect.width) / 2,
+    });
+  }, [target]);
+
+  return (
+    &lt;div ref={tooltipRef} style={{ position: 'absolute', ...position }}&gt;
+      {text}
+    &lt;/div&gt;
+  );
+}
+
+// 99% 场景用 useEffect。useLayoutEffect 仅用于：
+// 1. 测量 DOM 后立即调整（避免闪烁）
+// 2. 同步修改 DOM 不让用户看到中间态
+// 3. 集成命令式动画库（GSAP / Three.js）需要在 paint 前同步</code></pre>
+        </div>
+
+        <h3>StrictMode 双重触发 + cleanup 检测</h3>
+        <p>
+          B1 已讲过 StrictMode 让组件函数双重调用。<strong>对 useEffect 的具体影响</strong>：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · StrictMode 双重 effect</span>
+          <pre class="code"><code class="lang-js">// 在 StrictMode 下，组件 mount 时：
+useEffect(() =&gt; {
+  console.log('mount');
+  return () =&gt; console.log('cleanup');
+}, []);
+
+// 控制台输出（仅开发环境）：
+// mount
+// cleanup
+// mount
+// 而非生产环境的：mount
+
+// 为什么 React 这样做？
+// 检测你的 cleanup 是否正确写了：
+// - 如果 cleanup 不正确，会暴露 bug（如订阅了两次但只取消一次）
+// - 强迫你用"<em>每个 setup 都有 tearDown</em>" 的模式
+
+// 常见 bug 模式（StrictMode 暴露）：
+useEffect(() =&gt; {
+  // ❌ 没 cleanup —— StrictMode 下事件 listener 注册两次
+  window.addEventListener('keydown', handleKey);
+  // 生产环境单次：表面看起来正常
+  // 开发环境双次：addEventListener 被调用两次 —— 但 React 不知道，无法 cleanup
+  // → 实际有内存泄漏 + 双重响应
+}, []);
+
+useEffect(() =&gt; {
+  // ✅ 有 cleanup —— StrictMode 双调时 cleanup 也跑两次，最终状态正确
+  window.addEventListener('keydown', handleKey);
+  return () =&gt; window.removeEventListener('keydown', handleKey);
+}, []);
+
+// 关键原则：所有 effect 都应该假设可能跑多次 —— cleanup 必须正确</code></pre>
+        </div>
+
+        <h3>React 19 <code>useEffectEvent</code> 提案</h3>
+        <p>
+          长期痛点：useEffect 内有时需要"<em>非响应式</em>" 值——它会变但变了不该重跑 effect。React 19 引入实验性 <code>useEffectEvent</code>（仍在 RFC 阶段，未稳定）：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · useEffectEvent 解决"非响应式" 值</span>
+          <pre class="code"><code class="lang-js">// 痛点：roomId 变要重连 ws，但 onMessage 变化不该重连
+function Chat({ roomId, onMessage }) {
+  // ❌ 列入依赖：onMessage 每次 render 都新引用 → ws 反复重连
+  useEffect(() =&gt; {
+    const ws = new WebSocket(`wss://api.com/${roomId}`);
+    ws.onmessage = (e) =&gt; onMessage(JSON.parse(e.data));
+    return () =&gt; ws.close();
+  }, [roomId, onMessage]);
+
+  // ❌ 不列入：stale closure —— onMessage 变化但 effect 仍用旧的
+
+  // ✅ React 19 useEffectEvent（实验性）
+  const handleMessage = useEffectEvent((e) =&gt; {
+    onMessage(JSON.parse(e.data));   // 总是用最新 onMessage
+  });
+
+  useEffect(() =&gt; {
+    const ws = new WebSocket(`wss://api.com/${roomId}`);
+    ws.onmessage = handleMessage;     // 引用稳定 + 自动拿最新
+    return () =&gt; ws.close();
+  }, [roomId]);   // ✅ 不需要列 onMessage / handleMessage
+}
+
+// 注意：
+// 1. useEffectEvent 仍在实验阶段（写作时点 2026-04 未稳定）
+// 2. 设计意图：声明"<em>这个 callback 是事件响应，不是同步关系</em>"
+// 3. 不能在 render 中调用 useEffectEvent 返回的函数 —— 仅 effect 内 / event handler 内</code></pre>
+        </div>
+
+        <h3>何时不用 useEffect ⭐</h3>
+        <p>
+          <strong>这是 React 团队在 react.dev 反复强调的一节</strong>—— useEffect 被滥用太多。<strong>"<em>You Might Not Need an Effect</em>"</strong> 是官方推荐阅读。常见误用：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · useEffect 反模式与正确替代</span>
+          <pre class="code"><code class="lang-js">// === 反模式 1：派生 state ===
+// ❌ useEffect 同步派生值
+const [items, setItems] = useState([]);
+const [filteredItems, setFilteredItems] = useState([]);
+useEffect(() =&gt; {
+  setFilteredItems(items.filter(i =&gt; i.active));
+}, [items]);
+// 问题：① 多一次渲染 ② 同步逻辑可能出 bug ③ 性能差
+
+// ✅ 直接计算
+const filteredItems = items.filter(i =&gt; i.active);
+// 昂贵时用 useMemo
+
+// === 反模式 2：响应事件 ===
+// ❌ useEffect 响应 button click
+const [submitted, setSubmitted] = useState(false);
+useEffect(() =&gt; {
+  if (submitted) {
+    showToast('Success!');
+    setSubmitted(false);
+  }
+}, [submitted]);
+
+// ✅ 直接在 event handler 里
+const handleSubmit = () =&gt; {
+  showToast('Success!');
+};
+
+// === 反模式 3：通知 parent state 变化 ===
+// ❌ useEffect 通知 parent
+function Toggle({ onChange }) {
+  const [isOn, setIsOn] = useState(false);
+  useEffect(() =&gt; {
+    onChange(isOn);   // 通知 parent
+  }, [isOn, onChange]);
+  return ...;
+}
+
+// ✅ 在 setState 同时通知 parent（更新 + 通知是同一逻辑）
+function Toggle({ onChange }) {
+  const [isOn, setIsOn] = useState(false);
+  const handleToggle = () =&gt; {
+    const next = !isOn;
+    setIsOn(next);
+    onChange(next);   // 同步通知
+  };
+  return ...;
+}
+
+// === 反模式 4：初始化全局单例 ===
+// ❌ 每次组件 mount 都跑（即使已初始化）
+useEffect(() =&gt; {
+  initAnalytics();
+}, []);
+
+// ✅ 模块级初始化（仅一次）
+if (typeof window !== 'undefined' &amp;&amp; !window.__analyticsInitialized) {
+  initAnalytics();
+  window.__analyticsInitialized = true;
+}
+function App() { return ...; }
+
+// === 反模式 5：用 useEffect 加载数据（19+ 用 use API / RSC）===
+// ❌ 经典 useEffect fetch
+useEffect(() =&gt; {
+  fetch(`/api/users/${id}`).then(r =&gt; r.json()).then(setUser);
+}, [id]);
+
+// ✅ React 19 + RSC：服务端组件直接 await
+async function UserProfile({ id }) {
+  const user = await fetch(`/api/users/${id}`).then(r =&gt; r.json());
+  return &lt;UserCard {...user} /&gt;;
+}
+
+// ✅ 客户端组件 + use API
+'use client';
+function UserProfile({ userPromise }) {
+  const user = use(userPromise);
+  return &lt;UserCard {...user} /&gt;;
+}
+
+// ✅ 或用 TanStack Query / SWR（生产推荐）
+const { data, isLoading } = useQuery(['user', id], () =&gt;
+  fetch(`/api/users/${id}`).then(r =&gt; r.json()),
+);
+
+// 2025 年的 useEffect 真正用途越来越少 —— 主要是"<em>同步外部系统</em>"
+// （订阅 / DOM 操作 / 第三方库）。数据加载有更好的工具</code></pre>
+        </div>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 订阅外部 store（Redux / Zustand 之外的）</h3>
+          <p>
+            集成自家的 EventBus / 第三方状态库（不是 React 集成的）—— useEffect 订阅是经典用例：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 订阅外部 store</span>
+            <pre class="code"><code class="lang-js">function useExternalStore(store) {
+  const [value, setValue] = useState(store.getValue());
+
+  useEffect(() =&gt; {
+    const unsubscribe = store.subscribe(() =&gt; setValue(store.getValue()));
+    return unsubscribe;
+  }, [store]);
+
+  return value;
+}
+
+// 用法
+function Component() {
+  const userData = useExternalStore(globalUserStore);
+  return &lt;div&gt;{userData.name}&lt;/div&gt;;
+}
+
+// React 18+ 实际推荐用 useSyncExternalStore（专为外部 store 设计）：
+const userData = useSyncExternalStore(
+  globalUserStore.subscribe,
+  () =&gt; globalUserStore.getValue(),
+  () =&gt; globalUserStore.getServerValue(),  // SSR 快照
+);
+// 内部仍是 useEffect 订阅，但解决了 tearing（Concurrent rendering 期间撕裂）问题</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 集成命令式 DOM 库（Chart.js / Three.js / D3）</h3>
+          <p>
+            useEffect 是 React 与命令式 DOM 库的桥梁——React 管声明式渲染，effect 管命令式初始化和销毁：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 集成 Chart.js</span>
+            <pre class="code"><code class="lang-js">function Chart({ data, type = 'bar' }) {
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+
+  // 初始化（仅 type 变化时重建）
+  useEffect(() =&gt; {
+    chartRef.current = new ChartJS(canvasRef.current, {
+      type,
+      data,
+      options: { responsive: true },
+    });
+    return () =&gt; chartRef.current?.destroy();
+  }, [type]);
+
+  // data 变化时调用 update（不重建）
+  useEffect(() =&gt; {
+    if (!chartRef.current) return;
+    chartRef.current.data = data;
+    chartRef.current.update();
+  }, [data]);
+
+  return &lt;canvas ref={canvasRef} /&gt;;
+}
+
+// 关键设计：
+// 1. 拆 2 个 useEffect —— 一个负责"<em>组件生命周期</em>"，一个负责"<em>data 同步</em>"
+// 2. type 变重建（chart 类型变了）；data 变 update（数据变了不重建）
+// 3. cleanup 必须 destroy 老 chart，否则内存泄漏</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · React 18 升级时修 effect 双跑 bug</h3>
+          <p>
+            升级 React 17 → 18 + StrictMode 后，发现 useEffect 跑两次—— 不是 React 18 引入的 bug，是<strong>暴露了原有的 cleanup 缺失</strong>。
+          </p>
+          <ol>
+            <li><strong>检查每个 useEffect 是否有 cleanup</strong>—— 订阅 / listener / 定时器 / fetch 都要</li>
+            <li><strong>fetch 加 AbortController</strong>—— 双调时第一个会被取消，避免重复请求 + 响应顺序竞态</li>
+            <li><strong>WebSocket / EventSource</strong>—— cleanup 必须 close，否则双调建立两个连接</li>
+            <li><strong>analytics / 计数器</strong>—— 用 ref 标记是否已初始化，避免双调重复</li>
+            <li><strong>StrictMode 让你"<em>必须写正确</em>"</strong>—— 是好事，提前暴露 bug</li>
+          </ol>
+        </div>
+
+        <!-- 04 典型代码 ================================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>fetch 数据 + AbortController + 竞态保护</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 完整 fetch 模式（教学用，生产用 TanStack Query）</span>
+          <pre class="code"><code class="lang-js">function UserProfile({ userId }) {
+  const [user, setUser] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() =&gt; {
+    const controller = new AbortController();
+    setLoading(true);
+    setError(null);
+
+    fetch(`/api/users/${userId}`, { signal: controller.signal })
+      .then(r =&gt; {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(data =&gt; {
+        setUser(data);
+        setLoading(false);
+      })
+      .catch(err =&gt; {
+        if (err.name === 'AbortError') return;  // 被取消，忽略
+        setError(err);
+        setLoading(false);
+      });
+
+    return () =&gt; controller.abort();
+  }, [userId]);
+
+  if (loading) return &lt;Spinner /&gt;;
+  if (error) return &lt;ErrorMsg error={error} /&gt;;
+  if (!user) return null;
+  return &lt;UserCard {...user} /&gt;;
+}
+
+// 关键点：
+// 1. AbortController —— userId 快变时旧请求自动取消，避免响应顺序竞态
+// 2. 每个 effect 跑都重置 loading / error
+// 3. AbortError 必须忽略（不是真错）
+// 4. 生产推荐 TanStack Query / SWR 而非手写</code></pre>
+        </div>
+
+        <h3>document.title 同步（教学用）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 极简同步外部</span>
+          <pre class="code"><code class="lang-js">function Page({ title }) {
+  useEffect(() =&gt; {
+    document.title = title;
+  }, [title]);
+  // 不需要 cleanup —— title 永远 owned by 当前路由的 Page
+
+  return ...;
+}
+
+// React 19 已有更好方式：直接在 JSX 里写 &lt;title&gt;
+function Page({ title }) {
+  return (
+    &lt;&gt;
+      &lt;title&gt;{title}&lt;/title&gt;   {/* React 19 自动 hoist 到 head */}
+      ...
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ================================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：依赖数组漏依赖（stale closure）</div>
+          <p>
+            最常见的 useEffect bug。effect 内用了 state / props 但没列入依赖 → 闭包捕获旧值。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：① <strong>永远不要 disable react-hooks/exhaustive-deps</strong> ② 配 ESLint 在 CI 强制 ③ 真不想列依赖时用 useEffectEvent（19+）/ ref 模式（B10）/ updater function。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：依赖列了但是对象 / 函数 / 数组 → 永远 unequal</div>
+          <p>
+            <code>useEffect(() =&gt; {...}, [{ x: 1 }])</code> 或 <code>[arrayProp]</code>—— 每次 render 新引用 → effect 每次都重跑 → 可能死循环。
+          </p>
+          <div class="code-block" style="margin-top: 12px">
+            <span class="code-label">javascript · 引用稳定化</span>
+            <pre class="code"><code class="lang-js">// ❌ 死循环
+function Component({ config }) {
+  const [data, setData] = useState(null);
+  useEffect(() =&gt; {
+    fetch('/api', { body: JSON.stringify(config) }).then(setData);
+  }, [config]);   // config 每次 parent render 都新对象 → 死循环
+}
+
+// ✅ 1. 只取需要的原始字段
+useEffect(() =&gt; {...}, [config.id, config.name]);  // 假设是字符串
+
+// ✅ 2. parent 用 useMemo 稳定化 config
+const config = useMemo(() =&gt; ({ id, name }), [id, name]);
+
+// ✅ 3. 用 ref 模式（B10）
+
+// ✅ 4. 用 JSON.stringify 比较（仅简单数据）
+const configKey = JSON.stringify(config);
+useEffect(() =&gt; {...}, [configKey]);</code></pre>
+          </div>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：依赖里<strong>只放原始值</strong> 是最安全。复杂对象 / 函数依赖要用 useMemo / useCallback 稳定化。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：用 useEffect 做"<em>事件响应</em>"</div>
+          <p>
+            <code>useEffect(() =&gt; { if (formData.submitted) doSubmit() }, [formData])</code>—— 这是事件响应，应该在 onSubmit handler 里直接调 doSubmit，不需要 useEffect 中转。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：识别"<em>这是事件响应吗</em>"—— 是的话放 event handler，不要绕道 useEffect。详见 react.dev "<em>You Might Not Need an Effect</em>"。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：用 useEffect 派生 state</div>
+          <p>
+            <code>useEffect(() =&gt; { setFiltered(items.filter(...)) }, [items])</code>—— 多渲染一次 + 同步逻辑出 bug 风险。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：派生值<strong>直接计算</strong>。昂贵时用 useMemo。<strong>state 只存独立的源数据</strong>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：忘记 cleanup 导致 StrictMode 暴露 bug</div>
+          <p>
+            React 18 升级后看到 effect 跑两次—— 不是 bug 是 feature。StrictMode 帮你检测 cleanup。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：每个 setUp 都有 tearDown。<strong>双跑暴露的 bug 在生产是真实存在的</strong>—— StrictMode 只是让你提前发现。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 6：用 useLayoutEffect 跑昂贵操作让帧率掉</div>
+          <p>
+            <code>useLayoutEffect(() =&gt; { processLargeData() }, [data])</code>—— 阻塞 paint，UI 卡顿。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：useLayoutEffect 仅用于<strong>必须在 paint 前完成的 DOM 测量 / 同步调整</strong>。其他全部用 useEffect。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ================================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>权威来源</h3>
+        <ul>
+          <li>
+            <a href="https://react.dev/reference/react/useEffect" target="_blank" rel="noopener">react.dev · useEffect API</a>
+          </li>
+          <li>
+            <a href="https://react.dev/learn/synchronizing-with-effects" target="_blank" rel="noopener">react.dev · Synchronizing with Effects</a>
+          </li>
+          <li>
+            <a href="https://react.dev/learn/you-might-not-need-an-effect" target="_blank" rel="noopener">⭐ You Might Not Need an Effect</a> —— 官方反模式清单（必读）
+          </li>
+          <li>
+            <a href="https://react.dev/learn/lifecycle-of-reactive-effects" target="_blank" rel="noopener">react.dev · Lifecycle of Reactive Effects</a>
+          </li>
+        </ul>
+
+        <h3>经典深度文章</h3>
+        <ul>
+          <li>
+            <a href="https://overreacted.io/a-complete-guide-to-useeffect/" target="_blank" rel="noopener">⭐ Dan Abramov · A Complete Guide to useEffect (2019)</a> —— 仍是最深度的 useEffect 解读
+          </li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="06-use-state-deep.html">B6 useState 深度</a></li>
+          <li>下一章：<a href="08-use-reducer-context.html">B8 useReducer / useContext</a>（编写中）</li>
+          <li>引擎层：<a href="../01-history/03-fiber.html">A3 Fiber 架构</a> —— passive effect 在 commit 后异步</li>
+          <li>异步演进：<a href="../01-history/04-concurrent.html">A4 Concurrent</a> —— useEffect 与 Concurrent 的交互</li>
+        </ul>
+
+        <h3>跨主题参考</h3>
+        <ul>
+          <li><a href="../../javascript/02-advanced/02-closures.html">JS · 闭包内存模型</a> —— stale closure 根因</li>
+          <li><a href="../../javascript/03-async/06-abort-controller.html">JS · AbortController</a> —— fetch 取消机制</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="06-use-state-deep.html">
+            <span class="label">← 上一章</span>
+            <span class="title">B6 · useState 深度</span>
+          </a>
+          <a class="next" href="index.html">
+            <span class="label">下一步 →</span>
+            <span class="title">B8 · useReducer / useContext（🚧 编写中，先看 Track 概览）</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
