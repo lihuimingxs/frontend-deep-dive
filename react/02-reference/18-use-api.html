@@ -1,0 +1,656 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>B18 · use API + Promise 集成 · React 深度学习</title>
+    <meta
+      name="description"
+      content="React 19 use API 完整指南：use(promise) 配合 Suspense / use(Context) 替代 useContext、可在条件 / 循环中调用的根因（不是 Hook 是 effect-like 函数）、与 SWR / TanStack Query 的取舍、缓存约定、ref as prop 隐含的 stable identity 要求。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2361dafb'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23000000'%3EReact%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>React 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.13 220); color: #fff">R</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">React 首页</a>
+          <a href="index.html">Track B 目录</a>
+          <a href="https://react.dev/reference/react/use" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Track B · 官网知识精读</h3>
+        <ul>
+          <li><a href="index.html">Track 概览</a></li>
+        </ul>
+        <h4 style="margin-top: 12px; color: var(--text-muted)">Part 1 + 2 + 3 ✅</h4>
+        <ul>
+          <li><a href="01-rendering-model.html">B1-B5 心智模型</a></li>
+          <li><a href="06-use-state-deep.html">B6-B11 Hooks 全谱</a></li>
+          <li><a href="12-reconciliation.html">B12-B15 渲染并发</a></li>
+        </ul>
+        <h4 style="margin-top: 12px; color: var(--text-muted)">Part 4 · 现代 React</h4>
+        <ul>
+          <li><a href="16-server-components.html">B16 · Server Components ⭐</a></li>
+          <li><a href="17-actions.html">B17 · Actions</a></li>
+          <li><a href="18-use-api.html" class="active">B18 · use API</a></li>
+          <li><span class="sidebar-pending">B19 · ref as prop + 杂项 ⏳</span></li>
+        </ul>
+        <h3>另一轨</h3>
+        <ul>
+          <li><a href="../01-history/index.html">Track A · 历史脉络（已完成）</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">React</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Track B · 官网知识精读</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>B18 · use API</span>
+        </nav>
+
+        <h1>B18 · use API + Promise 集成</h1>
+        <p class="lead">
+          <code>use</code> 是 React 19 引入的<strong>读异步资源 / 上下文的统一原语</strong>—— <code>use(promise)</code> 把"<em>等 Promise resolve</em>" 变成同步代码（配合 Suspense），<code>use(Context)</code> 是 useContext 的"<em>更灵活版本</em>"（可以在条件 / 循环 / 早 return 之后调用）。本章讲清两个核心用法、为什么 <code>use</code> 是<strong>"<em>不是 Hook 的 Hook</em>"</strong>（Rules of Hooks 不适用）、Promise 必须可缓存的原因，以及它和 SWR / TanStack Query / RSC 的取舍。
+        </p>
+
+        <div class="callout warn" style="margin: 16px 0">
+          <div class="callout-title">⚠️ <code>use(promise)</code> 不是替代 useEffect 的"<em>魔法 fetcher</em>"</div>
+          <p>
+            <code>use</code> 不会帮你管理 Promise 的<strong>创建</strong>—— 它只负责<strong>读取</strong>。每次 render 必须给它<strong>同一个 Promise 引用</strong>（或可缓存的）。如果在组件内部 <code>const promise = fetch(...)</code>，每次 render 都创建新 Promise → 永远 pending → 死循环。<strong>Promise 必须来自父级 / 缓存层 / Server Component prop</strong>。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> <a href="13-suspense.html">B13 Suspense</a>（throw promise 机制） + <a href="08-use-reducer-context.html">B8 useContext</a>（对比）</span>
+          <span><strong>对应 react.dev</strong>
+            <a href="https://react.dev/reference/react/use" target="_blank" rel="noopener">use</a>
+          </span>
+          <span><strong>RFC</strong> <a href="https://github.com/reactjs/rfcs/pull/229" target="_blank" rel="noopener">#229 First-class support for promises</a></span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>四句话定义本章：</p>
+        <ol>
+          <li>
+            <strong><code>use(promise)</code></strong>：在组件 render 中读 Promise 的值。Promise pending → React 抛出 promise（B13 Suspense 机制）→ 最近 Suspense 边界显示 fallback。Promise resolved → 返回值。Promise rejected → 抛 error → 最近 ErrorBoundary 兜底（B15）。
+          </li>
+          <li>
+            <strong><code>use(Context)</code></strong>：等价于 <code>useContext(Context)</code>，但<strong>可以在条件分支 / 循环 / 早 return 之后调用</strong>。这是 useContext 不能做到的（Rules of Hooks 禁止条件调用 Hook）。
+          </li>
+          <li>
+            <strong><code>use</code> 不是 Hook</strong>—— 不受 Rules of Hooks 约束。可以在 if / for / 早 return 之后调用。但<strong>仍然只能在组件函数 / Hook 函数内</strong>调用（不能在 event handler / 普通函数里）。这是 React 19 第一个"<em>组件级原语</em>" 的扩展，区别于 Hook 必须按调用顺序匹配 hook list（B6）。
+          </li>
+          <li>
+            <strong>Promise 必须有稳定 identity</strong>—— 来自父组件 props / Server Component / 缓存层（<code>cache()</code> / SWR / TanStack Query）。组件内部直接 <code>fetch()</code> 创建 Promise 会死循环。<strong>RSC 是 use(promise) 的"<em>原生家</em>"</strong>—— Server Component 把 unawaited Promise 作为 prop 传给 Client Component，Client 用 use 读。
+          </li>
+        </ol>
+
+        <!-- 02 底层逻辑 ================================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>1. <code>use</code> 是"<em>挂靠 Suspense 的同步读取</em>"</h3>
+        <p>
+          B13 讲过 Suspense 的引擎机制：组件 throw promise → React 捕获 → 显示 fallback → promise resolve 后重新 render。<code>use(promise)</code> 是<strong>把这个机制包成了一个函数调用</strong>：
+        </p>
+        <div class="code-block"><pre class="code"><code class="lang-js">// 概念实现（简化）
+function use(thenable) {
+  if (thenable.status === 'fulfilled') return thenable.value;
+  if (thenable.status === 'rejected') throw thenable.reason;
+  if (thenable.status === 'pending') {
+    throw thenable;  // ← 触发 Suspense fallback
+  }
+  // 首次见到 thenable —— 附加状态追踪
+  thenable.status = 'pending';
+  thenable.then(
+    (v) =&gt; { thenable.status = 'fulfilled'; thenable.value = v; },
+    (e) =&gt; { thenable.status = 'rejected'; thenable.reason = e; },
+  );
+  throw thenable;
+}
+
+// 用户层代码就变得"<em>看似同步</em>"
+function Profile({ userPromise }) {
+  const user = use(userPromise);  // 等待 → 拿到 user
+  return &lt;div&gt;{user.name}&lt;/div&gt;;
+}
+// React 会自动在父级最近的 Suspense 边界显示 fallback</code></pre></div>
+
+        <p>
+          关键洞察：<strong>"<em>等待</em>" 这件事不在组件里发生</strong>—— 组件只做"<em>throw 然后被 React 重 render</em>"。这就是为什么 use(promise) 不需要 useState 持有数据，也不引入"<em>loading 标志</em>"。<strong>loading 状态是 Suspense 在更高层管理的</strong>。
+        </p>
+
+        <h3>2. 为什么 <code>use</code> 不是 Hook？Rules of Hooks 不适用？</h3>
+        <p>
+          B11 讲过 Rules of Hooks 的根因：Hook 通过 hook linked list 按调用顺序匹配（B6），条件调用会让顺序错乱。<strong>但 <code>use</code> 不依赖 hook linked list</strong>—— 它依赖：
+        </p>
+        <ul>
+          <li>
+            <strong>thenable 自身的状态字段</strong>（status / value / reason）—— 状态在 Promise 上，不在 Fiber 上
+          </li>
+          <li>
+            <strong>Suspense 边界的重 render 机制</strong>—— React 重启组件时，<code>use</code> 第二次见到同一个 thenable（identity 相同），直接读 status === 'fulfilled' 返回 value
+          </li>
+        </ul>
+        <p>
+          这意味着<strong>调用顺序对 use 不重要</strong>—— 第 1 次 render 在 if 分支里调用，第 2 次 render 不在了，也没问题。所以 use 可以放在条件 / 循环 / 早 return 后。
+        </p>
+        <div class="code-block"><pre class="code"><code class="lang-js">// ✅ 合法：use 在条件里
+function User({ userPromise, isVip }) {
+  if (!isVip) return &lt;BasicProfile /&gt;;  // 早 return，不调用 use
+
+  const user = use(userPromise);  // 仅 VIP 路径调用
+  return &lt;DetailedProfile user={user} /&gt;;
+}
+
+// ❌ 同样写法，useContext 不行
+function User({ isVip }) {
+  if (!isVip) return &lt;BasicProfile /&gt;;
+  const ctx = useContext(SomeContext);  // 报错：Hooks 调用顺序不一致
+  return ...;
+}
+
+// ✅ use(Context) 替代 useContext，合法
+function User({ isVip }) {
+  if (!isVip) return &lt;BasicProfile /&gt;;
+  const ctx = use(SomeContext);  // OK
+  return ...;
+}</code></pre></div>
+
+        <h3>3. Promise identity 稳定性是死循环的根因</h3>
+        <p>
+          <code>use</code> 通过<strong>Promise 引用（identity）</strong>判断"<em>是不是同一个等待</em>"：
+        </p>
+        <div class="code-block"><pre class="code"><code class="lang-js">// ❌ 死循环陷阱
+function User({ userId }) {
+  const userPromise = fetch(`/api/users/${userId}`).then(r =&gt; r.json());
+  // ↑ 每次 render 都创建新 Promise / 新 identity
+  const user = use(userPromise);
+  // 1. 首次 render: 新 Promise pending → throw → Suspense fallback
+  // 2. Promise resolve → React 重 render
+  // 3. 重 render 又创建新 Promise → pending → throw → 永远 fallback
+  return &lt;div&gt;{user.name}&lt;/div&gt;;
+}
+
+// ✅ 解决方案 1：Promise 来自 props（父级稳定持有）
+function User({ userPromise }) {
+  const user = use(userPromise);
+  return &lt;div&gt;{user.name}&lt;/div&gt;;
+}
+function Parent({ userId }) {
+  // 父级用 useMemo / useState 持有
+  const userPromise = useMemo(
+    () =&gt; fetch(`/api/users/${userId}`).then(r =&gt; r.json()),
+    [userId]
+  );
+  return &lt;User userPromise={userPromise} /&gt;;
+}
+
+// ✅ 解决方案 2：用 React.cache（仅 RSC）
+import { cache } from 'react';
+const fetchUser = cache((id) =&gt; fetch(`/api/users/${id}`).then(r =&gt; r.json()));
+async function ServerUser({ userId }) {
+  const user = await fetchUser(userId); // 同 userId 自动复用
+  return &lt;div&gt;{user.name}&lt;/div&gt;;
+}
+
+// ✅ 解决方案 3：用 SWR / TanStack Query（最常见）
+import useSWR from 'swr';
+function User({ userId }) {
+  const { data } = useSWR(`/api/users/${userId}`, fetcher);
+  // SWR 内部缓存 + 复用 promise
+  return &lt;div&gt;{data?.name}&lt;/div&gt;;
+}</code></pre></div>
+
+        <h3>4. RSC + use(promise) 是黄金组合</h3>
+        <p>
+          B16 讲过 Server Component 是 async 函数，可以 await。但有时<strong>不想 await</strong> —— 想让 Server 更快返回 + 让 Client 在 Suspense 边界显示 fallback：
+        </p>
+        <div class="code-block"><pre class="code"><code class="lang-js">// page.tsx (Server Component)
+import Comments from './Comments';
+
+export default function PostPage({ id }) {
+  // 不 await：把 unawaited Promise 作为 prop 传下去
+  const commentsPromise = fetch(`/api/posts/${id}/comments`).then(r =&gt; r.json());
+
+  return (
+    &lt;article&gt;
+      &lt;PostBody postId={id} /&gt;  {/* 主体可以立即渲染 */}
+      &lt;Suspense fallback={&lt;CommentsSkeleton /&gt;}&gt;
+        &lt;Comments commentsPromise={commentsPromise} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/article&gt;
+  );
+}
+
+// Comments.tsx
+'use client';
+import { use } from 'react';
+export default function Comments({ commentsPromise }) {
+  const comments = use(commentsPromise);  // 等待
+  return &lt;ul&gt;{comments.map(c =&gt; &lt;li key={c.id}&gt;{c.text}&lt;/li&gt;)}&lt;/ul&gt;;
+}
+
+// 收益：
+// ✅ Server 立即返回 PostBody，commentsPromise 序列化随 RSC payload 流式发出
+// ✅ Client 端 Comments 等 promise resolve 时显示 skeleton
+// ✅ promise identity 来自 Server prop，天然稳定（B16 序列化）</code></pre></div>
+
+        <h3>5. <code>use(Context)</code> vs <code>useContext</code>：可读性差异 vs 灵活性</h3>
+        <p>
+          两者读取的值<strong>完全相同</strong>—— Context Provider 提供的值。差异：
+        </p>
+        <table>
+          <thead>
+            <tr><th>维度</th><th>useContext</th><th>use(Context)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>是否 Hook</td><td>是（受 Rules of Hooks 约束）</td><td>否</td></tr>
+            <tr><td>条件 / 循环调用</td><td>❌ 禁止</td><td>✅ 允许</td></tr>
+            <tr><td>早 return 后调用</td><td>❌ 禁止</td><td>✅ 允许</td></tr>
+            <tr><td>调用位置</td><td>组件 / Hook 顶层</td><td>组件 / Hook 内任何位置（仍不能 event handler）</td></tr>
+            <tr><td>导入</td><td><code>import { useContext } from 'react'</code></td><td><code>import { use } from 'react'</code></td></tr>
+            <tr><td>性能</td><td>相同</td><td>相同</td></tr>
+          </tbody>
+        </table>
+        <p>
+          <strong>什么时候选 use(Context)</strong>：① 早 return 之后还需要 context ② 循环里读 context（罕见）③ 已经在用 use(promise)，统一风格。<strong>否则保持 useContext</strong>—— 它在生态中更熟悉。
+        </p>
+
+        <h3>6. <code>use</code> 不能在 event handler / 普通函数中</h3>
+        <p>
+          虽然 use 不受 Rules of Hooks 完整约束，但<strong>仍要在组件 render / Hook 内调用</strong>。原因：
+        </p>
+        <ul>
+          <li>
+            <strong>throw promise 必须发生在 render 期间</strong>—— React 只在 render 阶段捕获 thrown promise 用作 Suspense
+          </li>
+          <li>
+            <strong>event handler 不能 throw promise</strong>—— React 调度系统对事件不做 Suspense 处理
+          </li>
+        </ul>
+        <p>
+          要在事件中读 promise → 用 <code>await</code> + state 更新（startTransition 内），或用 SWR / TanStack 这类有 imperative API 的库。
+        </p>
+
+        <!-- 03 应用场景 ================================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3>场景 1：RSC 流式 + Client 端 use(promise)（最经典）</h3>
+          <p>
+            Server 立即返回 + Client 渐进显示。这是 React 19 取代"<em>useEffect 数据获取</em>" 的官方推荐路径。
+          </p>
+          <div class="code-block"><pre class="code"><code class="lang-js">// app/dashboard/page.tsx (Server)
+import { Suspense } from 'react';
+import RecommendationsClient from './RecommendationsClient';
+import StatsClient from './StatsClient';
+
+export default function Dashboard() {
+  // 都不 await —— 让两个慢请求并行 + 各自 Suspense 边界
+  const recsPromise = fetch('/api/recommendations').then(r =&gt; r.json());
+  const statsPromise = fetch('/api/stats').then(r =&gt; r.json());
+
+  return (
+    &lt;&gt;
+      &lt;h1&gt;Dashboard&lt;/h1&gt;
+      &lt;Suspense fallback={&lt;Skeleton h={200} /&gt;}&gt;
+        &lt;RecommendationsClient promise={recsPromise} /&gt;
+      &lt;/Suspense&gt;
+      &lt;Suspense fallback={&lt;Skeleton h={300} /&gt;}&gt;
+        &lt;StatsClient promise={statsPromise} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}
+
+// RecommendationsClient.tsx
+'use client';
+import { use } from 'react';
+export default function RecommendationsClient({ promise }) {
+  const recs = use(promise);
+  return &lt;ul&gt;{recs.map(r =&gt; &lt;li key={r.id}&gt;{r.title}&lt;/li&gt;)}&lt;/ul&gt;;
+}</code></pre></div>
+        </div>
+
+        <div class="scenario">
+          <h3>场景 2：与 Context 配合，灵活早 return</h3>
+          <div class="code-block"><pre class="code"><code class="lang-js">'use client';
+import { use } from 'react';
+import { ThemeContext } from './theme';
+import { UserContext } from './user';
+
+function Header({ minimal }) {
+  // 早 return：未登录用户用极简 header
+  if (!minimal) {
+    return &lt;MinimalHeader /&gt;;
+  }
+  // 早 return 之后还可以读 context（useContext 不允许）
+  const theme = use(ThemeContext);
+  const user = use(UserContext);
+  return (
+    &lt;header data-theme={theme}&gt;
+      &lt;Avatar user={user} /&gt;
+    &lt;/header&gt;
+  );
+}</code></pre></div>
+        </div>
+
+        <div class="scenario">
+          <h3>场景 3：仍用 SWR / TanStack Query 的客户端 fetching（最现实）</h3>
+          <p>
+            大多数中后台 / dashboard 应用<strong>没用 RSC</strong>（仍是 SPA / Vite + React Router）。在这种场景：
+          </p>
+          <ul>
+            <li>
+              <strong>简单数据 fetching</strong>：仍用 SWR / TanStack Query —— 它们内置缓存 / revalidate / dedupe / mutate
+            </li>
+            <li>
+              <strong>但可以用 use(promise) + 库的 Promise</strong>：TanStack Query v5 的 <code>queryClient.ensureQueryData()</code> 返回 Promise，可传给 use
+            </li>
+          </ul>
+          <div class="code-block"><pre class="code"><code class="lang-js">// 与 TanStack Query 配合
+import { useQueryClient } from '@tanstack/react-query';
+import { use, Suspense } from 'react';
+
+function User({ userId }) {
+  const queryClient = useQueryClient();
+  // queryClient 内部缓存：同 userId 返回同一 promise（identity 稳定）
+  const userPromise = queryClient.ensureQueryData({
+    queryKey: ['user', userId],
+    queryFn: () =&gt; fetch(`/api/users/${userId}`).then(r =&gt; r.json()),
+  });
+  const user = use(userPromise);
+  return &lt;div&gt;{user.name}&lt;/div&gt;;
+}
+
+// 使用时
+&lt;Suspense fallback={&lt;Skeleton /&gt;}&gt;
+  &lt;User userId={42} /&gt;
+&lt;/Suspense&gt;</code></pre></div>
+        </div>
+
+        <div class="scenario">
+          <h3>场景 4：渐进式接入：useEffect → use 的迁移</h3>
+          <div class="code-block"><pre class="code"><code class="lang-js">// 老世界
+function Profile({ userId }) {
+  const [user, setUser] = useState(null);
+  useEffect(() =&gt; {
+    fetch(`/api/users/${userId}`)
+      .then(r =&gt; r.json())
+      .then(setUser);
+  }, [userId]);
+  if (!user) return &lt;Spinner /&gt;;
+  return &lt;div&gt;{user.name}&lt;/div&gt;;
+}
+
+// 新世界（CSR / 没 RSC 的场景，用缓存层包装）
+const userCache = new Map();
+function getUser(id) {
+  if (!userCache.has(id)) {
+    userCache.set(id, fetch(`/api/users/${id}`).then(r =&gt; r.json()));
+  }
+  return userCache.get(id);
+}
+
+function Profile({ userId }) {
+  const user = use(getUser(userId));  // 缓存保证 identity 稳定
+  return &lt;div&gt;{user.name}&lt;/div&gt;;
+}
+
+// 使用
+&lt;Suspense fallback={&lt;Spinner /&gt;}&gt;
+  &lt;ErrorBoundary fallback={&lt;Error /&gt;}&gt;
+    &lt;Profile userId={42} /&gt;
+  &lt;/ErrorBoundary&gt;
+&lt;/Suspense&gt;
+// 自己手写缓存可行但容易踩坑，生产推荐 SWR / TanStack Query / RSC</code></pre></div>
+        </div>
+
+        <!-- 04 典型代码 ================================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>例 1：use(promise) + ErrorBoundary + Suspense 三件套</h3>
+        <div class="code-block"><pre class="code"><code class="lang-js">'use client';
+import { use, Suspense } from 'react';
+import { ErrorBoundary } from 'react-error-boundary';
+
+function PostBody({ postPromise }) {
+  const post = use(postPromise);  // pending → throw → Suspense
+                                   // rejected → throw error → ErrorBoundary
+  return &lt;article&gt;{post.content}&lt;/article&gt;;
+}
+
+export default function Post({ postPromise }) {
+  return (
+    &lt;ErrorBoundary fallback={&lt;ErrorPanel /&gt;}&gt;
+      &lt;Suspense fallback={&lt;ArticleSkeleton /&gt;}&gt;
+        &lt;PostBody postPromise={postPromise} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/ErrorBoundary&gt;
+  );
+}
+
+// 三个状态机用三层组件管理：
+// - 数据未到 → Suspense fallback
+// - 数据失败 → ErrorBoundary fallback
+// - 数据成功 → 真实 UI</code></pre></div>
+
+        <h3>例 2：use 与传统 Hook 的对比</h3>
+        <div class="code-block"><pre class="code"><code class="lang-js">// 传统 Hook 受 Rules of Hooks 约束
+function Old({ items, query }) {
+  const [filtered, setFiltered] = useState(items);
+  // ❌ 不能在 if / 循环里调用 useState / useEffect
+  if (!query) return &lt;Empty /&gt;;
+  // ↑ 早 return 之前必须把所有 Hook 调用完
+  useEffect(() =&gt; { ... }, [query]);
+  return ...;
+}
+
+// use 没有这个约束
+function New({ items, query, themePromise }) {
+  if (!query) return &lt;Empty /&gt;;  // 早 return ok
+
+  const theme = use(ThemeContext);  // ✅ 早 return 后调用
+  const themeData = use(themePromise);  // ✅ 顺序无关
+
+  // 但 useState / useEffect 仍需在顶层！use 是个例
+  return ...;
+}</code></pre></div>
+
+        <h3>例 3：use(Context) 在 utility 函数里（"<em>共享 logic</em>"）</h3>
+        <div class="code-block"><pre class="code"><code class="lang-js">// 自定义 Hook 中混用 use 和 useState
+import { use, useState } from 'react';
+import { LocaleContext } from './locale';
+
+function useFormatted(value, options) {
+  const locale = use(LocaleContext);
+  // 如果 options 没传，提前 return
+  if (!options) return String(value);
+  // ↑ 早 return 后还可以继续用 useState / useEffect 吗？
+  //    答：不可以。useState 仍受 Rules of Hooks 约束！
+  //    use 是唯一例外。
+  const [cached] = useState(() =&gt; new Intl.NumberFormat(locale, options));
+  // ❌ 这样写在早 return 之后调用 useState，违反 Rules of Hooks
+  return cached.format(value);
+}
+
+// 正确写法：useState 永远在顶层，use 可以在条件里
+function useFormatted(value, options) {
+  const [cache] = useState(() =&gt; new Map());  // ✅ 顶层
+  const locale = use(LocaleContext);  // ✅ 顶层（也可在条件里）
+  if (!options) return String(value);
+  let formatter = cache.get(`${locale}|${JSON.stringify(options)}`);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(locale, options);
+    cache.set(`${locale}|${JSON.stringify(options)}`, formatter);
+  }
+  return formatter.format(value);
+}</code></pre></div>
+
+        <!-- 05 常见陷阱 ================================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <h3>陷阱 1：组件内创建 Promise → 死循环</h3>
+          <p>
+            <strong>现象</strong>：页面永远显示 Suspense fallback，DevTools 显示组件不停 mount / unmount。
+          </p>
+          <p>
+            <strong>根因</strong>：每次 render 创建新 Promise → 新 identity → use 永远见到 pending 状态 → throw → React 重 render → 又创建新 Promise → …
+          </p>
+          <p>
+            <strong>规避</strong>：① Promise 来自 props（父级稳定持有）② 用 <code>cache()</code>（仅 RSC）③ 用 SWR / TanStack Query / 自己实现 Map 缓存 ④ 用 useMemo 缓存 promise（少见，因为 useMemo 不保证 stable，仅性能优化）
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <h3>陷阱 2：把 use 当成 useEffect 的"<em>异步版</em>"</h3>
+          <p>
+            <strong>现象</strong>：在组件里写 <code>const data = use(fetch(...))</code> 想"<em>更优雅地获取数据</em>"，结果踩陷阱 1 + 没有 cleanup / cancel 能力。
+          </p>
+          <p>
+            <strong>根因</strong>：use(promise) 只读，<strong>不管理 Promise 生命周期</strong>。useEffect 还有 cleanup 函数，可以 abort fetch / 清理订阅。use 没有等价物。
+          </p>
+          <p>
+            <strong>规避</strong>：要管理生命周期 / abort / 防抖等，<strong>仍用 useEffect 或专业库</strong>。use 只适合"<em>有外部已经持有的 Promise，我只想读它</em>" 的场景。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <h3>陷阱 3：在 event handler 里调用 use</h3>
+          <p>
+            <strong>现象</strong>：<code>onClick</code> 里写 <code>const data = use(promise)</code> 报错 <code>use cannot be called outside of a Component or Hook</code>。
+          </p>
+          <p>
+            <strong>根因</strong>：use 依赖 Suspense 的"<em>throw → 捕获 → 重 render</em>" 机制，<strong>该机制只在 render 阶段工作</strong>。事件处理是 React 在 commit 阶段后调度的，没有 Suspense 边界处理。
+          </p>
+          <p>
+            <strong>规避</strong>：事件中读 Promise → 用 <code>await</code>：
+          </p>
+          <div class="code-block"><pre class="code"><code class="lang-js">// ❌ 错
+&lt;button onClick={() =&gt; {
+  const result = use(somePromise);  // 报错
+}} /&gt;
+
+// ✅ 对：用 await + 把结果存 state
+const [result, setResult] = useState();
+&lt;button onClick={async () =&gt; {
+  const r = await somePromise;
+  setResult(r);
+}} /&gt;</code></pre></div>
+        </div>
+
+        <div class="pitfall">
+          <h3>陷阱 4：不用 ErrorBoundary，用户看到白屏</h3>
+          <p>
+            <strong>现象</strong>：Promise reject 后整个组件树崩溃，整页白屏。
+          </p>
+          <p>
+            <strong>根因</strong>：use 在 promise rejected 时会 throw error。如果没 ErrorBoundary 兜底，错误冒泡到根组件，React 卸载整个 tree（B15）。
+          </p>
+          <p>
+            <strong>规避</strong>：<strong>每个 use(promise) 都应该被 ErrorBoundary + Suspense 双重包裹</strong>。Next.js App Router 的 <code>error.tsx</code> 文件约定可以自动做这件事。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <h3>陷阱 5：误以为 use(Context) 是性能优化</h3>
+          <p>
+            <strong>现象</strong>：把 useContext 全替换为 use(Context) 想"<em>提性能</em>"。
+          </p>
+          <p>
+            <strong>根因</strong>：两者性能<strong>完全相同</strong>—— 都依赖同一套 Context 订阅机制。Context value 变 → 所有读它的组件重 render。<strong>use(Context) 仅在<u>位置灵活性</u>上比 useContext 强</strong>，不是性能优化。
+          </p>
+          <p>
+            <strong>规避</strong>：性能问题用 selector 模式（B8）/ Zustand / Jotai 解决。不要为了"<em>新</em>" 而替换 useContext。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <h3>陷阱 6：与 SWR / TanStack 重复 fetch</h3>
+          <p>
+            <strong>现象</strong>：把 <code>use(fetch(...))</code> 和 <code>useSWR(...)</code> 混用，同一份数据请求两次。
+          </p>
+          <p>
+            <strong>根因</strong>：use 没有缓存层，SWR / TanStack 有自己的缓存。两套同时跑会双倍请求。
+          </p>
+          <p>
+            <strong>规避</strong>：项目要么<strong>统一用 use(promise) + cache 层</strong>（RSC 项目），要么<strong>统一用 SWR / TanStack Query 的 hook</strong>（CSR 项目）。混用时通过 <code>queryClient.ensureQueryData()</code> 桥接（场景 3）。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ================================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>权威来源</h3>
+        <ul>
+          <li><a href="https://react.dev/reference/react/use" target="_blank" rel="noopener">react.dev · use</a></li>
+          <li><a href="https://react.dev/reference/react/cache" target="_blank" rel="noopener">react.dev · cache (RSC only)</a></li>
+          <li><a href="https://github.com/reactjs/rfcs/pull/229" target="_blank" rel="noopener">RFC #229 First-class promises</a></li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>引擎：<a href="13-suspense.html">B13 Suspense</a> —— use 依赖的 throw promise 机制</li>
+          <li>对比：<a href="08-use-reducer-context.html">B8 useContext</a> —— use(Context) 的"<em>老兄弟</em>"</li>
+          <li>错误兜底：<a href="15-error-boundary.html">B15 Error Boundary</a> —— use(promise) reject 兜底</li>
+          <li>RSC 场景：<a href="16-server-components.html">B16 Server Components</a> —— use 的"<em>原生家</em>"</li>
+          <li>下一章：<a href="19-misc.html">B19 ref as prop + 19+ 杂项</a>（编写中）</li>
+        </ul>
+
+        <h3>替代 / 互补库</h3>
+        <ul>
+          <li><a href="https://swr.vercel.app/" target="_blank" rel="noopener">SWR</a> —— Vercel 的轻量 fetch 库</li>
+          <li><a href="https://tanstack.com/query/latest" target="_blank" rel="noopener">TanStack Query</a> —— 客户端 fetch 事实标准</li>
+          <li><a href="https://jotai.org/" target="_blank" rel="noopener">Jotai</a> —— atomWithSuspense 也基于同一原理</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="17-actions.html">
+            <span class="label">← 上一章</span>
+            <span class="title">B17 · Actions</span>
+          </a>
+          <a class="next" href="index.html">
+            <span class="label">下一章 →</span>
+            <span class="title">B19 · ref as prop + 19+ 杂项（编写中）</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
