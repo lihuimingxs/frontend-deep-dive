@@ -11,11 +11,11 @@
 | ① | 语言 | **JavaScript**   | ✅ 完成     | [javascript.info](https://javascript.info/)                         | 62 章 / 7 阶段    |
 | ① | 语言 | **TypeScript**   | ✅ 完成     | [typescriptlang.org/docs](https://www.typescriptlang.org/docs/)     | 20 章 / 4 Part    |
 | ② | 规范 | **ECMAScript**   | ✅ 完成     | [ecma-international.org/ecma-262](https://ecma-international.org/publications-and-standards/standards/ecma-262/) | 11 章 / 2 轨 |
-| ③ | 引擎 | **V8 Engine**    | ⏳ 规划中   | [v8.dev/docs](https://v8.dev/docs)                                  | 待定              |
-| ③ | 引擎 | **Node.js Runtime** | ⏳ 规划中 | [nodejs.org/docs](https://nodejs.org/docs)                         | 待定              |
-| ③ | 引擎 | **Bun（Runtime + Toolchain）** | ⏳ 规划中 | [bun.com/docs](https://bun.com/docs)                       | 待定              |
-| ③ | 引擎 | **浏览器渲染管线** | ⏳ 规划中 | web.dev / Chrome 团队博客                                           | 待定              |
-| ③ | 引擎 | **WebAssembly**  | ⏳ 规划中   | [webassembly.org](https://webassembly.org/) + MDN                   | 待定              |
+| ③ | 引擎/生态 | **V8 Engine**    | ⏳ 规划中   | [v8.dev/docs](https://v8.dev/docs)                              | 待定              |
+| ③ | 引擎/生态 | **Node.js Runtime** | ⏳ 规划中 | [nodejs.org/docs](https://nodejs.org/docs)                     | 待定              |
+| ③ | 引擎/生态 | **Bun（Runtime + Toolchain）** ⭐ | ⏳ 规划中 · ecosystem | [bun.com/docs](https://bun.com/docs)              | 待定              |
+| ③ | 引擎/生态 | **浏览器渲染管线** | ⏳ 规划中 | web.dev / Chrome 团队博客                                       | 待定              |
+| ③ | 引擎/生态 | **WebAssembly**  | ⏳ 规划中   | [webassembly.org](https://webassembly.org/) + MDN               | 待定              |
 | ④ | 构建 | **Vite & 构建工具** | ⏳ 规划中 | [vite.dev](https://vite.dev/) + esbuild / Rollup                    | 待定              |
 | ④ | 构建 | **pnpm & monorepo** | ⏳ 规划中 | pnpm.io + Turborepo / Nx                                            | 待定              |
 | ④ | 构建 | **测试工具**     | ⏳ 规划中   | Vitest + Testing Library + Playwright                              | 待定              |
@@ -135,6 +135,7 @@ docs/learning/deep-dive/
 3. **每个知识点都要有"在哪儿用"** —— 应用场景至少 2-3 个来自现代框架/Node/工具链的真实案例。
 4. **每个陷阱都要有根因** —— 不只写"这样会错"，还要写"为什么会错"。
 5. **零依赖** —— 纯 HTML/CSS/JS，无构建、无 npm 包、无 CDN 引用，永久可离线打开。
+6. **重心归位 + 对照入口** —— 跨阶段主题（Bun / Next.js / AI SDK 等 ecosystem 类）的<strong>主卡置于其设计重心所在阶段</strong>，相邻阶段以"<em>对照入口</em>" 卡（虚线边框、↗ 对照徽标）深链到主章节的横评 anchor（如 <code>#vs-pnpm</code> / <code>#vs-vite</code> / <code>#vs-vitest</code>）。这样既保留 ecosystem 主题的叙事完整性，也在每个阶段提供横向对比入口。
 
 ## 技术选择
 
@@ -162,10 +163,10 @@ docs/learning/deep-dive/
 - **浏览器渲染管线** —— CRP / Compositor / Reflow / Web Vitals 根因
 - **WebAssembly** —— wasm32 ISA / JS 互操作 / WASI / Rust → wasm / SIMD / Component Model
 
-**④ 构建 / 工程化**（注：Bun 提供替代路径，在 ③ Bun 章节展开）
-- **Vite & 构建工具** —— 双模架构 / HMR / SWC vs Babel / Rolldown / Turbopack
-- **pnpm & monorepo** —— 软链 / phantom dep / Turborepo / Nx / changesets
-- **测试工具** —— Vitest / Testing Library / Playwright / MSW / Visual regression
+**④ 构建 / 工程化**（每张主卡配一张"<em>↗ Bun 对照入口</em>" 卡，深链到 ③ Bun 横评 anchor）
+- **Vite & 构建工具** —— 双模架构 / HMR / SWC vs Babel / Rolldown / Turbopack（+ ↗ Bun build 对照入口）
+- **pnpm & monorepo** —— 软链 / phantom dep / Turborepo / Nx / changesets（+ ↗ bun install 对照入口）
+- **测试工具** —— Vitest / Testing Library / Playwright / MSW / Visual regression（+ ↗ bun test 对照入口）
 
 **⑤ 框架**
 - **Next.js** —— App Router / RSC 边界 / Server Actions / 5 层缓存 / Edge Runtime
