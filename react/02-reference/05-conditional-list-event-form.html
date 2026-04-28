@@ -1,0 +1,873 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>B5 · 条件 / 列表 / 事件 / Form · React 深度学习</title>
+    <meta
+      name="description"
+      content="React 日常代码 4 大模式：条件渲染（&& / 三元 / 早返回 / 提取子组件）、列表 + key 完整规则、合成事件系统（17+ root 委托）、受控 vs 非受控表单、React 19 Form Actions。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2361dafb'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23000000'%3EReact%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>React 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.13 220); color: #fff">R</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">React 首页</a>
+          <a href="index.html">Track B 目录</a>
+          <a href="https://react.dev/learn/conditional-rendering" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Track B · 官网知识精读</h3>
+        <ul>
+          <li><a href="index.html">Track 概览</a></li>
+        </ul>
+        <h4 style="margin-top: 12px; color: var(--text-muted)">Part 1 · 心智模型</h4>
+        <ul>
+          <li><a href="01-rendering-model.html">B1 · 渲染模型</a></li>
+          <li><a href="02-jsx.html">B2 · JSX</a></li>
+          <li><a href="03-components-props.html">B3 · 组件与 Props</a></li>
+          <li><a href="04-state-basics.html">B4 · State 基础</a></li>
+          <li><a href="05-conditional-list-event-form.html" class="active">B5 · 条件 / 列表 / 事件 / Form</a></li>
+        </ul>
+        <h3>另一轨</h3>
+        <ul>
+          <li><a href="../01-history/index.html">Track A · 历史脉络（已完成）</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">React</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Track B · 官网知识精读</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>B5 · 条件 / 列表 / 事件 / Form</span>
+        </nav>
+
+        <h1>B5 · 条件 / 列表 / 事件 / Form</h1>
+        <p class="lead">
+          B1-B4 建立的<strong>心智模型</strong>（元素、JSX、组件 + Props、State）落到日常代码，最常见的 4 类模式是：<strong>条件渲染、列表渲染、事件处理、表单输入</strong>。本章把这 4 类模式讲清，包括<strong>每类模式的常见写法 + 微妙陷阱 + React 19 改动</strong>。读完后你能写中等复杂度业务代码—— 这也是 Track B Part 1 心智模型的<strong>收官章</strong>，之后进入 Part 2 Hooks 全谱。
+        </p>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 Part 1 收官</div>
+          <p>
+            读完本章你具备 React 19 写中等业务代码的能力。Part 2（B6-B11）深入 Hooks 系统（useState 深度 / useEffect 完整生命周期 / useReducer / useMemo / useRef / 自定义 Hooks），应对更复杂场景。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> B1-B4 全部</span>
+          <span><strong>对应 react.dev</strong>
+            <a href="https://react.dev/learn/conditional-rendering" target="_blank" rel="noopener">Conditional Rendering</a> ·
+            <a href="https://react.dev/learn/rendering-lists" target="_blank" rel="noopener">Rendering Lists</a> ·
+            <a href="https://react.dev/learn/responding-to-events" target="_blank" rel="noopener">Responding to Events</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>条件渲染</strong>有 4 种模式：<code>&amp;&amp;</code> 短路 / 三元 / 早返回 <code>null</code> / 提取子组件。<strong>避免 <code>&amp;&amp;</code> 短路渲染数字</strong>（B2 讲过陷阱），不嵌套深条件（提取子组件）。
+          </li>
+          <li>
+            <strong>列表渲染必须 key</strong>：稳定 + 唯一。<strong>不要用 array index 当 key</strong>（除非 list 永不重排序），否则 reconciliation 错配会让 input 焦点 / 滚动状态跑到错误项。详细机制 A3 / B12 讲过。
+          </li>
+          <li>
+            <strong>合成事件 + 顶层委托</strong>：React 17+ 把所有事件委托到 root container（不是 document）—— 让多版本 React 共存可能。受控 vs 非受控表单<strong>都合法</strong>，看场景选；React 19 引入 <strong>Form Actions</strong> 取代部分手写 useState 模板。
+          </li>
+        </ol>
+
+        <p>看一段最小代码识别 4 类模式：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 4 类模式在一段代码里</span>
+          <pre class="code"><code class="lang-js">function TodoApp({ todos, currentUser }) {
+  const [filter, setFilter] = useState('all');
+  const filtered = filter === 'all'
+    ? todos
+    : todos.filter(t =&gt; filter === 'done' ? t.done : !t.done);
+
+  // 早返回（条件渲染模式）
+  if (!currentUser) return &lt;Login /&gt;;
+
+  return (
+    &lt;&gt;
+      {/* 三元 + 短路（条件渲染）*/}
+      &lt;h1&gt;{currentUser.isAdmin ? 'Admin Panel' : 'Welcome'}&lt;/h1&gt;
+      {filtered.length === 0 &amp;&amp; &lt;p&gt;No todos&lt;/p&gt;}
+
+      {/* 列表 + key（列表渲染）*/}
+      &lt;ul&gt;
+        {filtered.map(todo =&gt; (
+          &lt;TodoItem key={todo.id} todo={todo} /&gt;   {/* ← 必须 key */}
+        ))}
+      &lt;/ul&gt;
+
+      {/* 事件处理 */}
+      &lt;button onClick={() =&gt; setFilter('done')}&gt;Done only&lt;/button&gt;
+
+      {/* 表单（19+ Action 风格）*/}
+      &lt;form action={createTodo}&gt;
+        &lt;input name="title" /&gt;
+        &lt;button type="submit"&gt;Add&lt;/button&gt;
+      &lt;/form&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>条件渲染 4 种模式</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 条件渲染 4 种模式各自适用</span>
+          <pre class="code"><code class="lang-js">// === 模式 1：&amp;&amp; 短路（最常用）===
+{isLoading &amp;&amp; &lt;Spinner /&gt;}
+{user.isAdmin &amp;&amp; &lt;AdminBadge /&gt;}
+// 适用：单分支 + 左值是 boolean
+// ⚠️ 陷阱：左值是 0 / '' / NaN 会渲染（B2 详述）
+
+// === 模式 2：三元（双分支）===
+{isLoggedIn ? &lt;Dashboard /&gt; : &lt;Login /&gt;}
+{count &gt; 10 ? &lt;Warning /&gt; : null}
+// 适用：双分支 / 简单替代
+
+// === 模式 3：早返回（推荐 - 复杂分支）===
+function UserPanel({ user }) {
+  if (!user) return &lt;Login /&gt;;
+  if (user.banned) return &lt;Banned /&gt;;
+  if (user.expired) return &lt;Renew /&gt;;
+
+  // 主路径
+  return &lt;Dashboard user={user} /&gt;;
+}
+// 适用：3+ 分支或前置校验
+// 优势：扁平、易读、TS narrowing 友好
+// ⚠️ 早返回前不能 useState 后又条件 return（破坏 Rules of Hooks）
+
+// === 模式 4：提取子组件（最干净）===
+// ❌ 嵌套深条件可读性差
+function Page({ status }) {
+  return (
+    &lt;div&gt;
+      {status === 'loading' &amp;&amp; &lt;Spinner /&gt;}
+      {status === 'error' &amp;&amp; &lt;ErrorBox /&gt;}
+      {status === 'idle' &amp;&amp; (
+        &lt;div&gt;
+          {/* 复杂内容 */}
+        &lt;/div&gt;
+      )}
+      {status === 'success' &amp;&amp; (
+        &lt;div&gt;
+          {/* 更多复杂内容 */}
+        &lt;/div&gt;
+      )}
+    &lt;/div&gt;
+  );
+}
+
+// ✅ 提取子组件 + 表驱动
+const STATUS_VIEWS = {
+  loading: Spinner,
+  error: ErrorBox,
+  idle: IdleView,
+  success: SuccessView,
+};
+function Page({ status }) {
+  const View = STATUS_VIEWS[status];
+  return &lt;div&gt;&lt;View /&gt;&lt;/div&gt;;
+}
+
+// ✅ 或 switch 提取
+function StatusView({ status }) {
+  switch (status) {
+    case 'loading': return &lt;Spinner /&gt;;
+    case 'error': return &lt;ErrorBox /&gt;;
+    case 'idle': return &lt;IdleView /&gt;;
+    case 'success': return &lt;SuccessView /&gt;;
+    default: return null;
+  }
+}</code></pre>
+        </div>
+
+        <h3>列表 + key 完整规则</h3>
+        <p>
+          列表渲染最常见的工程错误是 key 用错。<strong>A3 / B12 已详述底层 reconciliation 算法</strong>——本节聚焦"<em>怎么用对 key</em>"。
+        </p>
+
+        <p>3 条 key 规则：</p>
+        <ul>
+          <li><strong>必须唯一</strong>—— 同一 list 里不能重复</li>
+          <li><strong>必须稳定</strong>—— 同一逻辑项每次渲染 key 不变</li>
+          <li><strong>必须放最外层数组的元素上</strong>—— map 回调 return 的元素，不是嵌套元素</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">javascript · key 4 种典型用法</span>
+          <pre class="code"><code class="lang-js">// ✅ 用业务 ID（最优）
+{todos.map(todo =&gt; &lt;li key={todo.id}&gt;{todo.text}&lt;/li&gt;)}
+
+// ✅ 唯一字段（如果保证不变）
+{users.map(user =&gt; &lt;UserCard key={user.email} user={user} /&gt;)}
+
+// ✅ 数据生成时分配 UUID
+const newItem = { id: crypto.randomUUID(), ...data };
+
+// ⚠️ index（仅 list 永不重排序时）
+{staticHeaders.map((h, i) =&gt; &lt;th key={i}&gt;{h}&lt;/th&gt;)}
+// ⚠️ 任何排序 / 过滤 / 删除 / 插入操作都让 index 失效
+
+// ❌ Math.random()（每次渲染新 key → 重建组件 → 永远 mount unmount）
+{items.map(item =&gt; &lt;Item key={Math.random()} {...item} /&gt;)}
+
+// 用 Fragment 包裹时也要 key（短语法不支持 key，用完整 Fragment）
+{items.map(item =&gt; (
+  &lt;Fragment key={item.id}&gt;
+    &lt;dt&gt;{item.title}&lt;/dt&gt;
+    &lt;dd&gt;{item.body}&lt;/dd&gt;
+  &lt;/Fragment&gt;
+))}
+
+// 用 key 强制重建（高级用法）
+{/* 切换 userId 时强制重建 UserDetails，重置内部 state */}
+&lt;UserDetails key={userId} userId={userId} /&gt;</code></pre>
+        </div>
+
+        <p>
+          <strong>"<em>不要用 index</em>"的根因</strong>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript · index key bug 演示</span>
+          <pre class="code"><code class="lang-js">// 假设 list：[{ name: 'A' }, { name: 'B' }, { name: 'C' }]
+// 每个 li 内部有 input，用户在 'A' 的 input 输入 'foo'
+
+{items.map((item, i) =&gt; (
+  &lt;li key={i}&gt;
+    &lt;span&gt;{item.name}&lt;/span&gt;
+    &lt;input type="text" defaultValue="" /&gt;
+  &lt;/li&gt;
+))}
+
+// 现在用户点删除 'A' → list 变成 [{ name: 'B' }, { name: 'C' }]
+// React 看 keys：原来 [0, 1, 2] 现在 [0, 1]
+// 配对：
+//   key 0 还在 → 复用第一个 li，但内容现在是 'B' （!）
+//   key 1 还在 → 复用第二个 li，但内容现在是 'C'
+//   key 2 不在 → 销毁
+// 结果：① 'B' / 'C' 显示对了 ② 但 input 内容跑到 'B' 上（key 0 复用）
+//
+// 因为 React 用 key 配对，不是按内容判断同一项
+
+// ✅ 用 todo.id 作 key 后：
+//   key 'a' 不见了 → 销毁第一个 li（含 input）
+//   key 'b' 还在 → 不动
+//   key 'c' 还在 → 不动
+// 结果：input 内容随 'A' 一起销毁，不串到 'B' 上</code></pre>
+        </div>
+
+        <h3>合成事件系统</h3>
+        <p>
+          React 用<strong>合成事件</strong>（SyntheticEvent）封装原生事件——所有 <code>onClick</code> / <code>onChange</code> / <code>onKeyDown</code> 等都是 React 自己的事件系统，不是直接绑定 DOM。
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">特性</th>
+              <th>合成事件 vs 原生事件</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>命名</td>
+              <td>camelCase（<code>onClick</code> / <code>onMouseEnter</code>），原生是小写（<code>onclick</code>）</td>
+            </tr>
+            <tr>
+              <td>事件对象</td>
+              <td><code>SyntheticEvent</code> 实例，<strong>包装</strong>原生事件。访问 <code>e.nativeEvent</code> 可拿原生</td>
+            </tr>
+            <tr>
+              <td>跨浏览器一致</td>
+              <td>合成事件抹平浏览器差异（如 IE 旧 quirk）—— 现代项目其实已经不太需要</td>
+            </tr>
+            <tr>
+              <td>17 之前委托</td>
+              <td>所有事件委托到 <strong>document</strong>—— 多版本 React 共存时事件错乱</td>
+            </tr>
+            <tr>
+              <td>17+ 委托</td>
+              <td>所有事件委托到 <strong>root container</strong>（你 createRoot 的 DOM 节点）—— 多版本共存可能</td>
+            </tr>
+            <tr>
+              <td>preventDefault</td>
+              <td><code>e.preventDefault()</code>—— 同原生</td>
+            </tr>
+            <tr>
+              <td>stopPropagation</td>
+              <td><strong>合成事件层的 stop</strong>—— 不影响原生 listener。如果加了 native listener，仍会跑</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 事件处理常见模式</span>
+          <pre class="code"><code class="lang-js">// 基础
+&lt;button onClick={handleClick}&gt;Click&lt;/button&gt;
+&lt;button onClick={(e) =&gt; handleClick(e, 'extra')}&gt;Click&lt;/button&gt;
+
+// e 是 SyntheticEvent
+function handleChange(e: React.ChangeEvent&lt;HTMLInputElement&gt;) {
+  console.log(e.target.value);
+  console.log(e.nativeEvent);  // 原生 InputEvent
+}
+
+// preventDefault / stopPropagation
+&lt;form onSubmit={(e) =&gt; { e.preventDefault(); doSomething(); }}&gt;
+
+// 阻止冒泡（仅 React 层）
+&lt;div onClick={parent}&gt;
+  &lt;button onClick={(e) =&gt; {
+    e.stopPropagation();   // parent 不会被调用
+    doButton();
+  }}&gt;X&lt;/button&gt;
+&lt;/div&gt;
+
+// 拿原生事件做高级操作（罕见）
+function handleKeyDown(e) {
+  if (e.nativeEvent.isComposing) {
+    // 中文输入法 composing 状态
+    return;
+  }
+  if (e.key === 'Enter') {
+    submit();
+  }
+}
+
+// React 17+ 之前：委托 document，所以 document.addEventListener 监听
+//                能在 React 处理之前拦截
+// React 17+：委托 root，document listener 仍能拦截但顺序不同
+//            这是 17 升级常见的"<em>事件顺序变了</em>"bug 来源</code></pre>
+        </div>
+
+        <h3>受控 vs 非受控表单</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 20%">类型</th>
+              <th>受控</th>
+              <th>非受控</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>表单值来源</td>
+              <td>React state</td>
+              <td>DOM 自身</td>
+            </tr>
+            <tr>
+              <td>取值</td>
+              <td><code>value={state}</code></td>
+              <td>用 ref 读 <code>inputRef.current.value</code></td>
+            </tr>
+            <tr>
+              <td>更新</td>
+              <td><code>onChange =&gt; setState</code></td>
+              <td>不需要（用户输入直接改 DOM）</td>
+            </tr>
+            <tr>
+              <td>初始值</td>
+              <td><code>value={state}</code> + state 初始</td>
+              <td><code>defaultValue</code></td>
+            </tr>
+            <tr>
+              <td>实时验证 / 派生</td>
+              <td>容易（state 同步）</td>
+              <td>困难（要 onChange + ref）</td>
+            </tr>
+            <tr>
+              <td>性能</td>
+              <td>每次输入都 setState → 重渲染</td>
+              <td>无重渲染（DOM 自管理）</td>
+            </tr>
+            <tr>
+              <td>典型场景</td>
+              <td>实时搜索 / 联动校验 / 多字段同步</td>
+              <td>简单表单 / 大量字段 / React Hook Form</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 受控 vs 非受控对比</span>
+          <pre class="code"><code class="lang-js">// === 受控 ===
+function ControlledForm() {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+
+  return (
+    &lt;form onSubmit={(e) =&gt; { e.preventDefault(); submit({ name, email }); }}&gt;
+      &lt;input value={name} onChange={(e) =&gt; setName(e.target.value)} /&gt;
+      &lt;input value={email} onChange={(e) =&gt; setEmail(e.target.value)} /&gt;
+      &lt;button type="submit"&gt;Submit&lt;/button&gt;
+    &lt;/form&gt;
+  );
+}
+
+// === 非受控 ===
+function UncontrolledForm() {
+  const nameRef = useRef(null);
+  const emailRef = useRef(null);
+
+  const handleSubmit = (e) =&gt; {
+    e.preventDefault();
+    submit({
+      name: nameRef.current.value,
+      email: emailRef.current.value,
+    });
+  };
+
+  return (
+    &lt;form onSubmit={handleSubmit}&gt;
+      &lt;input defaultValue="" ref={nameRef} /&gt;
+      &lt;input defaultValue="" ref={emailRef} /&gt;
+      &lt;button type="submit"&gt;Submit&lt;/button&gt;
+    &lt;/form&gt;
+  );
+}
+
+// === React Hook Form 模式（混合）===
+function HookFormForm() {
+  const { register, handleSubmit } = useForm();
+  return (
+    &lt;form onSubmit={handleSubmit(submit)}&gt;
+      &lt;input {...register('name')} /&gt;       {/* 内部用 ref 非受控 */}
+      &lt;input {...register('email')} /&gt;
+      &lt;button type="submit"&gt;Submit&lt;/button&gt;
+    &lt;/form&gt;
+  );
+}
+// React Hook Form 内部用 ref 实现非受控 → 性能极佳（不重渲染）
+// 但 API 看起来像受控 → 学习曲线低
+// 详见 A5 生态</code></pre>
+        </div>
+
+        <h3>React 19 Form Actions（短重述）</h3>
+        <p>
+          <strong>短重述</strong>：React 19 引入 <code>&lt;form action={fn}&gt;</code> 直接绑函数 + <code>useActionState</code> + <code>useFormStatus</code> + <code>useOptimistic</code>—— 减少手写 useState + try/catch + isLoading 模板。详细机制见 <a href="../01-history/04-concurrent.html#internals">A4 Concurrent</a> 和 <a href="17-actions.html">B17 Actions</a>（编写中）。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · React 19 Form Actions 极简版</span>
+          <pre class="code"><code class="lang-js">// 19+ 风格：form action prop 取代 onSubmit
+async function createTodo(formData) {
+  await fetch('/api/todos', {
+    method: 'POST',
+    body: JSON.stringify({ title: formData.get('title') }),
+  });
+}
+
+function TodoForm() {
+  return (
+    &lt;form action={createTodo}&gt;
+      &lt;input name="title" /&gt;
+      &lt;button type="submit"&gt;Add&lt;/button&gt;
+    &lt;/form&gt;
+  );
+}
+
+// React 自动管理 pending state、自动 reset form、和 Server Actions 无缝集成
+// 详见 B17 Actions</code></pre>
+        </div>
+
+        <h3>事件委托与 React 17+ 改动</h3>
+        <p>
+          React 17 之前所有事件委托到 <code>document</code>—— 同一页面跑多版本 React 时事件会混乱（多个 React 都监听 document，处理顺序不可控）。
+        </p>
+        <p>
+          <strong>React 17+ 改成委托到 <code>root container</code></strong>（你 <code>createRoot(rootEl)</code> 的那个 DOM）—— 让<strong>多版本共存</strong>成为可能。但带来一些<strong>升级期 bug</strong>：
+        </p>
+        <ul>
+          <li><strong>document.addEventListener 拦截顺序变化</strong>：17 之前 document listener 在 React 之前跑，17 之后可能在之后</li>
+          <li><strong>ReactDOM.unmountComponentAtNode 行为微调</strong>：root 上的 listener 和组件树解耦</li>
+          <li><strong>Portal 行为不变</strong>：仍委托到组件树所属的 root，不是 portal 目标</li>
+        </ul>
+
+        <p>
+          17 升级时若发现"<em>事件顺序错乱</em>"，先查是否有 document.addEventListener 直接监听—— 改成在 root 元素上监听通常解决。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 实时搜索 + 防抖</h3>
+          <p>
+            搜索输入实时过滤大列表。受控 input + 防抖 + transition：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 实时搜索完整实现</span>
+            <pre class="code"><code class="lang-js">function SearchableList({ items }) {
+  const [query, setQuery] = useState('');
+  const [isPending, startTransition] = useTransition();
+  const deferredQuery = useDeferredValue(query);
+
+  const filtered = useMemo(
+    () =&gt; items.filter(item =&gt; item.name.includes(deferredQuery)),
+    [items, deferredQuery]
+  );
+
+  return (
+    &lt;&gt;
+      {/* 受控 input —— 实时显示输入 */}
+      &lt;input
+        value={query}
+        onChange={(e) =&gt; setQuery(e.target.value)}
+        placeholder="Search..."
+      /&gt;
+
+      {/* 提示推迟更新中 */}
+      {query !== deferredQuery &amp;&amp; &lt;Spinner /&gt;}
+
+      {/* 列表 + key（业务 ID）*/}
+      &lt;ul&gt;
+        {filtered.map(item =&gt; (
+          &lt;li key={item.id}&gt;{item.name}&lt;/li&gt;
+        ))}
+      &lt;/ul&gt;
+
+      {/* 条件渲染：空结果 */}
+      {filtered.length === 0 &amp;&amp; &lt;p&gt;No results&lt;/p&gt;}
+    &lt;/&gt;
+  );
+}
+
+// 涉及 4 类模式：
+// - 受控 input（onChange + setState）
+// - 列表 + key
+// - 条件渲染（空状态）
+// - 性能优化（useTransition / useDeferredValue / useMemo）</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 多步表单（Wizard）</h3>
+          <p>
+            注册流程 3 步：基本信息 → 详细信息 → 确认。每步是不同 form。用条件渲染 + state 管理当前步：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 多步表单</span>
+            <pre class="code"><code class="lang-js">function SignupWizard() {
+  const [step, setStep] = useState(1);
+  const [data, setData] = useState({
+    basic: {},
+    details: {},
+  });
+
+  // 早返回每步组件（条件渲染模式 3）
+  if (step === 1) return &lt;BasicStep onNext={(d) =&gt; {
+    setData(prev =&gt; ({ ...prev, basic: d }));
+    setStep(2);
+  }} /&gt;;
+
+  if (step === 2) return &lt;DetailsStep
+    initial={data.details}
+    onBack={() =&gt; setStep(1)}
+    onNext={(d) =&gt; {
+      setData(prev =&gt; ({ ...prev, details: d }));
+      setStep(3);
+    }}
+  /&gt;;
+
+  if (step === 3) return &lt;ConfirmStep
+    data={data}
+    onBack={() =&gt; setStep(2)}
+    onSubmit={() =&gt; submitSignup(data)}
+  /&gt;;
+
+  return null;
+}
+
+// 复杂场景（5+ 步、可跳转、带状态机）→ 用 XState（A5 提过）
+// 简单场景（&lt; 4 步）→ useState 足够</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 用 key 重置组件状态</h3>
+          <p>
+            用户切换 tab，每个 tab 有独立的 SearchableList 但 list 类型不同。要让切换 tab 时<strong>重置 SearchableList 的内部 state（query 等）</strong>—— 用 key 强制重建：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · key 强制重建</span>
+            <pre class="code"><code class="lang-js">function App() {
+  const [activeTab, setActiveTab] = useState('users');
+
+  return (
+    &lt;&gt;
+      &lt;Tabs activeTab={activeTab} onChange={setActiveTab} /&gt;
+
+      {/* 关键：key={activeTab} → tab 切换时 key 变 → React 销毁旧组件创建新组件 */}
+      {/* 内部 useState 的 query / filter 等全部重置 */}
+      &lt;SearchableList key={activeTab} type={activeTab} /&gt;
+    &lt;/&gt;
+  );
+}
+
+// 等效写法（更显式但同效果）：
+{activeTab === 'users' &amp;&amp; &lt;SearchableList type="users" /&gt;}
+{activeTab === 'posts' &amp;&amp; &lt;SearchableList type="posts" /&gt;}
+// 这种写法用条件渲染让组件 unmount + remount —— 同样重置 state
+
+// 但 key 写法的优势：
+// 1. 简洁：一行代码搞定
+// 2. 不依赖布尔条件（多个 tab 时不用写多个分支）
+// 3. 重命名 tab 不影响代码结构</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>带类型的事件 handler（TypeScript）</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript · React 事件类型</span>
+          <pre class="code"><code class="lang-ts">import {
+  ChangeEvent,
+  FormEvent,
+  MouseEvent,
+  KeyboardEvent,
+  FocusEvent,
+} from 'react';
+
+// 1. input change
+function handleChange(e: ChangeEvent&lt;HTMLInputElement&gt;) {
+  console.log(e.target.value);
+  console.log(e.target.name);
+}
+
+// 2. form submit
+function handleSubmit(e: FormEvent&lt;HTMLFormElement&gt;) {
+  e.preventDefault();
+  const formData = new FormData(e.currentTarget);
+  // ...
+}
+
+// 3. button click
+function handleClick(e: MouseEvent&lt;HTMLButtonElement&gt;) {
+  console.log(e.shiftKey, e.metaKey);
+}
+
+// 4. keyboard
+function handleKeyDown(e: KeyboardEvent&lt;HTMLInputElement&gt;) {
+  if (e.key === 'Enter') submit();
+  if (e.key === 'Escape') cancel();
+}
+
+// 5. focus
+function handleBlur(e: FocusEvent&lt;HTMLInputElement&gt;) {
+  validate(e.target.value);
+}
+
+// 在 JSX 中：通常 TypeScript 自动推导
+&lt;input onChange={(e) =&gt; setValue(e.target.value)} /&gt;
+//              ↑ e 自动推导为 ChangeEvent&lt;HTMLInputElement&gt;
+// 但抽出独立函数时要显式标注</code></pre>
+        </div>
+
+        <h3>遇到大 list 的渲染优化策略</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 大列表渲染策略表</span>
+          <pre class="code"><code class="lang-js">// 100 项以下：随便写
+{items.map(item =&gt; &lt;ItemCard key={item.id} {...item} /&gt;)}
+
+// 100-1000 项：① 用 React.memo 包 ItemCard ② 用 useMemo 算 filtered
+const ItemCard = React.memo(function ItemCard({ ...props }) {
+  return &lt;div&gt;...&lt;/div&gt;;
+});
+
+const filtered = useMemo(
+  () =&gt; items.filter(...).sort(...),
+  [items, query]
+);
+
+// 1000+ 项：必须虚拟滚动（virtual list）
+import { useVirtualizer } from '@tanstack/react-virtual';
+
+function VirtualList({ items }) {
+  const parentRef = useRef(null);
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () =&gt; parentRef.current,
+    estimateSize: () =&gt; 50,
+  });
+
+  return (
+    &lt;div ref={parentRef} style={{ height: 600, overflow: 'auto' }}&gt;
+      &lt;div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}&gt;
+        {virtualizer.getVirtualItems().map(virtual =&gt; (
+          &lt;div
+            key={items[virtual.index].id}
+            style={{
+              position: 'absolute', top: 0, left: 0,
+              transform: `translateY(${virtual.start}px)`,
+            }}
+          &gt;
+            &lt;ItemCard {...items[virtual.index]} /&gt;
+          &lt;/div&gt;
+        ))}
+      &lt;/div&gt;
+    &lt;/div&gt;
+  );
+}
+
+// 仅渲染可见项（约 20 个），不管底层 1 万还是 100 万项
+// TanStack Virtual / react-window / react-virtual 都是同思路</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：&amp;&amp; 短路渲染数字</div>
+          <p>
+            <code>{items.length &amp;&amp; ...}</code>—— 当 length 为 0 时渲染 '0' 文本。B2 已详述。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：左值 boolean 化（<code>items.length &gt; 0</code> / <code>Boolean(items.length)</code>）或用三元（<code>items.length ? ... : null</code>）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：用 array index 当 key 在重排序场景</div>
+          <p>
+            list 排序 / 过滤 / 删除 / 插入时，index 当 key 让 React 错配 Fiber—— input 焦点 / 滚动状态 / component state 跑到错误项。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：用业务 ID 作 key。仅"<em>list 永不重排序</em>" 时（如 static headers）才能用 index。生成数据时分配 <code>crypto.randomUUID()</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：早返回前调 hook 又条件 return（破坏 Rules of Hooks）</div>
+          <p>
+            <code>if (!user) return &lt;Login /&gt;</code> —— OK。但 <code>if (!user) { useEffect(...) ; return ...}</code> —— 破坏 Rules of Hooks（A3 详述）。
+          </p>
+          <div class="code-block" style="margin-top: 12px">
+            <span class="code-label">javascript · Rules of Hooks 与早返回</span>
+            <pre class="code"><code class="lang-js">// ❌ 早返回后还有 hook
+function UserPanel({ userId }) {
+  if (!userId) return &lt;Login /&gt;;       // ← 早返回
+  const data = useFetch(`/api/users/${userId}`);  // ❌ 条件调用 hook
+  return &lt;UserCard data={data} /&gt;;
+}
+
+// ✅ 所有 hook 在顶层调用
+function UserPanel({ userId }) {
+  const data = useFetch(userId ? `/api/users/${userId}` : null);
+  if (!userId) return &lt;Login /&gt;;       // ← 早返回放在 hooks 之后
+  return &lt;UserCard data={data} /&gt;;
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：用 stopPropagation 阻不了原生 listener</div>
+          <p>
+            合成事件的 <code>e.stopPropagation()</code> 只阻止<strong>合成事件层</strong>冒泡，不影响原生 <code>document.addEventListener</code> 注册的。混合用容易出 bug。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：避免混用合成事件 + 原生 listener。如必须用，<code>e.nativeEvent.stopImmediatePropagation()</code> 才能阻原生（17+）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：受控 input 切到非受控（或反之）</div>
+          <p>
+            一个 input 时而 <code>value={x}</code> 时而 <code>defaultValue=""</code>—— React 会 warn "<em>changing an uncontrolled input to controlled</em>"。原因是组件定义"<em>这个 input 是哪种</em>" 摇摆。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：组件初始决定受控 / 非受控，不要切换。受控 input 即使初始值是空字符串也用 <code>value={state ?? ''}</code> 而非 <code>value={state}</code>（避免传 undefined 让它退化成非受控）。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>权威来源</h3>
+        <ul>
+          <li><a href="https://react.dev/learn/conditional-rendering" target="_blank" rel="noopener">react.dev · Conditional Rendering</a></li>
+          <li><a href="https://react.dev/learn/rendering-lists" target="_blank" rel="noopener">react.dev · Rendering Lists</a></li>
+          <li><a href="https://react.dev/learn/responding-to-events" target="_blank" rel="noopener">react.dev · Responding to Events</a></li>
+          <li><a href="https://react.dev/reference/react-dom/components/input" target="_blank" rel="noopener">react.dev · &lt;input&gt; Reference</a></li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="04-state-basics.html">B4 State 基础</a></li>
+          <li>
+            <strong>🎉 Part 1 心智模型完结</strong>。下一步进入 <strong>Part 2 · Hooks 全谱</strong>（B6-B11）
+          </li>
+          <li>下一章：<a href="06-use-state-deep.html">B6 useState 深度</a>（编写中）—— hooks linked list 视角</li>
+          <li>事件委托 / Reconciliation 内部机制 → <a href="../01-history/03-fiber.html">A3 Fiber 架构</a></li>
+        </ul>
+
+        <h3>跨主题参考</h3>
+        <ul>
+          <li><a href="../../typescript/03-reference/16-iterators-jsx.html">TS · 16 Iterators / JSX</a> —— React 事件类型详解</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="04-state-basics.html">
+            <span class="label">← 上一章</span>
+            <span class="title">B4 · State 基础</span>
+          </a>
+          <a class="next" href="index.html">
+            <span class="label">🎉 Part 1 完结 / 下一步 →</span>
+            <span class="title">Part 2 · Hooks 全谱（B6 编写中）</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
