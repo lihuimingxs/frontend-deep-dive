@@ -13,7 +13,9 @@
 | ② | 规范 | **ECMAScript**   | ✅ 完成     | [ecma-international.org/ecma-262](https://ecma-international.org/publications-and-standards/standards/ecma-262/) | 11 章 / 2 轨 |
 | ③ | 引擎 | **V8 Engine**    | ⏳ 规划中   | [v8.dev/docs](https://v8.dev/docs)                                  | 待定              |
 | ③ | 引擎 | **Node.js Runtime** | ⏳ 规划中 | [nodejs.org/docs](https://nodejs.org/docs)                         | 待定              |
+| ③ | 引擎 | **Bun Runtime**  | ⏳ 规划中   | [bun.com/docs](https://bun.com/docs)                                | 待定              |
 | ③ | 引擎 | **浏览器渲染管线** | ⏳ 规划中 | web.dev / Chrome 团队博客                                           | 待定              |
+| ③ | 引擎 | **WebAssembly**  | ⏳ 规划中   | [webassembly.org](https://webassembly.org/) + MDN                   | 待定              |
 | ④ | 构建 | **Vite & 构建工具** | ⏳ 规划中 | [vite.dev](https://vite.dev/) + esbuild / Rollup                    | 待定              |
 | ④ | 构建 | **pnpm & monorepo** | ⏳ 规划中 | pnpm.io + Turborepo / Nx                                            | 待定              |
 | ④ | 构建 | **测试工具**     | ⏳ 规划中   | Vitest + Testing Library + Playwright                              | 待定              |
@@ -144,19 +146,21 @@ docs/learning/deep-dive/
 
 ## 状态与路线图
 
-### ✅ 已完成（4 / 16）
+### ✅ 已完成（4 / 18）
 
 - **JavaScript**（62 章，2026-04 完成）
 - **TypeScript**（20 章 / 4 Part 完成）
 - **ECMAScript**（11 章 / 2 轨完成 · Track A 历史脉络 5 章 + Track B 规范精读 6 章）
 - **React**（24 章 / 2 轨完成 · Track A 历史脉络 5 章 + Track B 官网精读 19 章 / 4 Part：心智模型 / Hooks 全谱 / 渲染并发 / 现代 React）
 
-### ⏳ 规划中（12 / 16，按学习顺序）
+### ⏳ 规划中（14 / 18，按学习顺序）
 
 **③ 引擎 / 运行时**
 - **V8 Engine** —— 编译流水线（Ignition / Sparkplug / Maglev / TurboFan）/ Hidden Class / IC / GC Orinoco
-- **Node.js Runtime** —— libuv / Streams / Worker Threads / 模块解析 / 与 Bun / Deno 对比
+- **Node.js Runtime** —— libuv / Streams / Worker Threads / 模块解析 / HTTP server 内部
+- **Bun Runtime** —— JavaScriptCore / Zig 实现 / 内置工具链 / Bun.serve / 与 Node / Deno 设计差异
 - **浏览器渲染管线** —— CRP / Compositor / Reflow / Web Vitals 根因
+- **WebAssembly** —— wasm32 ISA / JS 互操作 / WASI / Rust → wasm / SIMD / Component Model
 
 **④ 构建 / 工程化**
 - **Vite & 构建工具** —— 双模架构 / HMR / SWC vs Babel / Rolldown / Turbopack
@@ -180,7 +184,10 @@ docs/learning/deep-dive/
 ### 建议路径（一条线走完）
 
 ```
-V8 → Node.js → 浏览器渲染管线 → Vite → pnpm → 测试 → Next.js → Tailwind → shadcn → TanStack → HTTP/3 → AI SDK
+V8 → Node.js → Bun → 浏览器渲染管线 → WebAssembly
+  → Vite → pnpm → 测试
+  → Next.js → Tailwind → shadcn
+  → TanStack → HTTP/3 → AI SDK
 ```
 
 ## 与 Mira 项目的关系
