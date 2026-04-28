@@ -1,0 +1,930 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>B15 · Error Boundary · React 深度学习</title>
+    <meta
+      name="description"
+      content="Error Boundary 完整指南：唯一必须用 class component 的场景、componentDidCatch + getDerivedStateFromError、不捕获的 4 种情况、边界粒度选择、重试机制、react-error-boundary 库、React 19 root options。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2361dafb'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23000000'%3EReact%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>React 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.13 220); color: #fff">R</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">React 首页</a>
+          <a href="index.html">Track B 目录</a>
+          <a href="https://react.dev/reference/react/Component#catching-rendering-errors-with-an-error-boundary" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Track B · 官网知识精读</h3>
+        <ul>
+          <li><a href="index.html">Track 概览</a></li>
+        </ul>
+        <h4 style="margin-top: 12px; color: var(--text-muted)">Part 1 + Part 2 ✅</h4>
+        <ul>
+          <li><a href="01-rendering-model.html">B1-B5 心智模型</a></li>
+          <li><a href="06-use-state-deep.html">B6-B11 Hooks 全谱</a></li>
+        </ul>
+        <h4 style="margin-top: 12px; color: var(--text-muted)">Part 3 · 渲染与并发</h4>
+        <ul>
+          <li><a href="12-reconciliation.html">B12 · Reconciliation</a></li>
+          <li><a href="13-suspense.html">B13 · Suspense</a></li>
+          <li><a href="14-transition.html">B14 · useTransition</a></li>
+          <li><a href="15-error-boundary.html" class="active">B15 · Error Boundary</a></li>
+        </ul>
+        <h3>另一轨</h3>
+        <ul>
+          <li><a href="../01-history/index.html">Track A · 历史脉络（已完成）</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">React</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Track B · 官网知识精读</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>B15 · Error Boundary</span>
+        </nav>
+
+        <h1>B15 · Error Boundary</h1>
+        <p class="lead">
+          Error Boundary 是 React 16 引入的<strong>错误捕获机制</strong>—— 也是 React 19 时代<strong>唯一仍必须用 class component</strong> 的场景。本章讲清 Error Boundary 的完整模式（<code>componentDidCatch</code> + <code>getDerivedStateFromError</code>）、<strong>不捕获的 4 种情况</strong>（最容易踩坑）、边界粒度选择、重试机制，以及社区事实标准 <code>react-error-boundary</code> 库 和 React 19 新增的 <code>onUncaughtError</code> / <code>onCaughtError</code> root options。读完本章 React 主题 Part 3 渲染与并发 4 章 ✅ 收官。
+        </p>
+
+        <div class="callout warn" style="margin: 16px 0">
+          <div class="callout-title">⚠️ Error Boundary 不是万能</div>
+          <p>
+            Error Boundary 仅捕获<strong>渲染期错误</strong>（render / lifecycle / constructor）。<strong>4 种情况完全不捕获</strong>：① event handler 内的错（用 try/catch）② 异步代码的错（fetch / setTimeout / Promise）③ SSR 服务端 HTML 生成阶段的错 ④ Error Boundary 自身的错。这 4 个限制是工程实战中最容易踩的坑。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> <a href="01-rendering-model.html">B1 渲染模型</a> + <a href="13-suspense.html">B13 Suspense</a>（双重边界配合）</span>
+          <span><strong>对应 react.dev</strong>
+            <a href="https://react.dev/reference/react/Component#catching-rendering-errors-with-an-error-boundary" target="_blank" rel="noopener">Error Boundary</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>Error Boundary 必须是 class component</strong>—— React 19 时代唯一的 class 用例。它通过实现 2 个特殊静态 / 实例方法（<code>static getDerivedStateFromError</code> + <code>componentDidCatch</code>）来声明自己是 Error Boundary。函数组件没有等价的 Hook（React 至今未提供 useErrorBoundary）。
+          </li>
+          <li>
+            <strong>仅捕获渲染期错误</strong>：组件 render 函数 / 生命周期 / constructor 抛出的错。<strong>不捕获</strong>：event handler / async 代码（fetch / setTimeout / Promise）/ SSR / Boundary 自身错。
+          </li>
+          <li>
+            <strong>实战推荐用 <code>react-error-boundary</code> 库</strong>（社区事实标准）—— 提供函数式 API + reset 机制 + onError 回调 + Suspense 集成。<strong>React 19 新增 root options</strong>（<code>onUncaughtError</code> / <code>onCaughtError</code> / <code>onRecoverableError</code>）作为全局兜底，但<strong>不替代</strong> Error Boundary 的局部处理。
+          </li>
+        </ol>
+
+        <p>看一段最小代码：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Error Boundary 完整 class 模式</span>
+          <pre class="code"><code class="lang-js">// 必须 class component
+class ErrorBoundary extends React.Component {
+  state = { hasError: false, error: null };
+
+  // 1. 静态方法：从 error 派生新 state（render 用）
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  // 2. 生命周期：捕获后副作用（log / report）
+  componentDidCatch(error, errorInfo) {
+    console.error('Caught:', error, errorInfo.componentStack);
+    // 上报到 Sentry / Datadog / 自家监控
+    Sentry.captureException(error, { extra: errorInfo });
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback ?? &lt;div&gt;Something went wrong.&lt;/div&gt;;
+    }
+    return this.props.children;
+  }
+}
+
+// 用法
+function App() {
+  return (
+    &lt;ErrorBoundary fallback={&lt;ErrorPage /&gt;}&gt;
+      &lt;Dashboard /&gt;
+    &lt;/ErrorBoundary&gt;
+  );
+}
+// Dashboard 内部任何渲染错误 → Error Boundary 显示 ErrorPage</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ================================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>2 个特殊方法的角色</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 36%">方法</th>
+              <th>调用时机</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>static getDerivedStateFromError(error)</code></td>
+              <td>render 阶段（错误发生后）</td>
+              <td>更新 state 以渲染 fallback —— <strong>必须纯函数 + 同步</strong></td>
+            </tr>
+            <tr>
+              <td><code>componentDidCatch(error, errorInfo)</code></td>
+              <td>commit 阶段（fallback 已渲染）</td>
+              <td>副作用：log / report / 通知用户 / 触发外部处理</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>为什么要分两个方法</strong>：
+        </p>
+        <ul>
+          <li><strong><code>getDerivedStateFromError</code> 是静态 + 纯函数</strong>—— React 在 render 阶段调用，要求纯函数（A3 详述纯函数规则）。<strong>不能调 console.log / fetch / setState</strong></li>
+          <li><strong><code>componentDidCatch</code> 是实例 + 副作用</strong>—— commit 阶段调用，可以做任何副作用</li>
+          <li>这是"<em>render 纯函数 + commit 副作用</em>" 的强制分离</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 两个方法的精确分工</span>
+          <pre class="code"><code class="lang-js">class ErrorBoundary extends React.Component {
+  state = { hasError: false };
+
+  static getDerivedStateFromError(error) {
+    // ✅ 仅返回新 state
+    return { hasError: true };
+
+    // ❌ 不能在这里调 console.log / fetch / setState
+    // React 18+ Concurrent rendering 可能多次调用 → 副作用会跑多次
+  }
+
+  componentDidCatch(error, errorInfo) {
+    // ✅ 副作用全放这里
+    console.error('Boundary caught:', error);
+    logToService(error, errorInfo);
+    notifyUser('Something broke');
+
+    // 可以 setState 进一步细化（一般不必要）
+    this.setState({ errorMessage: error.message });
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return &lt;ErrorFallback /&gt;;
+    }
+    return this.props.children;
+  }
+}</code></pre>
+        </div>
+
+        <h3>不捕获的 4 种情况 ⭐</h3>
+
+        <div class="callout danger">
+          <div class="callout-title">🎯 这 4 种错误必须用其他方式处理</div>
+          <p>
+            Error Boundary 只是"<em>渲染期错误捕获器</em>"。下面 4 种错误<strong>静默丢失</strong>，需要你主动处理。
+          </p>
+        </div>
+
+        <h4>① Event handler 内的错</h4>
+
+        <div class="code-block">
+          <span class="code-label">javascript · event handler 错</span>
+          <pre class="code"<code class="lang-js">function Button() {
+  return (
+    &lt;button onClick={() =&gt; {
+      throw new Error('Boom');   // ❌ Error Boundary 不捕获
+    }}&gt;Click&lt;/button&gt;
+  );
+}
+
+// 原因：
+// onClick 不在 render 阶段执行（用户点击时才跑）
+// React 不知道这个错来自组件树
+// 错抛到 window.onerror（未处理则浏览器控制台打印）
+
+// ✅ 修复：用 try/catch
+&lt;button onClick={() =&gt; {
+  try {
+    doRiskyOperation();
+  } catch (e) {
+    console.error(e);
+    setError(e);   // 用 state 显示错误
+  }
+}}&gt;</code></pre>
+        </div>
+
+        <h4>② 异步代码的错</h4>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 异步错</span>
+          <pre class="code"<code class="lang-js">function Component() {
+  useEffect(() =&gt; {
+    setTimeout(() =&gt; {
+      throw new Error('Async boom');   // ❌ Error Boundary 不捕获
+    }, 1000);
+  }, []);
+}
+
+// 原因：
+// setTimeout 回调不在 render 调用栈内
+// React 完全不知道这个错（错跑到 window.onerror）
+
+// ✅ 修复：用 try/catch + setState 触发 Error Boundary
+function Component() {
+  const [error, setError] = useState(null);
+
+  useEffect(() =&gt; {
+    setTimeout(() =&gt; {
+      try {
+        doAsyncWork();
+      } catch (e) {
+        setError(e);   // 触发 state 变化
+      }
+    }, 1000);
+  }, []);
+
+  if (error) throw error;   // 在 render 阶段 throw → Error Boundary 捕获
+
+  return ...;
+}
+
+// 同样陷阱：
+// - Promise.then 内的错（要 .catch）
+// - fetch 内的错（要 .catch）
+// - WebSocket onmessage 内的错</code></pre>
+        </div>
+
+        <h4>③ SSR 服务端 HTML 生成阶段的错</h4>
+
+        <div class="code-block">
+          <span class="code-label">javascript · SSR 错</span>
+          <pre class="code"<code class="lang-js">// 服务端 renderToString / renderToPipeableStream 阶段
+// 组件 render 抛错 —— Error Boundary 不捕获（仅客户端 hydrate 后才捕获）
+
+// React 18 改进：renderToPipeableStream onError option
+import { renderToPipeableStream } from 'react-dom/server';
+
+const { pipe, abort } = renderToPipeableStream(&lt;App /&gt;, {
+  onError(error) {
+    console.error('SSR error:', error);
+    logToService(error);
+    // 决定是否 abort 或继续 fallback
+  },
+});
+
+// React 19 新 API（Next.js App Router 也用类似机制）：
+// 服务端组件抛错 → 沿组件树找最近的 error.tsx 边界
+// app/dashboard/error.tsx 是 Next.js 约定 Error Boundary
+'use client';   // 必须客户端组件
+export default function Error({ error, reset }) {
+  return (
+    &lt;div&gt;
+      &lt;h2&gt;Something went wrong&lt;/h2&gt;
+      &lt;button onClick={reset}&gt;Try again&lt;/button&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h4>④ Error Boundary 自身的错</h4>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Boundary 自身错</span>
+          <pre class="code"<code class="lang-js">class ErrorBoundary extends React.Component {
+  state = { hasError: false };
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return &lt;FallbackThatThrows /&gt;;   // ❌ fallback 自己抛错
+      // → Error Boundary 不能捕获自己的错
+      // → 沿 Fiber 上溯找<strong>外层</strong> Error Boundary
+      // → 没有外层 → 整个 React tree unmount
+    }
+    return this.props.children;
+  }
+}
+
+// 教训：
+// 1. fallback UI 必须简单 + 不依赖可能失败的资源
+// 2. 在最外层加一个"<em>最终兜底</em>" Error Boundary（永远不可能错的简单 div）
+// 3. React 19 onUncaughtError root option 作为最终兜底（见下文）
+
+// ✅ 正确：fallback 极简
+render() {
+  if (this.state.hasError) {
+    return &lt;div&gt;App crashed. &lt;a href="/"&gt;Go home&lt;/a&gt;&lt;/div&gt;;
+    // 不依赖任何状态 / 数据 / 第三方库
+  }
+}</code></pre>
+        </div>
+
+        <h3>边界粒度选择</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 边界粒度策略</span>
+          <pre class="code"<code class="lang-js">// 策略 1：单一全局边界（粗粒度）
+function App() {
+  return (
+    &lt;ErrorBoundary fallback={&lt;ErrorPage /&gt;}&gt;
+      &lt;Layout&gt;
+        &lt;Header /&gt;
+        &lt;Sidebar /&gt;
+        &lt;Main /&gt;
+      &lt;/Layout&gt;
+    &lt;/ErrorBoundary&gt;
+  );
+}
+// 优点：简单
+// 缺点：任何组件错误整页崩 → 用户被强制看 ErrorPage
+
+// 策略 2：按区域分边界（中粒度）
+function App() {
+  return (
+    &lt;ErrorBoundary fallback={&lt;AppCrashed /&gt;}&gt;
+      &lt;Header /&gt;
+      &lt;ErrorBoundary fallback={&lt;SidebarFallback /&gt;}&gt;
+        &lt;Sidebar /&gt;
+      &lt;/ErrorBoundary&gt;
+      &lt;ErrorBoundary fallback={&lt;MainFallback /&gt;}&gt;
+        &lt;Main /&gt;
+      &lt;/ErrorBoundary&gt;
+    &lt;/ErrorBoundary&gt;
+  );
+}
+// Sidebar 错只让 Sidebar 显示 SidebarFallback，Main 仍正常
+// 推荐：每个独立功能区一个 Boundary
+
+// 策略 3：每个 widget 独立边界（细粒度）—— dashboard 模式
+function Dashboard() {
+  return (
+    &lt;Grid&gt;
+      {widgets.map(w =&gt; (
+        &lt;ErrorBoundary
+          key={w.id}
+          fallback={&lt;WidgetError name={w.name} /&gt;}
+        &gt;
+          &lt;Widget {...w} /&gt;
+        &lt;/ErrorBoundary&gt;
+      ))}
+    &lt;/Grid&gt;
+  );
+}
+// 任何 widget 崩只让该格显示错误，其他正常
+// 适合：dashboard / 多 panel / 多组件并列
+
+// 决策：
+// 1. 顶层必须有兜底 Error Boundary（避免白屏）
+// 2. 每个独立功能区加一个（避免连锁崩溃）
+// 3. 关键 widget（chart / map / 第三方组件）单独包
+// 4. 不要每个组件都包（过细维护成本高）</code></pre>
+        </div>
+
+        <h3>重试机制（reset）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Error Boundary 重试机制</span>
+          <pre class="code"<code class="lang-js">class ErrorBoundary extends React.Component {
+  state = { hasError: false, error: null };
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  // 暴露 reset 方法
+  reset = () =&gt; {
+    this.setState({ hasError: false, error: null });
+  };
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        &lt;div&gt;
+          &lt;h2&gt;Error: {this.state.error?.message}&lt;/h2&gt;
+          &lt;button onClick={this.reset}&gt;Try again&lt;/button&gt;
+        &lt;/div&gt;
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// 重试模式：
+// 1. 用户点 "Try again" → reset state → React 重新渲染 children
+// 2. 如果错误根因还在（如 props 有问题）→ 立即再 throw
+// 3. 解决根因（用户操作 / 重新加载）后 → 成功渲染
+
+// 进阶：用 key 强制重新挂载子树
+class ErrorBoundary extends React.Component {
+  state = { hasError: false, resetKey: 0 };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  reset = () =&gt; {
+    this.setState({ hasError: false, resetKey: prev =&gt; prev + 1 });
+  };
+
+  render() {
+    if (this.state.hasError) {
+      return &lt;ErrorFallback onReset={this.reset} /&gt;;
+    }
+    // 用 resetKey 强制重新挂载（B12 key 强制重置）
+    return &lt;React.Fragment key={this.state.resetKey}&gt;{this.props.children}&lt;/React.Fragment&gt;;
+  }
+}
+// 重试时整个 children 子树重新 mount —— effect cleanup + 重跑</code></pre>
+        </div>
+
+        <h3><code>react-error-boundary</code> 库（社区事实标准）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · react-error-boundary 完整用法</span>
+          <pre class="code"<code class="lang-js">import { ErrorBoundary } from 'react-error-boundary';
+
+// 基础用法
+&lt;ErrorBoundary
+  fallback={&lt;div&gt;Something went wrong&lt;/div&gt;}
+&gt;
+  &lt;App /&gt;
+&lt;/ErrorBoundary&gt;
+
+// 完整用法 —— 函数式 fallback + reset + onError
+&lt;ErrorBoundary
+  fallbackRender={({ error, resetErrorBoundary }) =&gt; (
+    &lt;div role="alert"&gt;
+      &lt;p&gt;Error: {error.message}&lt;/p&gt;
+      &lt;button onClick={resetErrorBoundary}&gt;Try again&lt;/button&gt;
+    &lt;/div&gt;
+  )}
+  onError={(error, info) =&gt; {
+    Sentry.captureException(error, { extra: info });
+  }}
+  onReset={() =&gt; {
+    // reset 时执行（清空缓存 / 重新拉数据等）
+    queryClient.invalidateQueries();
+  }}
+  resetKeys={[userId]}   // 这些值变化时自动 reset
+&gt;
+  &lt;UserProfile userId={userId} /&gt;
+&lt;/ErrorBoundary&gt;
+
+// 配 useErrorBoundary Hook（仅在 ErrorBoundary 内子组件用）
+import { useErrorBoundary } from 'react-error-boundary';
+
+function MyComponent() {
+  const { showBoundary } = useErrorBoundary();
+
+  const handleClick = async () =&gt; {
+    try {
+      await riskyOperation();
+    } catch (e) {
+      showBoundary(e);   // 手动触发 Error Boundary
+    }
+  };
+}
+
+// 这是 "<em>事件 / 异步代码触发 Error Boundary</em>" 的标准方式
+// 解决 Error Boundary 不捕获 4 种情况的 ① 和 ②
+
+// 这个库是社区事实标准 —— 几乎所有 React 项目都用</code></pre>
+        </div>
+
+        <h3>React 19 root options</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · React 19 全局错误处理</span>
+          <pre class="code"<code class="lang-js">import { createRoot } from 'react-dom/client';
+
+createRoot(document.getElementById('root'), {
+  // 1. 没被任何 Error Boundary 捕获的错（最终兜底）
+  onUncaughtError: (error, errorInfo) =&gt; {
+    console.error('Uncaught:', error, errorInfo);
+    Sentry.captureException(error, { tags: { uncaught: true } });
+    // 这是 React 19 之前在 window.onerror 才能捕获的错
+  },
+
+  // 2. 被 Error Boundary 捕获的错（用于全局 log）
+  onCaughtError: (error, errorInfo) =&gt; {
+    console.warn('Caught by boundary:', error);
+    Sentry.captureException(error, { tags: { caught: true } });
+    // 即使有 Boundary 处理，全局也能 log
+  },
+
+  // 3. React 自动恢复的错（hydration 错等）
+  onRecoverableError: (error, errorInfo) =&gt; {
+    console.warn('Recovered:', error);
+    // React 已经处理 —— 仅供监控
+  },
+}).render(&lt;App /&gt;);
+
+// 关键作用：
+// 1. onUncaughtError 是<strong>最终兜底</strong>—— 任何 Error Boundary 都没捕获的错都来这
+// 2. 不替代局部 Error Boundary —— 仍要用 Boundary 提供 UI fallback
+// 3. 全局 logging 集中（Sentry / Datadog 上报）
+// 4. React 19 之前需要 window.onerror + window.onunhandledrejection 凑
+
+// 推荐组合：
+// - 顶层 + 关键区域：Error Boundary（提供 UI fallback）
+// - createRoot options：全局 logging + 最终兜底</code></pre>
+        </div>
+
+        <!-- 03 应用场景 ================================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · Dashboard 多 widget 独立 Error Boundary</h3>
+          <p>
+            管理后台 dashboard 8 个 widget 并列。某 widget 的图表组件偶尔崩—— 不能让整个 dashboard 崩。每个 widget 包独立 Boundary：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · widget 独立 Boundary</span>
+            <pre class="code"<code class="lang-js">import { ErrorBoundary } from 'react-error-boundary';
+
+const widgets = [
+  { id: 'sales', component: SalesChart, name: 'Sales Chart' },
+  { id: 'users', component: UserList, name: 'Users' },
+  { id: 'analytics', component: Analytics, name: 'Analytics' },
+  // ...
+];
+
+function Dashboard() {
+  return (
+    &lt;Grid&gt;
+      {widgets.map(({ id, component: Widget, name }) =&gt; (
+        &lt;GridItem key={id}&gt;
+          &lt;ErrorBoundary
+            fallbackRender={({ error, resetErrorBoundary }) =&gt; (
+              &lt;WidgetError
+                name={name}
+                error={error}
+                onRetry={resetErrorBoundary}
+              /&gt;
+            )}
+            onError={(error, info) =&gt; {
+              Sentry.captureException(error, {
+                tags: { widget: id, name },
+                extra: info,
+              });
+            }}
+          &gt;
+            &lt;Widget /&gt;
+          &lt;/ErrorBoundary&gt;
+        &lt;/GridItem&gt;
+      ))}
+    &lt;/Grid&gt;
+  );
+}
+
+// 效果：
+// - 任何 widget 崩 → 仅该格显示 WidgetError + Retry 按钮
+// - 其他 widget 仍正常工作
+// - Sentry 收到 widget 名 + error stack 可定位
+// - 用户可点 Retry 重试（或刷新页面）</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · Suspense + Error Boundary 双重边界</h3>
+          <p>
+            B13 已铺垫，本节展开。19 时代典型 data fetching 模式：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 双重边界完整模式</span>
+            <pre class="code"<code class="lang-js">import { ErrorBoundary } from 'react-error-boundary';
+import { Suspense, use } from 'react';
+
+function UserProfile({ userPromise }) {
+  const user = use(userPromise);
+  return &lt;UserCard {...user} /&gt;;
+}
+
+function App() {
+  const userId = useStore(s =&gt; s.currentUserId);
+  const userPromise = useMemo(() =&gt; fetchUser(userId), [userId]);
+
+  return (
+    &lt;ErrorBoundary
+      fallbackRender={({ error, resetErrorBoundary }) =&gt; (
+        &lt;div&gt;
+          &lt;h2&gt;Failed to load user&lt;/h2&gt;
+          &lt;p&gt;{error.message}&lt;/p&gt;
+          &lt;button onClick={resetErrorBoundary}&gt;Retry&lt;/button&gt;
+        &lt;/div&gt;
+      )}
+      resetKeys={[userId]}    {/* userId 变化自动 reset */}
+    &gt;
+      &lt;Suspense fallback={&lt;Spinner /&gt;}&gt;
+        &lt;UserProfile userPromise={userPromise} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/ErrorBoundary&gt;
+  );
+}
+
+// 边界协作：
+// - Suspense 处理 loading（promise pending）
+// - ErrorBoundary 处理错误（promise rejected → use throw）
+// - resetKeys={[userId]} 让用户切换时自动 reset Boundary
+// - 组件代码 UserProfile 看起来同步，无 loading / error state
+
+// 推荐顺序：ErrorBoundary 在外、Suspense 在内
+// 反过来也工作但语义不清</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 异步代码触发 Error Boundary（useErrorBoundary）</h3>
+          <p>
+            异步 fetch 失败时想让 Error Boundary 接管—— 用 react-error-boundary 的 useErrorBoundary Hook：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 异步触发 Boundary</span>
+            <pre class="code"<code class="lang-js">import { useErrorBoundary } from 'react-error-boundary';
+
+function Form() {
+  const { showBoundary } = useErrorBoundary();
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (data) =&gt; {
+    setSubmitting(true);
+    try {
+      await api.submit(data);
+    } catch (error) {
+      showBoundary(error);   // 手动触发外层 Error Boundary
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return &lt;form onSubmit={handleSubmit}&gt;...&lt;/form&gt;;
+}
+
+// 调用方
+&lt;ErrorBoundary fallbackRender={({ error, resetErrorBoundary }) =&gt; (
+  &lt;ErrorView error={error} onRetry={resetErrorBoundary} /&gt;
+)}&gt;
+  &lt;Form /&gt;
+&lt;/ErrorBoundary&gt;
+
+// 工作原理：
+// showBoundary 内部 setState 一个 error，下次 render 时 throw
+// → Error Boundary 捕获 → 显示 fallback
+// 这是"<em>异步错误转 Boundary</em>" 的官方模式</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 ================================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>生产级 Error Boundary 完整模板</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript · 生产级模板</span>
+          <pre class="code"<code class="lang-ts">// 用 react-error-boundary 库 + 自家定制
+import { ErrorBoundary, FallbackProps } from 'react-error-boundary';
+import { ReactNode, useEffect } from 'react';
+
+interface AppErrorBoundaryProps {
+  children: ReactNode;
+  context?: string;     // 用于 Sentry tag
+  fallback?: ReactNode | ((props: FallbackProps) =&gt; ReactNode);
+  resetKeys?: unknown[];
+}
+
+function DefaultErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
+  return (
+    &lt;div role="alert" className="error-fallback"&gt;
+      &lt;h2&gt;Something went wrong&lt;/h2&gt;
+      &lt;details&gt;
+        &lt;summary&gt;{error.message}&lt;/summary&gt;
+        &lt;pre&gt;{error.stack}&lt;/pre&gt;
+      &lt;/details&gt;
+      &lt;button onClick={resetErrorBoundary}&gt;Try again&lt;/button&gt;
+    &lt;/div&gt;
+  );
+}
+
+export function AppErrorBoundary({
+  children,
+  context = 'unknown',
+  fallback = DefaultErrorFallback,
+  resetKeys,
+}: AppErrorBoundaryProps) {
+  return (
+    &lt;ErrorBoundary
+      fallbackRender={typeof fallback === 'function' ? fallback : () =&gt; fallback}
+      onError={(error, info) =&gt; {
+        // 上报
+        Sentry.captureException(error, {
+          tags: { context },
+          extra: { componentStack: info.componentStack },
+        });
+        // 控制台 log（仅 dev）
+        if (import.meta.env.DEV) {
+          console.error('[ErrorBoundary]', context, error);
+        }
+      }}
+      onReset={() =&gt; {
+        // 重置时清缓存
+        queryClient.invalidateQueries({ queryKey: [context] });
+      }}
+      resetKeys={resetKeys}
+    &gt;
+      {children}
+    &lt;/ErrorBoundary&gt;
+  );
+}
+
+// 用法
+&lt;AppErrorBoundary context="dashboard" resetKeys={[userId]}&gt;
+  &lt;Dashboard /&gt;
+&lt;/AppErrorBoundary&gt;
+
+&lt;AppErrorBoundary context="settings" fallback={&lt;SettingsError /&gt;}&gt;
+  &lt;Settings /&gt;
+&lt;/AppErrorBoundary&gt;</code></pre>
+        </div>
+
+        <h3>Next.js App Router error.tsx 约定</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Next.js Error Boundary</span>
+          <pre class="code"<code class="lang-js">// app/dashboard/error.tsx
+'use client';   // ⚠️ 必须客户端组件
+
+export default function Error({
+  error,
+  reset,
+}: {
+  error: Error &amp; { digest?: string };
+  reset: () =&gt; void;
+}) {
+  useEffect(() =&gt; {
+    // 上报
+    Sentry.captureException(error);
+  }, [error]);
+
+  return (
+    &lt;div&gt;
+      &lt;h2&gt;Something went wrong!&lt;/h2&gt;
+      &lt;p&gt;{error.message}&lt;/p&gt;
+      &lt;button onClick={reset}&gt;Try again&lt;/button&gt;
+    &lt;/div&gt;
+  );
+}
+
+// Next.js 会自动把 app/dashboard/* 包裹在这个 Error Boundary 内
+// dashboard 内任何渲染错都被这个 error.tsx 捕获
+// 可以嵌套：app/error.tsx 是顶层、app/dashboard/error.tsx 是局部
+
+// 文件命名约定（Next.js App Router 特有）：
+// - error.tsx：客户端错误
+// - global-error.tsx：根级错误（包括 layout.tsx 错）
+// - not-found.tsx：404
+// - loading.tsx：Suspense fallback（自动包 Suspense）
+
+// 这是 RSC 时代的 Error Boundary 标准模式</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ================================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：以为 Error Boundary 捕获 event handler 错</div>
+          <p>
+            <code>&lt;button onClick={() =&gt; { throw ... }}&gt;</code>—— Error Boundary 完全不捕获。错跑到 window.onerror。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：event handler 内用 try/catch + setState 显示错误。或用 react-error-boundary 的 useErrorBoundary Hook 触发 Boundary。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：以为 Error Boundary 捕获异步错</div>
+          <p>
+            <code>setTimeout / Promise / fetch</code> 内的错—— Error Boundary 不捕获。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：Promise 链 .catch / async 函数 try/catch / fetch 后判断 r.ok。失败后用 setState + render 时 throw 触发 Boundary，或用 useErrorBoundary。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：fallback UI 自身报错</div>
+          <p>
+            ErrorFallback 用了某个可能失败的 prop / 第三方组件 → fallback 渲染时再次报错 → Boundary 不能自捕 → 沿 Fiber 上溯找外层 Boundary（如果有）→ 整个 app 崩。
+          </p>
+          <p style="margin-put: 8px">
+            <strong>规避</strong>：fallback UI 极简（纯 div + 文字 + button），不依赖任何可能失败的东西。最外层加"<em>最终兜底</em>" Boundary 或 React 19 onUncaughtError。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：在 getDerivedStateFromError 里调副作用</div>
+          <p>
+            <code>static getDerivedStateFromError(error) { console.log(error); return { hasError: true }; }</code>—— React 18+ Concurrent rendering 可能多次调用，console.log 跑多次。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：getDerivedStateFromError 仅返回 state（纯函数）。所有副作用放 componentDidCatch。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：忘记顶层兜底 Error Boundary 致白屏</div>
+          <p>
+            老代码没用 Error Boundary—— 任何小组件的渲染错让整个 React tree unmount → 白屏。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：① 顶层包一个 Error Boundary（最低成本兜底）② React 19 用 createRoot onUncaughtError 上报 + 显示降级 UI ③ Next.js 用 global-error.tsx 兜底。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ================================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>权威来源</h3>
+        <ul>
+          <li><a href="https://react.dev/reference/react/Component#catching-rendering-errors-with-an-error-boundary" target="_blank" rel="noopener">react.dev · Error Boundary</a></li>
+          <li><a href="https://react.dev/reference/react-dom/client/createRoot#options" target="_blank" rel="noopener">react.dev · createRoot options</a></li>
+        </ul>
+
+        <h3>社区事实标准</h3>
+        <ul>
+          <li><a href="https://github.com/bvaughn/react-error-boundary" target="_blank" rel="noopener">react-error-boundary 库</a> —— 函数式 API + reset + onError + Suspense 集成</li>
+          <li><a href="https://nextjs.org/docs/app/building-your-application/routing/error-handling" target="_blank" rel="noopener">Next.js · Error Handling</a> —— error.tsx 文件约定</li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="14-transition.html">B14 useTransition</a></li>
+          <li>
+            <strong>🎉 Part 3 渲染与并发完结</strong>。下一步进入 <strong>Part 4 · 现代 React</strong>（B16-B19）
+          </li>
+          <li>下一章：<a href="16-server-components.html">B16 Server Components</a>（编写中）</li>
+          <li>引擎层：<a href="../01-history/03-fiber.html">A3 Fiber</a> —— Error Boundary 在 commit 阶段处理</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="14-transition.html">
+            <span class="label">← 上一章</span>
+            <span class="title">B14 · useTransition</span>
+          </a>
+          <a class="next" href="index.html">
+            <span class="label">🎉 Part 3 完结 / 下一步 →</span>
+            <span class="title">Part 4 · 现代 React（B16 编写中）</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
