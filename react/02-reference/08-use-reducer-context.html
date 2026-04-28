@@ -1,0 +1,915 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>B8 · useReducer / useContext · React 深度学习</title>
+    <meta
+      name="description"
+      content="useReducer 完整签名 + 4 场景 + action discriminated union 类型设计、useContext + Context 性能陷阱 + useMemo 稳定 value + Context Selector 模式、React 19 use(Context) 替代部分用法。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2361dafb'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23000000'%3EReact%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>React 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.13 220); color: #fff">R</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">React 首页</a>
+          <a href="index.html">Track B 目录</a>
+          <a href="https://react.dev/reference/react/useReducer" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Track B · 官网知识精读</h3>
+        <ul>
+          <li><a href="index.html">Track 概览</a></li>
+        </ul>
+        <h4 style="margin-top: 12px; color: var(--text-muted)">Part 1 · 心智模型</h4>
+        <ul>
+          <li><a href="01-rendering-model.html">B1 · 渲染模型</a></li>
+          <li><a href="02-jsx.html">B2 · JSX</a></li>
+          <li><a href="03-components-props.html">B3 · 组件与 Props</a></li>
+          <li><a href="04-state-basics.html">B4 · State 基础</a></li>
+          <li><a href="05-conditional-list-event-form.html">B5 · 条件 / 列表 / 事件 / Form</a></li>
+        </ul>
+        <h4 style="margin-top: 12px; color: var(--text-muted)">Part 2 · Hooks 全谱</h4>
+        <ul>
+          <li><a href="06-use-state-deep.html">B6 · useState 深度</a></li>
+          <li><a href="07-use-effect.html">B7 · useEffect ⭐</a></li>
+          <li><a href="08-use-reducer-context.html" class="active">B8 · useReducer / useContext</a></li>
+          <li><span class="sidebar-pending">B9 · useMemo / useCallback ⏳</span></li>
+          <li><span class="sidebar-pending">B10 · useRef ⏳</span></li>
+          <li><span class="sidebar-pending">B11 · 自定义 Hooks ⏳</span></li>
+        </ul>
+        <h3>另一轨</h3>
+        <ul>
+          <li><a href="../01-history/index.html">Track A · 历史脉络（已完成）</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">React</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Track B · 官网知识精读</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>B8 · useReducer / useContext</span>
+        </nav>
+
+        <h1>B8 · useReducer / useContext</h1>
+        <p class="lead">
+          <code>useReducer</code> 是<strong>复杂状态管理</strong>的工具——多个字段联动 / 多种 action 类型的场景下比 useState 更清晰。<code>useContext</code> 是<strong>跨组件共享</strong>的工具——避免 prop drilling。两个 Hook 经常组合使用（如全局主题 / 用户登录态 / Toast 系统）。本章讲清两者的<strong>正确用法</strong>、<strong>性能陷阱</strong>、<strong>TypeScript discriminated union 模式</strong>，以及 React 19 <code>use(Context)</code> 与 <code>useContext</code> 的取舍。
+        </p>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 本章为什么把两个 Hook 合一章</div>
+          <p>
+            useReducer 和 useContext 经常<strong>组合使用</strong>—— 全局状态管理的"轻量 Redux 替代"模式：useReducer 管 state，useContext 跨组件共享。Track A 的 A5 生态章已讲了 Zustand / Redux Toolkit 等专业方案，本章讲<strong>不引第三方库时</strong>怎么用 React 内置 Hooks 实现。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> <a href="06-use-state-deep.html">B6 useState 深度</a> + <a href="07-use-effect.html">B7 useEffect</a></span>
+          <span><strong>对应 react.dev</strong>
+            <a href="https://react.dev/reference/react/useReducer" target="_blank" rel="noopener">useReducer</a> ·
+            <a href="https://react.dev/reference/react/useContext" target="_blank" rel="noopener">useContext</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong><code>useReducer</code> 是 <code>useState</code> 的超集</strong>（B6 已讲）。<strong>4 个场景必用</strong>：① 多字段联动（一个 action 改多个 state） ② 多种 action 类型（dispatch 不同 action） ③ 复杂转换逻辑（reducer 集中管理） ④ 测试 / 重放需求（pure function 易测）。简单场景仍用 useState。
+          </li>
+          <li>
+            <strong><code>useContext</code> 解决 prop drilling</strong>—— 但有<strong>性能陷阱</strong>：Context value 引用变化时<strong>所有消费者都重渲染</strong>，不管它们关心的字段变没变。所以"<em>大对象 Context</em>" 是反模式。
+          </li>
+          <li>
+            <strong>组合用法</strong>：<code>useReducer + useContext</code> = "<em>轻量 Redux</em>"。state + dispatch 通过 Context 传给所有后代。<strong>但要拆 2 个 Context</strong>（<code>StateContext</code> + <code>DispatchContext</code>），让只用 dispatch 的组件不被 state 变化触发重渲染。
+          </li>
+        </ol>
+
+        <p>看一段最小代码识别两个 Hook：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · useReducer + useContext 组合</span>
+          <pre class="code"><code class="lang-js">// 1. 定义 reducer + initial state
+const initialState = { count: 0, user: null };
+
+function appReducer(state, action) {
+  switch (action.type) {
+    case 'increment':
+      return { ...state, count: state.count + 1 };
+    case 'set_user':
+      return { ...state, user: action.payload };
+    default:
+      return state;
+  }
+}
+
+// 2. 创建两个 Context（state + dispatch 分离）
+const StateContext = createContext(initialState);
+const DispatchContext = createContext(() =&gt; {});
+
+// 3. Provider 用 useReducer
+function AppProvider({ children }) {
+  const [state, dispatch] = useReducer(appReducer, initialState);
+  return (
+    &lt;StateContext.Provider value={state}&gt;
+      &lt;DispatchContext.Provider value={dispatch}&gt;
+        {children}
+      &lt;/DispatchContext.Provider&gt;
+    &lt;/StateContext.Provider&gt;
+  );
+}
+
+// 4. 子组件按需消费
+function CountDisplay() {
+  const { count } = useContext(StateContext);   // 仅订阅 state
+  return &lt;span&gt;{count}&lt;/span&gt;;
+}
+
+function IncrementButton() {
+  const dispatch = useContext(DispatchContext);  // 仅订阅 dispatch（永远稳定）
+  return &lt;button onClick={() =&gt; dispatch({ type: 'increment' })}&gt;+&lt;/button&gt;;
+  // 不会因为 state 变化而重渲染（DispatchContext 的 value 永远是同一 dispatch）
+}</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3><code>useReducer</code> 完整签名与心智</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript · useReducer 类型定义</span>
+          <pre class="code"><code class="lang-ts">// 重载 1：基础
+function useReducer&lt;R extends Reducer&lt;any, any&gt;&gt;(
+  reducer: R,
+  initialState: ReducerState&lt;R&gt;,
+): [ReducerState&lt;R&gt;, Dispatch&lt;ReducerAction&lt;R&gt;&gt;];
+
+// 重载 2：含 lazy initializer（init 函数延迟求值，类似 useState lazy initial）
+function useReducer&lt;R extends Reducer&lt;any, any&gt;, I&gt;(
+  reducer: R,
+  initialArg: I,
+  init: (initial: I) =&gt; ReducerState&lt;R&gt;,
+): [ReducerState&lt;R&gt;, Dispatch&lt;ReducerAction&lt;R&gt;&gt;];
+
+type Reducer&lt;S, A&gt; = (state: S, action: A) =&gt; S;
+type Dispatch&lt;A&gt; = (action: A) =&gt; void;
+
+// 用法：
+const [state, dispatch] = useReducer(reducer, initialState);
+const [state, dispatch] = useReducer(reducer, initArg, (arg) =&gt; computeInitial(arg));
+
+// 关键事实：
+// - reducer 必须是纯函数（不能 mutate state、不能调副作用）
+// - dispatch 引用永远稳定（同 useState 的 setState）
+// - state 是不可变的（reducer 必须返回新引用）</code></pre>
+        </div>
+
+        <h3>何时用 <code>useReducer</code>（4 场景）</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">场景</th>
+              <th>useState 的痛点</th>
+              <th>useReducer 优势</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>多字段联动</td>
+              <td>多个 setState 难以协调（"用户登录"要同时改 user、token、loading、error）</td>
+              <td>一个 action 集中改多个字段</td>
+            </tr>
+            <tr>
+              <td>多种 action 类型</td>
+              <td>handler 散布各处（add/remove/toggle/edit todo）</td>
+              <td>reducer 集中所有转换逻辑</td>
+            </tr>
+            <tr>
+              <td>复杂转换逻辑</td>
+              <td>setState 内调函数嵌套</td>
+              <td>reducer 是 pure function，易测试</td>
+            </tr>
+            <tr>
+              <td>状态机 / 向导流</td>
+              <td>useState 表达不清晰（每步 transition 散落）</td>
+              <td>reducer 自然适配状态机模式</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>反向</strong>：以下场景仍用 useState：
+        </p>
+        <ul>
+          <li>简单 state（boolean / 数字 / 字符串）</li>
+          <li>3 个以下独立字段（form 几个 input）</li>
+          <li>state 变化逻辑简单（直接 setState 新值）</li>
+        </ul>
+
+        <h3>action 类型设计（discriminated union）⭐</h3>
+        <p>
+          TypeScript 中的 <strong>discriminated union</strong>（详见 <a href="../../typescript/01-handbook-basics/03-narrowing.html">TS · Narrowing</a>）是 reducer action 类型的<strong>事实标准</strong>：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">typescript · action discriminated union 模式</span>
+          <pre class="code"><code class="lang-ts">type State = {
+  todos: Todo[];
+  filter: 'all' | 'active' | 'completed';
+};
+
+// ⭐ Action 是 discriminated union —— type 字段是 discriminator
+type Action =
+  | { type: 'add'; payload: { text: string } }
+  | { type: 'toggle'; payload: { id: string } }
+  | { type: 'remove'; payload: { id: string } }
+  | { type: 'edit'; payload: { id: string; text: string } }
+  | { type: 'set_filter'; payload: { filter: State['filter'] } }
+  | { type: 'clear_completed' };  // 没有 payload
+
+function todoReducer(state: State, action: Action): State {
+  switch (action.type) {
+    case 'add':
+      return {
+        ...state,
+        todos: [...state.todos, { id: crypto.randomUUID(), text: action.payload.text, done: false }],
+        //                                                       ↑ TS narrowing：知道 payload 是 { text: string }
+      };
+    case 'toggle':
+      return {
+        ...state,
+        todos: state.todos.map(t =&gt; t.id === action.payload.id ? { ...t, done: !t.done } : t),
+      };
+    case 'remove':
+      return {
+        ...state,
+        todos: state.todos.filter(t =&gt; t.id !== action.payload.id),
+      };
+    case 'edit':
+      return {
+        ...state,
+        todos: state.todos.map(t =&gt; t.id === action.payload.id ? { ...t, text: action.payload.text } : t),
+      };
+    case 'set_filter':
+      return { ...state, filter: action.payload.filter };
+    case 'clear_completed':
+      return { ...state, todos: state.todos.filter(t =&gt; !t.done) };
+    default: {
+      // exhaustive check：TS 知道 default 分支不可达
+      const _exhaustive: never = action;
+      return state;
+    }
+  }
+}
+
+// 使用：
+dispatch({ type: 'add', payload: { text: 'Hello' } });
+//        ↑ TS 自动检查 type + payload 类型组合
+
+dispatch({ type: 'toggle', payload: { text: 'wrong' } });
+// ❌ TS 错：toggle 的 payload 是 { id }，不是 { text }
+
+dispatch({ type: 'invalid' });
+// ❌ TS 错：'invalid' 不在 Action 类型里
+
+// 加新 action 类型？
+// 只要在 Action 中加一个变体，TS 自动报错所有未处理 case 的 reducer
+// → "exhaustive checking" 神器：忘了处理就不能编译
+
+// 详细 discriminated union 见 TS · Narrowing</code></pre>
+        </div>
+
+        <h3><code>useContext</code> 完整签名</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript · useContext + Context 类型</span>
+          <pre class="code"><code class="lang-ts">// 1. 创建 Context（含默认值）
+const ThemeContext = createContext&lt;Theme&gt;({ mode: 'light', primary: '#000' });
+const UserContext = createContext&lt;User | null&gt;(null);  // 允许 null 作为"未登录"
+
+// 2. Provider 组件
+function App() {
+  const [theme, setTheme] = useState({ mode: 'light', primary: '#000' });
+  return (
+    &lt;ThemeContext.Provider value={theme}&gt;
+      &lt;Layout /&gt;
+    &lt;/ThemeContext.Provider&gt;
+  );
+}
+
+// 3. 消费者用 useContext
+function Button() {
+  const theme = useContext(ThemeContext);
+  return &lt;button style={{ background: theme.primary }}&gt;Click&lt;/button&gt;;
+}
+
+// 4. 没有 Provider 时用 createContext 的默认值
+//    所以 createContext 的默认值要设计成"<em>合理的 fallback</em>"
+//    或者强制必须有 Provider（默认值用 null + 自定义 hook 检查）
+
+// 5. 自定义 Hook 模式（推荐 —— 避免到处写 useContext + null 检查）
+function useTheme() {
+  const ctx = useContext(ThemeContext);
+  if (!ctx) throw new Error('useTheme must be used within ThemeProvider');
+  return ctx;
+}</code></pre>
+        </div>
+
+        <h3>Context 的性能陷阱 ⭐</h3>
+        <p>
+          <strong>这是 useContext 最常见的 bug 来源</strong>。
+        </p>
+
+        <div class="callout danger">
+          <div class="callout-title">🎯 Context value 引用变化 → 所有消费者都重渲染</div>
+          <p>
+            React 用 Object.is 比较 Context value。<strong>引用变化时所有 useContext 消费者都重新渲染，不管它们关心的字段是否变化</strong>—— 这是性能陷阱的根源。React.memo 包子组件也救不了，因为是 useContext hook 触发的重渲染（React.memo 仅比较 props）。
+          </p>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Context 性能陷阱演示</span>
+          <pre class="code"><code class="lang-js">// ❌ 性能问题：每次 App render 都创建新对象 → 所有消费者重渲染
+function App() {
+  const [user, setUser] = useState(null);
+  const [theme, setTheme] = useState('light');
+
+  // 每次 App render 都新建 value 对象 → 所有 useContext 消费者重渲染
+  const value = { user, theme, setUser, setTheme };
+
+  return (
+    &lt;AppContext.Provider value={value}&gt;
+      &lt;Header /&gt;     {/* 用了 user，每次都重渲染 */}
+      &lt;Sidebar /&gt;    {/* 用了 theme，theme 没变也重渲染 */}
+      &lt;Footer /&gt;     {/* 没用 context，但也...等等 Footer 不消费 context 不受影响 */}
+    &lt;/AppContext.Provider&gt;
+  );
+}
+
+// 解 1：用 useMemo 稳定 value
+function App() {
+  const [user, setUser] = useState(null);
+  const [theme, setTheme] = useState('light');
+
+  const value = useMemo(
+    () =&gt; ({ user, theme, setUser, setTheme }),
+    [user, theme]   // 仅 user / theme 变化时才新建 value
+  );
+
+  return &lt;AppContext.Provider value={value}&gt;...&lt;/AppContext.Provider&gt;;
+}
+// 但仍有问题：user 变 → theme 消费者也重渲染（value 引用变了）
+
+// 解 2：拆 Context（按更新频率分组）⭐ 推荐
+const UserContext = createContext(null);
+const ThemeContext = createContext(null);
+
+function App() {
+  const [user, setUser] = useState(null);
+  const [theme, setTheme] = useState('light');
+
+  return (
+    &lt;UserContext.Provider value={user}&gt;
+      &lt;ThemeContext.Provider value={theme}&gt;
+        ...
+      &lt;/ThemeContext.Provider&gt;
+    &lt;/UserContext.Provider&gt;
+  );
+}
+// 每个 Context 单独维护 → 仅相关 Context 变化时消费者重渲染
+
+// 解 3：state + dispatch 分两个 Context（前面已讲）
+&lt;StateContext.Provider value={state}&gt;
+  &lt;DispatchContext.Provider value={dispatch}&gt;
+    {children}
+  &lt;/DispatchContext.Provider&gt;
+&lt;/StateContext.Provider&gt;
+// dispatch 永远稳定，仅订阅 dispatch 的组件永不重渲染</code></pre>
+        </div>
+
+        <h3>Context Selector 模式（user-land 实现）</h3>
+        <p>
+          React 内置 useContext 没有"<em>仅订阅一个字段</em>" 的能力（这是 Redux selector / Zustand 的核心）。社区有几个 user-land 实现：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 自定义 Context Selector</span>
+          <pre class="code"><code class="lang-js">// 简化版（基于 useSyncExternalStore，React 18+）
+function createContextSelector(initialState) {
+  const subscribers = new Set();
+  let state = initialState;
+
+  return {
+    setState(updater) {
+      state = typeof updater === 'function' ? updater(state) : updater;
+      subscribers.forEach(fn =&gt; fn());
+    },
+    useSelector(selector) {
+      return useSyncExternalStore(
+        (cb) =&gt; { subscribers.add(cb); return () =&gt; subscribers.delete(cb); },
+        () =&gt; selector(state),
+      );
+    },
+  };
+}
+
+const userStore = createContextSelector({ name: '', age: 0 });
+
+function Component() {
+  const name = userStore.useSelector(s =&gt; s.name);  // 仅 name 变化时重渲染
+  return &lt;div&gt;{name}&lt;/div&gt;;
+}
+
+// 实际项目用第三方库：
+// - useContextSelector (use-context-selector npm 包)
+// - Zustand 内置 selector
+// - Jotai 用 atom 天然解决这个问题
+
+// 详见 A5 生态章节的状态管理对比</code></pre>
+        </div>
+
+        <h3>React 19 <code>use(Context)</code> vs <code>useContext</code></h3>
+        <p>
+          React 19 引入 <code>use</code> API（详见 A4 / B18），其中一个用法是<strong>读 Context</strong>。它和 <code>useContext</code> 的关键差异：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 24%">维度</th>
+              <th>useContext</th>
+              <th>use(Context)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>调用位置</td>
+              <td>必须组件顶层（Rules of Hooks）</td>
+              <td><strong>可在条件 / 循环 / 函数嵌套</strong>调用</td>
+            </tr>
+            <tr>
+              <td>是 Hook 吗</td>
+              <td>是（链表节点）</td>
+              <td>不是 —— 新机制（不依赖 hooks linked list）</td>
+            </tr>
+            <tr>
+              <td>性能</td>
+              <td>同样订阅 Context</td>
+              <td>同样订阅 Context</td>
+            </tr>
+            <tr>
+              <td>取舍</td>
+              <td>大多数场景用</td>
+              <td>仅在条件分支调用 Context 时用</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="code-block">
+          <span class="code-label">javascript · use(Context) 在条件分支调用</span>
+          <pre class="code"><code class="lang-js">// useContext 必须顶层（Rules of Hooks）
+function Component({ shouldUseTheme }) {
+  const theme = useContext(ThemeContext);  // 即使 shouldUseTheme = false 也调用
+
+  if (shouldUseTheme) {
+    return &lt;div className={theme.mode}&gt;...&lt;/div&gt;;
+  }
+  return &lt;div&gt;...&lt;/div&gt;;
+}
+
+// React 19 use(Context) 可在条件分支
+function Component({ shouldUseTheme }) {
+  if (shouldUseTheme) {
+    const theme = use(ThemeContext);  // ✅ 仅条件成立时才 subscribe
+    return &lt;div className={theme.mode}&gt;...&lt;/div&gt;;
+  }
+  return &lt;div&gt;...&lt;/div&gt;;
+}
+
+// 实际场景：根据 props 决定是否需要某个 Context
+// 大多数场景仍用 useContext（更清晰的依赖关系）
+// use(Context) 仅作为"<em>解锁条件订阅</em>" 的工具</code></pre>
+        </div>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · Toast 系统（轻量"全局状态" 不引库）</h3>
+          <p>
+            团队不想引 Zustand 等库，用 useReducer + useContext 实现 Toast：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 轻量 Toast 系统</span>
+            <pre class="code"><code class="lang-js">// types
+type Toast = { id: string; message: string; type: 'info' | 'error' | 'success' };
+type State = { toasts: Toast[] };
+type Action =
+  | { type: 'show'; payload: Omit&lt;Toast, 'id'&gt; }
+  | { type: 'dismiss'; payload: { id: string } };
+
+// reducer
+function toastReducer(state: State, action: Action): State {
+  switch (action.type) {
+    case 'show':
+      return {
+        toasts: [...state.toasts, { ...action.payload, id: crypto.randomUUID() }],
+      };
+    case 'dismiss':
+      return { toasts: state.toasts.filter(t =&gt; t.id !== action.payload.id) };
+  }
+}
+
+// Context（拆 state + dispatch）
+const StateContext = createContext&lt;State&gt;({ toasts: [] });
+const DispatchContext = createContext&lt;Dispatch&lt;Action&gt;&gt;(() =&gt; {});
+
+// Provider
+function ToastProvider({ children }: { children: ReactNode }) {
+  const [state, dispatch] = useReducer(toastReducer, { toasts: [] });
+  return (
+    &lt;StateContext.Provider value={state}&gt;
+      &lt;DispatchContext.Provider value={dispatch}&gt;
+        {children}
+        &lt;ToastList /&gt;
+      &lt;/DispatchContext.Provider&gt;
+    &lt;/StateContext.Provider&gt;
+  );
+}
+
+// Custom hooks（封装 useContext + 错误兜底）
+function useToasts() {
+  return useContext(StateContext).toasts;
+}
+function useToastDispatch() {
+  return useContext(DispatchContext);
+}
+
+// 用法
+function MyButton() {
+  const dispatch = useToastDispatch();
+  return (
+    &lt;button onClick={() =&gt; dispatch({
+      type: 'show',
+      payload: { message: 'Saved!', type: 'success' },
+    })}&gt;
+      Save
+    &lt;/button&gt;
+  );
+}
+
+// 这里 MyButton 仅订阅 dispatch（永远稳定）—— 任何 toast 增删都不重渲染它
+
+// 如果用 Zustand 替代：~ 5 行代码 + 全局 hook，无 Provider 嵌套
+// 取舍：useReducer + useContext 不引库；Zustand 更简洁但有依赖</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 多步表单状态机（XState 之外的轻量方案）</h3>
+          <p>
+            注册流程 5 步，每步可能跳到不同下一步，可前进 / 后退 / 重置。用 useReducer 实现状态机：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 状态机风格 reducer</span>
+            <pre class="code"><code class="lang-js">type Step = 'basic' | 'profile' | 'verify' | 'plan' | 'done';
+type State = {
+  step: Step;
+  data: { basic?: BasicInfo; profile?: Profile; plan?: Plan };
+};
+type Action =
+  | { type: 'next'; payload: { from: Step; data: any } }
+  | { type: 'back' }
+  | { type: 'reset' }
+  | { type: 'jump'; payload: { to: Step } };
+
+const transitions: Record&lt;Step, { next: Step | null; back: Step | null }&gt; = {
+  basic: { next: 'profile', back: null },
+  profile: { next: 'verify', back: 'basic' },
+  verify: { next: 'plan', back: 'profile' },
+  plan: { next: 'done', back: 'verify' },
+  done: { next: null, back: null },
+};
+
+function wizardReducer(state: State, action: Action): State {
+  switch (action.type) {
+    case 'next': {
+      const next = transitions[state.step].next;
+      if (!next) return state;
+      return {
+        step: next,
+        data: { ...state.data, [action.payload.from]: action.payload.data },
+      };
+    }
+    case 'back': {
+      const back = transitions[state.step].back;
+      return back ? { ...state, step: back } : state;
+    }
+    case 'reset':
+      return { step: 'basic', data: {} };
+    case 'jump':
+      return { ...state, step: action.payload.to };
+  }
+}
+
+// 用法
+function Wizard() {
+  const [state, dispatch] = useReducer(wizardReducer, { step: 'basic', data: {} });
+  // 根据 state.step 渲染对应表单页面
+  // 用户点 Next → dispatch({ type: 'next', payload: {...} })
+}
+
+// 复杂状态机（&gt; 10 状态 / 嵌套状态 / Side Effects）→ 用 XState（A5 推荐）
+// 简单状态机（&lt; 10 状态）→ useReducer 足够</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 主题 Context 性能优化</h3>
+          <p>
+            主题包含很多字段（colors / fonts / spacing / radii）。某些字段经常变（用户切换暗色），某些字段不变（spacing 系统）。怎么优化：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 主题 Context 拆分优化</span>
+            <pre class="code"><code class="lang-js">// ❌ 一个大 Context —— colors 变化让所有消费者重渲染
+const ThemeContext = createContext({
+  colors: {...},
+  fonts: {...},
+  spacing: {...},
+  radii: {...},
+});
+
+// ✅ 按更新频率拆 2 个 Context
+const ColorThemeContext = createContext(initialColors);     // 经常变（暗色切换）
+const StaticThemeContext = createContext({                  // 不变（spacing / fonts / radii）
+  fonts: {...},
+  spacing: {...},
+  radii: {...},
+});
+
+function App() {
+  const [colors, setColors] = useState(initialColors);
+  // staticTheme 是模块级常量 —— 完全不变 → 引用永远稳定
+
+  return (
+    &lt;StaticThemeContext.Provider value={staticTheme}&gt;
+      &lt;ColorThemeContext.Provider value={colors}&gt;
+        ...
+      &lt;/ColorThemeContext.Provider&gt;
+    &lt;/StaticThemeContext.Provider&gt;
+  );
+}
+
+// 仅用 spacing / fonts 的组件 —— 永不重渲染（StaticThemeContext 引用永远稳定）
+// 仅用 colors 的组件 —— 仅 colors 变化时重渲染
+// 性能与"按字段订阅" 接近</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>useReducer 与 useState 等价 / 互转</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 同一 todo 列表两种实现</span>
+          <pre class="code"><code class="lang-js">// === useState 风格 ===
+function TodoListWithUseState() {
+  const [todos, setTodos] = useState([]);
+
+  const add = (text) =&gt; setTodos(prev =&gt; [...prev, { id: Date.now(), text, done: false }]);
+  const toggle = (id) =&gt; setTodos(prev =&gt; prev.map(t =&gt; t.id === id ? { ...t, done: !t.done } : t));
+  const remove = (id) =&gt; setTodos(prev =&gt; prev.filter(t =&gt; t.id !== id));
+
+  return /* JSX */;
+}
+
+// === useReducer 风格（更复杂场景）===
+function todoReducer(state, action) {
+  switch (action.type) {
+    case 'add':
+      return [...state, { id: Date.now(), text: action.text, done: false }];
+    case 'toggle':
+      return state.map(t =&gt; t.id === action.id ? { ...t, done: !t.done } : t);
+    case 'remove':
+      return state.filter(t =&gt; t.id !== action.id);
+    default:
+      return state;
+  }
+}
+
+function TodoListWithUseReducer() {
+  const [todos, dispatch] = useReducer(todoReducer, []);
+  return /* JSX，调用 dispatch({ type: 'add', text }) 等 */;
+}
+
+// 转换决策：
+// - 3 个 action → useState 仍清晰
+// - 5+ action 或 action 内逻辑复杂 → useReducer 更清晰
+// - 需要测试 reducer 单独正确性 → useReducer（pure function）
+// - 需要 dispatch 跨多层组件传 → useReducer + Context</code></pre>
+        </div>
+
+        <h3>用 useReducer 实现 undo / redo</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · undo/redo 状态机</span>
+          <pre class="code"><code class="lang-js">type State&lt;T&gt; = { past: T[]; present: T; future: T[] };
+type Action&lt;T&gt; =
+  | { type: 'set'; payload: T }
+  | { type: 'undo' }
+  | { type: 'redo' }
+  | { type: 'reset'; payload: T };
+
+function undoReducer&lt;T&gt;(state: State&lt;T&gt;, action: Action&lt;T&gt;): State&lt;T&gt; {
+  switch (action.type) {
+    case 'set':
+      return {
+        past: [...state.past, state.present],
+        present: action.payload,
+        future: [],   // 新操作清除 redo 历史
+      };
+    case 'undo':
+      if (state.past.length === 0) return state;
+      return {
+        past: state.past.slice(0, -1),
+        present: state.past[state.past.length - 1],
+        future: [state.present, ...state.future],
+      };
+    case 'redo':
+      if (state.future.length === 0) return state;
+      return {
+        past: [...state.past, state.present],
+        present: state.future[0],
+        future: state.future.slice(1),
+      };
+    case 'reset':
+      return { past: [], present: action.payload, future: [] };
+  }
+}
+
+// 自定义 Hook
+function useUndoableState&lt;T&gt;(initial: T) {
+  const [state, dispatch] = useReducer&lt;Reducer&lt;State&lt;T&gt;, Action&lt;T&gt;&gt;&gt;(
+    undoReducer,
+    { past: [], present: initial, future: [] }
+  );
+
+  return {
+    state: state.present,
+    set: (value: T) =&gt; dispatch({ type: 'set', payload: value }),
+    undo: () =&gt; dispatch({ type: 'undo' }),
+    redo: () =&gt; dispatch({ type: 'redo' }),
+    canUndo: state.past.length &gt; 0,
+    canRedo: state.future.length &gt; 0,
+  };
+}
+
+// 用法
+function TextEditor() {
+  const editor = useUndoableState('');
+  return (
+    &lt;&gt;
+      &lt;textarea
+        value={editor.state}
+        onChange={(e) =&gt; editor.set(e.target.value)}
+      /&gt;
+      &lt;button disabled={!editor.canUndo} onClick={editor.undo}&gt;Undo&lt;/button&gt;
+      &lt;button disabled={!editor.canRedo} onClick={editor.redo}&gt;Redo&lt;/button&gt;
+    &lt;/&gt;
+  );
+}
+
+// 这就是 Excalidraw / Tldraw 等画板软件的 undo/redo 基础</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：reducer 中 mutate state（非纯函数）</div>
+          <p>
+            <code>case 'add': state.todos.push(newTodo); return state</code>—— mutate 后返回同引用 → React Object.is 等 → bailout，UI 不更新。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：reducer 必须返回新引用。<code>{...state, todos: [...state.todos, newTodo]}</code>。Immer 缓解嵌套：<code>produce(state, draft =&gt; { draft.todos.push(newTodo) })</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：reducer 中调副作用（非纯函数）</div>
+          <p>
+            <code>case 'submit': fetch('/api', {...}); return state</code>—— reducer 必须是纯函数，不能调 fetch / 改 DOM / log（log 一般容忍但不推荐）。Concurrent rendering 可能让 reducer 跑多次。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：副作用放 useEffect 或 event handler。reducer 仅负责"<em>给定 state + action 算新 state</em>"。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：Context value 没 useMemo 让所有消费者重渲染</div>
+          <p>
+            <code>&lt;Context.Provider value={{ user, setUser }}&gt;</code>—— 每次 App render 创建新对象 → 所有 useContext 消费者重渲染。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：① 用 useMemo 稳定 value ② 拆 Context（state + dispatch 分离 / 按更新频率分组）③ 用 useReducer 让 dispatch 引用永远稳定。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：在大 Context 上消费小字段</div>
+          <p>
+            <code>const { user } = useContext(BigContext)</code>—— BigContext 任何字段变都重渲染。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：① 拆细 Context ② 用 use-context-selector 库 ③ 用 Zustand（专门解决这个）。详见 A5 生态。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：忘记给 Context 加 default value 或自定义 hook 包装</div>
+          <p>
+            <code>createContext()</code>（无默认值）+ 组件忘记包 Provider → useContext 返回 undefined → 后续访问 .field 报 "<em>cannot read of undefined</em>"。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：① <code>createContext</code> 给合理默认值或 <code>null</code> + 自定义 hook 检查 ② 用 TypeScript 类型 <code>createContext&lt;User | null&gt;(null)</code>。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>权威来源</h3>
+        <ul>
+          <li><a href="https://react.dev/reference/react/useReducer" target="_blank" rel="noopener">react.dev · useReducer</a></li>
+          <li><a href="https://react.dev/reference/react/useContext" target="_blank" rel="noopener">react.dev · useContext</a></li>
+          <li><a href="https://react.dev/reference/react/createContext" target="_blank" rel="noopener">react.dev · createContext</a></li>
+          <li><a href="https://react.dev/reference/react/use" target="_blank" rel="noopener">react.dev · use</a> （19+）</li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="07-use-effect.html">B7 useEffect</a></li>
+          <li>下一章：<a href="09-use-memo-callback.html">B9 useMemo / useCallback</a>（编写中）</li>
+          <li>替代方案：<a href="../01-history/05-ecosystem.html">A5 生态</a> —— Zustand / Jotai / Redux Toolkit / XState</li>
+          <li>引擎层：<a href="06-use-state-deep.html">B6 useState 深度</a> —— useState = useReducer 特化</li>
+        </ul>
+
+        <h3>跨主题参考</h3>
+        <ul>
+          <li><a href="../../typescript/01-handbook-basics/03-narrowing.html">TS · Narrowing</a> —— discriminated union 完整模式</li>
+          <li><a href="../../typescript/02-type-manipulation/07-generics.html">TS · Generics</a> —— useReducer&lt;Reducer, Action&gt; 泛型</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="07-use-effect.html">
+            <span class="label">← 上一章</span>
+            <span class="title">B7 · useEffect ⭐</span>
+          </a>
+          <a class="next" href="index.html">
+            <span class="label">下一步 →</span>
+            <span class="title">B9 · useMemo / useCallback（🚧 编写中，先看 Track 概览）</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
