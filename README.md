@@ -13,7 +13,7 @@
 | ② | 规范 | **ECMAScript**   | ✅ 完成     | [ecma-international.org/ecma-262](https://ecma-international.org/publications-and-standards/standards/ecma-262/) | 11 章 / 2 轨 |
 | ③ | 引擎 | **V8 Engine**    | ⏳ 规划中   | [v8.dev/docs](https://v8.dev/docs)                                  | 待定              |
 | ③ | 引擎 | **Node.js Runtime** | ⏳ 规划中 | [nodejs.org/docs](https://nodejs.org/docs)                         | 待定              |
-| ③ | 引擎 | **Bun Runtime**  | ⏳ 规划中   | [bun.com/docs](https://bun.com/docs)                                | 待定              |
+| ③ | 引擎 | **Bun（Runtime + Toolchain）** | ⏳ 规划中 | [bun.com/docs](https://bun.com/docs)                       | 待定              |
 | ③ | 引擎 | **浏览器渲染管线** | ⏳ 规划中 | web.dev / Chrome 团队博客                                           | 待定              |
 | ③ | 引擎 | **WebAssembly**  | ⏳ 规划中   | [webassembly.org](https://webassembly.org/) + MDN                   | 待定              |
 | ④ | 构建 | **Vite & 构建工具** | ⏳ 规划中 | [vite.dev](https://vite.dev/) + esbuild / Rollup                    | 待定              |
@@ -158,11 +158,11 @@ docs/learning/deep-dive/
 **③ 引擎 / 运行时**
 - **V8 Engine** —— 编译流水线（Ignition / Sparkplug / Maglev / TurboFan）/ Hidden Class / IC / GC Orinoco
 - **Node.js Runtime** —— libuv / Streams / Worker Threads / 模块解析 / HTTP server 内部
-- **Bun Runtime** —— JavaScriptCore / Zig 实现 / 内置工具链 / Bun.serve / 与 Node / Deno 设计差异
+- **Bun（Runtime + Toolchain）** —— 四合一：`bun install`（替代 pnpm）+ `bun run`（替代 Node）+ `bun build`（替代 Rollup / Vite）+ `bun test`（替代 Jest / Vitest）。JavaScriptCore + Zig 实现，与 Node / Deno 的设计差异
 - **浏览器渲染管线** —— CRP / Compositor / Reflow / Web Vitals 根因
 - **WebAssembly** —— wasm32 ISA / JS 互操作 / WASI / Rust → wasm / SIMD / Component Model
 
-**④ 构建 / 工程化**
+**④ 构建 / 工程化**（注：Bun 提供替代路径，在 ③ Bun 章节展开）
 - **Vite & 构建工具** —— 双模架构 / HMR / SWC vs Babel / Rolldown / Turbopack
 - **pnpm & monorepo** —— 软链 / phantom dep / Turborepo / Nx / changesets
 - **测试工具** —— Vitest / Testing Library / Playwright / MSW / Visual regression
