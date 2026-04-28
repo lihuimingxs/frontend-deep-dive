@@ -135,7 +135,7 @@ docs/learning/deep-dive/
 3. **每个知识点都要有"在哪儿用"** —— 应用场景至少 2-3 个来自现代框架/Node/工具链的真实案例。
 4. **每个陷阱都要有根因** —— 不只写"这样会错"，还要写"为什么会错"。
 5. **零依赖** —— 纯 HTML/CSS/JS，无构建、无 npm 包、无 CDN 引用，永久可离线打开。
-6. **重心归位 + 对照入口** —— 跨阶段主题（Bun / Next.js / AI SDK 等 ecosystem 类）的<strong>主卡置于其设计重心所在阶段</strong>，相邻阶段以"<em>对照入口</em>" 卡（虚线边框、↗ 对照徽标）深链到主章节的横评 anchor（如 <code>#vs-pnpm</code> / <code>#vs-vite</code> / <code>#vs-vitest</code>）。这样既保留 ecosystem 主题的叙事完整性，也在每个阶段提供横向对比入口。
+6. **Ecosystem 主题作为整体讲** —— Bun / Next.js / AI SDK 这类跨多阶段的产品/平台主题，<strong>整章作为一个连贯的产品来讲</strong>，置于其设计重心所在阶段（Bun → ③、Next.js → ⑤、AI SDK → ⑧）。其他阶段如果要做横评，在<strong>该阶段章节的正文里</strong>自然提及（如 Vite 章节讨论 bundler 时把 Bun build 列入对比对象），而<strong>不在主页建独立的"<em>跳转卡</em>"</strong> —— 那是把内容切碎，违反作者思维。
 
 ## 技术选择
 
@@ -163,10 +163,10 @@ docs/learning/deep-dive/
 - **浏览器渲染管线** —— CRP / Compositor / Reflow / Web Vitals 根因
 - **WebAssembly** —— wasm32 ISA / JS 互操作 / WASI / Rust → wasm / SIMD / Component Model
 
-**④ 构建 / 工程化**（每张主卡配一张"<em>↗ Bun 对照入口</em>" 卡，深链到 ③ Bun 横评 anchor）
-- **Vite & 构建工具** —— 双模架构 / HMR / SWC vs Babel / Rolldown / Turbopack（+ ↗ Bun build 对照入口）
-- **pnpm & monorepo** —— 软链 / phantom dep / Turborepo / Nx / changesets（+ ↗ bun install 对照入口）
-- **测试工具** —— Vitest / Testing Library / Playwright / MSW / Visual regression（+ ↗ bun test 对照入口）
+**④ 构建 / 工程化**
+- **Vite & 构建工具** —— 双模架构 / HMR / SWC vs Babel / 与 Rolldown / Turbopack / Bun build 横评
+- **pnpm & monorepo** —— 软链 / phantom dep vs bun install / Turborepo / Nx / changesets
+- **测试工具** —— Vitest / Jest / bun test 关键差异 / Testing Library / Playwright / MSW
 
 **⑤ 框架**
 - **Next.js** —— App Router / RSC 边界 / Server Actions / 5 层缓存 / Edge Runtime
