@@ -4,14 +4,26 @@
 
 ## 主题清单
 
-| 主题             | 状态        | 来源                                                                | 章节数            |
-| ---------------- | ----------- | ------------------------------------------------------------------- | ----------------- |
-| **JavaScript**   | ✅ 完成     | [javascript.info](https://javascript.info/)                         | 62 章 / 7 阶段    |
-| **TypeScript**   | ✅ 完成     | [typescriptlang.org/docs](https://www.typescriptlang.org/docs/)     | 20 章 / 4 Part    |
-| **ECMAScript**   | ✅ 完成     | [ecma-international.org/ecma-262](https://ecma-international.org/publications-and-standards/standards/ecma-262/) | 11 章 / 2 轨（历史脉络 + 规范精读）|
-| **React**        | ✅ 完成     | [react.dev](https://react.dev/) + [React RFCs](https://github.com/reactjs/rfcs) | 24 章 / 2 轨（历史脉络 + 官网知识精读 4 Part）|
-| **Tailwind CSS** | ⏳ 规划中   | [tailwindcss.com/docs](https://tailwindcss.com/docs)                | 待定              |
-| **V8 Engine**    | ⏳ 规划中   | [v8.dev/docs](https://v8.dev/docs)                                  | 待定              |
+按学习顺序分组：**① 语言 → ② 规范 → ③ 引擎/运行时 → ④ 构建/工程化 → ⑤ 框架 → ⑥ 样式/UI → ⑦ 数据/网络 → ⑧ AI 集成**
+
+| # | 分组 | 主题             | 状态        | 来源                                                                | 章节数            |
+|---|------|------------------|-------------|---------------------------------------------------------------------|-------------------|
+| ① | 语言 | **JavaScript**   | ✅ 完成     | [javascript.info](https://javascript.info/)                         | 62 章 / 7 阶段    |
+| ① | 语言 | **TypeScript**   | ✅ 完成     | [typescriptlang.org/docs](https://www.typescriptlang.org/docs/)     | 20 章 / 4 Part    |
+| ② | 规范 | **ECMAScript**   | ✅ 完成     | [ecma-international.org/ecma-262](https://ecma-international.org/publications-and-standards/standards/ecma-262/) | 11 章 / 2 轨 |
+| ③ | 引擎 | **V8 Engine**    | ⏳ 规划中   | [v8.dev/docs](https://v8.dev/docs)                                  | 待定              |
+| ③ | 引擎 | **Node.js Runtime** | ⏳ 规划中 | [nodejs.org/docs](https://nodejs.org/docs)                         | 待定              |
+| ③ | 引擎 | **浏览器渲染管线** | ⏳ 规划中 | web.dev / Chrome 团队博客                                           | 待定              |
+| ④ | 构建 | **Vite & 构建工具** | ⏳ 规划中 | [vite.dev](https://vite.dev/) + esbuild / Rollup                    | 待定              |
+| ④ | 构建 | **pnpm & monorepo** | ⏳ 规划中 | pnpm.io + Turborepo / Nx                                            | 待定              |
+| ④ | 构建 | **测试工具**     | ⏳ 规划中   | Vitest + Testing Library + Playwright                              | 待定              |
+| ⑤ | 框架 | **React**        | ✅ 完成     | [react.dev](https://react.dev/) + [React RFCs](https://github.com/reactjs/rfcs) | 24 章 / 2 轨 |
+| ⑤ | 框架 | **Next.js**      | ⏳ 规划中   | [nextjs.org/docs](https://nextjs.org/docs)                          | 待定              |
+| ⑥ | 样式 | **Tailwind CSS** | ⏳ 规划中   | [tailwindcss.com/docs](https://tailwindcss.com/docs)                | 待定              |
+| ⑥ | 样式 | **shadcn/ui + Radix** | ⏳ 规划中 | ui.shadcn.com + radix-ui.com                                       | 待定              |
+| ⑦ | 数据 | **TanStack Query / SWR** | ⏳ 规划中 | tanstack.com/query + swr.vercel.app                              | 待定              |
+| ⑦ | 网络 | **HTTP/2 + HTTP/3 + QUIC** | ⏳ 规划中 | RFC 7540 / RFC 9114 / RFC 9000                                | 待定              |
+| ⑧ | AI   | **AI SDK**       | ⏳ 规划中   | Vercel AI SDK + Claude Agent SDK                                   | 待定              |
 
 ## 如何打开
 
@@ -132,11 +144,44 @@ docs/learning/deep-dive/
 
 ## 状态与路线图
 
-- ✅ JavaScript（62 章，2026-04 完成）
-- ✅ TypeScript（20 章 / 4 Part 完成）
-- ✅ ECMAScript（11 章 / 2 轨完成 · Track A 历史脉络 5 章 + Track B 规范精读 6 章）
-- ✅ React（24 章 / 2 轨完成 · Track A 历史脉络 5 章 + Track B 官网精读 19 章 / 4 Part：心智模型 / Hooks 全谱 / 渲染并发 / 现代 React）
-- ⏳ Tailwind CSS / V8（规划中，需后续单独研究）
+### ✅ 已完成（4 / 16）
+
+- **JavaScript**（62 章，2026-04 完成）
+- **TypeScript**（20 章 / 4 Part 完成）
+- **ECMAScript**（11 章 / 2 轨完成 · Track A 历史脉络 5 章 + Track B 规范精读 6 章）
+- **React**（24 章 / 2 轨完成 · Track A 历史脉络 5 章 + Track B 官网精读 19 章 / 4 Part：心智模型 / Hooks 全谱 / 渲染并发 / 现代 React）
+
+### ⏳ 规划中（12 / 16，按学习顺序）
+
+**③ 引擎 / 运行时**
+- **V8 Engine** —— 编译流水线（Ignition / Sparkplug / Maglev / TurboFan）/ Hidden Class / IC / GC Orinoco
+- **Node.js Runtime** —— libuv / Streams / Worker Threads / 模块解析 / 与 Bun / Deno 对比
+- **浏览器渲染管线** —— CRP / Compositor / Reflow / Web Vitals 根因
+
+**④ 构建 / 工程化**
+- **Vite & 构建工具** —— 双模架构 / HMR / SWC vs Babel / Rolldown / Turbopack
+- **pnpm & monorepo** —— 软链 / phantom dep / Turborepo / Nx / changesets
+- **测试工具** —— Vitest / Testing Library / Playwright / MSW / Visual regression
+
+**⑤ 框架**
+- **Next.js** —— App Router / RSC 边界 / Server Actions / 5 层缓存 / Edge Runtime
+
+**⑥ 样式 / UI**
+- **Tailwind CSS** —— 原子化 / JIT / v4 Oxide / CVA + cn() 模式
+- **shadcn/ui + Radix** —— Composition + 自管 source / a11y 原语 / 与 MUI / AntD 对比
+
+**⑦ 数据 / 网络**
+- **TanStack Query / SWR** —— 缓存键 / SWR 心智 / Suspense mode / 与 RSC 衔接
+- **HTTP/2 + HTTP/3 + QUIC** —— 多路复用 / HPACK / QPACK / 0-RTT / BBR
+
+**⑧ AI 集成**
+- **AI SDK** —— Vercel AI SDK + Claude Agent SDK / Streaming / Tool use / generateUI
+
+### 建议路径（一条线走完）
+
+```
+V8 → Node.js → 浏览器渲染管线 → Vite → pnpm → 测试 → Next.js → Tailwind → shadcn → TanStack → HTTP/3 → AI SDK
+```
 
 ## 与 Mira 项目的关系
 
