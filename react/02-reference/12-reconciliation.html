@@ -1,0 +1,733 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>B12 · Reconciliation 用户视角 · React 深度学习</title>
+    <meta
+      name="description"
+      content="A3 Fiber 内部数据结构的用户层映射：Reconciliation 算法用户感知（同 type 复用、不同重建）、key 工程意义 4 种用法、React.memo 完整签名 + 自定义比较函数、memo 失效 4 种情况、何时 memo 真正起作用。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2361dafb'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23000000'%3EReact%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>React 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.13 220); color: #fff">R</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">React 首页</a>
+          <a href="index.html">Track B 目录</a>
+          <a href="https://react.dev/learn/preserving-and-resetting-state" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Track B · 官网知识精读</h3>
+        <ul>
+          <li><a href="index.html">Track 概览</a></li>
+        </ul>
+        <h4 style="margin-top: 12px; color: var(--text-muted)">Part 1 + Part 2 ✅</h4>
+        <ul>
+          <li><a href="01-rendering-model.html">B1-B5 心智模型</a></li>
+          <li><a href="06-use-state-deep.html">B6-B11 Hooks 全谱</a></li>
+        </ul>
+        <h4 style="margin-top: 12px; color: var(--text-muted)">Part 3 · 渲染与并发</h4>
+        <ul>
+          <li><a href="12-reconciliation.html" class="active">B12 · Reconciliation</a></li>
+          <li><span class="sidebar-pending">B13 · Suspense ⏳</span></li>
+          <li><span class="sidebar-pending">B14 · useTransition ⏳</span></li>
+          <li><span class="sidebar-pending">B15 · Error Boundary ⏳</span></li>
+        </ul>
+        <h3>另一轨</h3>
+        <ul>
+          <li><a href="../01-history/index.html">Track A · 历史脉络（已完成）</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">React</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Track B · 官网知识精读</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>B12 · Reconciliation</span>
+        </nav>
+
+        <h1>B12 · Reconciliation 用户视角</h1>
+        <p class="lead">
+          A3 详述了 Fiber 内部 reconciliation diff 算法。本章从<strong>用户视角</strong>讲——你<strong>能在工程中感知到</strong>的 reconciliation 行为：什么时候组件被复用、什么时候被销毁重建、key 起到什么作用、<code>React.memo</code> 真正能跳过什么、什么情况让 memo 失效。读完后你能精确解释"<em>为什么我的 input 焦点丢了</em>"、"<em>为什么 React.memo 没用</em>"。
+        </p>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 Part 3 起点：从用户视角看引擎</div>
+          <p>
+            Part 3 的 4 章（B12-B15）都是"<em>把 A3 / A4 讲过的引擎机制翻译为用户能感知的工程行为</em>"。Reconciliation（B12）/ Suspense（B13）/ Concurrent（B14）/ Error Boundary（B15）—— 用户视角的实战指南。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> <a href="05-conditional-list-event-form.html">B5 列表 + key</a> + <a href="../01-history/03-fiber.html">A3 Fiber</a>（推荐）</span>
+          <span><strong>对应 react.dev</strong>
+            <a href="https://react.dev/learn/preserving-and-resetting-state" target="_blank" rel="noopener">Preserving and Resetting State</a> ·
+            <a href="https://react.dev/reference/react/memo" target="_blank" rel="noopener">memo</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>Reconciliation 算法用户感知：相同 type + 相同 key → 复用 Fiber</strong>（保留 state / 内部 ref）；<strong>不同 type 或不同 key → 销毁旧、创建新</strong>（state 重置、effect cleanup + remount）。这是 React 性能优化的基本规律。
+          </li>
+          <li>
+            <strong>key 有 4 种工程用法</strong>：① 列表项稳定 ID（最常见，B5 已讲）② <strong>用 key 强制重置组件 state</strong>（如 form key={userId} 切换用户重置表单）③ Fragment 多元素列表 ④ Animation 进出场标识。<strong>不要用 array index 当 key</strong>（除非永不重排序）。
+          </li>
+          <li>
+            <strong><code>React.memo</code> 用浅比较 props 决定是否跳过 render</strong>（同 useState 浅比较，B6）。但<strong>4 种情况让 memo 失效</strong>：① 每次新对象 / 数组 / 函数作 props ② children 是 JSX（每次新元素对象）③ 内部消费 Context 且 Context 变 ④ 内部 useState / useReducer 状态变。<strong>memo 必须配 useMemo / useCallback 用</strong>（B9 详述）。
+          </li>
+        </ol>
+
+        <p>看一段最小代码识别 reconciliation 行为：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · reconciliation 三种行为</span>
+          <pre class="code"><code class="lang-js">// 行为 1：同 type → 复用（state 保留）
+{showA ? &lt;Counter /&gt; : &lt;Counter /&gt;}     // 都是 Counter
+// 切换 showA 时 Counter 不被销毁 —— 内部 useState 的 count 保持
+
+// 行为 2：不同 type → 销毁重建
+{showCounter ? &lt;Counter /&gt; : &lt;Display /&gt;}
+// 切换时 Counter 被销毁、Display 被创建（或反之）—— state 重置
+
+// 行为 3：同 type + 不同 key → 销毁重建
+{users.map(user =&gt; &lt;UserCard key={user.id} user={user} /&gt;)}
+// user.id 变化的项被销毁重建（key 不同）
+// user.id 不变的项被复用（key 相同）
+
+// 行为 4：用 key 强制重置 state
+&lt;Form key={editingUserId} userId={editingUserId} /&gt;
+// 切换 editingUserId 时 Form 被销毁重建 → 内部 state 全部重置
+// 不需要手动写"reset" 逻辑</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ================================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Reconciliation 用户视角的精确规则</h3>
+        <p>
+          A3 已详述 React 在 beginWork 阶段的 diff 算法。从用户视角看，<strong>3 条精确规则</strong>：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">情况</th>
+              <th>React 行为</th>
+              <th>用户感知</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>同 type + 同 key（默认 null）</td>
+              <td>复用 Fiber，更新 props</td>
+              <td>state 保留 / DOM 复用 / effect 不 cleanup</td>
+            </tr>
+            <tr>
+              <td>不同 type</td>
+              <td>销毁旧 Fiber 子树 + 创建新 Fiber</td>
+              <td>state 重置 / DOM 重建 / effect cleanup + remount</td>
+            </tr>
+            <tr>
+              <td>同 type + 不同 key</td>
+              <td>同上（销毁重建）</td>
+              <td>同上</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>关键点</strong>：React 看的是<strong>同位置（同 parent）+ 同 type + 同 key</strong>。位置变化（Fiber 在 children 数组的索引）+ key 配对，决定哪些 Fiber 是"<em>同一个</em>"。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 同 type 复用的微妙陷阱</span>
+          <pre class="code"<code class="lang-js">function App() {
+  const [showA, setShowA] = useState(true);
+
+  return (
+    &lt;div&gt;
+      {showA ? (
+        &lt;Counter /&gt;
+      ) : (
+        &lt;Counter /&gt;
+      )}
+    &lt;/div&gt;
+  );
+}
+
+function Counter() {
+  const [count, setCount] = useState(0);
+  return &lt;button onClick={() =&gt; setCount(c =&gt; c + 1)}&gt;{count}&lt;/button&gt;;
+}
+
+// 切换 showA 时：
+// - Counter 在两个分支都存在
+// - 但 React 看的是"<em>同位置 + 同 type</em>"
+// - 三元两边都是 Counter（同 type） + 都在 div 的第 1 个 child（同位置）
+// - 所以 React 复用！
+// - 内部 useState 的 count 保持
+
+// 这种"<em>看似切换实则复用</em>" 是 React 设计选择 —— 让条件渲染高效
+// 想强制重置？用 key：
+{showA ? &lt;Counter key="a" /&gt; : &lt;Counter key="b" /&gt;}  // 不同 key → 重建</code></pre>
+        </div>
+
+        <h3>key 的 4 种工程用法</h3>
+
+        <h4>用法 1：列表项稳定 ID（最常见）</h4>
+        <p>B5 已详述。核心：业务 ID（todo.id / user.email）作 key，永远不用 index（除非 list 永不重排序）。</p>
+
+        <h4>用法 2：用 key 强制重置组件 state ⭐</h4>
+
+        <div class="code-block">
+          <span class="code-label">javascript · key 强制重置 state</span>
+          <pre class="code"<code class="lang-js">// 场景：编辑用户表单。切换不同用户时要"<em>重置表单 state</em>"
+
+// ❌ 不用 key —— Form 内部 state 不重置
+function App({ editingUserId }) {
+  return &lt;Form userId={editingUserId} /&gt;;
+}
+function Form({ userId }) {
+  const [name, setName] = useState('');  // 切换 userId 时 name 不变
+  // 用户输错了 'Alice' 给 user 1，切到 user 2 后 input 仍显示 'Alice'
+  return &lt;input value={name} onChange={e =&gt; setName(e.target.value)} /&gt;;
+}
+
+// ✅ 用 key={userId} —— 切换时强制重建 Form
+function App({ editingUserId }) {
+  return &lt;Form key={editingUserId} userId={editingUserId} /&gt;;
+  //              ↑ key 改变 → React 销毁旧 Form 创建新 Form
+  //              ↑ 内部 useState 重置 / useEffect cleanup + 重新跑
+}
+
+// 同款模式：
+// - Tab 切换重置 form
+// - 编辑不同 todo 重置 modal 状态
+// - 切换路由参数重置组件
+// - 把 key 当作"<em>组件实例 ID</em>"
+
+// 替代方案：手写 reset
+// 用 useEffect 监听 userId 变化 + 调用 setName('') 重置
+// 但要重置 N 个 state 就要写 N 次 —— key 一行解决
+
+// 注意陷阱：key 不是 prop，组件内部访问不到
+// 如果想"<em>重置 + 知道当前 key</em>"，要传 prop 同时给 key</code></pre>
+        </div>
+
+        <h4>用法 3：Fragment 多元素列表</h4>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Fragment 列表</span>
+          <pre class="code"<code class="lang-js">// list 中每项渲染多个相邻元素 —— 用完整 Fragment 形式
+import { Fragment } from 'react';
+
+{items.map(item =&gt; (
+  &lt;Fragment key={item.id}&gt;
+    &lt;dt&gt;{item.title}&lt;/dt&gt;
+    &lt;dd&gt;{item.body}&lt;/dd&gt;
+  &lt;/Fragment&gt;
+))}
+
+// 短语法 &lt;&gt;...&lt;/&gt; 不支持 key（B2 / B5 已讲）—— 必须用完整 Fragment</code></pre>
+        </div>
+
+        <h4>用法 4：Animation 进出场标识</h4>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 进出场动画依赖 key</span>
+          <pre class="code"<code class="lang-js">import { AnimatePresence, motion } from 'framer-motion';
+
+function Carousel({ slides, currentIndex }) {
+  return (
+    &lt;AnimatePresence mode="wait"&gt;
+      &lt;motion.div
+        key={currentIndex}                      {/* key 变化触发动画 */}
+        initial={{ opacity: 0, x: 100 }}
+        animate={{ opacity: 1, x: 0 }}
+        exit={{ opacity: 0, x: -100 }}
+      &gt;
+        {slides[currentIndex]}
+      &lt;/motion.div&gt;
+    &lt;/AnimatePresence&gt;
+  );
+}
+
+// AnimatePresence 通过 key 变化识别"<em>这是同一组件的新实例</em>"
+// → 触发 exit 动画 + initial 动画
+// 没 key 或 key 不变 → 没动画（因为 React 把它们当同一 Fiber 复用）</code></pre>
+        </div>
+
+        <h3><code>React.memo</code> 完整签名</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript · React.memo 类型</span>
+          <pre class="code"<code class="lang-ts">function memo&lt;P&gt;(
+  Component: React.ComponentType&lt;P&gt;,
+  arePropsEqual?: (prevProps: P, nextProps: P) =&gt; boolean,
+): React.MemoExoticComponent&lt;React.ComponentType&lt;P&gt;&gt;;
+
+// 用法 1：默认浅比较
+const MyButton = memo(function MyButton(props) {
+  return &lt;button&gt;...&lt;/button&gt;;
+});
+
+// 用法 2：自定义比较函数
+const MyChart = memo(
+  function MyChart({ data }) { return &lt;svg&gt;...&lt;/svg&gt;; },
+  (prev, next) =&gt; prev.data.length === next.data.length &amp;&amp;
+                  prev.data.every((d, i) =&gt; d.id === next.data[i].id),
+);
+// arePropsEqual 返回 true → 跳过渲染（注意：返回 true 表示"相等" 跳过！）
+// 与 shouldComponentUpdate 反过来 —— 那个返回 true 表示"应该更新" 不跳过
+
+// 默认浅比较实现（简化）：
+function shallowEqual(a: object, b: object): boolean {
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  return keysA.every(key =&gt; Object.is(a[key], b[key]));
+}
+// 同 useState / useEffect / useMemo 的浅比较</code></pre>
+        </div>
+
+        <h3>memo 失效 4 种情况 ⭐</h3>
+
+        <p>
+          <strong>新人最常见的"<em>memo 没用</em>" 原因</strong>—— 不是 memo 本身的问题，是<strong>props 引用每次都变</strong>：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · memo 失效 4 种典型情况</span>
+          <pre class="code"<code class="lang-js">const Child = memo(function Child({ data, onClick, items, children }) {
+  console.log('Child render');
+  return ...;
+});
+
+function Parent() {
+  const [count, setCount] = useState(0);
+
+  // ❌ 失效 1：每次新对象
+  &lt;Child data={{ x: 1 }} /&gt;
+  // 每次 Parent render 创建新对象 → 浅比较 false → memo 失效
+
+  // ❌ 失效 2：每次新函数
+  &lt;Child onClick={() =&gt; doSomething()} /&gt;
+  // 每次 Parent render 创建新箭头函数 → memo 失效
+
+  // ❌ 失效 3：每次新数组
+  &lt;Child items={[1, 2, 3]} /&gt;
+  // 同上
+
+  // ❌ 失效 4：children 是 JSX（每次新元素对象）
+  &lt;Child&gt;
+    &lt;span&gt;Hello&lt;/span&gt;
+  &lt;/Child&gt;
+  // children prop 是 React.createElement 返回的新对象 → 浅比较 false
+
+  // ✅ 修复 1：useMemo 稳定对象 / 数组
+  const data = useMemo(() =&gt; ({ x: 1 }), []);
+  const items = useMemo(() =&gt; [1, 2, 3], []);
+
+  // ✅ 修复 2：useCallback 稳定函数
+  const onClick = useCallback(() =&gt; doSomething(), []);
+
+  // ✅ 修复 3：children 是 JSX 时... 没法直接修复
+  // 选项 A：把 children 提到外面（compound components 模式）
+  // 选项 B：用 React.memo 加自定义比较函数对比 children 元素
+
+  return &lt;Child data={data} onClick={onClick} items={items} /&gt;;
+}
+
+// 实际工程：
+// 用 React DevTools Profiler 看哪些 props 变化导致 memo 失效
+// "Why did this render?" 列会精确指出原因
+// 然后用 useMemo / useCallback 稳定对应 props</code></pre>
+        </div>
+
+        <h3>memo 失效的 2 种"<em>不可见</em>" 情况</h3>
+
+        <p>
+          除上面 4 种 props 引用变化，还有 2 种 memo 不能阻止的重渲染：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · memo 也阻止不了的重渲染</span>
+          <pre class="code"<code class="lang-js">const Child = memo(function Child({ data }) {
+  // ① 内部消费 Context —— Context 变化触发重渲染（memo 不管）
+  const theme = useContext(ThemeContext);
+  // 即使 props 没变，theme 变 → Child 重渲染
+
+  // ② 内部 useState / useReducer —— 自身 state 变化触发重渲染
+  const [count, setCount] = useState(0);
+  // 调 setCount 后 Child 重渲染（自然行为）
+
+  // ③ 内部用 useSyncExternalStore —— 外部 store 变化（B7 提过）
+  const data = useSyncExternalStore(...);
+
+  return ...;
+});
+
+// memo 仅跳过"<em>因 props 不变 + 父重渲染</em>" 触发的 render
+// 不能跳过：① 内部 state/reducer 变 ② 订阅的 Context 变 ③ 订阅的外部 store 变
+
+// 这是合理设计 —— Hook 内部状态变化必须触发重渲染才能更新 UI</code></pre>
+        </div>
+
+        <h3>何时 memo 真正起作用</h3>
+
+        <p>
+          <strong>memo 真正有用的场景</strong>—— 满足全部 3 个条件：
+        </p>
+        <ol>
+          <li><strong>父组件频繁渲染</strong>（如父有 useState 频繁变 + memo 子树渲染相对昂贵）</li>
+          <li><strong>子组件 props 大多不变</strong>（少数几个变化）</li>
+          <li><strong>子组件 render 真昂贵</strong>（&gt; 1ms，DevTools 测过）</li>
+        </ol>
+
+        <p>反之三件事都不满足，memo 是<strong>负优化</strong>（cache 开销 &gt; 节省的 render 时间，B9 详述）。</p>
+
+        <p>
+          <strong>React Compiler 19 实验性</strong>（B9 已讲）会自动加 memoization—— 启用后<strong>大部分手动 memo 不必要</strong>。这是性能优化的未来方向。
+        </p>
+
+        <h3>memo + useMemo + useCallback 三件套（短重述链回 B9）</h3>
+
+        <p>
+          <strong>短重述</strong>：B9 已详述"<em>memo 必须配 useMemo / useCallback 才有意义</em>"。复习要点：
+        </p>
+        <ul>
+          <li>给 memo 子组件传对象 / 数组 / 函数 prop 时，用 useMemo / useCallback 稳定引用</li>
+          <li>三件套必须同时用 —— 单用任何一个都白费</li>
+          <li>没有 memo 包子组件，useMemo / useCallback 单用没意义（B9）</li>
+          <li>React Compiler 启用后这套自动化 —— 新代码不必预先这么写</li>
+        </ul>
+
+        <!-- 03 应用场景 ================================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 编辑表单切换实体重置 state</h3>
+          <p>
+            用户列表 + 详情编辑 panel。点击不同用户进入编辑—— 表单 state 必须重置（不能让 user 1 的输入跑到 user 2）。<strong>用 key 一行解决</strong>：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · key 强制重置实战</span>
+            <pre class="code"<code class="lang-js">function UserManager() {
+  const [users, setUsers] = useState&lt;User[]&gt;([...]);
+  const [editingId, setEditingId] = useState&lt;string | null&gt;(null);
+  const editingUser = users.find(u =&gt; u.id === editingId);
+
+  return (
+    &lt;div&gt;
+      &lt;UserList users={users} onSelect={setEditingId} /&gt;
+      {editingUser &amp;&amp; (
+        &lt;UserEditForm
+          key={editingUser.id}                  {/* ← 关键 */}
+          user={editingUser}
+          onSave={(updated) =&gt; {
+            setUsers(prev =&gt; prev.map(u =&gt; u.id === updated.id ? updated : u));
+            setEditingId(null);
+          }}
+        /&gt;
+      )}
+    &lt;/div&gt;
+  );
+}
+
+function UserEditForm({ user, onSave }) {
+  // 初始值从 user 来，但用户编辑时 state 是独立的
+  const [name, setName] = useState(user.name);
+  const [email, setEmail] = useState(user.email);
+
+  // key 变化 → UserEditForm 销毁重建 → useState 重新初始化为新 user
+  // 不需要写 useEffect 同步 user 到 state（那是反模式 —— B7 讲过）
+
+  return (
+    &lt;form onSubmit={() =&gt; onSave({ ...user, name, email })}&gt;
+      &lt;input value={name} onChange={e =&gt; setName(e.target.value)} /&gt;
+      &lt;input value={email} onChange={e =&gt; setEmail(e.target.value)} /&gt;
+      &lt;button type="submit"&gt;Save&lt;/button&gt;
+    &lt;/form&gt;
+  );
+}
+
+// 优势：
+// 1. 不写 useEffect 同步 props → state（避免反模式）
+// 2. 不写 reset 逻辑（key 自动处理）
+// 3. 切换用户时 effect cleanup 也自动跑（关闭 WebSocket / 取消请求等）</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 用 React DevTools Profiler 找 memo 失效</h3>
+          <p>
+            团队反馈"<em>列表组件渲染慢</em>"。用 Profiler 排查：
+          </p>
+          <ol>
+            <li><strong>启动 Profiler</strong>—— Chrome DevTools → React 面板 → Profiler tab → 点击录制</li>
+            <li><strong>触发慢动作</strong>—— 输入搜索 / 点击按钮等</li>
+            <li><strong>停止录制 → 看 flame graph</strong>—— 慢组件高亮</li>
+            <li><strong>点慢组件</strong>—— 右侧"<em>Why did this render?</em>"列显示原因：
+              <ul>
+                <li>"<em>The parent component rendered</em>"—— 父重渲染让子重渲染（默认行为，加 memo 解）</li>
+                <li>"<em>Props changed (data, onClick)</em>"—— 哪些 props 变了，可能需要 useMemo / useCallback 稳定</li>
+                <li>"<em>Hooks changed</em>"—— 内部 useState / useReducer / useContext 变化（memo 不能解，是合理重渲染）</li>
+              </ul>
+            </li>
+            <li><strong>对症下药</strong>：① 父重渲染让子重渲染 → 加 memo ② props 引用不稳 → useMemo / useCallback ③ Context 变 → 拆 Context（B8）</li>
+          </ol>
+          <p>
+            生产推荐工具栈：React DevTools Profiler + React Scan（B9 提过，自动检测重渲染）+ Chrome Performance（看时间线）。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · Compound Components 模式 + 隐式重渲染</h3>
+          <p>
+            shadcn/ui 风格的 Tabs：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · Compound Components 重渲染分析</span>
+            <pre class="code"<code class="lang-js">function Tabs({ defaultValue, children }) {
+  const [active, setActive] = useState(defaultValue);
+
+  // ⚠️ 注意：Tabs.Provider value 每次 render 新对象 —— 所有 useContext 消费者重渲染
+  return (
+    &lt;TabsContext.Provider value={{ active, setActive }}&gt;
+      {children}
+    &lt;/TabsContext.Provider&gt;
+  );
+}
+
+// 优化：useMemo 稳定 value（B8 详述）
+function Tabs({ defaultValue, children }) {
+  const [active, setActive] = useState(defaultValue);
+
+  const value = useMemo(
+    () =&gt; ({ active, setActive }),
+    [active]   // setActive 引用稳定，仅 active 变化时新建
+  );
+
+  return (
+    &lt;TabsContext.Provider value={value}&gt;
+      {children}
+    &lt;/TabsContext.Provider&gt;
+  );
+}
+
+// 用法
+&lt;Tabs defaultValue="home"&gt;
+  &lt;Tabs.List&gt;
+    &lt;Tabs.Trigger value="home"&gt;Home&lt;/Tabs.Trigger&gt;
+    &lt;Tabs.Trigger value="profile"&gt;Profile&lt;/Tabs.Trigger&gt;
+  &lt;/Tabs.List&gt;
+  &lt;Tabs.Content value="home"&gt;Home content&lt;/Tabs.Content&gt;
+  &lt;Tabs.Content value="profile"&gt;Profile content&lt;/Tabs.Content&gt;
+&lt;/Tabs&gt;
+
+// 进一步优化：拆 state + dispatch 两个 Context（B8 模式）
+// 仅用 setActive 的 Trigger 不会因 active 变化重渲染</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 ================================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>memo 自定义比较函数 —— 何时该用</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 自定义 arePropsEqual</span>
+          <pre class="code"<code class="lang-js">// 场景：图表组件，data 是大数组（10000+ 项）
+// 大多数变化是新增 / 删除尾部 —— 仅 length 变化
+// 浅比较每次 false（数组引用变）但实际数据没变（仅 length 加一）
+
+const HeavyChart = memo(
+  function HeavyChart({ data, color }) {
+    return /* 用 D3 渲染 10000+ 数据点 */;
+  },
+  // 自定义比较：仅当 data 长度或 color 变才重渲染
+  (prev, next) =&gt; {
+    if (prev.color !== next.color) return false;  // false = 不相等 = 重渲染
+    if (prev.data.length !== next.data.length) return false;
+    // 数据没变（length 相同 + color 相同）→ 跳过 render
+    return true;
+  },
+);
+
+// ⚠️ 自定义比较函数的陷阱：
+// 1. 容易写错（应该比较什么 / 怎么比较）
+// 2. 比较本身有开销（深比较大数组比 render 还慢）
+// 3. 维护成本高（数据结构变了要改比较函数）
+//
+// 大多数场景不需要自定义 —— 用 useMemo / useCallback 让浅比较通过更简单
+// 仅当：① 数据结构稳定（不会大改） ② 浅比较确实不能满足
+//      ③ render 真昂贵（&gt; 50ms） 才考虑
+
+// React 19 + React Compiler 启用后这种手动优化更不必要</code></pre>
+        </div>
+
+        <h3>识别"<em>本应稳定但每次都变</em>" 的 props</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 稳定 prop 的常见错误</span>
+          <pre class="code"<code class="lang-js">function Parent() {
+  const [count, setCount] = useState(0);
+
+  // ❌ 看起来稳定，实际每次新对象
+  return &lt;Child config={{ theme: 'dark', size: 'md' }} /&gt;;
+
+  // ✅ 移到组件外（永远稳定）
+}
+const STABLE_CONFIG = { theme: 'dark', size: 'md' };
+function Parent() {
+  const [count, setCount] = useState(0);
+  return &lt;Child config={STABLE_CONFIG} /&gt;;  // 永远同一引用
+}
+
+// ❌ 看起来稳定，实际每次新数组
+function Parent() {
+  return &lt;Child options={['a', 'b', 'c']} /&gt;;
+}
+
+// ✅ 模块级常量
+const OPTIONS = ['a', 'b', 'c'] as const;
+function Parent() {
+  return &lt;Child options={OPTIONS} /&gt;;
+}
+
+// ❌ inline 字符串模板（看似稳定）—— 这个其实 OK
+&lt;Child label={`Hello ${name}`} /&gt;
+// 字符串是原始值 —— Object.is 比较值不比引用 → 同样 'Hello Alice' 比较相等 ✅
+// 仅引用类型（对象 / 数组 / 函数）才有引用稳定性问题
+
+// 决策：
+// - 永远不变 → 模块级常量
+// - 依赖 props/state 变化 → useMemo / useCallback
+// - 简单字面量原始值 → 直接写 inline OK</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ================================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：用 array index 当 key 在 list 重排序时（B5 已讲）</div>
+          <p>
+            list 排序 / 过滤 / 删除时 index 让 React 错配 Fiber—— input 焦点 / 滚动状态 / component state 跑到错误项。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：业务 ID 作 key。仅 list 永不重排序（如 static headers）才用 index。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：用 key 强制重置导致动画 / 焦点丢失</div>
+          <p>
+            <code>&lt;Form key={Date.now()} /&gt;</code> 这种<strong>每次都用新 key</strong>—— Form 永远 mount unmount，根本没办法用。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：key 仅用业务相关稳定值（userId / postId / tabId）。"<em>每次重置</em>" 不是 key 的合理用法。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：memo 子组件不带 useMemo / useCallback 稳定 props</div>
+          <p>
+            <code>const Child = memo(...)</code> + <code>&lt;Child onClick={() =&gt; ...} /&gt;</code>—— onClick 每次新函数 → memo 失效。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：B9 三件套（memo + useMemo + useCallback）必须配套。React Compiler 启用后这套自动化。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：用 memo 期望阻止 Context / state 触发的重渲染</div>
+          <p>
+            memo 仅跳过"<em>因 props 不变 + 父重渲染</em>" 触发的 render，不阻止 Context / 内部 state 变化。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：理解 memo 的范围。Context 性能问题用拆 Context（B8）/ Selector 模式（B8）/ Zustand 等。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：memo 自定义比较函数返回反了</div>
+          <p>
+            <code>(prev, next) =&gt; prev.data !== next.data</code>—— 这是返回"<em>不相等</em>"，但 React 期望返回"<em>相等</em>"（true = 相等 = 跳过）。结果反向。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：记住 <strong>true = props 相等 = 跳过 render</strong>。这与 class 的 <code>shouldComponentUpdate</code> 反过来（那个 true = should update = 不跳过）。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ================================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>权威来源</h3>
+        <ul>
+          <li><a href="https://react.dev/learn/preserving-and-resetting-state" target="_blank" rel="noopener">react.dev · Preserving and Resetting State</a></li>
+          <li><a href="https://react.dev/reference/react/memo" target="_blank" rel="noopener">react.dev · memo</a></li>
+          <li><a href="https://react.dev/reference/rules/react-keys-must-be-unique" target="_blank" rel="noopener">react.dev · React Keys Must Be Unique</a></li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="11-custom-hooks.html">B11 自定义 Hooks</a></li>
+          <li>下一章：<a href="13-suspense.html">B13 Suspense 用户视角</a>（编写中）</li>
+          <li>引擎层：<a href="../01-history/03-fiber.html">A3 Fiber 架构</a> —— Reconciliation 完整 diff 算法</li>
+          <li>性能优化：<a href="09-use-memo-callback.html">B9 useMemo / useCallback</a> —— memo 三件套</li>
+          <li>列表 + key：<a href="05-conditional-list-event-form.html">B5 条件 / 列表 / 事件 / Form</a></li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="11-custom-hooks.html">
+            <span class="label">← 上一章</span>
+            <span class="title">B11 · 自定义 Hooks</span>
+          </a>
+          <a class="next" href="index.html">
+            <span class="label">下一步 →</span>
+            <span class="title">B13 · Suspense 用户视角（🚧 编写中，先看 Track 概览）</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
