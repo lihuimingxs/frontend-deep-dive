@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>B1 · 渲染模型与 React 元素 · React 深度学习</title>
+    <meta
+      name="description"
+      content="React 元素的本质（{ type, props, key, ref }）、7 种 Component 类型（function/memo/lazy/forwardRef/Suspense/Provider/class）、render 触发的 5 种条件、render 必须是纯函数的根因、StrictMode 双重渲染。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2361dafb'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23000000'%3EReact%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>React 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.13 220); color: #fff">R</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">React 首页</a>
+          <a href="index.html">Track B 目录</a>
+          <a href="https://react.dev/learn/your-first-component" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Track B · 官网知识精读</h3>
+        <ul>
+          <li><a href="index.html">Track 概览</a></li>
+        </ul>
+        <h4 style="margin-top: 12px; color: var(--text-muted)">Part 1 · 心智模型</h4>
+        <ul>
+          <li><a href="01-rendering-model.html" class="active">B1 · 渲染模型</a></li>
+          <li><span class="sidebar-pending">B2 · JSX ⏳</span></li>
+          <li><span class="sidebar-pending">B3 · 组件与 Props ⏳</span></li>
+          <li><span class="sidebar-pending">B4 · State 基础 ⏳</span></li>
+          <li><span class="sidebar-pending">B5 · 条件 / 列表 / 事件 / Form ⏳</span></li>
+        </ul>
+        <h3>另一轨</h3>
+        <ul>
+          <li><a href="../01-history/index.html">Track A · 历史脉络（已完成）</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">React</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Track B · 官网知识精读</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>B1 · 渲染模型</span>
+        </nav>
+
+        <h1>B1 · 渲染模型与 React 元素</h1>
+        <p class="lead">
+          Track B 从最底层概念开始：<strong>React 元素是什么？</strong>什么样的对象能被 React 渲染？组件的 7 种类型各自做什么？render 在什么时候触发？为什么 render 必须是纯函数？读完本章，你能精确回答<strong>"<em>render() 到底返回了什么</em>"</strong> 和<strong>"<em>什么操作会让 React 重新渲染我的组件</em>"</strong>—— 这是后续所有 Track B 章节的基础。
+        </p>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 本章是 Track B 的入口</div>
+          <p>
+            如果你跳过了 Track A 直接读 Track B，本章是<strong>必读</strong>。建议<strong>先读 <a href="../01-history/02-design-philosophy.html">A2 设计哲学</a></strong>（5 分钟）建立心智地基——本章的"<em>为什么</em>" 都能在 A2 找到答案。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> JSX 基础语法 + ES2015 class（可选）</span>
+          <span><strong>对应 react.dev</strong>
+            <a href="https://react.dev/learn/your-first-component" target="_blank" rel="noopener">Your First Component</a> ·
+            <a href="https://react.dev/reference/react/createElement" target="_blank" rel="noopener">createElement</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>React 元素是普通 JS 对象</strong>：<code>{ $$typeof, type, props, key, ref }</code>。<strong>不是 DOM 节点 / 不是 class 实例 / 不是组件</strong>—— 它只是<strong>"<em>UI 应该是什么样</em>" 的描述</strong>。<code>&lt;div /&gt;</code> 在编译后就是 <code>{ type: 'div', props: {} }</code>。
+          </li>
+          <li>
+            <strong>组件是接受 props 返回 React 元素的函数</strong>。"<em>函数组件 / 类组件</em>" 是写法不同，本质都是"<em>props → element tree</em>" 的映射。React 19 时代<strong>函数组件是默认</strong>，class 组件仍支持但仅用于 Error Boundary（极少数场景）。
+          </li>
+          <li>
+            <strong>render 在 5 种情况触发</strong>：① state 变化 ② props 变化（含 parent 重渲染让你 props 变）③ context 变化 ④ 父组件重渲染（即使 props 引用相等也会触发，除非 React.memo）⑤ React 自身的 Strict Mode 双重渲染。<strong>render 必须是纯函数</strong>—— 因为 React 18+ Concurrent rendering 可能<strong>多次调用</strong>组件函数。
+          </li>
+        </ol>
+
+        <p>看一段最小代码，识别其中的"<em>元素 / 组件 / render</em>" 三个概念：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 三个概念在一段代码里</span>
+          <pre class="code"><code class="lang-js">// 1. Greeting 是「组件」—— 一个返回 React 元素的函数
+function Greeting({ name }) {
+  return &lt;h1&gt;Hello, {name}&lt;/h1&gt;;
+  //     ↑ 这里的 &lt;h1&gt; 编译后是「React 元素」对象：
+  //       { type: 'h1', props: { children: ['Hello, ', name] } }
+}
+
+// 2. 调用 Greeting() 得到一个「React 元素」（不是 HTML，不是 class 实例）：
+const element = &lt;Greeting name="Alice" /&gt;;
+//                ↑ 编译后：{ type: Greeting, props: { name: 'Alice' } }
+console.log(element);  // 一个普通 JS 对象
+
+// 3. 「render」是 React 把这个元素树映射到 DOM 的过程：
+import { createRoot } from 'react-dom/client';
+createRoot(document.getElementById('root')).render(element);
+//                                          ↑ 这里的 render 是 root.render
+//                                            React 内部会调用 Greeting 函数
+//                                            "Greeting 函数被调用" = "组件 render"
+//                                            （这两个 render 不是同一个东西，注意区分）</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>React 元素的精确结构</h3>
+        <p>
+          React 元素是<strong>普通 JS 对象</strong>，<code>React.createElement</code> 创建（JSX 编译后调用的就是它）。结构如下：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · React 元素对象结构</span>
+          <pre class="code"><code class="lang-js">// JSX
+&lt;div className="card" onClick={handleClick}&gt;
+  Hello {name}
+&lt;/div&gt;
+
+// 编译后（旧 JSX runtime，React.createElement 风格）：
+React.createElement(
+  'div',                               // type
+  { className: 'card', onClick: handleClick },  // props（不含 children）
+  'Hello ',                            // children（可变参数）
+  name,
+);
+
+// 实际产生的元素对象：
+{
+  $$typeof: Symbol(react.element),     // ← 用 Symbol 防止 XSS（详见下文）
+  type: 'div',                         // ← 字符串（host 元素）/ 函数（组件）/ Symbol（Fragment 等）
+  props: {
+    className: 'card',
+    onClick: handleClick,
+    children: ['Hello ', name],        // ← children 也是 props 的一部分
+  },
+  key: null,                           // ← list 中的身份证（详见 B5）
+  ref: null,                           // ← DOM 引用（详见 B10）
+}
+
+// 新 JSX runtime（React 17+，更高效）：
+import { jsx as _jsx } from 'react/jsx-runtime';
+_jsx('div', { className: 'card', onClick: handleClick, children: ['Hello ', name] });
+// 详见 B2 JSX 编译与运行时</code></pre>
+        </div>
+
+        <p>
+          <strong>关键事实</strong>：
+        </p>
+        <ul>
+          <li><strong>React 元素是 immutable</strong>—— 一旦创建不能改。要改 UI 要重新创建新元素树（这就是 A2 讲的"<em>不可变 + 重新渲染</em>"哲学）</li>
+          <li><strong>元素描述 UI，不是 UI 本身</strong>—— 元素是<strong>蓝图</strong>，DOM 节点是 React 根据蓝图实际操作浏览器创建的产物。Fiber 节点（A3）是 React 内部连接两者的桥梁</li>
+          <li><strong><code>$$typeof</code> 是 Symbol</strong>—— 不是字符串。这是 React 的 XSS 防御：服务器返回的 JSON 不可能含真正的 Symbol（JSON 不支持 Symbol 序列化），所以恶意服务器无法构造合法的 React 元素冒充。详见 React 安全文档</li>
+        </ul>
+
+        <p>
+          <strong>JSX 编译细节</strong>：详见下一章 <a href="02-jsx.html">B2 · JSX 编译与运行时</a>（新 runtime / classic runtime / jsxImportSource 等）。本章只需理解 <code>&lt;X /&gt;</code> 编译后是一个对象。
+        </p>
+
+        <h3>组件的 7 种类型</h3>
+        <p>
+          React 19 中"<em>什么能作为元素的 type</em>"有 7 种：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 28%">组件类型</th>
+              <th>type 字段是什么</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Host 元素</strong>（'div' / 'span' / ...）</td>
+              <td>小写字符串</td>
+              <td>原生 DOM 节点（react-dom）/ 原生 view（react-native）</td>
+            </tr>
+            <tr>
+              <td><strong>Function Component</strong>（默认）</td>
+              <td>函数引用</td>
+              <td>大部分组件。可用 Hooks</td>
+            </tr>
+            <tr>
+              <td><strong>Class Component</strong> ⚠️</td>
+              <td>class 引用（含 prototype.render）</td>
+              <td>仅 Error Boundary（B15）+ 老代码遗产。新代码避免</td>
+            </tr>
+            <tr>
+              <td><strong><code>memo</code> 包装</strong></td>
+              <td><code>{ $$typeof: Symbol(react.memo), type: Comp }</code></td>
+              <td>跳过 props 浅相等的渲染（详见 B12）</td>
+            </tr>
+            <tr>
+              <td><strong><code>lazy</code> 包装</strong></td>
+              <td><code>{ $$typeof: Symbol(react.lazy), _payload, _init }</code></td>
+              <td>代码分割，配合 Suspense（详见 B13）</td>
+            </tr>
+            <tr>
+              <td><strong><code>forwardRef</code> 包装</strong> ⚠️</td>
+              <td><code>{ $$typeof: Symbol(react.forward_ref), render }</code></td>
+              <td>转发 ref。<strong>React 19 退役</strong>—— 用 ref as prop 替代</td>
+            </tr>
+            <tr>
+              <td><strong>特殊组件</strong>（Fragment / Suspense / Profiler / StrictMode / Provider / Consumer）</td>
+              <td>Symbol（如 <code>Symbol(react.fragment)</code>）</td>
+              <td>React 内置语义组件</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>"<em>组件首字母大小写</em>" 的根因</strong>：JSX 编译时<strong>小写</strong>识别为 host 元素（type 是字符串）；<strong>大写</strong>识别为组件（type 是变量引用）。这就是 <code>&lt;div /&gt;</code> 和 <code>&lt;Div /&gt;</code> 完全不同——前者是字符串 'div'，后者要求作用域内有 <code>Div</code> 变量。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 大小写约定</span>
+          <pre class="code"><code class="lang-js">function MyButton() { return &lt;button&gt;Click&lt;/button&gt;; }
+
+&lt;mybutton /&gt;     // ❌ 编译后 type: 'mybutton'（找不到此 host 元素）
+&lt;MyButton /&gt;     // ✅ 编译后 type: MyButton（函数引用）
+&lt;myButton /&gt;     // ❌ 同 'mybutton'
+&lt;my-button /&gt;    // ✅ Web Component 风格（含连字符 → host 元素）</code></pre>
+        </div>
+
+        <h3>render 触发的 5 种条件</h3>
+        <p>
+          这是<strong>React 性能优化的基础知识</strong>—— 准确知道"<em>什么时候组件会被调用</em>" 才能合理用 memo / useMemo / useCallback。
+        </p>
+
+        <ol>
+          <li>
+            <strong>state 变化</strong>：调用 <code>setState</code> / <code>setReducer</code> 更新本组件 state（用 Object.is 比较，相等则跳过）
+          </li>
+          <li>
+            <strong>props 变化</strong>：父组件传给本组件的 props 引用变化（<strong>注意：父重渲染时即使 props 内容相同，没用 memo 也会重渲染</strong>）
+          </li>
+          <li>
+            <strong>父组件重渲染</strong>：父组件 render 时，<strong>所有子组件默认重渲染</strong>—— 不管 props 变没变。<strong>这是常被误解的点</strong>。<code>React.memo</code> 才能跳过这种"<em>无意义</em>" 重渲染
+          </li>
+          <li>
+            <strong>context 变化</strong>：本组件订阅的 Context value 变化（用 Object.is 比较 value）
+          </li>
+          <li>
+            <strong>StrictMode 双重渲染</strong>（仅开发环境）：React 主动多调用一次组件函数，帮你检测渲染期副作用
+          </li>
+        </ol>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 父重渲染会让所有子重渲染（默认）</span>
+          <pre class="code"><code class="lang-js">function Parent() {
+  const [count, setCount] = useState(0);
+  return (
+    &lt;&gt;
+      &lt;button onClick={() =&gt; setCount(c =&gt; c + 1)}&gt;{count}&lt;/button&gt;
+      &lt;Child /&gt;     {/* 没传任何 props，但每次 Parent 重渲染都会被调用 */}
+      &lt;ExpensiveChild data={largeData} /&gt;  {/* 同样，largeData 引用没变也会被调用 */}
+    &lt;/&gt;
+  );
+}
+
+function Child() {
+  console.log('Child rendered');  // 每次点击 button 都打印
+  return &lt;div&gt;child&lt;/div&gt;;
+}
+
+// React 不会"<em>智能跳过没变的子组件</em>"——你必须用 memo 显式声明
+const MemoedChild = React.memo(Child);
+function ExpensiveChild({ data }) {
+  return &lt;div&gt;{data.length}&lt;/div&gt;;
+}
+const MemoedExpensiveChild = React.memo(ExpensiveChild);
+
+// 用 MemoedChild 替代 Child 后：
+// - MemoedChild 不接收 props → 永远跳过
+// - MemoedExpensiveChild 浅比较 data props → 引用没变就跳过</code></pre>
+        </div>
+
+        <p>
+          <strong>"<em>父重渲染默认让子重渲染</em>"</strong> 是 React 的核心行为——它在 Fiber 阶段（A3）调 beginWork 处理每个子 Fiber，不管 props 是否变。<strong>memo 的作用就是"<em>在 beginWork 之前加一道浅比较</em>"</strong>，跳过这次调用。
+        </p>
+
+        <h3>render 必须是纯函数（这是为什么 useEffect 存在）</h3>
+        <p>
+          React 18+ 的 Concurrent rendering（A4）让<strong>组件函数可能被多次调用</strong>—— 一次渲染中途被高优先级更新打断 → 丢弃 wip tree → 重新渲染。所以<strong>组件函数必须是纯函数</strong>：
+        </p>
+
+        <ul>
+          <li><strong>相同的 props + state 必须返回相同的元素树</strong></li>
+          <li><strong>不能修改 React 之外的状态</strong>（DOM、全局变量、外部 store）</li>
+          <li><strong>不能调有副作用的 API</strong>（<code>fetch</code>、<code>setTimeout</code>、<code>console.log</code> ⚠️——技术上副作用但 React 容忍）</li>
+          <li><strong>不能调 setState 导致死循环</strong>（除非有终止条件）</li>
+        </ul>
+
+        <p>
+          所有副作用必须放在 <code>useEffect</code>（commit 后异步）/ <code>useLayoutEffect</code>（commit 后同步）/ <code>useState 的 lazy initializer</code>（首次渲染） 中。详见 <a href="07-use-effect.html">B7 useEffect 完整生命周期</a>（编写中）。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 渲染期副作用违规清单</span>
+          <pre class="code"><code class="lang-js">function Component() {
+  const [count, setCount] = useState(0);
+
+  // ❌ 1. 渲染期间修改外部变量
+  externalCounter++;
+
+  // ❌ 2. 渲染期间调 fetch
+  fetch('/api/log', { method: 'POST', body: JSON.stringify({ count }) });
+
+  // ❌ 3. 渲染期间修改 state（无限循环）
+  if (count &lt; 10) setCount(count + 1);
+  // 注意：useState 的 lazy initializer 不算 —— useState(() =&gt; expensive())
+  //       那只在首次渲染调用一次
+
+  // ❌ 4. 渲染期间修改 DOM
+  document.title = 'Loading';
+
+  // ❌ 5. 渲染期间修改 ref（在 react-strict-effects 时代视为违规）
+  ref.current.value = 'something';
+
+  return &lt;div&gt;{count}&lt;/div&gt;;
+}
+
+// ✅ 全部副作用放 useEffect
+useEffect(() =&gt; {
+  externalCounter++;
+  fetch('/api/log', { method: 'POST', body: JSON.stringify({ count }) });
+  document.title = 'Loaded';
+}, [count]);</code></pre>
+        </div>
+
+        <h3>StrictMode 双重渲染 —— React 帮你检测纯度</h3>
+        <p>
+          开发环境下，把组件树包在 <code>&lt;StrictMode&gt;</code> 里，<strong>每个组件函数会被调用两次</strong>（仅开发环境，生产构建无影响）。这是 React 主动检测"<em>渲染期是否有副作用</em>"的工具：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · StrictMode 暴露副作用</span>
+          <pre class="code"><code class="lang-js">// main.tsx
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+
+createRoot(document.getElementById('root')).render(
+  &lt;StrictMode&gt;
+    &lt;App /&gt;
+  &lt;/StrictMode&gt;
+);
+
+// 在 StrictMode 下：
+// - 组件函数被调用 2 次（每次状态变化）
+// - useState / useReducer 的 reducer 被调用 2 次
+// - useEffect 在 mount 时跑 2 次（cleanup → mount → cleanup → mount）
+// - useMemo / useCallback 函数被调用 2 次
+
+// 如果你的代码在 2 次调用下行为不同 → 有渲染期副作用 → bug
+// 例：
+let id = 0;
+function Component() {
+  const myId = id++;  // ❌ 每次调用 id 都变 —— StrictMode 让你立即发现
+  return &lt;div&gt;{myId}&lt;/div&gt;;
+  // StrictMode 下 myId 一会是 0 一会是 1，UI 闪烁
+}
+
+// 修复：把 myId 放进 useState 或 useId
+const [myId] = useState(() =&gt; nextId++);</code></pre>
+        </div>
+
+        <p>
+          <strong>StrictMode 还检测</strong>：① <code>componentWillMount</code> 等过时生命周期 ② legacy context API ③ findDOMNode（已废弃）④ Concurrent 不安全的代码模式。<strong>新项目应该总是开 StrictMode</strong>—— 它是 React 给你的免费"<em>纯度检测器</em>"。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 调试"<em>组件被调用太多次</em>"</h3>
+          <p>
+            发现某个组件渲染开销大但被频繁调用——用 React DevTools Profiler 看，发现 parent 每次重渲染都让它跑。<strong>5 种 render 触发条件</strong>排查：
+          </p>
+          <ol>
+            <li>本组件 state 变了？看 useState / useReducer 调用 → 没改就排除</li>
+            <li>props 变了？DevTools 的"Why did this render?"列会显示哪个 prop 变化</li>
+            <li>父组件重渲染？是的 → 加 <code>React.memo</code> 跳过（如 props 引用稳定）</li>
+            <li>Context value 变？看本组件用了哪些 useContext —— Context value 用 useMemo 缓存</li>
+            <li>StrictMode 双重？开发环境正常，生产 1 次 —— 不用担心</li>
+          </ol>
+          <p>
+            诊断后通常 <code>React.memo</code> + <code>useMemo</code>（稳定 props 引用）+ <code>useCallback</code>（稳定函数引用）组合解决。详见 <a href="09-use-memo-callback.html">B9</a>（编写中）。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 给同事讲清"<em>父重渲染会让子重渲染</em>"</h3>
+          <p>
+            新人常误以为 "<em>子组件 props 没变就不会重渲染</em>"。这是 Vue 心智—— Vue 用 Proxy 自动追踪依赖，确实能精确决定。<strong>React 的默认行为是相反的</strong>：父重渲染就调用所有子组件函数，不管 props。
+          </p>
+          <p>
+            解释步骤：① 引导他看 React DevTools Profiler，亲眼看到子组件被反复调用 ② 解释根因：A3 Fiber 的 beginWork 默认对每个子 Fiber 都跑 ③ 引出 <code>React.memo</code> 是显式的"<em>跳过</em>" 声明 ④ 提醒：memo 的浅比较会让 inline object / function props 失效（要用 useMemo / useCallback 配合）
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 评估"<em>第三方组件库是否兼容 Concurrent</em>"</h3>
+          <p>
+            升级到 React 18 后某第三方组件出现奇怪行为—— 怀疑它有渲染期副作用。验证：
+          </p>
+          <ol>
+            <li>本地开 StrictMode → 重现 bug？说明它在双重渲染下行为不同 → 有副作用</li>
+            <li>看库源码：组件函数体里有 <code>useState 之外的修改</code> / <code>非 useEffect 的 fetch</code> / <code>外部变量赋值</code>？</li>
+            <li>提 issue / 提 PR / 寻找替代库</li>
+          </ol>
+          <p>
+            React 18 之前很多老库依赖"<em>组件函数只跑一次</em>" 的隐含假设。React 18 + StrictMode 把这些 bug 暴露出来——这是 18 升级时常见的痛点。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>看见 React 元素的真实结构</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 打印 React 元素查看结构</span>
+          <pre class="code"><code class="lang-js">function App() {
+  const element = (
+    &lt;div className="container"&gt;
+      &lt;h1&gt;Title&lt;/h1&gt;
+      &lt;Greeting name="Alice" /&gt;
+    &lt;/div&gt;
+  );
+
+  console.log(element);
+  /* 控制台输出：
+  {
+    $$typeof: Symbol(react.element),
+    type: 'div',
+    key: null,
+    ref: null,
+    props: {
+      className: 'container',
+      children: [
+        {
+          $$typeof: Symbol(react.element),
+          type: 'h1',
+          props: { children: 'Title' },
+          key: null, ref: null,
+        },
+        {
+          $$typeof: Symbol(react.element),
+          type: Greeting,                      // ← 函数引用
+          props: { name: 'Alice' },
+          key: null, ref: null,
+        },
+      ],
+    },
+  }
+  */
+
+  return element;
+}
+
+// 重要观察：
+// 1. element 是<strong>纯 JS 对象</strong>，可以 console.log / JSON.stringify（但 Symbol 会丢）
+// 2. children 在 props 里，是嵌套元素树
+// 3. 函数组件（Greeting）此时还<strong>没被调用</strong>——它只是 element.type
+// 4. React 在 commit 阶段 才调用 Greeting 函数生成它的子元素</code></pre>
+        </div>
+
+        <h3>render 触发条件实测 demo</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 5 种触发条件可视化</span>
+          <pre class="code"><code class="lang-js">// 用 console.log 让每个 render 可见
+function Parent() {
+  const [count, setCount] = useState(0);
+  const [theme] = useContext(ThemeContext);  // 假设有
+  console.log('Parent render', { count, theme });
+
+  return (
+    &lt;&gt;
+      &lt;button onClick={() =&gt; setCount(c =&gt; c + 1)}&gt;
+        Count: {count}
+      &lt;/button&gt;
+      &lt;Child propValue="static" /&gt;
+      &lt;ChildMemo propValue="static" /&gt;
+    &lt;/&gt;
+  );
+}
+
+function Child({ propValue }) {
+  console.log('Child render', { propValue });
+  return &lt;div&gt;static child&lt;/div&gt;;
+}
+
+const ChildMemo = React.memo(function ChildMemo({ propValue }) {
+  console.log('ChildMemo render', { propValue });
+  return &lt;div&gt;memoed child&lt;/div&gt;;
+});
+
+// 测试：点击 button 触发 setCount
+//
+// 控制台输出：
+//   Parent render { count: 1, theme: 'light' }
+//   Child render { propValue: 'static' }     ← 父重渲染让子被调用
+//   （ChildMemo 不打印）                       ← memo 跳过：propValue 字符串没变
+//
+// 测试 StrictMode（开发环境）：
+//   Parent render { count: 1 }              ← 双重
+//   Parent render { count: 1 }
+//   Child render { propValue: 'static' }     ← 双重
+//   Child render { propValue: 'static' }</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：把"<em>render</em>"等同于"<em>DOM 渲染</em>"</div>
+          <p>
+            "<em>render</em>" 在 React 至少有 3 种不同含义：① 调用组件函数（"<em>component render</em>"）② React Fiber render 阶段（A3）③ 浏览器 paint。混着用必然误解。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：精确用语：
+          </p>
+          <ul>
+            <li>"<em>组件 render</em>" / "<em>调用组件函数</em>" → 函数被执行</li>
+            <li>"<em>commit</em>" / "<em>提交</em>" → React 真的修改了 DOM</li>
+            <li>"<em>页面 paint</em>" / "<em>页面渲染</em>" → 浏览器实际绘制</li>
+          </ul>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：以为子组件 props 没变就不重渲染</div>
+          <p>
+            <strong>这是 Vue 心智</strong>。React 默认每次父重渲染都调用所有子组件函数，<strong>不管 props 变没变</strong>。要"<em>props 没变就跳过</em>" 必须显式 <code>React.memo</code> 包裹。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：理解 React 的默认行为是"<em>积极调用</em>"。性能问题用 memo + DevTools Profiler 定位，不要凭直觉假设。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：组件首字母小写</div>
+          <p>
+            <code>function myButton() { ... }</code> + <code>&lt;myButton /&gt;</code> → JSX 编译为 <code>type: 'mybutton'</code>（host 元素）。React 会尝试把它当原生 HTML 元素，渲染失败或不生效。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：组件名永远首字母大写。ESLint <code>react/jsx-pascal-case</code> 自动检测。或者用 <code>const MyButton = (props) =&gt; ...</code> 函数表达式赋给大写常量。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：在 render 中产生副作用导致 StrictMode 暴露 bug</div>
+          <p>
+            升级到 React 18 + StrictMode 后，看到组件 mount 时跑了 2 遍 fetch、计数器跳了 2 步、订阅注册了 2 次—— 不是 React 18 引入的 bug，是<strong>你之前就有渲染期副作用</strong>，StrictMode 把它暴露出来。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：所有副作用搬进 <code>useEffect</code>。<code>useEffect</code> 在 StrictMode 下也会跑两次（cleanup + mount + cleanup + mount），所以 cleanup 必须正确处理（详见 B7）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：以为 console.log 在 render 中是"<em>无副作用</em>" 的</div>
+          <p>
+            技术上 console.log <strong>是副作用</strong>（它修改控制台），但 React 容忍——开发调试用没问题。但在 StrictMode 下 console.log 也会打两次，不要据此判断"<em>组件被调用 N 次</em>" 的实际次数（生产是 N/2 次）。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：调试时知道这点。Profiler 给的是真实数据，不依赖 console.log 计数。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>权威来源</h3>
+        <ul>
+          <li>
+            <a href="https://react.dev/learn/your-first-component" target="_blank" rel="noopener">react.dev · Your First Component</a>
+          </li>
+          <li>
+            <a href="https://react.dev/learn/render-and-commit" target="_blank" rel="noopener">react.dev · Render and Commit</a>
+          </li>
+          <li>
+            <a href="https://react.dev/learn/keeping-components-pure" target="_blank" rel="noopener">react.dev · Keeping Components Pure</a>
+          </li>
+          <li>
+            <a href="https://react.dev/reference/react/createElement" target="_blank" rel="noopener">react.dev · createElement</a> + <a href="https://react.dev/reference/react/StrictMode" target="_blank" rel="noopener">StrictMode</a>
+          </li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>下一章：<a href="02-jsx.html">B2 · JSX 编译与运行时</a>（编写中）—— 新 / 旧 JSX runtime、jsxImportSource、TypeScript 集成</li>
+          <li>另一轨：<a href="../01-history/02-design-philosophy.html">A2 · 设计哲学</a> —— 本章的"<em>为什么</em>" 都在这里
+          </li>
+          <li>底层引擎：<a href="../01-history/03-fiber.html">A3 · Fiber 架构</a> —— React 元素 → Fiber 节点的映射
+          </li>
+        </ul>
+
+        <h3>跨主题参考</h3>
+        <ul>
+          <li><a href="../../javascript/02-advanced/02-closures.html">JS · 闭包</a> —— 函数组件的闭包基础</li>
+          <li><a href="../../ecma/02-spec/02-data-types.html">ECMA · B2 数据类型</a> —— Symbol 的唯一性（$$typeof 用 Symbol 防 XSS）</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../01-history/05-ecosystem.html">
+            <span class="label">← 另一轨</span>
+            <span class="title">A5 · 生态与工程化</span>
+          </a>
+          <a class="next" href="index.html">
+            <span class="label">下一步 →</span>
+            <span class="title">B2 · JSX（🚧 编写中，先看 Track 概览）</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
