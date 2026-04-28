@@ -9,7 +9,7 @@
 | **JavaScript**   | ✅ 完成     | [javascript.info](https://javascript.info/)                         | 62 章 / 7 阶段    |
 | **TypeScript**   | ✅ 完成     | [typescriptlang.org/docs](https://www.typescriptlang.org/docs/)     | 20 章 / 4 Part    |
 | **ECMAScript**   | ✅ 完成     | [ecma-international.org/ecma-262](https://ecma-international.org/publications-and-standards/standards/ecma-262/) | 11 章 / 2 轨（历史脉络 + 规范精读）|
-| **React**        | 🚧 编写中   | [react.dev](https://react.dev/) + [React RFCs](https://github.com/reactjs/rfcs) | 24 章 / 2 轨（历史脉络 + 官网知识精读 4 Part）|
+| **React**        | ✅ 完成     | [react.dev](https://react.dev/) + [React RFCs](https://github.com/reactjs/rfcs) | 24 章 / 2 轨（历史脉络 + 官网知识精读 4 Part）|
 | **Tailwind CSS** | ⏳ 规划中   | [tailwindcss.com/docs](https://tailwindcss.com/docs)                | 待定              |
 | **V8 Engine**    | ⏳ 规划中   | [v8.dev/docs](https://v8.dev/docs)                                  | 待定              |
 
@@ -72,11 +72,11 @@ docs/learning/deep-dive/
 │   ├── 01-history/             # ✅ Track A · 历史脉络与设计（5 章）
 │   └── 02-spec/                # ✅ Track B · ECMA-262 规范精读（6 章）
 │
-├── react/                      # 🚧 React 主题（编写中，2 轨独立）
+├── react/                      # ✅ React 主题（24 章 / 2 轨完成）
 │   ├── index.html              # React hub
 │   ├── outline.md              # 写作蓝本
-│   ├── 01-history/             # 🚧 Track A · 历史脉络与设计（5 章）
-│   └── 02-reference/           # 🚧 Track B · React 官网知识精读（19 章 / 4 Part）
+│   ├── 01-history/             # ✅ Track A · 历史脉络与设计（5 章）
+│   └── 02-reference/           # ✅ Track B · React 官网知识精读（19 章 / 4 Part）
 │
 ├── tailwindcss/                # ⏳ 规划中
 └── v8/                         # ⏳ 规划中
@@ -135,7 +135,7 @@ docs/learning/deep-dive/
 - ✅ JavaScript（62 章，2026-04 完成）
 - ✅ TypeScript（20 章 / 4 Part 完成）
 - ✅ ECMAScript（11 章 / 2 轨完成 · Track A 历史脉络 5 章 + Track B 规范精读 6 章）
-- 🚧 React（24 章 / 2 轨：✅ Track A 5 章 + Part 1 心智模型 5 章 + Part 2 Hooks 全谱 6 章 + Part 3 渲染并发 4 章 + B16 RSC + B17 Actions + B18 use / 🚧 Part 4 余 1 章待写）
+- ✅ React（24 章 / 2 轨完成 · Track A 历史脉络 5 章 + Track B 官网精读 19 章 / 4 Part：心智模型 / Hooks 全谱 / 渲染并发 / 现代 React）
 - ⏳ Tailwind CSS / V8（规划中，需后续单独研究）
 
 ## 与 Mira 项目的关系
