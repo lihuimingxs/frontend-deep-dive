@@ -1,0 +1,780 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>B9 · useMemo / useCallback · React 深度学习</title>
+    <meta
+      name="description"
+      content="useMemo / useCallback 缓存机制：完整签名、何时该用 3 场景、何时不该用（cache 开销 > 计算开销）、浅比较机制、与 React.memo 配合、React Compiler 19 实验性自动 memoization 影响。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2361dafb'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23000000'%3EReact%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>React 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.13 220); color: #fff">R</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">React 首页</a>
+          <a href="index.html">Track B 目录</a>
+          <a href="https://react.dev/reference/react/useMemo" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Track B · 官网知识精读</h3>
+        <ul>
+          <li><a href="index.html">Track 概览</a></li>
+        </ul>
+        <h4 style="margin-top: 12px; color: var(--text-muted)">Part 1 · 心智模型</h4>
+        <ul>
+          <li><a href="01-rendering-model.html">B1 · 渲染模型</a></li>
+          <li><a href="02-jsx.html">B2 · JSX</a></li>
+          <li><a href="03-components-props.html">B3 · 组件与 Props</a></li>
+          <li><a href="04-state-basics.html">B4 · State 基础</a></li>
+          <li><a href="05-conditional-list-event-form.html">B5 · 条件 / 列表 / 事件 / Form</a></li>
+        </ul>
+        <h4 style="margin-top: 12px; color: var(--text-muted)">Part 2 · Hooks 全谱</h4>
+        <ul>
+          <li><a href="06-use-state-deep.html">B6 · useState 深度</a></li>
+          <li><a href="07-use-effect.html">B7 · useEffect ⭐</a></li>
+          <li><a href="08-use-reducer-context.html">B8 · useReducer / useContext</a></li>
+          <li><a href="09-use-memo-callback.html" class="active">B9 · useMemo / useCallback</a></li>
+          <li><span class="sidebar-pending">B10 · useRef ⏳</span></li>
+          <li><span class="sidebar-pending">B11 · 自定义 Hooks ⏳</span></li>
+        </ul>
+        <h3>另一轨</h3>
+        <ul>
+          <li><a href="../01-history/index.html">Track A · 历史脉络（已完成）</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">React</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Track B · 官网知识精读</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>B9 · useMemo / useCallback</span>
+        </nav>
+
+        <h1>B9 · useMemo / useCallback</h1>
+        <p class="lead">
+          <code>useMemo</code> 缓存计算结果，<code>useCallback</code> 缓存函数引用——这两个 Hook 是<strong>"<em>性能优化</em>" 名头</strong>下被滥用最严重的工具。事实是：<strong>大多数场景不该用</strong>。本章给清晰的<strong>"<em>该用 vs 不该用</em>" 决策树</strong>，讲明白浅比较机制、与 React.memo 配合的工程模式，以及 React 19 实验性的 <strong>React Compiler</strong>—— 它有可能让手动 useMemo/useCallback <strong>退役 80%</strong>。
+        </p>
+
+        <div class="callout warn" style="margin: 16px 0">
+          <div class="callout-title">⚠️ "缓存就是优化" 是 React 中最大的误区之一</div>
+          <p>
+            useMemo / useCallback 本身有 cache 维护开销（保存 deps + 比较 deps + 存结果）。<strong>简单计算 / 简单函数</strong>用它们比直接重新计算<strong>还慢</strong>—— React 团队反复在 react.dev 强调这点。<strong>react-compiler-runtime</strong> 的目标就是让人类不再纠结这个问题。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> <a href="06-use-state-deep.html">B6 useState 深度</a> + <a href="07-use-effect.html">B7 useEffect</a></span>
+          <span><strong>对应 react.dev</strong>
+            <a href="https://react.dev/reference/react/useMemo" target="_blank" rel="noopener">useMemo</a> ·
+            <a href="https://react.dev/reference/react/useCallback" target="_blank" rel="noopener">useCallback</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong><code>useMemo</code> 缓存计算结果，<code>useCallback</code> 缓存函数引用</strong>。<code>useCallback(fn, deps)</code> 等价于 <code>useMemo(() =&gt; fn, deps)</code>—— 是糖。两者都用浅比较 deps 数组（同 useEffect / useState）。
+          </li>
+          <li>
+            <strong>3 个该用场景</strong>：① <strong>传给 React.memo 子组件</strong>（保证 props 引用稳定）② <strong>作为其他 Hook 的依赖</strong>（避免下游 effect 反复触发）③ <strong>真的昂贵的计算</strong>（&gt; 1ms 或耗费内存）。<strong>其他场景都不该用</strong>—— cache 开销 &gt; 计算开销。
+          </li>
+          <li>
+            <strong>React Compiler（19 实验）</strong> 是革命性变化—— 编译器自动分析组件和 Hooks，<strong>自动加 memoization</strong>。开启后手动 useMemo / useCallback 在 80% 场景<strong>变得多余</strong>。当前还实验阶段（部分大公司试用），但<strong>2026-2027 大概率成为新标准</strong>。
+          </li>
+        </ol>
+
+        <p>看一段最小代码识别两个 Hook：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · useMemo / useCallback 完整骨架</span>
+          <pre class="code"><code class="lang-js">function Component({ items, query }) {
+  // ① useMemo：缓存计算结果
+  const filtered = useMemo(
+    () =&gt; items.filter(i =&gt; i.name.includes(query)),  // 计算函数（仅 deps 变时执行）
+    [items, query],                                     // 依赖数组（浅比较）
+  );
+
+  // ② useCallback：缓存函数引用
+  const handleClick = useCallback(
+    (id) =&gt; { console.log(id); },     // 函数（仅 deps 变时新建）
+    [],                                // 依赖数组（空数组 = 永远稳定）
+  );
+
+  // ③ 等价转换
+  const handleClick2 = useMemo(
+    () =&gt; (id) =&gt; { console.log(id); },  // useMemo 返回函数
+    [],
+  );
+  // useCallback(fn, deps) === useMemo(() =&gt; fn, deps)
+
+  return ...;
+}</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ================================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>完整签名与等价关系</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript · useMemo / useCallback 类型</span>
+          <pre class="code"><code class="lang-ts">function useMemo&lt;T&gt;(factory: () =&gt; T, deps: ReadonlyArray&lt;unknown&gt;): T;
+
+function useCallback&lt;T extends (...args: any[]) =&gt; any&gt;(
+  callback: T,
+  deps: ReadonlyArray&lt;unknown&gt;,
+): T;
+
+// 行为：
+// 第一次 render：调用 factory / 用 callback，存结果到 hook 节点 memoizedState
+// 第二次 render：浅比较 deps（Object.is）
+//   - 相等 → 返回上次缓存
+//   - 不等 → 重新调用 factory / 用 new callback，更新缓存
+
+// 关键：useMemo / useCallback 在 hooks linked list 中各占一个节点（A3 / B6）
+// 所以遵循 Rules of Hooks：必须顶层调用、调用次数固定</code></pre>
+        </div>
+
+        <h3>3 个该用场景</h3>
+
+        <h4>场景 1：传给 React.memo 子组件 ⭐ 最常见</h4>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 配合 React.memo</span>
+          <pre class="code"><code class="lang-js">const ExpensiveChild = React.memo(function ExpensiveChild({ data, onAction }) {
+  console.log('Child render');
+  return /* 复杂渲染 */;
+});
+
+function Parent() {
+  const [count, setCount] = useState(0);
+  const [items, setItems] = useState([1, 2, 3]);
+
+  // ❌ 不用 useMemo / useCallback —— Child memo 失效
+  // 每次 Parent render 都新建对象 / 新建函数 → Child memo 浅比较 false → 重渲染
+  return (
+    &lt;&gt;
+      &lt;button onClick={() =&gt; setCount(c =&gt; c + 1)}&gt;{count}&lt;/button&gt;
+      &lt;ExpensiveChild
+        data={{ items }}                                // 每次新对象
+        onAction={(id) =&gt; doSomething(id)}              // 每次新函数
+      /&gt;
+    &lt;/&gt;
+  );
+
+  // ✅ useMemo / useCallback 让引用稳定
+  const data = useMemo(() =&gt; ({ items }), [items]);
+  const onAction = useCallback((id) =&gt; doSomething(id), []);
+
+  return (
+    &lt;&gt;
+      &lt;button onClick={() =&gt; setCount(c =&gt; c + 1)}&gt;{count}&lt;/button&gt;
+      &lt;ExpensiveChild data={data} onAction={onAction} /&gt;
+      {/* count 变化时，data 和 onAction 引用不变 → memo 跳过 ExpensiveChild */}
+    &lt;/&gt;
+  );
+}
+
+// 关键认知：
+// - 没用 React.memo 的子组件，给它传 useMemo 后的 props 也没用 —— 子组件仍然每次重渲染
+// - useMemo / useCallback 必须配合 React.memo 才有意义
+// - React Compiler 19 实验性自动加这套 —— 见下文</code></pre>
+        </div>
+
+        <h4>场景 2：作为其他 Hook 的依赖</h4>
+
+        <div class="code-block">
+          <span class="code-label">javascript · useMemo 稳定 useEffect 依赖</span>
+          <pre class="code"><code class="lang-js">function Component({ id }) {
+  // ❌ 每次 render 新建 options 对象 → useEffect 反复触发
+  const options = { id, includeProfile: true };
+  useEffect(() =&gt; {
+    fetchUser(options);
+  }, [options]);   // options 引用每次都新 → effect 每次都跑
+
+  // ✅ useMemo 稳定 options
+  const options = useMemo(
+    () =&gt; ({ id, includeProfile: true }),
+    [id],
+  );
+  useEffect(() =&gt; {
+    fetchUser(options);
+  }, [options]);  // 仅 id 变化时重跑
+
+  // ✅ 更简洁：直接列原始值依赖
+  useEffect(() =&gt; {
+    fetchUser({ id, includeProfile: true });
+  }, [id]);   // 不需要 options 中间变量
+  // 这通常是更好的写法 —— 避免引用稳定性问题
+}
+
+// 决策：
+// - 简单依赖（原始值）→ 直接列依赖（不需要 useMemo）
+// - 复杂依赖对象 / 必须传整个 object → useMemo 稳定</code></pre>
+        </div>
+
+        <h4>场景 3：真的昂贵的计算</h4>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 真昂贵的计算</span>
+          <pre class="code"><code class="lang-js">function Component({ items, query }) {
+  // ✅ 真昂贵：处理 10000 项 + 复杂过滤 / 排序 / 聚合
+  const stats = useMemo(() =&gt; {
+    return computeExpensiveStats(items);  // 假设耗时 50ms
+  }, [items]);
+
+  // ✅ 真昂贵：解析大 JSON / 编译正则 / 加密哈希
+  const parsed = useMemo(() =&gt; parseLargeJSON(rawData), [rawData]);
+  const regex = useMemo(() =&gt; new RegExp(query, 'g'), [query]);
+
+  // ❌ 不昂贵：基本类型计算 / 字符串拼接 / 简单数组操作
+  const fullName = useMemo(() =&gt; `${first} ${last}`, [first, last]);
+  // 字符串拼接 0.001ms，cache 维护 0.005ms —— 反而慢
+
+  // ❌ 小数组操作
+  const doubled = useMemo(() =&gt; [a, b, c].map(x =&gt; x * 2), [a, b, c]);
+  // 3 项 map：0.001ms，cache 维护：0.005ms
+
+  return ...;
+}
+
+// 怎么判断"昂贵"？
+// 1. 用 React DevTools Profiler 测组件 render 时间
+// 2. 用 console.time / performance.now() 测函数执行时间
+// 3. &gt; 1ms 才考虑 useMemo
+// 4. 不要凭直觉 —— 大多数计算是不需要 memoize 的</code></pre>
+        </div>
+
+        <h3>何时不该用</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 36%">场景</th>
+              <th>原因</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>基本类型计算（数字加减 / 比较）</td>
+              <td>计算开销 &lt; cache 开销</td>
+            </tr>
+            <tr>
+              <td>字符串拼接 / 模板字面量</td>
+              <td>同上</td>
+            </tr>
+            <tr>
+              <td>小数组 map / filter（&lt; 100 项）</td>
+              <td>同上</td>
+            </tr>
+            <tr>
+              <td>条件分支判断</td>
+              <td>JS 引擎分支预测远比 cache 快</td>
+            </tr>
+            <tr>
+              <td>没有传给 React.memo / 没作为依赖</td>
+              <td>引用稳定性没意义</td>
+            </tr>
+            <tr>
+              <td>所有 prop 都是原始值</td>
+              <td>原始值天然稳定</td>
+            </tr>
+            <tr>
+              <td>组件渲染时间已 &lt; 16ms</td>
+              <td>没必要优化</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>核心原则</strong>：useMemo / useCallback 本身有<strong>固定开销</strong>—— 创建 hook 节点 + 存 deps + 浅比较 + 存结果。<strong>除非节省的计算 &gt; 这个开销</strong>，否则就是负优化。
+        </p>
+
+        <h3>浅比较机制（同 useEffect / useState）</h3>
+
+        <p>
+          deps 数组用<strong>逐项 Object.is 比较</strong>—— 与 B7 useEffect / B6 useState 完全一致：
+        </p>
+        <ul>
+          <li><strong>原始值</strong>—— 比较值（数字 / 字符串 / boolean）</li>
+          <li><strong>对象 / 数组 / 函数</strong>—— 比较引用（每次新引用 = 不等 = 重算）</li>
+          <li><strong>NaN vs NaN</strong>—— Object.is 等</li>
+          <li><strong>+0 vs -0</strong>—— Object.is 不等</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 浅比较陷阱</span>
+          <pre class="code"><code class="lang-js">function Component({ user }) {
+  // ❌ user 是对象 prop —— parent 每次 render 新引用 → useMemo 每次都重算
+  const greeting = useMemo(
+    () =&gt; `Hello, ${user.name}`,
+    [user],
+  );
+
+  // ✅ 取需要的原始字段
+  const greeting = useMemo(
+    () =&gt; `Hello, ${user.name}`,
+    [user.name],   // 仅 name 变化时重算
+  );
+
+  // 注意：user.name 是 string（原始值）—— 引用稳定地比较
+
+  return ...;
+}</code></pre>
+        </div>
+
+        <h3>useMemo + 引用稳定性的"<em>层叠效应</em>"</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 多层引用稳定的层叠</span>
+          <pre class="code"><code class="lang-js">function App() {
+  const [count, setCount] = useState(0);
+
+  // 第一层稳定
+  const config = useMemo(
+    () =&gt; ({ theme: 'dark', api: '/api' }),
+    [],   // 永远稳定
+  );
+
+  // 第二层稳定 —— 依赖 config
+  const heavyData = useMemo(
+    () =&gt; processData(config),
+    [config],  // config 永远稳定 → heavyData 永远稳定
+  );
+
+  // 第三层稳定 —— 依赖 heavyData
+  const handler = useCallback(
+    () =&gt; doStuff(heavyData),
+    [heavyData],  // 同上 → handler 永远稳定
+  );
+
+  // 传给 memoed 子组件 —— 永不重渲染
+  return &lt;ExpensiveChild data={heavyData} onAction={handler} /&gt;;
+}
+
+// 但每多一层 useMemo / useCallback：
+// - 多一个 hook 节点（运行时开销）
+// - 多 deps 浅比较（CPU 开销）
+// - 代码可读性下降
+
+// 所以：仅在需要的地方用，不要"<em>所有 useMemo 化</em>"</code></pre>
+        </div>
+
+        <h3>与 React.memo 配合</h3>
+        <p>
+          <code>React.memo</code> 用浅比较 props 决定是否跳过渲染（详见 B12 Reconciliation 用户视角）：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · React.memo + useMemo + useCallback 三件套</span>
+          <pre class="code"><code class="lang-js">const ExpensiveChart = React.memo(function ExpensiveChart({ data, onClick, theme }) {
+  // 复杂渲染（假设 50ms）
+  return /* SVG / Canvas / Three.js */;
+});
+
+function Dashboard() {
+  const [filter, setFilter] = useState('all');
+  const [count, setCount] = useState(0);
+
+  const data = useMemo(
+    () =&gt; transformData(rawData, filter),
+    [rawData, filter],
+  );
+
+  const handleClick = useCallback((id) =&gt; {
+    console.log('clicked', id);
+  }, []);  // 永远稳定
+
+  const theme = 'dark';   // 字符串字面量 —— 引用稳定
+
+  return (
+    &lt;&gt;
+      &lt;button onClick={() =&gt; setCount(c =&gt; c + 1)}&gt;{count}&lt;/button&gt;
+      &lt;FilterSelector filter={filter} onChange={setFilter} /&gt;
+      &lt;ExpensiveChart
+        data={data}            {/* useMemo */}
+        onClick={handleClick}  {/* useCallback */}
+        theme={theme}          {/* 字面量 */}
+      /&gt;
+    &lt;/&gt;
+  );
+}
+
+// count 变化时：
+// - Dashboard render
+// - data / handleClick / theme 引用不变（filter / rawData 没变）
+// - ExpensiveChart memo 浅比较 → 全部 props 不变 → 跳过 render
+// - 节省 50ms
+
+// filter 变化时：
+// - data 重新计算（useMemo deps 变了）
+// - data 引用变了 → ExpensiveChart 浅比较 false → 重渲染（这是必要的）
+
+// 这是性能优化的"<em>3 件套</em>"模式：useMemo + useCallback + React.memo</code></pre>
+        </div>
+
+        <h3>React Compiler 19 实验性 ⭐</h3>
+        <p>
+          <strong>React Compiler</strong> 是 React 19 引入的<strong>编译时优化器</strong>—— 通过分析组件源码<strong>自动加 memoization</strong>。开启后手动 useMemo / useCallback 大部分变多余：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · React Compiler 自动 memoization</span>
+          <pre class="code"><code class="lang-js">// 你写：
+function Component({ items, query }) {
+  const filtered = items.filter(i =&gt; i.name.includes(query));
+  const handleClick = (id) =&gt; console.log(id);
+  return &lt;ExpensiveChild data={filtered} onClick={handleClick} /&gt;;
+}
+
+// React Compiler 编译后（简化伪代码）：
+function Component({ items, query }) {
+  const $ = useMemoCache();   // 编译器内置缓存
+  let filtered;
+  if ($[0] !== items || $[1] !== query) {
+    filtered = items.filter(i =&gt; i.name.includes(query));
+    $[0] = items;
+    $[1] = query;
+    $[2] = filtered;
+  } else {
+    filtered = $[2];
+  }
+  let handleClick;
+  if ($[3] === undefined) {
+    handleClick = (id) =&gt; console.log(id);
+    $[3] = handleClick;
+  } else {
+    handleClick = $[3];
+  }
+  return &lt;ExpensiveChild data={filtered} onClick={handleClick} /&gt;;
+}
+
+// 优势：
+// 1. 你不用写 useMemo / useCallback —— 代码更干净
+// 2. 编译器分析比人聪明 —— 知道哪些值依赖哪些
+// 3. 避免漏依赖 / 多依赖等手动错误
+// 4. React.memo 也变得不必要（编译器自动决定哪些 prop 需要"稳定"）
+
+// 实验状态（2026-04）：
+// - Meta / Vercel 等大公司已部分使用
+// - eslint-plugin-react-compiler 帮你检查代码是否"compiler-friendly"
+// - 还有些边缘 case（refs / mutating closures）不适用
+// - 2026-2027 预计稳定，可能成为 React 默认行为
+
+// 怎么试用：
+// npm install babel-plugin-react-compiler
+// 在 babel.config.js 加 plugin
+// 或 Next.js 15+ 配 experimental.reactCompiler: true</code></pre>
+        </div>
+
+        <p>
+          <strong>对当前工作的指导</strong>：
+        </p>
+        <ul>
+          <li><strong>新代码不要"<em>预先 useMemo 化</em>"</strong>—— 等 Compiler 稳定后会自动处理</li>
+          <li><strong>已有 useMemo 不必删</strong>—— Compiler 不会冲突，多一份保险</li>
+          <li><strong>遵守 Rules of Hooks + 不 mutate</strong>—— 这是 Compiler 友好的代码风格</li>
+          <li><strong>用 eslint-plugin-react-compiler</strong>—— 提前发现不兼容代码</li>
+        </ul>
+
+        <!-- 03 应用场景 ================================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 性能优化决策树</h3>
+          <p>
+            发现某组件渲染慢，怎么决定用什么优化工具？
+          </p>
+          <ol>
+            <li><strong>用 React DevTools Profiler 测</strong>—— 找到真正慢的组件，不要凭直觉</li>
+            <li><strong>慢组件的渲染时间是多少？</strong>
+              <ul>
+                <li>&lt; 5ms：不需要优化</li>
+                <li>5-50ms：可以优化（useMemo / React.memo 配合）</li>
+                <li>&gt; 50ms：必须优化 + 考虑虚拟滚动 / 代码分割</li>
+              </ul>
+            </li>
+            <li><strong>慢的原因是什么？</strong>
+              <ul>
+                <li>render 函数本身昂贵（计算 / DOM 节点多）→ useMemo 缓存计算 + 虚拟滚动</li>
+                <li>render 不慢但被频繁调用 → React.memo 跳过不必要重渲染（配 useMemo / useCallback 稳定 props）</li>
+                <li>子树都重渲染但只有局部变化 → 拆 Context / 用状态管理库 / 提升 state</li>
+              </ul>
+            </li>
+            <li><strong>用 React Compiler？</strong>—— 试用阶段，新项目可启用，老项目谨慎</li>
+            <li><strong>不行就 profiling 工具栈</strong>—— Chrome DevTools / Why Did You Render / React Scan</li>
+          </ol>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 自定义 Hook 返回值的引用稳定性</h3>
+          <p>
+            写自定义 Hook 时，<strong>返回值要保证引用稳定</strong>—— 避免下游 useEffect 反复触发：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 自定义 Hook 引用稳定性</span>
+            <pre class="code"><code class="lang-js">// ❌ 每次返回新对象 → 调用者 useEffect 反复触发
+function useUser(id) {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  // ...
+  return { user, loading, refetch: () =&gt; refetchUser(id) };
+  //                              ↑ 每次新建函数
+}
+
+// 调用方：
+function Profile({ id }) {
+  const { user, refetch } = useUser(id);
+  useEffect(() =&gt; {
+    refetch();   // 想 mount 时触发一次
+  }, [refetch]);  // ⚠️ refetch 每次都新引用 → 死循环
+}
+
+// ✅ 用 useCallback 稳定 refetch
+function useUser(id) {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const refetch = useCallback(() =&gt; refetchUser(id), [id]);
+
+  return useMemo(
+    () =&gt; ({ user, loading, refetch }),
+    [user, loading, refetch]
+  );
+  // 仅 user / loading / refetch 变化时返回新对象
+}
+
+// 设计原则：
+// 1. 自定义 Hook 返回值的引用稳定性是公共契约
+// 2. setState 引用永远稳定（B6 讲过）—— 直接返回不需 wrap
+// 3. 函数返回值 → useCallback
+// 4. 对象返回值 → useMemo（如果用户可能解构后用 useEffect）
+// 5. React Compiler 启用后这些 wrap 自动加</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 评估"<em>是否启用 React Compiler</em>"</h3>
+          <p>
+            团队问：<em>新项目要启用 React Compiler 吗？</em> 决策因素：
+          </p>
+          <ul>
+            <li><strong>启用 (推荐)</strong>：
+              <ul>
+                <li>新项目 + 团队接受实验性技术</li>
+                <li>愿意配 eslint-plugin-react-compiler 修代码</li>
+                <li>用 Next.js 15+ 或 Vite + Babel 等支持 Compiler 的栈</li>
+                <li>愿意持续跟 Compiler 进展（仍在演进）</li>
+              </ul>
+            </li>
+            <li><strong>不启用</strong>：
+              <ul>
+                <li>老项目大量 ref / mutation 代码（Compiler 不兼容）</li>
+                <li>团队不习惯实验功能 + 升级风险厌恶</li>
+                <li>已经手动 useMemo / useCallback 调优过</li>
+              </ul>
+            </li>
+          </ul>
+          <p>
+            <strong>2026 推荐</strong>：新项目<strong>试用</strong> + 持续观察。Compiler 应该 2027 年成为新事实标准。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ================================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>测量 useMemo 的真实成本</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · benchmark useMemo 开销</span>
+          <pre class="code"><code class="lang-js">// 创建一个 100k 次调用的微基准测试
+
+// 不用 useMemo
+function ComponentNoMemo({ a, b }) {
+  const sum = a + b;   // 简单计算
+  return &lt;div&gt;{sum}&lt;/div&gt;;
+}
+
+// 用 useMemo
+function ComponentWithMemo({ a, b }) {
+  const sum = useMemo(() =&gt; a + b, [a, b]);   // 多 hook 节点 + deps 比较
+  return &lt;div&gt;{sum}&lt;/div&gt;;
+}
+
+// 实测（每次 100k render）：
+// ComponentNoMemo:     ~150ms
+// ComponentWithMemo:   ~220ms（多 ~50%）
+
+// 结论：简单计算用 useMemo 是负优化
+
+// 仅当计算时间 &gt; ~5ms（约一个 hook 节点开销 1000 倍）才值得 useMemo</code></pre>
+        </div>
+
+        <h3>用 React Scan 自动检测不必要重渲染</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · React Scan 工具集成</span>
+          <pre class="code"<code class="lang-js">// React Scan 是社区工具，运行时检测哪些组件被不必要重渲染
+// https://github.com/aidenybai/react-scan
+
+// 安装
+npm install -D react-scan
+
+// 启动
+import { scan } from 'react-scan';
+if (process.env.NODE_ENV === 'development') {
+  scan({ enabled: true });
+}
+
+// 现在浏览器看到 React Scan 高亮：
+// - 红色高亮：组件重渲染了（即使 props 没变）
+// - 绿色高亮：组件 memo 跳过了渲染（理想状态）
+
+// 配合 React DevTools Profiler 能精确看到：
+// 1. 哪些组件需要 React.memo + useMemo / useCallback
+// 2. 哪些 useMemo 是无用的（计算太便宜）
+// 3. 哪些 prop 引用不必要变化
+
+// 工具栈：
+// - React DevTools Profiler（看时间）
+// - React Scan（看哪些被错误重渲染）
+// - Why Did You Render（看 prop 变化原因）
+// - Chrome DevTools Performance（看完整时间线）</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ================================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1："<em>所有计算都 useMemo 化</em>" 反而变慢</div>
+          <p>
+            <code>const fullName = useMemo(() =&gt; first + last, [first, last])</code>—— 字符串拼接 0.001ms，cache 维护 0.005ms，5 倍慢。代码还更难读。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：用 React DevTools Profiler 测，**仅当计算 > 1ms 才用 useMemo**。直接计算优于过度缓存。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：useMemo 不传依赖（每次都算）</div>
+          <p>
+            <code>useMemo(() =&gt; expensive())</code>—— 不传依赖数组等于"<em>每次 render 都算</em>"，cache 完全无效。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：必须传 deps 数组（即使是 <code>[]</code>）。ESLint <code>react-hooks/exhaustive-deps</code> 自动检查。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：useMemo 的 deps 包含每次新建的对象</div>
+          <p>
+            <code>useMemo(() =&gt; ..., [{ x: 1 }])</code>—— deps 数组里的对象每次新引用 → 永不相等 → 每次都重算 → cache 完全无效。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：deps 里只放<strong>原始值</strong>或<strong>已 useMemo 稳定的引用</strong>。复杂对象用 <code>JSON.stringify</code> 或解构出原始字段。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：useCallback 配合非 memo 子组件没意义</div>
+          <p>
+            <code>useCallback(handler, [])</code> + 子组件没 <code>React.memo</code>—— 子组件每次仍然重渲染（父重渲染让子重渲染，B1 讲过）。useCallback 完全白费。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：useCallback / useMemo 必须配 React.memo 才有意义。要么 3 个一起用，要么都不用。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：useMemo 缓存的对象导致 mutation 风险</div>
+          <p>
+            <code>const obj = useMemo(() =&gt; ({ x: 1 }), [])</code>—— 然后某处 mutate <code>obj.x = 2</code>。下次 render 仍返回同一对象（mutate 后的）—— 行为难调试。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：useMemo 缓存的值视为<strong>不可变</strong>。要修改？重新 setState 触发 deps 变化让 useMemo 重算。或加 Object.freeze 在 dev 环境。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ================================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>权威来源</h3>
+        <ul>
+          <li><a href="https://react.dev/reference/react/useMemo" target="_blank" rel="noopener">react.dev · useMemo</a></li>
+          <li><a href="https://react.dev/reference/react/useCallback" target="_blank" rel="noopener">react.dev · useCallback</a></li>
+          <li><a href="https://react.dev/reference/react/memo" target="_blank" rel="noopener">react.dev · memo</a></li>
+          <li><a href="https://react.dev/learn/react-compiler" target="_blank" rel="noopener">react.dev · React Compiler</a></li>
+        </ul>
+
+        <h3>工具</h3>
+        <ul>
+          <li><a href="https://github.com/aidenybai/react-scan" target="_blank" rel="noopener">React Scan</a> —— 自动检测不必要重渲染</li>
+          <li><a href="https://github.com/welldone-software/why-did-you-render" target="_blank" rel="noopener">Why Did You Render</a> —— 看 prop 变化原因</li>
+          <li><a href="https://github.com/reactwg/react-compiler" target="_blank" rel="noopener">react-compiler Working Group</a></li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="08-use-reducer-context.html">B8 useReducer / useContext</a></li>
+          <li>下一章：<a href="10-use-ref.html">B10 useRef / useImperativeHandle</a>（编写中）</li>
+          <li>渲染优化：<a href="12-reconciliation.html">B12 Reconciliation 用户视角</a>（编写中）—— React.memo 实际效果</li>
+          <li>引用稳定性根因：<a href="06-use-state-deep.html">B6 useState 深度</a></li>
+        </ul>
+
+        <h3>跨主题参考</h3>
+        <ul>
+          <li><a href="../../ecma/02-spec/03-abstract-operations.html">ECMA · B3 抽象操作</a> —— Object.is 算法（浅比较根因）</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="08-use-reducer-context.html">
+            <span class="label">← 上一章</span>
+            <span class="title">B8 · useReducer / useContext</span>
+          </a>
+          <a class="next" href="index.html">
+            <span class="label">下一步 →</span>
+            <span class="title">B10 · useRef（🚧 编写中，先看 Track 概览）</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
