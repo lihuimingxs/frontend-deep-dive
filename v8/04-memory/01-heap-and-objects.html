@@ -56,11 +56,6 @@
           <span><strong>前置</strong> ECMA P4（数据类型）</span>
           <span><strong>主要来源</strong> v8.dev/blog/pointer-compression · mutable-heap-number</span>
         </div>
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>骨架版本。对照大纲 <code>v8/outline.md § P4.1</code>。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>"V8 中的 number"是 SMI ⊎ HeapNumber 的 union</strong>：算术热路径上 V8 做 SMI fast path（无堆分配），溢出回 HeapNumber。</li>
@@ -70,41 +65,129 @@
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
 
-        <h3>Heap 分代结构</h3>
-        <p><em>正文待写。</em></p>
+        <h3>Heap 分代结构：6 个 Space 各司其职</h3>
+        <p>
+          V8 堆不是一整块——按对象生命周期、用途、安全模型分成多个独立区域（叫 <strong>Space</strong>）。每个 Space 有自己的分配策略、回收算法、内存上限。理解这套划分是理解 GC 行为（P4.2）的前置。
+        </p>
+
+        <h4>Young Generation (NewSpace)：新对象的产房</h4>
+        <p>
+          所有新分配的对象先进 NewSpace。默认 16MB-64MB（视 <code>--max-semi-space-size</code> 调整），相对很小——这是有意的：年轻代要频繁回收，越小回收越快。NewSpace 内部又分 <strong>From-space</strong> 和 <strong>To-space</strong> 两半，<strong>Cheney 半空间复制</strong> 算法靠这俩 ping-pong：每次 Minor GC 把 From 中"活的"对象拷到 To，From 整体丢弃，From / To 角色互换。
+        </p>
+        <p>
+          年轻代假设：<strong>大多数对象很快就死</strong>（generational hypothesis）。统计数据表明 90%+ 的对象在第一次 Minor GC 时已经不可达——所以频繁回收年轻代是高 ROI 操作。活过 N 次 Minor GC（默认 N=2）的对象会被<strong>晋升</strong>到 Old Gen。
+        </p>
+
+        <h4>Old Generation：长寿对象的归宿</h4>
+        <p>
+          晋升过来的对象 + 直接大尺寸分配的对象住这。Old Gen 用 <strong>Mark-Compact</strong>（标记 + 整理压缩）回收，频次远低于 Minor GC（典型几秒到几分钟一次）。Old Gen 内部历史上分 <strong>Old Pointer Space</strong>（含指针的对象）和 <strong>Old Data Space</strong>（不含指针的对象，如长字符串）——区分目的是 GC 扫描时跳过 Data Space 节省工作。最近 V8 把这俩合并简化了 layout。
+        </p>
+
+        <h4>专用 Space：Code / Map / Large / Trusted</h4>
         <ul>
-          <li><strong>Young Generation (NewSpace)</strong>：小、新对象、Scavenger 频繁回收（默认 16MB-64MB）；又分 From-space 和 To-space（Cheney 半空间复制）</li>
-          <li><strong>Old Generation</strong>：大、长寿对象、Mark-Compact 偶尔回收；又分 Old Pointer Space / Old Data Space</li>
-          <li><strong>Code Space</strong>：JIT 编译产物（机器码）</li>
-          <li><strong>Map Space</strong>：Hidden Class（Map 对象）单独区域</li>
-          <li><strong>Large Object Space</strong>：&gt; 大于 spaces 的对象（典型 1MB+）</li>
-          <li><strong>Trusted Space</strong> / <strong>Trusted Code Space</strong>（V8 Sandbox 引入）</li>
+          <li><strong>Code Space</strong>：JIT 编译产物（Sparkplug/Maglev/TurboFan 的机器码）。机器码不是普通对象——它要 executable 内存页（在 V8 Sandbox 之前直接 RWX，之后只 RW + 单独 Code Pointer Table 间接执行，详见 P5.2）。</li>
+          <li><strong>Map Space</strong>：Hidden Class（Map 对象，详见 P3.1）单独存放。这是 V8 内存效率的关键——大量对象共享 Map，Map 自己集中存放可以独立 GC 优化。最近 V8 把 Map 也合进了 Old Pointer Space，但概念上仍可独立思考。</li>
+          <li><strong>Large Object Space</strong>：超过 ~1MB 的大对象单独分配单独管理——不参与 compaction（搬动开销太大）、不能晋升回 NewSpace。典型例子是大数组、大 String、大 ArrayBuffer。</li>
+          <li><strong>Trusted Space / Trusted Code Space</strong>（V8 11+，2024 V8 Sandbox 引入）：放"V8 内部信任的元数据"——deopt 信息、bytecode arrays、Code 对象等。这些数据如果被攻击者腐蚀就能直接导致 RCE，所以放在 Sandbox cage 之外的"可信区域"，cage 内的腐蚀打不到这里（详见 P5.2）。</li>
         </ul>
 
-        <h3>Tagged Pointer（V8 表示一切的方式）</h3>
-        <p><em>正文待写。</em></p>
+        <h3>Tagged Pointer：V8 表示一切的方式</h3>
+        <p>
+          V8 内部所有 JS 值——number、string、object、function、SMI、null、undefined——都用<strong>同一种 64-bit 字</strong>（启用 Pointer Compression 时是 32-bit 字）表示，叫 <strong>tagged pointer</strong>。怎么在一个字里区分这是整数还是堆指针？答案是<strong>看最低位</strong>。
+        </p>
+        <p>
+          V8 利用了一个事实：<strong>所有堆对象地址都是 4 字节对齐的</strong>——所以堆指针的最低 2 位永远是 0。V8 把最低位用作 tag bit：
+        </p>
         <ul>
-          <li>64-bit 系统：每个 V8 值是 64-bit 字</li>
-          <li>最低位 = 0 → <strong>SMI</strong> (Small Integer)，剩 31 位整数（compressed pointer 模式下）</li>
-          <li>最低位 = 1 → <strong>HeapObject 指针</strong>（实际指向堆，地址按 4 字节对齐所以低位为 0；运行时 -1 还原）</li>
+          <li><strong>最低位 = 0</strong>：这是 <strong>SMI</strong>（Small Integer）——整数值就是这个字本身（除以 2 还原）</li>
+          <li><strong>最低位 = 1</strong>：这是 <strong>HeapObject 指针</strong>——实际地址是这个字 -1（去掉 tag）</li>
         </ul>
+        <p>
+          这套编码精妙在<strong>没有任何额外内存开销</strong>——SMI 和指针共用同一个 64-bit 字，不需要 union、不需要 type 字段。运行时判断类型只需要看最低位（一条 <code>and rax, 1</code> + <code>cmp</code>）。"零开销区分"是 V8 算术热路径快的根源之一。
+        </p>
 
-        <h3>SMI 的代价</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li>31-bit signed range：-2^30 到 2^30 - 1</li>
-          <li>超出 → 升级成 HeapNumber（堆上 8 字节 IEEE 754 double）</li>
-          <li>数组下标、循环计数器都希望落在 SMI 范围</li>
-        </ul>
+        <h3>SMI 的代价：31-bit 范围与 HeapNumber 边界</h3>
+        <p>
+          SMI（Small Integer）的范围：在启用 Pointer Compression 的 64-bit 系统上是 <strong>31-bit signed</strong>——<code>-2^30</code> 到 <code>2^30 - 1</code>，约 ±10.7 亿。32-bit 系统更窄。
+        </p>
+        <p>
+          为什么 31 位而不是 63 位？因为 SMI 共用同一个 32-bit 字（启用 Pointer Compression 时），低位是 tag bit，剩 31 位给数值。这是用 32-bit 字编码"整数 ⊎ 堆指针"两类值时的几何约束——多 1 位整数范围必然少 1 位指针寻址范围。
+        </p>
+        <p>
+          数值超出 SMI 范围会发生什么？V8 把它<strong>升级成 HeapNumber</strong>——堆上分配 8 字节存 IEEE 754 double。访问这个数值要：先解 tag、读堆指针、加偏移、加载 8 字节 double。<strong>开销比 SMI 大几倍</strong>。
+        </p>
+        <p>
+          这给一条 actionable 优化指南：<strong>数组下标、循环计数器、对象 ID</strong>——这些频繁创建的整数都希望落在 SMI 范围。如果你的 ID 超过 21 亿（10 亿×2 + 1），就开始走 HeapNumber 慢路径。常见踩坑：用毫秒时间戳作 key（<code>Date.now()</code> 在 1970 年 1 月 22 日就超过 SMI 范围了，所以历史上一直是 HeapNumber——不是 V8 错，是这个值天然超出 SMI）。
+        </p>
+        <div class="callout info">
+          <div class="callout-title">💡 浮点数也是 HeapNumber</div>
+          <p>
+            <code>1.5</code> / <code>NaN</code> / <code>Infinity</code> 都是 HeapNumber——SMI 只能装整数。这就是为什么数值数组保 PACKED_SMI（详见 P3.1）这么重要——一旦塞入浮点数，整个数组从 PACKED_SMI 变 PACKED_DOUBLE，每个元素都是堆分配的 HeapNumber，内存和访问速度都受影响。
+          </p>
+        </div>
 
-        <h3>Pointer Compression（V8 8.0+，2020）</h3>
-        <p><em>正文待写。</em></p>
+        <h3>Pointer Compression（V8 8.0+，2020）：堆 -43% 的工程奇迹</h3>
+        <p>
+          一个让 V8 团队等了 10 年才做的优化。<strong>问题</strong>：64-bit 系统的指针字段占 8 字节，但 V8 堆很少超过 4GB——指针的<strong>高 32 位都是浪费</strong>。一个典型 V8 对象有 5-10 个指针字段，每个浪费 4 字节——大对象池累计浪费几百 MB。
+        </p>
+        <p>
+          <strong>方案</strong>：在虚拟地址空间<strong>预留连续的 4GB 区域</strong>（叫 <strong>isolate cage</strong>），所有堆对象住在里面。对象内部的指针字段不再存绝对地址，而是<strong>cage 起始地址 + 32-bit offset</strong>——只占 4 字节。需要解引用时由 base 寄存器（CPU 寄存器持有 cage 起始地址）+ offset 还原成完整地址。
+        </p>
+        <div class="code-block">
+          <span class="code-label">layout-comparison</span>
+<pre class="code"><code>// 启用 Pointer Compression 前（64-bit 字段）
+struct Object {
+  Map* map;          // 8 bytes，但高 32 位永远是 0x00007F...
+  Value* prop1;      // 8 bytes，同上
+  Value* prop2;      // 8 bytes，同上
+}; // 总 24 字节
+
+// 启用后（32-bit offset 字段）
+struct Object {
+  uint32_t map;      // 4 bytes，cage 内 offset
+  uint32_t prop1;    // 4 bytes
+  uint32_t prop2;    // 4 bytes
+}; // 总 12 字节，省 50%</code></pre>
+        </div>
+        <p>
+          <strong>效果</strong>：典型应用 V8 堆 <strong>-43%</strong>（不是简单 -50% 因为有 SMI / 不可压缩字段）。除了内存收益还有附加好处：
+        </p>
         <ul>
-          <li><strong>问题</strong>：64-bit 系统的指针字段占 8 字节，但 V8 堆 &lt; 4GB → 高 32 位都一样</li>
-          <li><strong>方案</strong>：在虚拟地址空间预留 4GB 区域（<strong>isolate cage</strong>），所有堆对象住在里面；对象内部指针字段用 <strong>32-bit offset</strong> 表示</li>
-          <li><strong>效果</strong>：堆 -43%、指令 cache 命中率提升、SMI 改成 31-bit（与压缩指针一致）</li>
-          <li><strong>代价</strong>：堆上限 4GB（之前可以无限）；进入 isolate 时要计算 base</li>
+          <li><strong>L1 cache 命中率提升</strong>——更小对象意味着更多对象能塞进同一 cache line</li>
+          <li><strong>SMI 改成 31-bit</strong>（与压缩指针一致），保持"整数 ⊎ 指针"的几何对称</li>
+          <li><strong>为 V8 Sandbox 铺路</strong>——攻击者腐蚀的指针只能在 cage 内乱窜，自然限制了影响半径（详见 P5.2）</li>
         </ul>
+        <p>
+          <strong>代价</strong>：堆上限 <strong>4GB（per isolate）</strong>——之前 V8 堆理论上可以多大都行（虽然实践中很少超 2GB）。这是 V8 团队思考很久才下的决心：<strong>大多数应用根本用不到 4GB 堆，4GB 上限换 -43% 内存是好交易</strong>。需要超大堆的少数场景（数据库引擎 in-process、内存数据库）可以禁用 Pointer Compression（编译期 V8 选项）。
+        </p>
+        <p>
+          注意 <strong>4GB 上限是 per-isolate</strong>——多 isolate（Workers / Node Worker Threads）不互相挤压。这就是为什么 Cloudflare Workers 在单进程跑几千 isolate 时内存效率极高——每个 isolate 自己 cage，互不影响。
+        </p>
+
+        <h3>HeapObject 通用 layout：第一个字段永远是 Map</h3>
+        <p>
+          一个堆对象在内存里的物理布局：
+        </p>
+        <div class="code-block">
+          <span class="code-label">heap-object-layout</span>
+<pre class="code"><code>┌────────────────────┐  ← obj 指针指向这里
+│ Map pointer (4B)   │  ← 第一字段永远是 Map（Hidden Class）
+├────────────────────┤
+│ Properties (4B)    │  ← 指向 properties backing store
+├────────────────────┤
+│ Elements (4B)      │  ← 指向 elements backing store（数组用）
+├────────────────────┤
+│ in-object slot 0   │  ← 前 N 个属性直接存这里（详见 P3.1）
+│ in-object slot 1   │
+│ ...                │
+└────────────────────┘</code></pre>
+        </div>
+        <p>
+          关键约束：<strong>第一字段永远是 Map 指针</strong>。这就是为什么 V8 编译的 IC 检查机器码总是 <code>mov rax, [rdi]</code>（读对象第一字段拿 Map）—— rdi 是对象指针，offset 0 是 Map 字段，不需要看任何元数据就知道在哪。这种"硬约束"换来 IC 检查的极低开销。
+        </p>
+        <p>
+          Properties 和 Elements 是两个独立 backing store——分开是因为属性和数组元素访问模式完全不同，分开能让 GC 单独优化各自的复制策略。In-object slots 紧跟在 header 后面——前 N 个属性直接存对象自身（详见 P3.1 三档存储），N 由 Slack Tracking 动态决定。
+        </p>
 
         <h3>HeapObject 通用 layout</h3>
         <div class="code-block">
@@ -117,41 +200,97 @@
 ...</code></pre>
         </div>
 
-        <h3>String 表示（多种）</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li><strong>SeqOneByteString</strong>：纯 ASCII 单字节</li>
-          <li><strong>SeqTwoByteString</strong>：UTF-16</li>
-          <li><strong>ConsString</strong>：a + b 字符串拼接的"延迟链表"（不立即合并）</li>
-          <li><strong>SlicedString</strong>：另一字符串的子串（共享 backing）</li>
-          <li><strong>ExternalString</strong>：指向 V8 外部内存（嵌入器分配）</li>
-          <li><strong>InternalizedString</strong>：去重的字符串池（用于属性名）</li>
-        </ul>
+        <h3>String 表示：6 种内部形态</h3>
+        <p>
+          JS 程序员看到的 String 是个简单类型——字符序列。V8 内部却有<strong>6 种不同的 String 表示</strong>，根据来源、构造方式、共享情况自动选择。理解这套区分能解释很多看似神秘的字符串性能现象。
+        </p>
 
-        <h3>Mutable Heap Numbers（V8 11+）</h3>
-        <p><em>正文待写。</em>当 V8 确定一个 HeapNumber 只被一个 object 引用时，让它 mutable，原地更新；否则每次浮点数变化都新分配。</p>
+        <h4>SeqOneByteString / SeqTwoByteString：连续字节</h4>
+        <p>
+          最朴素的表示——字符直接存连续内存。<strong>SeqOneByteString</strong> 用于纯 Latin-1（ASCII + 部分扩展），每字符 1 字节；<strong>SeqTwoByteString</strong> 用于 Unicode，每字符 2 字节（UTF-16 code unit）。V8 在创建 String 时检测：能用 OneByte 装下就用，省一半内存。
+        </p>
+        <p>
+          这种区分意味着<strong>纯 ASCII 字符串内存只有混入中文的字符串的一半</strong>。"Hello World" = 11 字节；"你好世界" = 8 字节（4 chars × 2 bytes）。看着反直觉但符合 V8 的字节真实占用。
+        </p>
+
+        <h4>ConsString：拼接的延迟链表</h4>
+        <p>
+          <code>a + b</code> 字符串拼接在 V8 内部<strong>不立即合并内容</strong>——而是创建一个 <strong>ConsString</strong> 对象，里面存"指向 a 的指针 + 指向 b 的指针 + 总长度"。延迟到真正需要遍历内容时（如 <code>charCodeAt</code> / 比较 / 序列化）才<strong>flatten</strong>（合并成 SeqString）。
+        </p>
+        <p>
+          这就是为什么 <code>let s = ''; for (...) s += chunk</code> 在 V8 里其实没那么慢——每次 += 创建一个 ConsString 嵌套，O(1) 操作；最后 access 时 flatten 一次。当然<strong>更优雅的写法是用数组 + join</strong>——但 V8 给了"naive 写法不灾难"的兜底。
+        </p>
+
+        <h4>SlicedString：子串视图</h4>
+        <p>
+          <code>str.slice(10, 1000)</code> 不会立即拷贝——而是创建一个 <strong>SlicedString</strong> 引用<strong>原 String + 偏移 + 长度</strong>。访问时按偏移读原 String。
+        </p>
+        <p>
+          这套机制省内存但有个隐患：<strong>切出 1KB 子串可能让 1GB 源 String 永不能 GC</strong>——因为 SlicedString 引用源 String 整体，源不能被回收。如果你切出大文本的小段长期持有，要主动 <code>flatten</code>（如 <code>str.slice().normalize('NFC')</code> 或拷贝技巧）让 V8 把子串变独立 SeqString，源就能被 GC。
+        </p>
+
+        <h4>ExternalString：嵌入器外部内存</h4>
+        <p>
+          有些字符串数据来自 V8 外部——如 Chrome 的 HTML parser 直接给 V8 喂磁盘 buffer，Node 的 fs.readFile 给 V8 喂 OS buffer。V8 不需要拷贝这些数据进堆，可以创建 <strong>ExternalString</strong>——只存"指向外部 buffer 的指针 + 长度"，外部 buffer 由嵌入器管理生命周期。
+        </p>
+        <p>
+          这是大文件解析高效的关键——10MB JSON 通过 ExternalString 不需要进 V8 堆，<code>JSON.parse</code> 直接读外部 buffer。
+        </p>
+
+        <h4>InternalizedString：去重字符串池</h4>
+        <p>
+          属性名（hidden class 的 DescriptorArray 里的 name 字段）必须能用<strong>指针比较</strong>判等——所以 V8 维护一个全局 <strong>InternalizedString 池</strong>。所有用作属性名的 String 都被自动 internalize（如果池里有相同内容直接返回池里那个，否则添加进去）。
+        </p>
+        <p>
+          这就是为什么 <code>'foo' === 'foo'</code> 在 V8 里是<strong>一条指针 cmp 指令</strong>——两个字符串字面量都被 intern 到同一个池对象。也是为什么 V8 处理大量重复字符串属性名（如 React 组件的 props key）极其高效——同一字符串只在堆上存一份。
+        </p>
+
+        <h3>Mutable Heap Numbers（V8 11+）：原地更新浮点数</h3>
+        <p>
+          HeapNumber 默认是<strong>不可变</strong>的——每次浮点数变化都要新分配。这在 hot loop 里给 GC 巨大压力（一个 <code>let f = 1.0; for (...) f += 0.1</code> 每次迭代都新分配 8 字节）。
+        </p>
+        <p>
+          V8 11+ 引入 <strong>Mutable Heap Number</strong>——当 V8 确定一个 HeapNumber <strong>只被一个 object 引用</strong>（不会被其他地方观测到）时，让它<strong>原地更新</strong>。第二次写不再分配新对象，直接改原内存。这给浮点数密集场景巨大性能提升——典型物理引擎 / 图形处理在 V8 11+ 之后比之前快 20-30%。
+        </p>
 
         <h3>Conservative Stack Scanning（V8 11.2+，2023）</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li><strong>背景</strong>：V8 GC 一直是精确式 —— 每个栈位置都要精确知道是否是指针。要求编译器维护精确的 stack maps，复杂且慢</li>
-          <li><strong>做法</strong>：GC 扫描栈时，把所有"看起来像指针的字"都当作潜在 root —— 可能多保留一些对象（保守），但允许编译器丢掉 stack maps</li>
-          <li><strong>为什么现在能这么做</strong>：Pointer Compression 让指针只能落在 4GB cage 内，"看起来像指针"的判断准确率极高；误判保留的对象很少</li>
-          <li><strong>收益</strong>：编译器代码简化、Maglev 编译速度可观提升；为 V8 与 Cppgc / Oilpan 互操作铺路</li>
-        </ul>
+        <p>
+          GC 扫描栈一直是 V8 的精细工程——必须知道<strong>栈上每个 64-bit 字到底是不是指针</strong>，因为误把整数当指针会导致内存腐蚀，漏把指针当整数会导致对象误回收。这就要求编译器（TurboFan / Maglev）维护精确的 <strong>stack maps</strong>——记录每个 deopt 点 / 调用点 stack frame 上每个 slot 的类型。维护 stack maps 复杂、慢、易错。
+        </p>
+        <p>
+          V8 11.2 起做了一个大胆的简化——<strong>Conservative Stack Scanning</strong>。GC 扫描栈时，<strong>把所有"看起来像指针的字"都当作潜在 root</strong>——可能多保留一些对象（保守式 GC 经典做法），但<strong>允许编译器完全丢掉 stack maps</strong>。代价是少量"假指针"造成的内存浪费。
+        </p>
+        <p>
+          为什么 2023 才能做？关键是 <strong>Pointer Compression</strong> 让"看起来像指针"的判断变准了——指针必须落在 4GB cage 内，cage 之外的"看起来像指针的字"显然不是指针。误判率极低，保守保留的内存可忽略。这是<strong>一个老优化（Pointer Compression）解锁了另一个优化</strong>的典型例子——V8 演化的"链式"特征。
+        </p>
+        <p>
+          收益：编译器代码简化、Maglev 编译速度提升、为 V8 与 Cppgc/Oilpan 互操作铺路（C++ 端栈本来就只能保守扫——两边一致后跨堆 GC 才好做，详见 P4.2 末尾）。
+        </p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A · 内存敏感场景下避免 HeapNumber</h3>
-          <p><em>正文待写。</em>保持整数运算（<code>Math.floor</code> / <code>| 0</code>）。</p>
+          <h3 class="scenario-title">场景 A · 整数运算保 SMI fast path</h3>
+          <p>
+            在数组下标 / 计数器 / ID 等高频整数场景，确保值落在 SMI 范围（-2^30 到 2^30-1）。常见技巧：用 <code>x | 0</code> 或 <code>Math.floor</code> 强制转整数；ID 设计成自增 32-bit 整数而非时间戳；分页数据用相对偏移而非绝对游标。一旦超出 SMI 升级为 HeapNumber——堆分配 + 多一次 load——hot path 上累计可观。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B · 大字符串拼接</h3>
-          <p><em>正文待写。</em>知道 ConsString 是惰性合并 —— <code>for (s += chunk)</code> 在 V8 不会每次都拷贝（直到 access 时）。</p>
+          <h3 class="scenario-title">场景 B · 大文本切片防内存泄漏</h3>
+          <p>
+            从大文本切出小段长期持有（如 log parser 切出关键行、JSON parser 切出 key），用 SlicedString 隐含<strong>原 String 不能 GC</strong>——切出 1KB 子串可能让 1GB 源永不释放。诊断：用 Chrome DevTools Memory Profiler 看 retainer 链；修法：对长期持有的子串<strong>主动 flatten</strong>——<code>str.slice().split('').join('')</code> 之类的 trick，或显式 <code>String(str)</code> 强制拷贝。
+          </p>
         </div>
         <div class="scenario">
           <h3 class="scenario-title">场景 C · Buffer / TypedArray 用 ArrayBuffer</h3>
-          <p><em>正文待写。</em>这个 backing 在 ArrayBuffer Allocator 那层（嵌入器决定）而非 V8 堆。</p>
+          <p>
+            处理大型二进制数据（图像、音频、网络包）<strong>不要</strong>用普通 JS 数组——每个元素都是 SMI/HeapNumber，访问慢、GC 压力大。用 <code>Uint8Array</code> / <code>Int32Array</code> / <code>Float64Array</code>——backing 是 <strong>ArrayBuffer</strong>，由 ArrayBuffer Allocator（嵌入器决定，Node 用 malloc，Chrome 用 PartitionAlloc）分配，<strong>不在 V8 堆内</strong>。访问是直接内存 load，GC 不需要扫，性能等同 native code。这就是为什么 WebGL / Canvas / WebAudio 都强制用 TypedArray。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 字符串属性名享受 InternalizedString 加速</h3>
+          <p>
+            JS 程序里"重复使用同一字符串作属性名"是极常见模式——React props key、CSS-in-JS class 名、API 返回的 schema key。V8 自动 intern 这些字符串，<code>obj.foo</code> 的 key 比较是<strong>一条指针 cmp 指令</strong>。这个机制对你透明无需手动管理——但<strong>动态构造属性名</strong>（<code>obj['key_' + i]</code>）会创建新字符串，要先去 InternalizedString 池查找去重，<strong>每次 ~50ns 开销</strong>。hot path 上避免动态属性名是这个机制的反向应用。
+          </p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
