@@ -75,13 +75,6 @@
           <span><strong>主要来源</strong> Wikipedia · WebKit / SpiderMonkey 官方 wiki · Hermes 设计文档</span>
         </div>
 
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>
-            本章为<strong>骨架版本</strong>。对照大纲文件 <code>v8/outline.md § P1.2</code>。
-          </p>
-        </div>
-
         <!-- 01 速览 -->
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
@@ -94,32 +87,43 @@
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
 
         <h3>同代人 · JavaScriptCore (Apple)</h3>
-        <p><em>正文待写。</em>关键点：</p>
-        <ul>
-          <li>4 层管道 LLInt → Baseline → DFG → FTL（V8 直到 2023 才补齐 4 层）</li>
-          <li>FTL 后端早期用过 LLVM，后来换成自家 B3 —— 因为 LLVM 编译开销在 web 场景太重</li>
-          <li>内存敏感（iOS 设备约束），Riptide GC 比 Orinoco 更激进地避免暂停</li>
-          <li>嵌入哲学：作为 WebKit 的一部分发布，向外提供 ObjC / C API（Apple 平台第一公民）</li>
-          <li>Bun 用 JSC 而不是 V8 —— 启动比 V8 快是因素之一（详见独立 Bun 主题）</li>
-        </ul>
+        <p>
+          JSC 是 Apple 给 Safari 用的引擎，前身可追溯到 KDE 的 KJS（2002 由 KDE 开发者 Harri Porten 写的简陋实现）。Apple 在 2003 年 fork KDE 的 KHTML 创立 WebKit，KJS 也跟着被吸收并改名为 JavaScriptCore。一开始 JSC 没有 JIT，2008 年（V8 发布同年）Apple 推出第一代 JIT 编译器 <strong>SquirrelFish Extreme</strong>（俗称 SFX 或 Nitro），这就是为什么 JSC 也常被叫做"Nitro"——历史命名混乱，看老资料容易撞名。
+        </p>
+        <p>
+          JSC 的当代架构是 <strong>4 层管道</strong>，比 V8 整整早 15 年就完成 4 层化：<strong>LLInt</strong>（Low-Level Interpreter，用 offlineasm 自定义汇编 DSL 写）→ <strong>Baseline JIT</strong>（template JIT，给每个 bytecode 发段机器码）→ <strong>DFG JIT</strong>（Data Flow Graph 优化器，函数调用 60 次或循环 1000 次后启用）→ <strong>FTL JIT</strong>（Faster Than Light，函数调用上千次后启用，最深优化）。FTL 早期后端用 <strong>LLVM</strong>，但发现 LLVM 编译开销对 web 场景太重——2016 年 Filip Pizlo 主导写了自家 <strong>B3 后端</strong>（Bare Bones Backend）替换 LLVM，<strong>编译速度快 5×</strong>而生成代码质量相当。这是个有意思的设计哲学冲突：LLVM 是为 AOT 编译（C++ / Rust）优化的，每次多花一秒编译都值；JSC 是为 web 实时编译，编译开销直接影响用户感知。
+        </p>
+        <p>
+          GC 是 <strong>Riptide</strong>——比 Orinoco 更激进地避免暂停，因为 iOS 设备的内存和电量约束更严苛。嵌入哲学也独特：JSC 作为 WebKit 的一部分发布，对外提供 <strong>ObjC / C API</strong>（不是像 V8 那种 C++ API），让它在 Apple 平台第一公民——iOS / macOS 应用嵌 JS 引擎几乎默认 JSC。<strong>Bun</strong>（2022 由 Jarred Sumner 推出的 JS 运行时）选择 JSC 不选 V8 是其核心差异化之一——JSC 启动比 V8 略快、API 更轻量；详见独立的 Bun 主题。
+        </p>
 
         <h3>同代人 · SpiderMonkey (Mozilla)</h3>
-        <p><em>正文待写。</em>关键点：</p>
-        <ul>
-          <li>老牌：1995 由 Eich 本人写出第一版（比 V8 早 13 年）</li>
-          <li>当代管道：Baseline Interp → Baseline JIT → IonMonkey → Warp</li>
-          <li>"研究驱动"特征明显——很多论文级优化先在 SM 试（如 Inline Threading、Type Inference）</li>
-          <li>与 Rust 集成深（Servo / Stylo 用 SM 互操作）</li>
-        </ul>
+        <p>
+          SpiderMonkey 是<strong>所有 JS 引擎的祖宗</strong>——1995 年 Brendan Eich 在 Netscape 用 10 天写出第一个版本（当时叫 Mocha → LiveScript → JavaScript），这就是 SpiderMonkey 的起点。比 V8 早 <strong>13 年</strong>。从 1995 到现在 SpiderMonkey 一直在演化，期间换过几次完全不同的执行架构——这是 V8 / JSC 都没有的"30 年历史包袱 + 30 年研究积累"双重特征。
+        </p>
+        <p>
+          当代 SpiderMonkey 管道是 <strong>3-4 层</strong>：Baseline Interpreter → Baseline JIT → <strong>Warp</strong>（2020 引入的新一代优化编译器，替换了之前的 IonMonkey）。Warp 的设计选择和 V8 TurboFan 有趣对比——TF 用 sea of nodes（无显式控制流图），Warp 用 MIR / LIR（多个中间表示，每层显式 CFG）。GC 是 <strong>GenGC</strong>，分代 + compacting + concurrent sweeping。
+        </p>
+        <p>
+          SpiderMonkey 的特征是<strong>研究驱动</strong>——很多论文级优化先在 SM 试，再扩散到其他引擎：Trace-based JIT（2008 年 TraceMonkey，开了 JS JIT 用 trace 的先河，虽然这条路最后没成主流）、Inline Threading、Type Inference。还有一个独特优势：<strong>与 Rust 集成深</strong>——Servo 浏览器和 Firefox 的 Stylo（CSS 引擎）都用 Rust 写但和 SM 交互——这是 V8 / JSC 几乎没碰过的领域。
+        </p>
 
         <h3>同代人 · Hermes (Meta)</h3>
-        <p><em>正文待写。</em>关键点：</p>
-        <ul>
-          <li>2019 发布，专为 React Native 移动端设计</li>
-          <li><strong>AOT bytecode 而非 JIT</strong> —— iOS 禁止动态代码生成，且移动端冷启动占主要时长</li>
-          <li>设计选择：bundle 时把 JS 编成 bytecode，运行时只解释；牺牲稳态性能换启动速度</li>
-          <li>反向证明了一件事：<strong>JIT 不是必需的</strong>；如果场景对启动敏感、稳态不敏感，AOT 是更好的选择</li>
-        </ul>
+        <p>
+          Hermes 是 2019 年 Meta 为 <strong>React Native</strong> 推出的引擎。和 V8 / JSC / SM 完全不同——它<strong>没有 JIT</strong>。为什么？
+        </p>
+        <p>
+          移动端有两个硬约束：第一，<strong>iOS 不允许动态代码生成</strong>（JIT 需要 W^X 内存页，App Store 不批准），所以 iOS 上的 JSC 也禁用 JIT；第二，移动应用<strong>冷启动占主要时长</strong>，用户体感差异在 0-3 秒，那段时间 JIT 都还没来得及做优化。Meta 团队意识到：与其和这两个约束斗争，不如反过来设计一个<strong>专为冷启动 + 移动场景</strong>优化的引擎。
+        </p>
+        <p>
+          Hermes 的方案是 <strong>AOT bytecode</strong>——bundle 时（开发机上）就把 JS 编成 bytecode，应用打包时把 bytecode 一起 ship。运行时 Hermes 直接执行 bytecode，<strong>无 parse、无 JIT、无 warm-up</strong>。代价是稳态性能比 JIT 引擎慢 30-50%——但移动端用户根本跑不到稳态，所以这是<strong>用稳态性能换冷启动</strong>的精明交易。GC 是 Hermes 自家的 <strong>Hades</strong>——OG（老年代）和主线程并发跑，避免移动端最痛的 GC pause。
+        </p>
+        <div class="callout success">
+          <div class="callout-title">💡 Hermes 反向证明了一件事：JIT 不是必需的</div>
+          <p>
+            从 1995 SpiderMonkey 到 2008 V8，业界共识是"动态语言要快必须 JIT"。Hermes 用一套移动端实测数据反驳了这个共识：<strong>如果场景对启动敏感、稳态不敏感，AOT bytecode 是更好的选择</strong>。R Native 在 Hermes 出来后启动时间下降 30%+，TTI（Time To Interactive）显著改善。这反过来说明 V8 的多层 JIT 设计是<strong>特定场景（长跑稳态）最优</strong>而非<strong>普适最优</strong>。
+          </p>
+        </div>
 
         <h3>设计选择对比</h3>
         <p>不是"哪个更好"而是"在哪个轴上偏哪边"：</p>
@@ -144,37 +148,85 @@
         </table>
 
         <h3>V8 自己的"分身史"——同一份 V8 源码的不同形态</h3>
-        <p><em>正文待写。</em>关键点：</p>
-        <ul>
-          <li><strong>Chrome / Edge</strong>：完整 V8 + Blink Bindings + Renderer 进程沙箱 + V8 Sandbox 双层</li>
-          <li><strong>Node.js</strong>：完整 V8 + libuv（Event Loop）+ N-API；Worker Threads = 多 Isolate；详见独立的 Node.js Runtime 主题</li>
-          <li><strong>Deno</strong>：完整 V8 + Tokio（Rust 异步运行时）+ Web 标准 API；TypeScript 通过 swc 即时转译</li>
-          <li><strong>Cloudflare Workers</strong>：V8 Isolate-per-tenant；冷启动 &lt; 5ms（不是容器级隔离而是 Isolate 级）；这是 V8 设计中最被推到极限的用法</li>
-          <li><strong>Electron</strong>：Chrome + Node 同进程；contextIsolation 控制 Renderer 是否能看到 Node 全局</li>
-          <li><strong>Bun（不在此列）</strong>：用 JSC 不用 V8 —— 详见独立的 Bun 主题</li>
-        </ul>
+        <p>
+          V8 本身只是 C++ 库；它真正的样貌是被嵌入到不同宿主里之后才形成的。同一份 V8 源码在 Chrome / Node / Deno / Workers / Electron 里被裁出非常不同的形态。
+        </p>
+
+        <h4>Chrome / Edge（完整 V8 + Blink + 双层沙箱）</h4>
+        <p>
+          完整 V8 + Blink（DOM / Layout / Compositing 引擎）+ Bindings（V8 与 Blink 之间的胶水代码）。Renderer 进程跑在 OS-level 沙箱（Linux seccomp / macOS sandbox-exec / Windows AppContainer）；2024 起 V8 内部还有 V8 Sandbox 防腐蚀升级。这是 V8 的"最完整宿主"——所有 V8 特性都为 Chrome 优先实现并测试。
+        </p>
+
+        <h4>Node.js（V8 + libuv + N-API）</h4>
+        <p>
+          完整 V8 + <strong>libuv</strong>（跨平台异步 I/O 库，提供 Event Loop）+ <strong>N-API</strong>（V8 之上再封一层 ABI 稳定的 C 接口，让 native module 不依赖具体 V8 版本）+ 大量 Node 自家 built-in（<code>fs</code> / <code>net</code> / <code>http</code> / <code>crypto</code>）。Worker Threads 是 Node 对 V8 Isolate API 的暴露。<strong>没有 OS 进程沙箱</strong>——V8 安全漏洞在 Node 服务端是直接的进程级 RCE。详见独立的 Node.js Runtime 主题。
+        </p>
+
+        <h4>Deno（V8 + Tokio + Web 标准）</h4>
+        <p>
+          完整 V8 + <strong>Tokio</strong>（Rust 异步运行时，替代 Node 的 libuv）+ Web 标准 API（<code>fetch</code> / <code>Response</code> / <code>URL</code> / <code>WebSocket</code>，与浏览器同名同义）。TypeScript 由 Deno 内置 <strong>swc</strong> 在导入时即时转译，无需手动编译。Deno 还引入了 V8 没有的"权限模型"——<code>--allow-read</code> / <code>--allow-net</code> 等显式授权，是对 Node "默认全权"的反思。
+        </p>
+
+        <h4>Cloudflare Workers（V8 设计被推到极限的用法）</h4>
+        <p>
+          这是 V8 历史上最有创意的用法。Workers 不是"容器级 serverless"也不是"VM 级 serverless"——是 <strong>Isolate-per-tenant</strong>：单个 Cloudflare 进程内同时跑成千上万个 V8 Isolate，每个对应一个客户的 Worker，<strong>冷启动 &lt; 5ms、内存 ~5MB</strong>（容器约 100ms / 100MB）。靠的是 V8 的 Snapshot（共享 built-ins 堆状态）+ Pointer Compression（共享 cage 布局）。
+        </p>
+        <p>
+          但单个进程跑几千个互不信任的 Isolate 给 <strong>Spectre 攻击</strong>带来巨大压力——CPU 推测执行的副作用在跨 Isolate 测时间能泄漏其他 tenant 内存。Cloudflare 的应对是激进的：<strong>禁用所有精确 timer</strong>（<code>Date.now()</code> 在代码执行期间冻结，<code>performance.now()</code> 不提供）、<strong>禁止用户级线程</strong>（不让构造 ad-hoc timer）、自家加一层 sandbox + Memory Protection Keys（MPK）硬件保护。这是 V8 设计目标和真实使用场景之间最大的张力点之一。
+        </p>
+
+        <h4>Electron（Chrome + Node 同进程）</h4>
+        <p>
+          完整 Chrome + 完整 Node 同时塞进一个进程。Renderer 进程默认能看到 Node 全局——给应用开发带来极大便利但也是安全噩梦（远程内容能直接调 <code>require('child_process').exec()</code>）。Electron 后来加了 <code>contextIsolation</code> 控制这道边界——默认 Renderer 不再有 Node 全局，必须通过 <code>preload</code> 脚本显式 bridge。
+        </p>
+
+        <h4>Bun（不在此列——用 JSC 不用 V8）</h4>
+        <p>
+          为完整起见列出。Bun 启动速度比 Node 快是多因素的，引擎差异（JSC vs V8）只是其一；Bun 还用 Zig 重写了大量 Node built-in、用更激进的 lazy-loading、内置 bundler 减少模块解析开销等。详见独立的 Bun 主题。
+        </p>
 
         <h3>三条底层逻辑线</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li><strong>V8 是激进派</strong>：JIT 4 层、Sea of Nodes、Pointer Compression、Sandbox —— 同代人的设计往往更稳健（JSC 内存优先、SM 研究优先）</li>
-          <li><strong>嵌入式生态拉动 V8 设计而不是反过来</strong>：Isolate API 在 2011 稳定是因为 Node 需要、Snapshot 是因为 Chrome 启动需要、V8 Sandbox 是因为 Cloudflare Workers 需要</li>
-          <li><strong>Hermes 是"反 V8"的设计实验</strong>：完全不做 JIT、专注 AOT bytecode + 极致启动 —— 把 V8 走的路径反过来走，证明 V8 的多层 JIT 设计是<strong>特定场景最优</strong>而非<strong>普适最优</strong></li>
-        </ul>
+
+        <h4>V8 在历史上是激进派（不是稳健派）</h4>
+        <p>
+          很多人对 V8 的印象是"主流引擎、稳健"——这其实不准。从架构选择看 V8 一直是激进派：JIT 4 层（同代人 JSC 也 4 层但比 V8 早 15 年完成）、Sea of Nodes IR（学术 IR 第一次大规模生产部署）、Pointer Compression（牺牲 4GB 堆上限换内存 -43%）、V8 Sandbox（承认"修不完"转向"限制半径"）。每一条都不是首创但 V8 把它们做到生产规模。同代人的设计往往更稳健：JSC 内存优先（不轻易加层）、SM 研究优先（先在小范围试再扩散）、Hermes 直接走极简路线。V8 的激进有市场份额做后盾——bug 影响够大才能驱动激进决策。
+        </p>
+
+        <h4>嵌入式生态拉动 V8 设计</h4>
+        <p>
+          V8 的核心 API 设计绝大多数是被嵌入器需求驱动的，不是被 Chrome 自身需要驱动的。<strong>Isolates</strong> 概念在 2011 稳定下来是为了 Node Workers；<strong>Snapshot</strong> 是 Chrome 启动时间需求；<strong>V8 Sandbox</strong> 的强需求来自 Cloudflare Workers。对比 SpiderMonkey 几乎只服务 Firefox / Servo，JSC 主要服务 Safari + 少数 Apple 平台嵌入器——V8 的"多重宿主"特征是它和同代人最大的差异。
+        </p>
+
+        <h4>Hermes 是"反 V8"的设计实验</h4>
+        <p>
+          Hermes 的成功不是"我们也做了一个 V8"——它<strong>明确反对</strong> V8 的核心选择（多层 JIT、运行时优化、稳态性能优先）。它接受了"动态语言不优化稳态性能"这个反共识，换来了移动端冷启动的胜利。这给整个 JS 引擎领域提供了一个反面坐标：让我们重新审视"JIT 是否必要"——答案是<strong>取决于场景</strong>，而非泛化的真理。今天 React Native + Hermes 的组合在移动端几乎成了默认；这反过来给 V8 / JSC 的移动端策略也带来了压力。
+        </p>
 
         <!-- 03 应用场景 -->
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
           <h3 class="scenario-title">场景 A · 评估某个 JS bug 是 V8 自身问题还是嵌入器问题</h3>
-          <p><em>正文待写。</em>例：Node 的 GC 行为 ≠ Chrome 的 GC 行为，因为 Node 跑长服务、Chrome 跑短交互。</p>
+          <p>
+            遇到 Node 服务端的诡异 bug——内存涨、GC 卡、性能衰减——首先要分清<strong>是 V8 自身行为还是 Node 嵌入差异</strong>。例：Node 的 GC 调优默认偏服务端长跑（max-old-space-size 起步 1.5GB），Chrome 偏短交互（每个 tab 上限低很多）；同样代码在 Chrome 跑顺溜在 Node 跑半小时崩溃，往往是因为没调 <code>--max-old-space-size</code>。又例：Node 没有 OS 进程沙箱，FS / 网络访问不受限——同样 V8 SAB 漏洞在 Chrome 是低危在 Node 是高危。判断时先问"这是嵌入层差异还是 V8 引擎层"。
+          </p>
         </div>
         <div class="scenario">
           <h3 class="scenario-title">场景 B · 看 V8 release notes 知道哪些特性会传到 Node</h3>
-          <p><em>正文待写。</em>哪些只在 Chrome 里有（如 Chrome 专属的 V8 flag）。</p>
+          <p>
+            Chrome 124 的某个新 V8 特性（如某 ES 提案 / 某优化）<strong>不一定会立即出现在 Node</strong>。Node 升级 V8 的节奏：每个 LTS（如 Node 22）锁定一个 V8 版本（V8 12.4），minor 升级只 backport bug fix 不带特性。想用某 V8 新特性要查 Node release notes 看哪个版本起搭载——这就是为什么"Node 22 vs Node 23 vs Node 24"在 V8 层面差异很大。Workers / Deno 的节奏又各自不同。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C · 理解 V8 漏洞的影响半径</h3>
-          <p><em>正文待写。</em>CVE 在 Chrome 是问题但在 Node 可能不是（攻击面不同）。</p>
+          <h3 class="scenario-title">场景 C · 理解 V8 漏洞 (CVE) 的影响半径</h3>
+          <p>
+            V8 每年大约公告 30+ CVE。同一个 CVE 在不同宿主里影响截然不同：<strong>Chrome</strong> 有 OS 进程沙箱 + 2024 起的 V8 Sandbox，从 V8 漏洞到 RCE 还要绕两层；<strong>Node 服务端</strong>没有进程沙箱，V8 漏洞直接是进程级 RCE，是 P0 紧急；<strong>Cloudflare Workers</strong> 用了自家的二级 sandbox + MPK 硬件保护，攻击难度更高但单进程多 tenant 的攻击面也更大。看 CVE 时第一件事是查"这是 V8 自身问题还是宿主层问题，影响哪些宿主"。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 选型时的"引擎差异"判据</h3>
+          <p>
+            React Native 移动端选 Hermes 还是 JSC（V8 在 RN 上不可用）：稳态性能敏感选 JSC，启动 / 包体敏感选 Hermes（默认）。Bun vs Node：启动速度 / 测试 runner / bundler 集成需求强选 Bun，长跑稳态性能 / 生态成熟度选 Node。Cloudflare Workers vs AWS Lambda：高并发短任务（API 网关、Edge 鉴权）选 Workers（毫秒冷启动），重计算 / 长任务选 Lambda（容器粒度更适配）。
+          </p>
         </div>
 
         <!-- 04 典型代码 -->
