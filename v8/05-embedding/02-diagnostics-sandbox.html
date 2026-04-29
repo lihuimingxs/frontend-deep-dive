@@ -56,11 +56,6 @@
           <span><strong>前置</strong> P2.3（deopt）+ P3.2（IC）+ P4.2（GC）</span>
           <span><strong>主要来源</strong> v8.dev/blog/sandbox · OffensiveCon 2024 V8 Heap Sandbox</span>
         </div>
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>骨架版本。对照大纲 <code>v8/outline.md § P5.2</code>。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>诊断工具的统一哲学</strong>：V8 把所有内部状态都暴露成 <code>--trace-*</code> flag —— 因为 V8 团队自己也用这些 flag 调试。</li>
@@ -70,8 +65,12 @@
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
 
-        <h3>V8 命令行 flag 全景</h3>
-        <p><em>正文待写。</em>适用于 Node / d8 / Chrome 启动参数：</p>
+        <h3>V8 命令行 flag 全景：把内部状态暴露成 stdout</h3>
+        <p>
+          V8 的诊断哲学是<strong>透明</strong>——所有内部决策（编译选哪一层、IC 站点状态变化、GC 触发原因、deopt 发生位置）都能通过命令行 flag 打到 stderr。这不是为外部用户准备的——是 V8 团队自己日常调试用的同一套工具。这意味着工具<strong>非常生产级</strong>但也<strong>不太友好</strong>——输出量大、格式杂、需要 grep 过滤。
+        </p>
+        <p>
+          适用于 Node / d8 / Chrome 启动参数（Chrome 通过 <code>--js-flags="..."</code> 转发）：</p>
         <ul>
           <li><strong>诊断字节码 / 编译产物</strong>：<code>--print-bytecode</code> <code>--print-bytecode-filter=funcName</code> <code>--print-code</code> <code>--print-opt-code</code></li>
           <li><strong>追踪 IC / Tier-up</strong>：<code>--trace-ic</code> <code>--trace-opt</code> <code>--trace-deopt</code> <code>--trace-turbo</code>（生成 turbo.json 用于 Turbolizer）</li>
@@ -80,70 +79,147 @@
           <li><strong>危险用途</strong>（仅 d8 / <code>--allow-natives-syntax</code>）：<code>%PrepareFunctionForOptimization</code> + <code>%OptimizeFunctionOnNextCall</code> + <code>%HaveSameMap</code> + <code>%DebugPrint</code></li>
         </ul>
 
-        <h3>d8 工具</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li>V8 自带的 minimal shell（不含 Node API、不含 DOM）</li>
-          <li>用法：<code>d8 --print-bytecode foo.js</code></li>
-          <li>何时用：测试 V8 行为而非 Node 行为；复现 V8 bug</li>
-        </ul>
+        <h3>d8：V8 自带的 minimal shell</h3>
+        <p>
+          <code>d8</code> 是 V8 build 出来的<strong>命令行 JS 引擎</strong>——只有 V8 + 最小 console / file I/O，<strong>不含</strong> Node API、不含 DOM、不含 fetch / setTimeout 之类 web API。它是 V8 团队的"裸机"测试环境。
+        </p>
+        <p>
+          典型用法：<code>d8 --print-bytecode foo.js</code> 跑某段代码并打 bytecode。<strong>何时用</strong>：(1) 复现 V8 bug 时——剥离 Node 干扰确认是 V8 自身问题；(2) 学习 V8 内部时——用 <code>%PrepareFunctionForOptimization</code> + <code>%OptimizeFunctionOnNextCall</code> 等 native syntax 强制走某 tier；(3) V8 团队自己跑 test262 / 性能基准。
+        </p>
+        <p>
+          安装：从 <code>https://v8.dev/docs/build</code> 自己 build 或用 <code>jsvu</code>（<code>npm install -g jsvu &amp;&amp; jsvu --engines=v8</code>）一键装。
+        </p>
 
-        <h3>Turbolizer（Web 工具）</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li>输入：<code>--trace-turbo</code> 生成的 turbo.json</li>
-          <li>输出：可视化 Sea of Nodes IR 各个 phase 的演化</li>
-          <li>适用：调试 TurboFan 编译输出 / 学习编译器</li>
-        </ul>
+        <h3>Turbolizer：Sea of Nodes IR 可视化</h3>
+        <p>
+          TurboFan 内部用 sea of nodes IR（详见 P2.3）——节点之间无显式顺序，文本输出几乎不可读。<strong>Turbolizer</strong> 是 V8 团队自家写的 web 可视化工具，把 sea of nodes 渲染成<strong>可交互图</strong>：每个节点显示类型 + 输入 / 输出边、可以单步看 30+ 个 optimization phase 之间 IR 的演化（inlining 前后、escape analysis 前后、scheduling 前后等）。
+        </p>
+        <p>
+          用法：(1) <code>node --trace-turbo --trace-turbo-path=/tmp/turbo my-script.js</code> 生成 <code>/tmp/turbo/turbo-funcName-0.json</code>；(2) 在浏览器打开 <a href="https://v8.github.io/tools/head/turbolizer/" target="_blank" rel="noopener">v8.github.io/tools/head/turbolizer/</a>；(3) 加载 json 文件。
+        </p>
+        <p>
+          <strong>何时用</strong>：想知道某个函数<strong>实际被 TurboFan 优化成什么样</strong>——是否真的内联了 callback、escape analysis 是否成功消除了某次堆分配、loop invariant 是否被外提。学习曲线陡（要对 sea of nodes 概念熟悉），但是看 V8 优化决策的<strong>唯一直观方式</strong>。
+        </p>
 
-        <h3>Linux perf + V8 perf integration</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li><code>--perf-prof</code> 让 V8 把 JIT 代码符号写到 <code>/tmp/perf-&lt;pid&gt;.map</code></li>
-          <li>perf 调用栈能看到 JS 函数名（而非 <code>0x12345</code>）</li>
-        </ul>
+        <h3>Linux perf 集成：让系统级 profiler 看到 JS 函数名</h3>
+        <p>
+          Linux <code>perf</code> 是内核级采样 profiler——能抓 CPU 周期、cache miss、分支预测失败等硬件事件。但默认 perf 看到的 JIT 机器码只是 <code>0x7f5a8b2c1000</code> 之类的地址——不知道哪段是哪个 JS 函数。
+        </p>
+        <p>
+          V8 提供 <code>--perf-prof</code> 解决这个：启用后 V8 把 JIT 出来的每段机器码地址 + 对应 JS 函数名<strong>写到 <code>/tmp/perf-&lt;pid&gt;.map</code></strong>。perf 自动读这个映射文件，调用栈展示时把地址替换成函数名。
+        </p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+<pre class="code"><code class="lang-bash">node --perf-prof app.js &amp; PID=$!
+sudo perf record -F 99 -p $PID -g -- sleep 30
+sudo perf report
+# 调用栈里能看到 myHotFunction 而非 0x7f5a8b2c1000</code></pre>
+        </div>
+        <p>
+          这套机制对<strong>真实生产环境性能分析</strong>极有价值——比 V8 自家工具更接近真实 CPU 行为，能抓到 V8 自己不暴露的（如 cache miss 集中在哪些函数）。Node 服务端调优、Workers 团队优化都靠这条。
+        </p>
 
-        <h3>V8 Inspector Protocol</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li>V8 暴露的调试 / profiling 协议（即 Chrome DevTools Protocol 的 V8 子集）</li>
-          <li>Node 的 <code>--inspect</code> flag 启动这个；DevTools / VSCode 通过 WebSocket 连接</li>
-          <li>不要和 Node Inspector npm 包混淆（那是包装层）</li>
-        </ul>
+        <h3>V8 Inspector Protocol：DevTools 用的同一套</h3>
+        <p>
+          V8 暴露的<strong>调试 / profiling 协议</strong>——即 Chrome DevTools Protocol 的 V8 子集。这就是为什么 Chrome DevTools / VSCode / WebStorm 调试 Node / Workers / Deno 都能用同一套界面——它们都在跑 Inspector Protocol，只是连到不同 V8 实例。
+        </p>
+        <p>
+          Node 启动加 <code>--inspect</code>（或 <code>--inspect-brk</code> 启动即断点）—— V8 在 9229 端口起 WebSocket server。DevTools / VSCode / Chrome 浏览器输入 <code>chrome://inspect</code> 自动发现并连接。完整能力：断点、单步、变量查看、heap snapshot、CPU profiler、火焰图——都通过这套协议透传。
+        </p>
+        <p>
+          <strong>不要和 npm 上的 <code>node-inspector</code> 包混淆</strong>——那是 2014 年的旧包装层，用 V8 旧 debugger API（已废弃）。今天直接用 <code>--inspect</code> + DevTools 即可。Workers 也支持这套协议——Cloudflare Workers Wrangler 跑 <code>wrangler dev --inspect</code> 就能用 DevTools 调试。
+        </p>
 
-        <h3>V8 Sandbox（2024 默认开启）</h3>
-        <p><em>正文待写。</em></p>
+        <h3>V8 Sandbox（2024 默认开启）：从"零 bug"到"限制 bug 半径"</h3>
+        <p>
+          2024 年 4 月 Chrome 123 默认开启 <strong>V8 Sandbox</strong>——V8 安全模型史上最大的一次转变。这是个值得展开讲的案例——它反映的不只是技术，而是<strong>软件安全工程哲学的成熟</strong>。
+        </p>
+
+        <h4>威胁模型：承认 bug 不可避免</h4>
+        <p>
+          V8 团队 17 年来积累的事实：<strong>60%+ 的 V8 安全漏洞是内存安全问题</strong>——OOB read/write、UAF、type confusion 等。每个 bug 修一个就少一个，但<strong>新代码不停加</strong>（每天数百次 commit），新 bug 也不停产生。"修每一个 bug 直到没有"是不可能目标。
+        </p>
+        <p>
+          V8 Sandbox 的根本转变是<strong>放弃这个目标</strong>——承认"V8 内部一定有内存安全 bug"，转向<strong>限制每个 bug 能造成的危害</strong>。具体威胁模型：
+        </p>
         <ul>
-          <li><strong>威胁模型</strong>：假设 V8 总会有内存安全 bug（OOB read/write、UAF）→ 不再追求"零 bug"，而是限制 bug 的影响半径</li>
-          <li><strong>机制</strong>：
-            <ul>
-              <li><strong>Pointer Cage</strong>：所有 V8 堆指针都是 4GB 区域内的 32-bit offset → 攻击者腐蚀指针只能在 cage 内乱窜</li>
-              <li><strong>External Pointer Table</strong>：指向 cage 外的指针（如 ArrayBuffer backing、code pointer、function trampoline）通过 indirection table 访问，每个 entry 有 type tag → 防止 type confusion</li>
-              <li><strong>Code Pointer Table</strong> + <strong>Trusted Space</strong>：JIT 代码地址通过特殊 table 间接调用，防 ROP</li>
-            </ul>
-          </li>
-          <li><strong>效果</strong>：从 V8 漏洞升级到 RCE 需要再绕过 Sandbox（额外漏洞）；Chrome 把 V8 Sandbox 加进 VRP 奖励范围</li>
-          <li><strong>代价</strong>：~1% 性能开销；要求 64-bit 系统（cage 需 1TB 虚拟地址）</li>
+          <li><strong>假设</strong>：攻击者已经利用某 V8 bug 获得 V8 堆内的<strong>任意读写能力</strong>（ARW，arbitrary read/write）</li>
+          <li><strong>目标</strong>：阻止攻击者把这种 V8 内部能力升级到<strong>整个进程的 ARW</strong>（即 RCE）</li>
         </ul>
+        <p>
+          这套思路和 Chrome Renderer 进程沙箱、iOS App Sandbox 是一脉相承的——<strong>分层防御，每层假设上层已被攻破</strong>。
+        </p>
+
+        <h4>机制 1 · Pointer Cage：4GB 笼子限制指针游走</h4>
+        <p>
+          所有 V8 堆指针在启用 Pointer Compression 后都是 <strong>4GB cage 内的 32-bit offset</strong>（详见 P4.1）。攻击者腐蚀某个指针字段时，<strong>无论怎么改</strong>都只能让它指到 cage 内某个其他位置——cage 外的内存对它是不可达的。
+        </p>
+        <p>
+          这是 V8 Sandbox 的<strong>第一道</strong>也是<strong>最便宜</strong>的防护——<strong>不需要任何额外开销</strong>，因为 Pointer Compression 本来就是这么工作的。Sandbox 就是把它从"省内存的副作用"升级成"主动安全机制"。
+        </p>
+
+        <h4>机制 2 · External Pointer Table：cage 外指针通过间接表</h4>
+        <p>
+          但有些数据天然在 cage 外——<strong>ArrayBuffer backing</strong>（用户分配的二进制大块）、<strong>code pointer</strong>（指向 JIT 机器码）、<strong>function trampoline</strong>（C++ 函数地址）。直接存这些指针让攻击者能绕开 cage 限制。
+        </p>
+        <p>
+          解决方案：<strong>External Pointer Table</strong>——所有 cage 外指针不直接存，而是<strong>存进表里再用 index 引用</strong>。表本身不在 cage 内（攻击者改不到），每个 entry 还带 <strong>type tag</strong>——访问时强制类型校验，阻止 type confusion 攻击（把一个 type A 的指针当 type B 用）。
+        </p>
+
+        <h4>机制 3 · Code Pointer Table + Trusted Space：阻断 ROP</h4>
+        <p>
+          JIT 代码地址通过<strong>专门的 Code Pointer Table</strong> 间接调用——攻击者腐蚀某个调用点的地址也不能直接跳到任意机器码。配合 <strong>Trusted Space</strong>（V8 内部信任的元数据区域）放在 cage 外，防止"控制流劫持"（ROP / JOP 攻击）。这是 V8 Sandbox 最复杂的一层，但对阻断<strong>从 ARW 到代码执行</strong>的最后一步至关重要。
+        </p>
+
+        <h4>效果与代价</h4>
+        <p>
+          <strong>效果</strong>：从 V8 漏洞升级到进程级 RCE 现在需要<strong>额外绕过 Sandbox</strong>——通常需要找到第二个独立漏洞。Chrome 把 V8 Sandbox 加进 VRP（Vulnerability Reward Program）奖励范围，对找到 sandbox 绕过的研究员开 25 万美金赏金（V8 普通漏洞 5 万）—— Google 用赏金等级表达"这层比内部 bug 难得多"。
+        </p>
+        <p>
+          <strong>代价</strong>：~1% 性能开销（每次 cage 外指针访问多一次表查询）；要求 64-bit 系统（cage 需要预留 1TB 虚拟地址空间，32-bit 系统不够）。这就是为什么 V8 Sandbox <strong>32-bit 系统不可用</strong>——但 2024 年 32-bit 设备的 web 用户已经少到可忽略。
+        </p>
+
+        <div class="callout success">
+          <div class="callout-title">📊 V8 Sandbox 是软件安全工程哲学成熟的代表</div>
+          <p>
+            过去 30 年软件安全的主流做法是"<strong>修 bug 直到没有</strong>"——投入大量人力做 fuzzing、code review、formal verification 试图消除所有漏洞。这条路在<strong>少量、稳定、形式化定义清晰</strong>的系统（密码学库、操作系统内核子系统）有效，但在 V8 这种<strong>大型、快速演化、复杂语义</strong>的系统失败了——bug 永远修不完。<br><br>
+            V8 Sandbox 转向"<strong>分层防御</strong>"是务实——和 Chrome 进程沙箱、iOS App Sandbox、Linux capabilities、AWS IAM 同一思路：<strong>承认完美不可能，转向限制损害</strong>。这种转变在大型软件系统正在普及，是工程哲学的进化。
+          </p>
+        </div>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A · 性能调优工作流（4 步）</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 A · 性能调优 4 步工作流</h3>
+          <p>
+            遇到"应用慢"时按这个顺序排查：
+          </p>
           <ol>
-            <li><code>--trace-deopt</code> 找反复 deopt 的函数</li>
-            <li><code>--trace-ic</code> 找 megamorphic IC 站点</li>
-            <li><code>--trace-turbo</code> + Turbolizer 看 TurboFan 是否真的内联</li>
-            <li><code>--trace-gc</code> + Memory Profiler 看 GC 频率与 retainer</li>
+            <li><strong><code>--trace-deopt</code></strong>：先找反复 deopt 的函数（详见 P2.3）。如果有 deopt loop 就是<strong>最大优先级</strong>——优化效果立刻显现。</li>
+            <li><strong><code>--trace-ic</code></strong>：找 megamorphic IC 站点（详见 P3.2）。grep "MEGAMORPHIC" 列出转换最频繁的位置。</li>
+            <li><strong><code>--trace-turbo</code> + Turbolizer</strong>：看 TurboFan 是否真的内联了你以为的 callback、是否消除了边界检查。这一步对算法层瓶颈无解，但能确认引擎层没问题。</li>
+            <li><strong><code>--trace-gc</code> + DevTools Memory Profiler</strong>：看 GC 频率（Minor GC 1-3ms / Major GC &lt; 50ms 健康）+ heap retainer（找内存泄漏）。</li>
           </ol>
+          <p>
+            按这 4 步排查 90% 的 V8 性能问题能定位根因。剩下的属于算法 / 数据结构层问题，引擎工具帮不上。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B · 安全审计</h3>
-          <p><em>正文待写。</em>评估某 V8 CVE 是否在 Sandbox 范围内。</p>
+          <h3 class="scenario-title">场景 B · 评估 V8 CVE 影响半径</h3>
+          <p>
+            V8 每年公告 30+ 安全漏洞，每个都要决定"我的应用要不要立即升级"。三个问题逐一回答：(1) <strong>这个漏洞在 V8 Sandbox 范围内吗</strong>？看 CVE 描述是否提到 "sandbox bypass"——是 sandbox bypass 立即升级；如果只是 V8 内 ARW 但 sandbox 阻断了升级，紧急性低一档。(2) <strong>我的宿主有进程沙箱吗</strong>？Chrome / Workers 有，Node 服务端没有——同一 CVE 在 Node 是 P0，在 Chrome 可能 P2。(3) <strong>攻击面是否暴露</strong>？跑用户输入 JS 的服务（serverless / sandbox / 评测系统）是高风险，跑自己代码的服务面小得多。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C · 嵌入器开发</h3>
-          <p><em>正文待写。</em>用 Inspector Protocol 给自己的运行时加 debug 支持。</p>
+          <h3 class="scenario-title">场景 C · 嵌入器开发：用 Inspector Protocol</h3>
+          <p>
+            自己嵌入 V8 做运行时（如 game engine 跑 JS 脚本、custom serverless 平台），<strong>不要自己实现调试器</strong>——直接挂 V8 Inspector Protocol。Workers / Deno 都是这样做的：在某端口起 WebSocket，让 Chrome DevTools / VSCode 连进来。这样用户能用熟悉的工具调试你的运行时——Cloudflare Workers 的 <code>wrangler dev --inspect</code> 就是把这套协议透传到 DevTools。代价低（几十行 C++ 集成代码）、收益巨大（专业级调试体验）。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 用 d8 + %natives 做 V8 行为实验</h3>
+          <p>
+            学习 V8 内部时<strong>用 d8 而不是 Node</strong>——剥离 Node 干扰。<code>d8 --allow-natives-syntax</code> 启用后能用 <code>%PrepareFunctionForOptimization</code> + <code>%OptimizeFunctionOnNextCall</code> 强制让某函数被 TurboFan 编译，<code>%HaveSameMap(a, b)</code> 验证两对象是否同 hidden class，<code>%DebugPrint(obj)</code> dump V8 内部表示。配合 <code>--trace-opt --print-opt-code</code> 看实际生成的机器码——是<strong>把抽象 V8 概念变成可执行实验的最直接方式</strong>。
+          </p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
