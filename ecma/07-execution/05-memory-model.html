@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>内存模型与多线程（§24）· P7 · ECMAScript 深度学习</title>
+    <meta
+      name="description"
+      content="ECMA-262 §24 Memory Model 形式化 + SharedArrayBuffer + Atomics 11 个 API + Lock-free 数据结构（SPSC ring buffer / spinlock / 双缓冲）+ Spectre 缓解与 COOP/COEP 配置。WebGPU compute / FFmpeg.wasm / AudioWorklet 的多线程基础。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c84a1f'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EES%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>ECMAScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.16 35); color: #fff">ES</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">ES 首页</a>
+          <a href="index.html">P7 目录</a>
+          <a href="https://262.ecma-international.org/15.0/index.html#sec-memory-model" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · §9 执行模型与并发</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-execution-model.html">01 · 执行模型基础（容器与上下文）</a></li>
+          <li><a href="02-spec-execution-context.html">02 · §9 执行模型规范精读</a></li>
+          <li><a href="03-event-loop-async.html">03 · Event Loop 与异步演进</a></li>
+          <li><a href="04-modules-tla.html">04 · 模块系统与 Top-Level Await</a></li>
+          <li><a href="05-memory-model.html" class="active">05 · 内存模型与多线程（§24）</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-standards/index.html">P1 · 标准与演化</a></li>
+          <li><a href="../02-design/index.html">P2 · 设计原则与灵感</a></li>
+          <li><a href="../03-spec-reading/index.html">P3 · 怎么读规范</a></li>
+          <li><a href="../04-data-types/index.html">P4 · §6 数据类型与值</a></li>
+          <li><a href="../05-abstract-ops/index.html">P5 · §7 抽象操作</a></li>
+          <li><a href="../06-internal-slots/index.html">P6 · §10 内部槽与元编程</a></li>
+        </ul>
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../javascript/index.html">JavaScript 深度学习</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">ECMAScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · §9 执行模型与并发</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>05 · 内存模型与多线程</span>
+        </nav>
+
+        <h1>内存模型与多线程（§24 Memory Model + Atomics）</h1>
+        <p class="lead">
+          ECMA-262 §24 是规范里"<strong>最像 C++ 标准</strong>"的一章——它形式化定义了多 Agent 之间共享内存的<strong>事件偏序、happens-before 关系、race condition 的精确语义</strong>。这是从 ES2017 加入 SharedArrayBuffer / Atomics 起，TC39 把"<em>JS 多线程</em>"从"<em>偶尔的 hack</em>"升级为"<em>规范一等公民</em>"的标志。本章把 §24 形式化 + Atomics 11 个 API + Lock-free 经典模式 + Spectre 缓解后的浏览器配置一次讲透——是 P7 的压轴章，也是 WebGPU compute / FFmpeg.wasm / AudioWorklet 等高性能 Web 应用的硬基础。
+        </p>
+
+        <div class="callout warn" style="margin: 16px 0">
+          <div class="callout-title">⚠️ 这是 ECMA-262 中最深的一章</div>
+          <p>
+            §24 用 <strong>Candidate Execution</strong>、<strong>Synchronizes-With</strong>、<strong>happens-before</strong> 等形式化术语描述多线程语义——和 C++/Java 内存模型同构，但 JS 的好处是<strong>所有 Atomics 默认顺序一致（SC）</strong>，不需要选 6 种 memory_order，心智负担小一半。代价是性能略低于精细控制。本章<strong>不要求</strong>你写 lock-free 代码——读懂 80% 就够工程使用，剩下的 20% 留给真正写并发原语的人。
+          </p>
+        </div>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 本章交叉规则</div>
+          <p>
+            <a href="01-execution-model.html">P7.1 Agent / Agent Cluster</a> 已讲了<strong>多 Agent 的容器边界</strong>；<a href="03-event-loop-async.html">P7.3 异步演进</a> 讲了<strong>从 Promise 到多线程的演进路径</strong>。本章在它们基础上展开<strong>共享内存的形式化语义 + 同步原语 + 浏览器安全配置</strong>。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~45 分钟</span>
+          <span><strong>前置</strong> <a href="01-execution-model.html">P7.1 Agent / Agent Cluster</a>（必读）+ <a href="03-event-loop-async.html">P7.3 异步演进 SAB 段</a>（推荐）</span>
+          <span><strong>对应 ECMA-262</strong>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-memory-model" target="_blank" rel="noopener">§24 Memory Model</a> + <a href="https://262.ecma-international.org/15.0/index.html#sec-atomics-object" target="_blank" rel="noopener">§25.4 Atomics</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>JS 多线程 = Agent Cluster + SharedArrayBuffer + Atomics + §24 Memory Model</strong>。Agent 边界默认隔离（postMessage 传值），但同 Cluster 的 Agent 可以共享 SAB（传引用）；Atomics 提供无撕裂的读写 + 原子读改写 + 同步原语；§24 形式化保证什么操作之间有 happens-before。
+          </li>
+          <li>
+            <strong>Spectre 让 SAB 在 2018 全网下线，2020 配 COOP+COEP 头重启</strong>。今天用 SAB 必须满足 <code>crossOriginIsolated === true</code>——浏览器把 origin 完全隔离到独立进程，恢复高精度时钟（Spectre 的核心条件），代价是嵌入第三方 iframe 要小心。
+          </li>
+          <li>
+            <strong>所有 Atomics 默认顺序一致（SC）</strong>——比 C++ 6 种 memory_order 简单得多，但<strong>普通访问不是原子</strong>：写 <code>arr[0]++</code> 在多线程下会撕裂，必须 <code>Atomics.add(arr, 0, 1)</code>。
+          </li>
+        </ol>
+
+        <p>多线程心智模型一图（文字版）：</p>
+
+        <div class="code-block">
+          <span class="code-label">JS 多线程架构</span>
+          <pre class="code"><code class="lang-js">┌──────────────────────────────────────────────────────────────────┐
+│  Agent Cluster（同 Origin、crossOriginIsolated 后启用）          │
+│                                                                  │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐         │
+│  │ Main Agent   │   │ Worker A     │   │ Worker B     │         │
+│  │  (UI 线程)   │   │              │   │              │         │
+│  │              │   │              │   │              │         │
+│  │  Heap Local  │   │  Heap Local  │   │  Heap Local  │         │
+│  │  Stack Local │   │  Stack Local │   │  Stack Local │         │
+│  │  Job Queue   │   │  Job Queue   │   │  Job Queue   │         │
+│  └─────┬────────┘   └─────┬────────┘   └─────┬────────┘         │
+│        │ ↕ postMessage    │ ↕                │                  │
+│        │   (传值/transfer) │                  │                  │
+│        │                  │                  │                  │
+│  ──────┴──────────────────┴──────────────────┴──────────         │
+│   ╔═════════════════════════════════════════════════════╗        │
+│   ║  Shared Memory (SharedArrayBuffer)                  ║        │
+│   ║  └─ Int32Array view ←→ Atomics.{load,store,add,...} ║        │
+│   ║  └─ Float64Array view（不能 Atomics，没有原子访问）  ║        │
+│   ╚═════════════════════════════════════════════════════╝        │
+└──────────────────────────────────────────────────────────────────┘
+                       │
+                       │ 主线程 vs Worker 不同：
+                       │  • Atomics.wait() 只允许在 Worker
+                       │  • Main 用 Atomics.waitAsync (ES2024) 异步版
+                       │
+   每个 Agent 内部：单线程 + Event Loop（P7.1 / P7.3 已讲）
+   Agent 间：默认无共享内存，需 SAB 显式开启</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>§24 Memory Model 形式化</h3>
+        <p>
+          §24 用 6 个核心概念定义多线程语义。读懂这 6 个，规范文本就读得通。
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">概念</th>
+              <th>含义</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Event</strong></td>
+              <td>程序执行中可观察的"动作"——每次 Atomics 操作 / 普通 SAB 读写都是一个 Event，含字节范围 + 类型（Read / Write / RMW）</td>
+            </tr>
+            <tr>
+              <td><strong>Candidate Execution</strong></td>
+              <td>所有可能的"事件偏序"集合——给定一段并发程序，规范不规定 Event 的全序，而是给一个集合，每个元素是一种合法的执行顺序</td>
+            </tr>
+            <tr>
+              <td><strong>Agent Order</strong></td>
+              <td>同一个 Agent 内 Event 的<strong>程序顺序</strong>（program order）——这是单线程内的"按代码先后"</td>
+            </tr>
+            <tr>
+              <td><strong>Synchronizes-With</strong></td>
+              <td>跨 Agent 的"同步点"关系——一个 Atomics.store 与之后的 Atomics.load 同步；Atomics.notify 与对应的 Atomics.wait 同步</td>
+            </tr>
+            <tr>
+              <td><strong>Happens-Before</strong></td>
+              <td>由 Agent Order ∪ Synchronizes-With 的<strong>传递闭包</strong>定义。如果事件 A happens-before B，那么 A 的副作用对 B 可见</td>
+            </tr>
+            <tr>
+              <td><strong>Race Condition</strong></td>
+              <td>两个事件没有 happens-before 关系（双向都不) + 至少一个是 Write + 访问相同内存——精确定义为<strong>"未同步的并发访问"</strong></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          关键观察：<strong>JS 没有 C++ 6 种 memory_order</strong>（relaxed / acquire / release / acq_rel / consume / seq_cst）。所有 Atomics 操作隐含 <strong>seq_cst（Sequentially Consistent，顺序一致）</strong>语义——所有线程观察到的 Atomics 操作顺序一致。代价是性能比 relaxed 略低（CPU 不能重排）；好处是不会写错。
+        </p>
+
+        <h3>SharedArrayBuffer：共享内存的载体</h3>
+        <p>
+          <strong>SAB</strong> 是 ArrayBuffer 的"共享版"——同一段字节被多个 Agent 同时持有引用，任何一方写都立刻被其他方看见。规范层叫 <strong>Shared Data Block</strong>（§24.2.2）。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · SAB 创建与跨 Agent 共享</span>
+          <pre class="code"><code class="lang-js">// 检查环境是否支持（必须 crossOriginIsolated）
+if (typeof SharedArrayBuffer === 'undefined' || !crossOriginIsolated) {
+  throw new Error('需要 COOP+COEP 头才能用 SAB');
+}
+
+// 创建 1024 字节的共享内存
+const sab = new SharedArrayBuffer(1024);
+
+// 创建 view（必须用 SAB 兼容的 TypedArray）
+const i32 = new Int32Array(sab);   // 256 个 int32
+const f64 = new Float64Array(sab); // 128 个 double（不能 Atomics！）
+
+// 主线程发给 Worker
+const worker = new Worker('worker.js');
+worker.postMessage(sab);
+//          ↑ 这是引用传递，不是值复制（与普通 ArrayBuffer 的 transfer 语义不同）
+
+// worker.js
+self.onmessage = (e) =&gt; {
+  const sab = e.data;
+  const i32 = new Int32Array(sab);
+  Atomics.add(i32, 0, 1);  // 主线程立刻看见 i32[0] 变化
+};</code></pre>
+        </div>
+
+        <p>
+          <strong>关键约束</strong>：只有 <code>Int8/Uint8/Int16/Uint16/Int32/Uint32/BigInt64/BigUint64Array</code> 支持 Atomics。<code>Float32Array</code> / <code>Float64Array</code> 没有 Atomics（IEEE 754 浮点 + 跨架构原子访问太复杂，规范没纳）。
+        </p>
+
+        <h3>Atomics 的 11 个核心 API</h3>
+
+        <p><strong>1. 原子读写（避免撕裂）</strong></p>
+        <ul>
+          <li><code>Atomics.load(typedArray, index)</code> → 完整读 32 / 64 位（普通 <code>ta[i]</code> 在 CPU 不对齐时可能撕裂）</li>
+          <li><code>Atomics.store(typedArray, index, value)</code> → 完整写</li>
+        </ul>
+
+        <p><strong>2. 原子读-改-写（RMW）</strong></p>
+        <ul>
+          <li><code>Atomics.add(ta, i, v)</code> / <code>Atomics.sub(ta, i, v)</code> —— 原子加减，返回旧值</li>
+          <li><code>Atomics.and</code> / <code>Atomics.or</code> / <code>Atomics.xor</code> —— 原子位运算</li>
+          <li><code>Atomics.exchange(ta, i, v)</code> —— 原子交换：写新值，返回旧值（"无条件 swap"）</li>
+        </ul>
+
+        <p><strong>3. CAS（Compare-And-Swap）—— Lock-free 数据结构核心</strong></p>
+        <ul>
+          <li><code>Atomics.compareExchange(ta, i, expected, replacement)</code> —— 如果当前值 === expected，则写 replacement，返回旧值；否则不变</li>
+        </ul>
+
+        <p><strong>4. 同步原语（实现 mutex / 条件变量）</strong></p>
+        <ul>
+          <li><code>Atomics.wait(ta, i, value, timeout?)</code> —— 阻塞当前 Agent，直到 <code>ta[i] !== value</code> 或 notify 或 timeout。返回 <code>"ok"</code> / <code>"not-equal"</code> / <code>"timed-out"</code>。<strong>主线程禁用</strong>（会卡 UI）</li>
+          <li><code>Atomics.notify(ta, i, count?)</code> —— 唤醒 wait 在 ta[i] 上的最多 count 个 Agent，返回实际唤醒数</li>
+          <li><code>Atomics.waitAsync(ta, i, value, timeout?)</code>（ES2024）—— 主线程的 wait 替代，返回 <code>{ async, value: Promise&lt;"ok" | "not-equal" | "timed-out"&gt; }</code></li>
+        </ul>
+
+        <h3>Lock-free 经典模式</h3>
+
+        <h4>SPSC ring buffer（单生产者-单消费者无锁队列）</h4>
+
+        <div class="code-block">
+          <span class="code-label">javascript · SPSC ring buffer 核心</span>
+          <pre class="code"><code class="lang-js">// 共享内存布局：
+//   [head_index, tail_index, slot_0, slot_1, ..., slot_{N-1}]
+//                  ↑ 只生产者写、消费者只读
+//                          ↑ 只消费者写、生产者只读
+// 因为读写各自独占，不需要 CAS，只需 Atomics.load/store
+
+class SPSCQueue {
+  constructor(sab, capacity) {
+    this.meta = new Int32Array(sab, 0, 2);    // [head, tail]
+    this.data = new Int32Array(sab, 8, capacity);
+    this.cap = capacity;
+  }
+  // 生产者
+  push(value) {
+    const tail = Atomics.load(this.meta, 1);
+    const head = Atomics.load(this.meta, 0);
+    if ((tail + 1) % this.cap === head) return false;  // full
+    this.data[tail] = value;                           // 普通写：同一线程后续 store 之前
+    Atomics.store(this.meta, 1, (tail + 1) % this.cap);
+    return true;
+  }
+  // 消费者
+  pop() {
+    const head = Atomics.load(this.meta, 0);
+    const tail = Atomics.load(this.meta, 1);
+    if (head === tail) return undefined;  // empty
+    const value = this.data[head];
+    Atomics.store(this.meta, 0, (head + 1) % this.cap);
+    return value;
+  }
+}
+// 关键：head 由 Atomics.store 同步，所以消费者读到 head 推进时，
+// data[head] 的写入对消费者可见（happens-before 由 Atomics 链建立）。</code></pre>
+        </div>
+
+        <h4>spinlock with backoff（自旋锁 + 退避）</h4>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 简易 mutex</span>
+          <pre class="code"><code class="lang-js">// 共享变量 lock[0]: 0=unlocked, 1=locked
+function lock(state) {
+  while (Atomics.compareExchange(state, 0, 0, 1) !== 0) {
+    // CAS 失败 = 已被锁住，退避
+    Atomics.wait(state, 0, 1);  // 阻塞直到 unlock 后被 notify
+  }
+}
+
+function unlock(state) {
+  Atomics.store(state, 0, 0);
+  Atomics.notify(state, 0, 1);  // 唤醒 1 个等待者
+}
+
+// 主线程不能用 Atomics.wait —— 改用 Atomics.waitAsync：
+async function lockMain(state) {
+  while (Atomics.compareExchange(state, 0, 0, 1) !== 0) {
+    const { async, value } = Atomics.waitAsync(state, 0, 1);
+    if (async) await value;
+  }
+}</code></pre>
+        </div>
+
+        <h4>双缓冲（double buffering）</h4>
+
+        <p>
+          UI 主线程读 + Worker 写交替的经典模式：两块缓冲区 + 一个"当前可读 index" 原子标记。Worker 写完一块就把 index 翻转，主线程下一帧读新块。AudioWorklet / Canvas FLIP 都用这个模式，避免读到半写的数据。
+        </p>
+
+        <h3>Spectre 缓解与 COOP/COEP</h3>
+
+        <p>
+          <strong>Spectre 攻击</strong>（2018）利用 CPU 推测执行 + 高精度时钟测出"<em>不该读到的内存</em>"。SAB 给 JS 带来微秒级精度计时器，于是 SAB 在 2018 年被全网下线。
+        </p>
+
+        <p>
+          <strong>2020 重启</strong>：要求页面声明跨源隔离（cross-origin isolated），浏览器把它放到独立进程，断绝跨 origin 的内存可观察性。配置：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">HTTP headers · 启用 SAB</span>
+          <pre class="code"><code class="lang-js">// 主页面 HTTP 响应头
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+
+// 所有子资源（image / iframe / script）必须额外标
+Cross-Origin-Resource-Policy: same-site   // 或 cross-origin
+
+// 然后页面 JS 可以检测：
+console.log(crossOriginIsolated);  // true 才能用 SAB
+console.log(typeof SharedArrayBuffer);  // "function"</code></pre>
+        </div>
+
+        <p>
+          <strong>COEP 的 require-corp 是最严格的</strong>：所有跨 origin 子资源（CDN 上的 image、第三方 iframe）都必须显式声明 CORP 头允许嵌入。这会破坏不少老页面（特别是嵌广告 / 第三方分析）——是 SAB 的"政治成本"。
+        </p>
+
+        <h3>主线程限制 vs Atomics.waitAsync</h3>
+        <p>
+          <code>Atomics.wait</code> 在主线程<strong>会抛错</strong>（"Atomics.wait cannot be called in this context"）—— HTML 规范的 host hook 限制，避免阻塞 UI。ES2024 加的 <code>Atomics.waitAsync</code> 返回 Promise，不阻塞，主线程可用。这是 JS 多线程心智的"<em>异步基因</em>"——同步阻塞总是被替换为返回 Promise。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · AudioWorklet 实时音频处理</h3>
+          <p>
+            音频处理要求在每个 ~3ms 的回调周期内完成 sample 处理。主线程完全不可用（GC 暂停就掉帧）。方案：
+          </p>
+          <ul>
+            <li>音频回调跑在 AudioWorkletProcessor（独立线程）</li>
+            <li>UI 通过 SAB 传递参数（音量、频率等）</li>
+            <li>用 Atomics.store 更新参数，AudioWorklet Atomics.load 读取</li>
+            <li>无需序列化、无需 postMessage 抖动</li>
+          </ul>
+          <p>这是 SAB 在 Web 端的旗舰应用——延迟从毫秒级降到微秒级。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · WebGPU compute / FFmpeg.wasm</h3>
+          <p>
+            处理大型矩阵 / 视频帧：
+          </p>
+          <ul>
+            <li>用 SAB 直接装张量 / 帧数据，避免 postMessage 的"复制 + 反序列化"开销</li>
+            <li>多个 Worker 并行计算（map-reduce 模式），用 Atomics 同步进度</li>
+            <li>WebGPU 的 GPUBuffer 可以从 SAB 直接 mapping，零拷贝传给 GPU</li>
+          </ul>
+          <p>FFmpeg.wasm 解码 4K 视频时，每帧 ~30MB；用 postMessage 复制需要几 ms，用 SAB 是 0ms。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 共享状态实时协作（Figma / Excalidraw 风格）</h3>
+          <p>
+            多 Worker 共享 CRDT 文档状态，Atomics 保证一致性：UI Worker 渲染 + 输入 Worker 处理鼠标事件 + 网络 Worker 同步远端更新——三方共享同一份 SAB-backed 文档。CRDT 算法本身的 lock-free 性质 + Atomics 的 SC 语义结合，做到无锁实时协作。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>原子计数器 vs 普通计数器（演示 race）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 主线程 + 4 Worker 各加 100 万次</span>
+          <pre class="code"><code class="lang-js">// 期望结果：4_000_000；实际"普通版"会丢更新。
+
+// main.js
+const sab = new SharedArrayBuffer(8);
+const i32 = new Int32Array(sab);
+
+const workers = [];
+for (let i = 0; i &lt; 4; i++) {
+  const w = new Worker('inc-worker.js');
+  w.postMessage({ sab, useAtomics: true });
+  workers.push(w);
+}
+
+// inc-worker.js
+self.onmessage = (e) =&gt; {
+  const { sab, useAtomics } = e.data;
+  const i32 = new Int32Array(sab);
+  for (let i = 0; i &lt; 1_000_000; i++) {
+    if (useAtomics) {
+      Atomics.add(i32, 0, 1);   // 正确：4_000_000
+    } else {
+      i32[0] += 1;              // 错误：~700K，丢了大量更新
+    }
+  }
+};
+// useAtomics=false 时丢更新的根因：
+//   load i32[0] → +1 → store i32[0]  这 3 步可被另一线程的 store 插入</code></pre>
+        </div>
+
+        <h3>用 Atomics.waitAsync 做 mutex（主线程版）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 主线程友好的 mutex</span>
+          <pre class="code"><code class="lang-js">class AsyncMutex {
+  constructor(sab) {
+    this.state = new Int32Array(sab);  // state[0]: 0=unlocked, 1=locked
+  }
+  async lock() {
+    while (Atomics.compareExchange(this.state, 0, 0, 1) !== 0) {
+      const { async, value } = Atomics.waitAsync(this.state, 0, 1, 5000);
+      if (async) await value;  // 异步等待 unlock
+    }
+  }
+  unlock() {
+    Atomics.store(this.state, 0, 0);
+    Atomics.notify(this.state, 0, 1);
+  }
+}
+
+// 用法：
+const mutex = new AsyncMutex(new SharedArrayBuffer(4));
+async function criticalSection() {
+  await mutex.lock();
+  try {
+    // 临界区代码
+  } finally {
+    mutex.unlock();
+  }
+}</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：忘了 COOP/COEP，SAB 构造器抛错</div>
+          <p>
+            未配置头时 <code>typeof SharedArrayBuffer</code> 可能是 <code>"function"</code>（浏览器假装存在），但 <code>new SharedArrayBuffer(1024)</code> 抛 <code>SecurityError</code>。运行前必须 <code>console.log(crossOriginIsolated)</code> 确认。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：CDN / nginx / Cloudflare 上配齐 <code>COOP: same-origin</code>、<code>COEP: require-corp</code>，并把所有子资源（包括 favicon、CDN script）改成同源或加 <code>CORP: cross-origin</code> 头。是配置工程而不是代码工程。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：在主线程 Atomics.wait</div>
+          <p>
+            直接抛 <code>TypeError: Atomics.wait cannot be called in this context</code>。规范允许（Forward Progress 满足），但宿主（浏览器）禁——会卡 UI。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：主线程用 <code>Atomics.waitAsync</code>（ES2024）。Node 主线程可以用 <code>Atomics.wait</code>，但仍不推荐（事件循环会卡）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：用普通 i32[0] += 1 做并发计数</div>
+          <p>
+            JS 的 <code>+=</code> 是 3 步（read / add / write），中间任何步骤可被另一 Agent 打断。结果是"丢更新"——计数远小于期望。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：所有共享内存修改用 <code>Atomics.add / sub / exchange / compareExchange</code>。普通访问只能用于"<em>只读</em>"或"<em>SPSC 中的单方独占字段</em>"。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：以为 postMessage(sab) 是转移所有权</div>
+          <p>
+            普通 ArrayBuffer 用 <code>postMessage(buf, [buf])</code> 转移后原方就不能用；SAB 是<strong>共享引用</strong>，双方同时持有，谁都可以读写。语义完全不同。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：心里记住"<strong>SAB = 多方共享一份内存</strong>"，与 ArrayBuffer 的"transfer 转移所有权"是两套语义。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：嵌入第三方 iframe 后失去 crossOriginIsolated</div>
+          <p>
+            COEP <code>require-corp</code> 会把所有跨源子资源加严要求。第三方 iframe 没声明 CORP 时，整个页面失去 crossOriginIsolated 状态，SAB 立刻失效。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：要么所有第三方资源同步配 CORP；要么用 <code>credentialless</code> COEP 模式（更宽松但有兼容性代价）；要么把第三方放独立子域 + iframe sandbox。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 6：用 FinalizationRegistry 释放 SAB 内存</div>
+          <p>
+            <code>FinalizationRegistry</code> 的回调"<em>不保证触发</em>"——GC 时机由引擎决定。把它当作"SAB 内存释放保证"会泄漏。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：SAB 由引用计数管理，不能手动释放；要"<em>释放</em>"就得让所有 Agent 解除引用，等 GC 自然回收。详见 <a href="../06-internal-slots/02-reflect-meta.html">P6.2 Reflect 与元编程谱</a> 的 WeakRef 节。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范</h3>
+        <ul>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-memory-model" target="_blank" rel="noopener">ECMA-262 §24 Memory Model</a> —— 形式化全章
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-atomics-object" target="_blank" rel="noopener">§25.4 Atomics Object</a> —— 11 个 API 的精确算法
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-sharedarraybuffer-objects" target="_blank" rel="noopener">§25.2 SharedArrayBuffer</a>
+          </li>
+          <li>
+            <a href="https://github.com/tc39/proposal-atomics-wait-async" target="_blank" rel="noopener">tc39/proposal-atomics-wait-async</a> —— ES2024 主线程版
+          </li>
+        </ul>
+
+        <h3>安全 / 配置</h3>
+        <ul>
+          <li>
+            <a href="https://meltdownattack.com/" target="_blank" rel="noopener">Spectre & Meltdown 原文</a>
+          </li>
+          <li>
+            <a href="https://web.dev/articles/coop-coep" target="_blank" rel="noopener">web.dev · Cross-Origin Isolation 实战</a>
+          </li>
+          <li>
+            <a href="https://html.spec.whatwg.org/multipage/origin.html#concept-origin" target="_blank" rel="noopener">HTML 规范 · Cross-Origin Isolation</a>
+          </li>
+        </ul>
+
+        <h3>实战</h3>
+        <ul>
+          <li>
+            <a href="https://developer.chrome.com/blog/audio-worklet/" target="_blank" rel="noopener">Chrome · AudioWorklet 实战</a>
+          </li>
+          <li>
+            <a href="https://github.com/ffmpegwasm/ffmpeg.wasm" target="_blank" rel="noopener">ffmpeg.wasm 源码</a> —— SAB 的完整工业用例
+          </li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="04-modules-tla.html">P7.4 模块系统与 Top-Level Await</a></li>
+          <li>容器边界：<a href="01-execution-model.html">P7.1 Agent / Agent Cluster</a> —— SAB 的 Agent 边界</li>
+          <li>异步演进：<a href="03-event-loop-async.html">P7.3 Event Loop 与异步演进</a> —— Worker / Atomics 的引入历史</li>
+          <li>元编程：<a href="../06-internal-slots/02-reflect-meta.html">P6.2 Reflect 与元编程谱</a> —— WeakRef + FinalizationRegistry GC 语义</li>
+        </ul>
+
+        <h3>跨主题参考</h3>
+        <ul>
+          <li><a href="../../javascript/03-async/index.html">JS · P3 异步 & 错误处理</a> —— 单 Agent 异步基础</li>
+          <li><a href="../../javascript/07-advanced/01-arraybuffer-typedarray.html">JS · ArrayBuffer / TypedArray</a> —— 单线程版</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="04-modules-tla.html">
+            <span class="label">← 上一章</span>
+            <span class="title">04 · 模块系统与 Top-Level Await</span>
+          </a>
+          <a class="next" href="../index.html">
+            <span class="label">🎉 P7 完工 →</span>
+            <span class="title">返回 ECMAScript 主页</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

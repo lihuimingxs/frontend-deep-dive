@@ -46,6 +46,7 @@
           <li><a href="02-spec-execution-context.html">02 · §9 执行模型规范精读</a></li>
           <li><a href="03-event-loop-async.html">03 · Event Loop 与异步演进</a></li>
           <li><a href="04-modules-tla.html">04 · 模块系统与 Top-Level Await</a></li>
+          <li><a href="05-memory-model.html">05 · 内存模型与多线程（§24）</a></li>
         </ul>
         <h3>其他阶段</h3>
         <ul>
@@ -54,7 +55,7 @@
           <li><a href="../03-spec-reading/index.html">P3 · 怎么读规范</a></li>
           <li><a href="../04-data-types/index.html">P4 · §6 数据类型与值</a></li>
           <li><a href="../05-abstract-ops/index.html">P5 · §7 抽象操作</a></li>
-          <li><a href="../06-internal-slots/index.html">P6 · §10 内部槽与方法</a></li>
+          <li><a href="../06-internal-slots/index.html">P6 · §10 内部槽与元编程</a></li>
         </ul>
         <h3>跨主题</h3>
         <ul>
@@ -243,7 +244,86 @@ Array.isArray(arrFromFrame);    // true（这个 API 是 Realm-aware 的）
         </ul>
 
         <p>
-          每个 Agent 跑完当前 Job 后会<strong>清空 PromiseJobs 队列</strong>（这就是"微任务"在每个宏任务后被批量执行），然后从其他 Job 队列取下一个。详细的 Event Loop 规则在 <a href="index.html">A4 异步演进</a> 展开（PPT 经典页"Event Loop：宏任务与微任务"）。
+          每个 Agent 跑完当前 Job 后会<strong>清空 PromiseJobs 队列</strong>（这就是"微任务"在每个宏任务后被批量执行），然后从其他 Job 队列取下一个。详细的 Event Loop 规则在 <a href="03-event-loop-async.html">P7.3 Event Loop 与异步演进</a> 展开。
+        </p>
+
+        <h4>ShadowRealm —— 未来的 Realm 隔离 (Stage 3 提案)</h4>
+        <p>
+          <strong>ShadowRealm</strong> 是 TC39 <a href="https://github.com/tc39/proposal-shadowrealm" target="_blank" rel="noopener">Stage 3 提案</a>，把"创建一个独立 Realm"这个能力从宿主特权（iframe / <code>vm.createContext</code>）下放到 ECMAScript 语言本身。它解决的核心问题：<strong>受信代码隔离</strong>——你想跑一段第三方插件代码，希望它有完整的 Intrinsics，但不能访问主 Realm 的 globals 和 DOM。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · ShadowRealm 用法（提案语义）</span>
+          <pre class="code"><code class="lang-js">// 创建一个全新的 Realm（独立 Intrinsics、独立 globalThis、无 DOM）
+const realm = new ShadowRealm();
+
+// 跨边界传值的限制：只能传 primitive + 函数
+const result = realm.evaluate('1 + 2');           // 3
+const fn = realm.evaluate('(x) =&gt; x * 2');         // 包装函数
+fn(21);                                            // 42
+
+// 不能传对象（防止跨 Realm 引用泄露）：
+realm.evaluate('Object.assign')({ a: 1 });
+// TypeError: Cannot transfer object across ShadowRealm boundary
+
+// 异步导入模块（隔离运行）：
+const lib = await realm.importValue('./plugin.js', 'default');
+lib(input);  // input 必须是 primitive 或函数</code></pre>
+        </div>
+
+        <p>
+          <strong>与 iframe / vm.createContext 的对比</strong>：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 25%">能力</th>
+              <th>iframe</th>
+              <th>vm.createContext (Node)</th>
+              <th>ShadowRealm</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>独立 Intrinsics</td>
+              <td>✅</td>
+              <td>✅</td>
+              <td>✅</td>
+            </tr>
+            <tr>
+              <td>跨边界传对象</td>
+              <td>✅（但跨 Realm 会丢 instanceof）</td>
+              <td>✅（同上）</td>
+              <td>❌（强制 primitive + 函数）</td>
+            </tr>
+            <tr>
+              <td>含 DOM</td>
+              <td>✅</td>
+              <td>❌</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td>语言原生</td>
+              <td>❌（HTML 特性）</td>
+              <td>❌（Node 特性）</td>
+              <td>✅（ECMA-262 提案）</td>
+            </tr>
+            <tr>
+              <td>撤销隔离环境</td>
+              <td>✅（detach iframe）</td>
+              <td>⚠️ 复杂</td>
+              <td>⏳ 配合 Membrane 模式</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>polyfill 与 Membrane 模式</strong>：在 ShadowRealm 原生支持前，社区用 <a href="https://github.com/Agoric/realms-shim" target="_blank" rel="noopener">Realms shim</a> + Membrane 实现近似能力。Membrane = "一对 Proxy 包装跨边界对象 + WeakMap 维护身份映射 + 撤销时所有跨边界引用同时失效"。详细实现见 <a href="../06-internal-slots/02-reflect-meta.html">P6.2 Reflect 与元编程谱</a> 的 Membrane 实现节。
+        </p>
+
+        <p>
+          <strong>工程意义</strong>：ShadowRealm 落地后，"<em>受信第三方代码执行</em>"（沙箱插件、低代码引擎、金融级合约执行）会从"用 iframe + postMessage 凑合"升级到"用语言级隔离"，是 SES（Secure ECMAScript）+ <code>lockdown()</code> 等可信执行环境的下一代基础设施。
         </p>
 
         <h3>Execution Context（执行上下文）</h3>
@@ -501,19 +581,116 @@ setTimeout(() =&gt; {
           自 ES2015 开始，几乎所有现代代码都在 strict 上下文里跑——但<strong>非 strict 的"sloppy mode"仍然存在</strong>，因为老网页脚本必须保持向后兼容。这是 ES1-ES2025 的"双轨制"。
         </p>
 
-        <h3>生成器与协程的暂停机制（PPT 未覆盖）</h3>
+        <h3>Generator / async generator 状态机深入</h3>
         <p>
-          <code>function*</code> 生成器是怎么"暂停"的？规范用一种叫 <strong>"suspended ExecutionContext"</strong> 的技巧：
+          <code>function*</code> 生成器是怎么"暂停"的？规范用一种叫 <strong>"suspended ExecutionContext"</strong> 的技巧——把 ExecutionContext 当作"<strong>可挂起的栈帧</strong>"。下面把 Generator 的完整状态机 + async/await 的 desugar + yield 双向通信讲清。
+        </p>
+
+        <p>
+          <strong>Generator 的 4 个内部状态</strong>（规范字段 <code>[[GeneratorState]]</code>）：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">spec · Generator 状态转移图（文字版）</span>
+          <pre class="code"><code class="lang-js">// 创建：function* 调用，但不执行函数体
+[suspended-start]
+       │
+       │ gen.next()  ← 第一次调用
+       ▼
+   [executing] ─── yield expr ──→ [suspended-yield]
+       │                                │
+       │ return / throw                 │ gen.next(value)
+       ▼                                │ gen.return()
+   [completed]  ←──────────── gen.throw()
+   （不可逆，再 next 始终返回 { value: undefined, done: true }）
+
+// 关键点：
+// - suspended-start：刚创建，函数体未跑
+// - suspended-yield：跑到 yield 暂停了
+// - executing：正在跑（正常情况下用户看不到，重入会抛 TypeError）
+// - completed：函数执行结束 / throw / return，从此终态</code></pre>
+        </div>
+
+        <p>
+          <strong>每次 next/throw/return 的算法</strong>（§27.5.3）：
         </p>
         <ol>
-          <li>调用生成器函数<strong>不立即执行</strong>，而是创建一个 Generator 对象（含 <code>[[GeneratorContext]]</code> 内部槽，存当前 ExecutionContext）</li>
-          <li>调用 <code>gen.next()</code>：<strong>恢复</strong> <code>[[GeneratorContext]]</code> 压回栈顶</li>
-          <li>遇到 <code>yield expr</code>：<strong>暂停</strong>当前 ExecutionContext —— 把它从栈顶移除但<strong>不销毁</strong>，控制权返回给 <code>gen.next()</code> 的调用方</li>
-          <li>下次 <code>gen.next(value)</code>：再次把它压回栈顶，从 yield 处继续，<code>value</code> 成为 yield 表达式的值</li>
+          <li>调用生成器函数<strong>不立即执行</strong>，而是创建一个 Generator 对象（含 <code>[[GeneratorContext]]</code> 内部槽，存当前 ExecutionContext + <code>[[GeneratorState]]</code> 设为 <code>suspended-start</code>）</li>
+          <li>调用 <code>gen.next()</code>：把 <code>[[GeneratorState]]</code> 改成 <code>executing</code>，<strong>恢复</strong> <code>[[GeneratorContext]]</code> 压回栈顶</li>
+          <li>遇到 <code>yield expr</code>：把 expr 求值出的"值"作为 next() 返回的 <code>value</code>，状态改 <code>suspended-yield</code>，<strong>暂停</strong>当前 ExecutionContext —— 从栈顶移除但<strong>不销毁</strong>，控制权返回给 <code>gen.next()</code> 的调用方</li>
+          <li>下次 <code>gen.next(value)</code>：再把 <code>[[GeneratorContext]]</code> 压回栈顶，从 yield 处<strong>继续</strong>——这次的入参 <code>value</code> 成为<strong>上一个 yield 表达式</strong>的求值结果（双向通信）</li>
+          <li>函数 return / throw / 走完：状态变 <code>completed</code>，丢弃 <code>[[GeneratorContext]]</code>，再 next 始终返回 <code>{ value: undefined, done: true }</code></li>
         </ol>
 
         <p>
-          这就是<strong>协程（coroutine）</strong>的实现——ExecutionContext 作为"<strong>可挂起的栈帧</strong>"。<code>async function</code> 也是基于这个机制（含 await 时挂起 ExecutionContext，Promise resolve 后恢复）。详细见 <a href="index.html">A4 异步演进</a>。
+          <strong>yield 双向通信</strong>是 Generator 的精妙之处——一段同步代码中，<code>yield</code> 既能<strong>输出值</strong>给外面，也能从外面<strong>接收值</strong>：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 双向通信演示</span>
+          <pre class="code"><code class="lang-js">function* dialog() {
+  const greeting = yield 'who are you?';   // 输出 "who are you?"，等接收
+  console.log('hello', greeting);          // 用接收到的值
+  const action = yield `${greeting} arrived`;
+  return `${greeting} did ${action}`;
+}
+
+const g = dialog();
+g.next();           // { value: 'who are you?', done: false }
+g.next('Alice');    // 控制台打 "hello Alice"；返回 { value: 'Alice arrived', done: false }
+g.next('coding');   // { value: 'Alice did coding', done: true }
+//   ↑ 这个值传给上一个 yield 表达式，作为 action 的取值</code></pre>
+        </div>
+
+        <p>
+          <strong>async/await 的 Generator desugar</strong>：<code>async function</code> 不是新机制，是 <code>function*</code> + <code>Promise</code> 的语法糖。Babel / TypeScript 早期就是这么编译的：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · async function desugar 成 generator</span>
+          <pre class="code"><code class="lang-js">// 原始 async function：
+async function fetchUser(id) {
+  const res = await fetch(`/api/users/${id}`);
+  const data = await res.json();
+  return data.name;
+}
+
+// 编译后大致等价于：
+function fetchUser(id) {
+  return runAsync(function* () {
+    const res = yield fetch(`/api/users/${id}`);
+    const data = yield res.json();
+    return data.name;
+  });
+}
+
+// runAsync 是一个驱动器：把 yield 出来的 Promise 等待 resolve，再 next 进去
+function runAsync(genFn) {
+  return new Promise((resolve, reject) =&gt; {
+    const gen = genFn();
+    function step(method, value) {
+      let result;
+      try { result = gen[method](value); } catch (e) { return reject(e); }
+      if (result.done) return resolve(result.value);
+      Promise.resolve(result.value).then(
+        v =&gt; step('next', v),
+        e =&gt; step('throw', e),
+      );
+    }
+    step('next');
+  });
+}
+
+// 这就是为什么 async/await stack trace 不连续——
+// 每个 await 后续是 .then 回调，不在原调用栈里。</code></pre>
+        </div>
+
+        <p>
+          <strong>ES2018 加 async generator</strong>（<code>async function*</code>）：把同步 Generator 升级为异步——<code>yield</code> 出来的可以是 Promise，<code>for await...of</code> 自动 await 每次 next 的 value。这让"<em>处理流式异步数据</em>"（SSE、文件流、分页 API）有了官方 idiom。
+        </p>
+
+        <p>
+          这就是<strong>协程（coroutine）</strong>的实现——ExecutionContext 作为"<strong>可挂起的栈帧</strong>"。<code>async function</code> 也是基于这个机制（含 await 时挂起 ExecutionContext，Promise resolve 后恢复）。详细异步演进见 <a href="03-event-loop-async.html">P7.3 Event Loop 与异步演进</a>。
         </p>
 
         <h3>模块加载与求值顺序（PPT 未覆盖，规范层补全）</h3>
@@ -802,7 +979,7 @@ console.log('sync');
 
         <h3>本主题内部</h3>
         <ul>
-          <li>上一阶段：<a href="../06-internal-slots/01-internal-slots.html">P6 · §10 内部槽与方法</a></li>
+          <li>上一阶段：<a href="../06-internal-slots/01-internal-slots.html">P6 · §10 内部槽与元编程</a></li>
           <li>规范侧：<a href="02-spec-execution-context.html">P7.2 §9 执行模型规范精读</a> —— 从规范层视角再讲一遍 Realm/Agent/Job/Environment Record（含 ResolveBinding 等抽象操作的逐步算法）</li>
           <li>下一章：<a href="03-event-loop-async.html">P7.3 Event Loop 与异步演进</a> —— Job Queue 在 Agent 上的调度、Promise 状态机、async/await 如何用 ExecutionContext 暂停机制实现</li>
           <li>模块求值：<a href="04-modules-tla.html">P7.4 模块系统与 Top-Level Await</a> —— Source Text Module Records 的 4 阶段算法 + cycle 死锁检测</li>
@@ -821,7 +998,7 @@ console.log('sync');
         <nav class="chapter-nav" aria-label="章节翻页">
           <a class="prev" href="../06-internal-slots/01-internal-slots.html">
             <span class="label">← 上一阶段</span>
-            <span class="title">P6 · §10 内部槽与方法</span>
+            <span class="title">P6 · §10 内部槽与元编程</span>
           </a>
           <a class="next" href="02-spec-execution-context.html">
             <span class="label">下一章 →</span>

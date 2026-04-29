@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Reflect 与元编程谱 · P6 · ECMAScript 深度学习</title>
+    <meta
+      name="description"
+      content="Reflect 13 个静态方法（与 Proxy 13 个 trap 一一对应）+ Reflect vs Object.* 的差异 + Membrane 模式（跨 Realm 隔离） + WeakRef + FinalizationRegistry GC 语义。让 P6 的元编程谱完整起来。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c84a1f'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EES%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>ECMAScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.16 35); color: #fff">ES</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">ES 首页</a>
+          <a href="index.html">P6 目录</a>
+          <a href="https://262.ecma-international.org/15.0/index.html#sec-reflect-object" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · §10 内部槽与元编程</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-internal-slots.html">01 · 内部槽与内部方法</a></li>
+          <li><a href="02-reflect-meta.html" class="active">02 · Reflect 与元编程谱</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-standards/index.html">P1 · 标准与演化</a></li>
+          <li><a href="../02-design/index.html">P2 · 设计原则与灵感</a></li>
+          <li><a href="../03-spec-reading/index.html">P3 · 怎么读规范</a></li>
+          <li><a href="../04-data-types/index.html">P4 · §6 数据类型与值</a></li>
+          <li><a href="../05-abstract-ops/index.html">P5 · §7 抽象操作</a></li>
+          <li><a href="../07-execution/index.html">P7 · §9 执行模型与并发</a></li>
+        </ul>
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../javascript/index.html">JavaScript 深度学习</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">ECMAScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · §10 内部槽与元编程</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>02 · Reflect 与元编程谱</span>
+        </nav>
+
+        <h1>Reflect 与元编程谱</h1>
+        <p class="lead">
+          P6.1 讲了 Proxy 怎么<strong>替换</strong> 11 个 essential internal methods——但元编程是一对设计，<strong>Reflect 是 Proxy 的对应物</strong>：把 internal methods "<em>暴露成静态函数</em>"，让 trap 内可以调它们做"转发原行为"，让外部代码可以以"显式调内部方法"的姿态做反射。本章把 Reflect 完整 13 个 API + 与 Proxy 的协作模式 + Membrane 跨 Realm 隔离的经典实现 + WeakRef / FinalizationRegistry 的 GC 语义 一次讲透——让 P6 形成完整的元编程谱。
+        </p>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 本章交叉规则</div>
+          <p>
+            Proxy / Reflect 用法在 <a href="../../javascript/02-advanced/08-proxy-reflect.html">JS · Proxy / Reflect</a> 已有完整 API 列表与示例。本章不重复，<strong>聚焦"Reflect 为什么存在 + Proxy + Reflect 标准搭配 + Membrane 模式 + WeakRef GC 语义"</strong>——这些是 JS 主题没展开的"<em>设计层 + 工程模式</em>"。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> <a href="01-internal-slots.html">P6.1 内部槽与内部方法</a>（必读）</span>
+          <span><strong>对应 ECMA-262</strong>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-reflect-object" target="_blank" rel="noopener">§28.1 Reflect</a> + <a href="https://262.ecma-international.org/15.0/index.html#sec-weak-ref-objects" target="_blank" rel="noopener">§26 WeakRef</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>Reflect 不是新功能，是把 internal methods "暴露成函数"</strong>。13 个静态方法分别对应 13 个 Proxy trap 和 11 个 essential internal methods。在 Proxy trap 内调 <code>Reflect.X(target, ...args)</code> 是"转发原行为"的标准惯用法。
+          </li>
+          <li>
+            <strong>Membrane 模式 = "一对 Proxy 包装跨边界对象 + WeakMap 维护身份映射 + 撤销时所有跨边界引用同时失效"</strong>。是 SES（Secure ECMAScript） / ShadowRealm polyfill / Realms shim 等可信执行环境的核心基础设施。
+          </li>
+          <li>
+            <strong>WeakRef + FinalizationRegistry（ES2021）让 JS 第一次有了"不阻止 GC 的引用" + "GC 时执行 cleanup"</strong>。但规范刻意不规定 GC 时机——<strong>不能把它当"析构函数"用</strong>。
+          </li>
+        </ol>
+
+        <p>Reflect 与 Proxy 的对应关系一图：</p>
+
+        <div class="code-block">
+          <span class="code-label">Reflect ↔ Proxy trap ↔ internal method 三方对应</span>
+          <pre class="code"><code class="lang-js">// 13 个 Reflect 方法 ↔ 13 个 Proxy trap ↔ 11 个 essential internal methods
+// （Proxy 多 2 个 trap：apply/construct 对应函数对象的 [[Call]] / [[Construct]]）
+
+Reflect.get(t, p, r)              ↔  get trap          ↔  [[Get]]
+Reflect.set(t, p, v, r)           ↔  set              ↔  [[Set]]
+Reflect.has(t, p)                 ↔  has              ↔  [[HasProperty]]
+Reflect.deleteProperty(t, p)      ↔  deleteProperty   ↔  [[Delete]]
+Reflect.ownKeys(t)                ↔  ownKeys          ↔  [[OwnPropertyKeys]]
+Reflect.getPrototypeOf(t)         ↔  getPrototypeOf   ↔  [[GetPrototypeOf]]
+Reflect.setPrototypeOf(t, p)      ↔  setPrototypeOf   ↔  [[SetPrototypeOf]]
+Reflect.isExtensible(t)           ↔  isExtensible     ↔  [[IsExtensible]]
+Reflect.preventExtensions(t)      ↔  preventExtensions↔  [[PreventExtensions]]
+Reflect.getOwnPropertyDescriptor  ↔  getOwnPrope...   ↔  [[GetOwnProperty]]
+Reflect.defineProperty(t, p, d)   ↔  defineProperty   ↔  [[DefineOwnProperty]]
+Reflect.apply(f, t, args)         ↔  apply            ↔  [[Call]]（仅函数）
+Reflect.construct(f, args, nt)    ↔  construct        ↔  [[Construct]]（仅构造器）
+
+// 标准搭配（trap 默认转发模板）：
+new Proxy(target, {
+  get(t, p, r)  { return Reflect.get(t, p, r); },     // 不拦截 = 透明转发
+  set(t, p, v, r) { return Reflect.set(t, p, v, r); },
+  // ...
+});</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>为什么需要 Reflect</h3>
+        <p>
+          ES2015 之前，做"反射"操作得用一堆零散 API：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 40%">操作</th>
+              <th>ES2015 之前</th>
+              <th>ES2015 之后</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>读属性</td>
+              <td><code>obj[key]</code></td>
+              <td><code>Reflect.get(obj, key)</code></td>
+            </tr>
+            <tr>
+              <td>写属性（失败抛错）</td>
+              <td><code>Object.defineProperty</code> 抛错</td>
+              <td><code>Reflect.defineProperty</code> 返回 <code>false</code></td>
+            </tr>
+            <tr>
+              <td>调用函数</td>
+              <td><code>fn.apply(thisArg, args)</code></td>
+              <td><code>Reflect.apply(fn, thisArg, args)</code></td>
+            </tr>
+            <tr>
+              <td>用 new 调用</td>
+              <td><code>new Fn(...args)</code>（不能展开）</td>
+              <td><code>Reflect.construct(Fn, args, newTarget)</code></td>
+            </tr>
+            <tr>
+              <td>检查属性存在</td>
+              <td><code>key in obj</code></td>
+              <td><code>Reflect.has(obj, key)</code></td>
+            </tr>
+            <tr>
+              <td>删属性</td>
+              <td><code>delete obj[key]</code></td>
+              <td><code>Reflect.deleteProperty(obj, key)</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>三个关键改进</strong>：
+        </p>
+
+        <ul>
+          <li><strong>统一签名</strong>：所有 Reflect 方法都是 <code>(target, ...args)</code>，签名整齐——便于在 Proxy trap 内做"通用转发"</li>
+          <li><strong>返回 boolean 而不是抛错</strong>：<code>Reflect.set</code> / <code>Reflect.defineProperty</code> 失败返回 <code>false</code>，不抛 TypeError——比 <code>Object.defineProperty</code> 更便于处理失败</li>
+          <li><strong>支持 Receiver / newTarget</strong>：<code>Reflect.get(t, p, r)</code> 的 r 是 getter 内 <code>this</code> 的值；<code>Reflect.construct(F, args, NT)</code> 的 NT 是 <code>new.target</code>——这两个旋钮在普通语法里拿不到</li>
+        </ul>
+
+        <h3>Proxy + Reflect 标准搭配</h3>
+        <p>
+          Proxy trap 的<strong>默认行为</strong>应该是"<em>不拦截，透明转发</em>"。这时调 Reflect 是惯用法（而不是手动 <code>target[p]</code>，会丢 receiver 上下文）：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Vue 3 / Solid 风格响应式</span>
+          <pre class="code"><code class="lang-js">function reactive(target) {
+  return new Proxy(target, {
+    get(t, p, r) {
+      track(t, p);                   // 拦截：收集依赖
+      return Reflect.get(t, p, r);   // 转发：保持原行为（含 receiver）
+    },
+    set(t, p, v, r) {
+      const oldValue = t[p];
+      const result = Reflect.set(t, p, v, r);  // 转发：尝试写
+      if (result &amp;&amp; oldValue !== v) {
+        trigger(t, p);               // 拦截：触发更新
+      }
+      return result;
+    },
+    deleteProperty(t, p) {
+      const had = Reflect.has(t, p);
+      const result = Reflect.deleteProperty(t, p);
+      if (had &amp;&amp; result) trigger(t, p);
+      return result;
+    },
+  });
+}
+
+// 关键：trap 内必须用 Reflect 转发，不能用 t[p]：
+//   const obj = { get name() { return this.first + ' ' + this.last; } };
+//   const proxy = reactive(obj);
+//   proxy.name；
+//   ↑ 走 get(t='obj', p='name', r=proxy)。
+//     用 t['name'] 调 getter 时 this = t（原始 obj），收集不到 proxy 的依赖。
+//     用 Reflect.get(t, 'name', r) 时 this = r（proxy），依赖收集到 proxy。
+//     这就是为什么 Reflect 比 t[p] 更"对"。</code></pre>
+        </div>
+
+        <h3>Membrane 模式：跨边界隔离</h3>
+        <p>
+          <strong>问题场景</strong>：你想跑一段第三方代码，希望它能拿到一些数据（"<em>读权限</em>"），但所有"<em>写</em>" 都被拦截，并且能在某一刻<strong>整体撤销整个隔离环境</strong>——所有跨边界引用立刻失效。
+        </p>
+
+        <p>
+          <strong>Membrane 的核心思想</strong>：在两个对象图（"<em>main side</em>" / "<em>guest side</em>"）之间放一对镜像 Proxy。任何引用穿越边界时<strong>自动包装</strong>，并用 WeakMap 维护身份映射（保证同一个对象多次穿越仍是同一个 Proxy）。撤销时把所有 Proxy 标记为 revoked，整片对象图同时失效。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 最小可运行 Membrane（30 行核心）</span>
+          <pre class="code"><code class="lang-js">function makeMembrane(initialTarget) {
+  const wrapped = new WeakMap();    // original → proxy（避免重复包装）
+  const revokers = [];               // 所有 Proxy.revoke 函数
+
+  function wrap(value) {
+    if (value === null || (typeof value !== 'object' &amp;&amp; typeof value !== 'function')) {
+      return value;  // primitive 直接传，不需要包装
+    }
+    if (wrapped.has(value)) return wrapped.get(value);  // 身份映射
+
+    const { proxy, revoke } = Proxy.revocable(value, {
+      get(t, p, r) {
+        return wrap(Reflect.get(t, p, r));  // 出去的引用也包装
+      },
+      set(t, p, v, r) {
+        return Reflect.set(t, p, unwrap(v), r);  // 进来的解包
+      },
+      apply(t, thisArg, args) {
+        return wrap(Reflect.apply(t, unwrap(thisArg), args.map(unwrap)));
+      },
+      // ... 其他 trap 同理
+    });
+
+    wrapped.set(value, proxy);
+    revokers.push(revoke);
+    return proxy;
+  }
+
+  function unwrap(value) { /* 反向：把 proxy 找回原对象 */ }
+
+  return {
+    expose: wrap(initialTarget),
+    revoke: () =&gt; revokers.forEach(r =&gt; r()),
+  };
+}
+
+// 用法：
+const { expose, revoke } = makeMembrane(realData);
+plugin.run(expose);   // plugin 拿到的是 wrapped 视图
+// ...
+revoke();              // 一键撤销所有跨边界引用，plugin 持有的 proxy 全部失效</code></pre>
+        </div>
+
+        <p>
+          <strong>实战中 Membrane 还要处理</strong>：原型链（Reflect.getPrototypeOf 的返回值也要包装）、Symbol 属性、Promise 跨边界（resolve 出来的值要包装）、Error 跨边界（栈帧泄漏问题）等。完整工业实现：<a href="https://github.com/Agoric/SES-shim" target="_blank" rel="noopener">Agoric SES-shim</a>、<a href="https://github.com/salesforce/observable-membrane" target="_blank" rel="noopener">Salesforce observable-membrane</a>。
+        </p>
+
+        <p>
+          <strong>与 ShadowRealm 的关系</strong>：ShadowRealm（<a href="../07-execution/01-execution-model.html">P7.1 已介绍</a>，Stage 3）原生就是<strong>语言级 Membrane</strong>——跨边界传值被强制限制为 primitive + 函数。在它落地前，社区 polyfill 用 Membrane 实现近似能力。
+        </p>
+
+        <h3>WeakRef + FinalizationRegistry（ES2021）</h3>
+
+        <p>
+          <strong>WeakRef</strong>：持有不阻止 GC 的弱引用。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · WeakRef 基本用法</span>
+          <pre class="code"><code class="lang-js">let big = { /* 1MB 数据 */ };
+const ref = new WeakRef(big);
+
+ref.deref();  // 返回 big 或 undefined（如果已被 GC）
+
+big = null;   // 解除强引用
+// 此后 GC 可能回收 big；ref.deref() 何时变 undefined 由 GC 决定
+
+// 典型用法：缓存中持有"建议保留但允许回收"的对象
+const cache = new Map();
+function getThumbnail(url) {
+  const ref = cache.get(url);
+  const cached = ref?.deref();
+  if (cached) return cached;  // 还活着，复用
+
+  const fresh = generateThumbnail(url);  // 重新生成（昂贵）
+  cache.set(url, new WeakRef(fresh));
+  return fresh;
+}</code></pre>
+        </div>
+
+        <p>
+          <strong>FinalizationRegistry</strong>：注册对象 GC 时执行的 cleanup 回调。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 自动释放外部资源</span>
+          <pre class="code"><code class="lang-js">// 场景：JS 对象包了一个 WASM 内存指针，希望对象 GC 时释放 WASM 端的内存
+
+const registry = new FinalizationRegistry((heldValue) =&gt; {
+  // heldValue 是注册时给的"清理依据"
+  wasmModule.free(heldValue);
+  console.log('已释放 WASM 内存:', heldValue);
+});
+
+class WasmBuffer {
+  constructor(size) {
+    this.ptr = wasmModule.malloc(size);
+    registry.register(this, this.ptr);  // 注册：当 this 被 GC 时调 cleanup(ptr)
+  }
+}
+
+let buf = new WasmBuffer(1024);
+buf = null;  // 一段时间后 GC 触发，cleanup 自动跑
+
+// ⚠️ 关键约束：cleanup 触发时机不确定
+//   - GC 时机由引擎决定，可能立刻、可能几分钟后、甚至程序退出前都不跑
+//   - cleanup 在 microtask 里跑，但什么时机被排队 = GC 决定
+//   - 不应放业务关键逻辑（比如刷新 UI、发请求、关键资源释放）</code></pre>
+        </div>
+
+        <p>
+          <strong>规范刻意不规定 GC 时机</strong>，以避免开发者写出依赖回收时机的代码。这是设计上的"<em>反模式防御</em>"——把 GC 当作"<em>看不见的优化</em>"而不是"<em>可调度的析构</em>"。
+        </p>
+
+        <h3>Reflect.construct + new.target 元编程</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Reflect.construct 高级用法</span>
+          <pre class="code"><code class="lang-js">// 用法 1：用一个构造器构造另一个的实例（changeTo subclass 模式）
+class Animal { constructor(name) { this.name = name; } }
+class Dog extends Animal {}
+
+const d = Reflect.construct(Animal, ['Rex'], Dog);
+//             ↑ 用 Animal 的逻辑构造，但实例的 [[Prototype]] 链来自 Dog
+d instanceof Dog;  // true！
+d.name;            // "Rex"
+
+// 用法 2：动态参数（args 是数组，spread 比 new Fn(...args) 更直接）
+function build(Cls, args) {
+  return Reflect.construct(Cls, args);
+}
+
+// 用法 3：写 abstract class 检测
+class Shape {
+  constructor() {
+    if (new.target === Shape) {
+      throw new Error('Shape is abstract');
+    }
+  }
+}
+class Circle extends Shape { /* OK */ }
+new Shape();    // throws
+new Circle();   // OK</code></pre>
+        </div>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 写 Vue 3 / Solid / Mobx 风格响应式</h3>
+          <p>
+            响应式系统的核心是 <code>Proxy + Reflect</code>。<strong>Proxy</strong> 拦截属性访问，<strong>Reflect</strong> 转发原行为同时保持 receiver 正确。Vue 3 的 <code>reactive()</code> 内部就是 30 行这个模板，加上"<em>track 收集依赖 / trigger 触发副作用</em>"。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 写沙箱 / 插件系统</h3>
+          <p>
+            想跑第三方代码，但需要：① 隔离命名空间 ② 限制可见 API ③ 一键撤销整个环境。Membrane 是核心机制——比 iframe 轻、比 vm.createContext 跨平台。Salesforce LWC、Figma 插件系统、低代码引擎都用类似 Membrane。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 缓存 + 自动 WASM 内存释放</h3>
+          <p>
+            处理大量 wasm 计算结果（图像缩略图、ML 推理结果）—— 既想缓存复用，又怕内存爆。<strong>WeakRef</strong> 让缓存"有则用、没则重建"；<strong>FinalizationRegistry</strong> 在 JS 对象被回收时释放对应 WASM 内存。注意 cleanup 时机不可靠，仍要有手动 dispose 兜底。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>Proxy + Reflect 模板（透明拦截器）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 标准 trap 转发</span>
+          <pre class="code"><code class="lang-js">function tracingProxy(target, name) {
+  return new Proxy(target, {
+    get(t, p, r) {
+      console.log(`[${name}] get`, String(p));
+      return Reflect.get(t, p, r);
+    },
+    set(t, p, v, r) {
+      console.log(`[${name}] set`, String(p), '=', v);
+      return Reflect.set(t, p, v, r);
+    },
+    deleteProperty(t, p) {
+      console.log(`[${name}] delete`, String(p));
+      return Reflect.deleteProperty(t, p);
+    },
+    has(t, p) {
+      console.log(`[${name}] has`, String(p));
+      return Reflect.has(t, p);
+    },
+    ownKeys(t) {
+      console.log(`[${name}] ownKeys`);
+      return Reflect.ownKeys(t);
+    },
+    apply(t, thisArg, args) {
+      console.log(`[${name}] apply`, args);
+      return Reflect.apply(t, thisArg, args);
+    },
+    construct(t, args, nt) {
+      console.log(`[${name}] construct`, args);
+      return Reflect.construct(t, args, nt);
+    },
+  });
+}
+
+const data = tracingProxy({ a: 1 }, 'data');
+data.a;       // [data] get a
+data.b = 2;   // [data] set b = 2
+'a' in data;  // [data] has a</code></pre>
+        </div>
+
+        <h3>WeakRef-based LRU 缓存</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 弱缓存</span>
+          <pre class="code"><code class="lang-js">class WeakLRU {
+  constructor() { this.map = new Map(); }
+  get(key) {
+    const ref = this.map.get(key);
+    const value = ref?.deref();
+    if (value === undefined &amp;&amp; ref !== undefined) {
+      this.map.delete(key);  // 已被 GC，清理 stale ref
+    }
+    return value;
+  }
+  set(key, value) {
+    this.map.set(key, new WeakRef(value));
+  }
+}
+
+const cache = new WeakLRU();
+cache.set('user:1', { name: 'Alice', /* big data */ });
+// ... 内存压力下，user:1 可能被 GC 回收
+cache.get('user:1');  // 可能是 undefined（已回收）或对象（还活着）
+
+// 注意：基础类型（number / string）不能 WeakRef，要转 wrapper</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：Proxy trap 内忘了用 Reflect 转发</div>
+          <p>
+            写 <code>get(t, p) { /* 拦截 */ return t[p]; }</code> —— 看起来对，但 receiver 丢了。如果属性是 getter，<code>this</code> 是 t（原对象）而不是 proxy，依赖收集失败、嵌套响应式失效。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：永远用 <code>Reflect.get(t, p, r)</code> 转发，把 receiver 显式传进去。这是 Vue 3、Solid、Mobx 等响应式系统的标准模板。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：用 WeakRef 当强引用替代品</div>
+          <p>
+            <code>const ref = new WeakRef(obj);</code> 之后立刻 <code>ref.deref()</code> 一定拿得到，但<strong>过段时间未必</strong>。把 WeakRef 当"持久存"用会丢数据。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：只用 WeakRef 表达"<em>建议保留但允许回收</em>"的语义；如果一定要保留，用普通强引用。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：FinalizationRegistry 回调跑业务逻辑</div>
+          <p>
+            cleanup 不保证触发——GC 可能永远不跑（程序退出前对象一直可达；引擎不优先回收）。把"<em>关闭 socket / 释放 lock / 通知用户</em>" 放进 cleanup 会导致资源泄漏或行为不一致。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：cleanup 只放<strong>"可有可无的优化"</strong>（清缓存、释放可重新申请的资源）。关键资源用<strong>显式 dispose / using 模式</strong>（详见 <a href="../07-execution/03-event-loop-async.html">P7.3 异步演进</a> 的 <code>using</code> 节）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：Membrane 漏拦截 Symbol / 原型方法</div>
+          <p>
+            手写 Membrane 容易漏：① <code>Symbol</code> 属性的访问（要在 <code>get</code> trap 里处理 Symbol key）② 原型链方法（<code>getPrototypeOf</code> 返回的也要包装）③ <code>Promise.then</code> 的回调参数（resolve 出来的值跨边界要包装）。漏一处就破隔离。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：直接用 <a href="https://github.com/Agoric/SES-shim" target="_blank" rel="noopener">SES-shim</a> 等成熟实现，不要手写工业级 Membrane（除非学习目的）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：Reflect.set 失败被忽略</div>
+          <p>
+            <code>Reflect.set</code> 在写入失败（如对象 frozen）时返回 <code>false</code> 而不抛错。如果不检查返回值，会出现"<em>看似写了但实际没写</em>" 的静默失败。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：在 Proxy trap 里 <code>const ok = Reflect.set(...); if (!ok) throw new TypeError(...);</code>，或在 strict mode 下用 <code>obj.x = v</code>（失败抛错）替代。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范</h3>
+        <ul>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-reflect-object" target="_blank" rel="noopener">ECMA-262 §28.1 Reflect</a> —— 13 个静态方法
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-proxy-object-internal-methods-and-internal-slots" target="_blank" rel="noopener">§10.5 Proxy Object</a> —— 13 个 trap
+          </li>
+          <li>
+            <a href="https://262.ecma-international.org/15.0/index.html#sec-weak-ref-objects" target="_blank" rel="noopener">§26 WeakRef</a> + <a href="https://262.ecma-international.org/15.0/index.html#sec-finalization-registry-objects" target="_blank" rel="noopener">§26 FinalizationRegistry</a>
+          </li>
+        </ul>
+
+        <h3>Membrane / SES 实战</h3>
+        <ul>
+          <li>
+            <a href="https://github.com/Agoric/SES-shim" target="_blank" rel="noopener">Agoric SES-shim</a> —— 工业级 Membrane + lockdown 实现
+          </li>
+          <li>
+            <a href="https://github.com/salesforce/observable-membrane" target="_blank" rel="noopener">Salesforce observable-membrane</a> —— LWC 用的 Membrane
+          </li>
+          <li>
+            <a href="https://tc39.es/proposal-shadowrealm/" target="_blank" rel="noopener">ShadowRealm Proposal</a> —— 语言级 Membrane 的下一代
+          </li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="01-internal-slots.html">P6.1 内部槽与内部方法</a> —— Proxy 的底层机制</li>
+          <li>容器层：<a href="../07-execution/01-execution-model.html">P7.1 执行模型基础</a> —— ShadowRealm 提案与 Realm 隔离</li>
+          <li>异步资源管理：<a href="../07-execution/03-event-loop-async.html">P7.3 异步演进</a> —— ES2025 <code>using</code> 显式 dispose 模式</li>
+          <li>多线程：<a href="../07-execution/05-memory-model.html">P7.5 内存模型与多线程</a> —— SAB 内存释放与 FinalizationRegistry 的关系</li>
+        </ul>
+
+        <h3>跨主题参考</h3>
+        <ul>
+          <li><a href="../../javascript/02-advanced/08-proxy-reflect.html">JS · Proxy / Reflect</a> —— 完整 API + 用法示例</li>
+          <li><a href="../../javascript/01-fundamentals/10-map-set.html">JS · Map / Set / WeakMap / WeakRef 家族</a></li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-internal-slots.html">
+            <span class="label">← 上一章</span>
+            <span class="title">01 · 内部槽与内部方法</span>
+          </a>
+          <a class="next" href="../07-execution/01-execution-model.html">
+            <span class="label">下一阶段 →</span>
+            <span class="title">P7.1 · 执行模型基础</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

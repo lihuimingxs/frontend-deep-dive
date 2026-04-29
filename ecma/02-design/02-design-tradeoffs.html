@@ -51,7 +51,7 @@
           <li><a href="../03-spec-reading/index.html">P3 · 怎么读规范</a></li>
           <li><a href="../04-data-types/index.html">P4 · §6 数据类型与值</a></li>
           <li><a href="../05-abstract-ops/index.html">P5 · §7 抽象操作</a></li>
-          <li><a href="../06-internal-slots/index.html">P6 · §10 内部槽与方法</a></li>
+          <li><a href="../06-internal-slots/index.html">P6 · §10 内部槽与元编程</a></li>
           <li><a href="../07-execution/index.html">P7 · §9 执行模型与并发</a></li>
         </ul>
         <h3>跨主题</h3>
@@ -367,6 +367,55 @@ Promise.all(range); // Promise resolved [1, 2, 3]
 
         <p>
           <strong>详细机制请参考</strong> <a href="../../javascript/01-fundamentals/11-symbol.html">JS · 01-fundamentals/11-symbol</a>。
+        </p>
+
+        <h3>跨 Realm 工程模式（设计权衡的副产物）</h3>
+        <p>
+          上面 6 个设计决策叠加，再配合<strong>"每个 iframe / vm context / Worker 是独立 Realm，独立 Intrinsics"</strong>（<a href="../07-execution/01-execution-model.html">P7.1 详述</a>）这一事实，就有了 JS 工程师反复踩的<strong>"跨 Realm 兼容"</strong>问题：一个对象跨过 Realm 边界后，<code>instanceof</code> 失败、<code>===</code> 在很多场景下失效——因为它的原型链指向另一个 Realm 的 <code>Array.prototype</code>。
+        </p>
+
+        <p>
+          <strong>三种检测方式对比</strong>：
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%">方式</th>
+              <th>跨 Realm 工作？</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>arr instanceof Array</code></td>
+              <td>❌（原型链不同）</td>
+              <td>同 Realm 内 OK，跨边界失败</td>
+            </tr>
+            <tr>
+              <td><code>Array.isArray(arr)</code></td>
+              <td>✅（Realm-aware）</td>
+              <td>规范专门设计的"<em>对所有 Realm 的 Array 都返回 true</em>"</td>
+            </tr>
+            <tr>
+              <td>鸭子类型 <code>typeof arr.length === 'number'</code></td>
+              <td>✅（不依赖原型）</td>
+              <td>最通用，但匹配过宽（普通对象也可能有 length）</td>
+            </tr>
+            <tr>
+              <td><code>Object.prototype.toString.call(x) === '[object Array]'</code></td>
+              <td>✅（用 Symbol.toStringTag）</td>
+              <td>lodash 风格，准确但绕</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>Membrane 模式</strong>是更系统的方案：在两个 Realm 之间放一对 Proxy 包装对象，所有跨边界引用都被记录到 WeakMap，并能"<em>一键撤销整个隔离环境</em>"——是 SES（Secure ECMAScript）/ ShadowRealm polyfill 的核心机制。完整实现见 <a href="../06-internal-slots/02-reflect-meta.html">P6.2 Reflect 与元编程谱</a>。
+        </p>
+
+        <p>
+          <strong>设计取舍</strong>：跨 Realm 边界<strong>每次都加成本</strong>（要么用 Realm-aware API，要么用 Membrane 包装），但有时是必须的（iframe 沙箱、Web Components、Node vm）。<strong>编写库时</strong>：如果可能被嵌 iframe / 跨 Worker 调用，永远用 <code>Array.isArray</code> / <code>Symbol.toStringTag</code> 等 Realm-aware 检测，不用 <code>instanceof</code>。<strong>编写应用时</strong>：默认假设单 Realm，遇到跨 Realm 场景再单独处理。
         </p>
 
         <!-- 03 应用场景 ============================================== -->
