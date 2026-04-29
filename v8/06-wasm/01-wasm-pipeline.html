@@ -55,11 +55,6 @@
           <span><strong>前置</strong> P2.3（优化编译器）</span>
           <span><strong>主要来源</strong> v8.dev/docs/wasm-compilation-pipeline · holiday-season-2023</span>
         </div>
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>骨架版本。对照大纲 <code>v8/outline.md § P6.1</code>。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>wasm 没解释器是因为它本身就是 bytecode</strong>：JS 的 Ignition 把源码翻译成 bytecode；wasm 直接是 bytecode 形式 → V8 跳过翻译，直接 Liftoff 编译。</li>
@@ -70,70 +65,181 @@
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
 
         <h3>Wasm 双层管道</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li><strong>Liftoff</strong>（2018 引入）：baseline 编译器，wasm bytecode → 机器码 1:1，无 IR
-            <ul>
-              <li>类似 JS 的 Sparkplug：极快编译换更慢稳态</li>
-              <li>启动时<strong>所有函数同步编译为 Liftoff</strong> → 无解释器，所以"启动 = 编译完所有函数"</li>
-            </ul>
-          </li>
-          <li><strong>TurboFan</strong>（共享 JS 路径）：复用 sea of nodes，跑长期热点 wasm 函数</li>
-          <li><strong>Tier-up</strong>：和 JS 一样，hot 函数从 Liftoff 提到 TurboFan</li>
-        </ul>
+        <p>
+          V8 跑 Wasm 用<strong>2 层 JIT 管道</strong>——比 JS 的 4 层（Ignition + Sparkplug + Maglev + TurboFan）少一半。原因：wasm 本身就是 bytecode，不需要 parser + bytecode generator；而且 wasm 设计上类型已知（不像 JS 动态类型），不需要为收集类型 feedback 而做多层 IC。
+        </p>
 
-        <h3>WasmGC（2023 正式）</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li>让 Java / Kotlin / Dart / Scala 这些"托管语言"能高效编译到 wasm</li>
-          <li>V8 直接用 Orinoco 管理 wasm GC 对象（不再通过 JS 包装）</li>
-          <li>性能：Java/Kotlin/Dart 编译版<strong>约为 wasm 直接版的 2x</strong>（vs 之前编译到 JS 慢几个数量级）</li>
-        </ul>
+        <h4>Liftoff（2018 引入）：baseline 编译器</h4>
+        <p>
+          Liftoff 是 V8 的 wasm baseline JIT——把 wasm bytecode <strong>1:1 翻译成机器码</strong>，<strong>无 IR、无 SSA、无寄存器分配</strong>。设计哲学和 JS 的 Sparkplug 完全相同（事实上 Sparkplug 借鉴了 Liftoff 的成功），但 Liftoff 比 Sparkplug <strong>早 3 年</strong>出现。这是因为 wasm 没有"先有解释器"的历史包袱——上来就是给 baseline JIT 设计的格式。
+        </p>
+        <p>
+          一个关键差异：<strong>V8 不为 wasm 提供解释器</strong>——所有 wasm 函数<strong>启动时同步编译为 Liftoff 机器码</strong>。这意味着"启动" = "编译完所有函数"。这个设计选择对启动时间影响巨大——见后文"启动时间评估"应用场景。
+        </p>
+
+        <h4>TurboFan（共享 JS 路径）</h4>
+        <p>
+          热点 wasm 函数会被<strong>tier-up 到 TurboFan</strong>——和 JS 用同一份 sea of nodes IR、同一套优化遍。这是 V8 节省工程力量的设计——wasm 不需要重写一套优化器。tier-up 触发条件和 JS 类似（call counter 越过阈值），编译同样在 helper thread 上后台跑。
+        </p>
+        <p>
+          为什么没有 Maglev？因为 wasm 类型已知，Liftoff 与 TurboFan 之间的"中频代码"空档不像 JS 那么明显——TurboFan 编译开销也比 JS 小（不需要做 type feedback 推断）。Liftoff + TurboFan 两层基本够用。
+        </p>
+
+        <h4>共享 IR + 共享优化遍 = V8 工程效率</h4>
+        <p>
+          一个值得注意的设计：<strong>wasm 在 V8 内部"和 JS 共享一切"</strong>——同一套堆、同一套 GC（Orinoco / WasmGC 复用）、同一套 TurboFan 优化遍、同一套 debugger / profiler。这就是为什么 V8 团队增加 wasm 支持时不需要写另一个引擎，只需要加 Liftoff 和 wasm 字节码 → sea of nodes 的转换层。<strong>JS 引擎的所有优化技术 free upgrade 给 wasm 用</strong>——这是 V8 选 wasm 这条路时的隐性收益。
+        </p>
+
+        <h3>WasmGC（2023 正式）：让托管语言真正能编译到 wasm</h3>
+        <p>
+          原始 wasm 设计假设源语言是 C/C++/Rust——<strong>手动管理内存</strong>。但很多语言（Java、Kotlin、Dart、Scala、C#、Go）依赖 GC——它们的运行时模型与 wasm 不匹配。
+        </p>
+        <h4>WasmGC 之前：自带 GC + 包体爆炸</h4>
+        <p>
+          2023 之前，托管语言编译到 wasm 必须<strong>把整个 GC 实现也编译进 wasm bundle</strong>——bundle 通常 5-20MB（光 GC 就几 MB），启动慢、性能差。Kotlin/wasm 早期 bundle 12MB+ 是常态，对比同源代码编译到 JS 仅 200KB——根本无法用于生产。
+        </p>
+        <p>
+          替代方案是编译到 JS（Kotlin/JS、Scala.js、TeaVM）——但失去 wasm 性能优势，不上不下。这条路 10 年都没走通。
+        </p>
+        <h4>WasmGC：让 wasm 模块复用 V8 GC</h4>
+        <p>
+          <strong>WasmGC</strong> 提案（Stage 4，2023 年 V8 / Chrome 117 全平台）让 wasm 模块直接<strong>复用宿主引擎的 GC</strong>——在 V8 里就是复用 Orinoco。wasm 字节码新增了"GC 对象类型"（struct / array of references），创建这些对象时 V8 把它们<strong>放进 V8 堆</strong>，参与 Orinoco 标准回收流程。
+        </p>
+        <p>
+          这意味着 Kotlin/wasm bundle 不再需要带 GC——直接说"创建 struct"就行，回收交给 V8。<strong>包体下降 80%+，性能提升 2×</strong>（V8 团队官方数字）。
+        </p>
+        <p>
+          生态影响：Kotlin Multiplatform、Dart Web 都在 2023-2025 期间加 wasm target。Scala.js 团队也在跟进。Java 是 Oracle 项目（OpenJDK 的 Project Leyden）单独探索。这是 wasm 真正<strong>"不只是 C/C++/Rust 后端"</strong>的关键里程碑。
+        </p>
+        <p>
+          技术细节：WasmGC 对象在 V8 堆内，受 Pointer Compression / V8 Sandbox 保护（详见 P5.2）。这是 wasm 加入 V8 安全模型的入口——相比之前 wasm 线性内存独立于 V8 堆、不享受这些保护。
+        </p>
 
         <h3>V8 Wasm 与 JS 的互操作</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li><strong>Imports / Exports</strong>：wasm 模块通过 import 拿到 JS 函数 / 内存；export 暴露 wasm 函数给 JS</li>
-          <li><strong>JS Promise Integration (JSPI)</strong>（2025 Stage 4）：让同步 wasm 调用异步 JS API（如 fetch）</li>
-          <li><strong>Reference Types</strong>（externref / funcref）：让 wasm 持有不透明的 JS 对象引用</li>
-          <li><strong>跨边界调用开销</strong>：early V8 是 ~100ns，今天 ~10ns；vs 普通 JS call ~1ns —— 仍有"边界税"</li>
-        </ul>
+        <p>
+          Wasm 不是孤立的——它通过 <strong>Imports / Exports</strong> 与 JS 双向交互。Wasm 模块声明它需要从 JS 端拿什么（imports：JS 函数、JS 内存、JS 全局），暴露给 JS 什么（exports：wasm 函数、wasm 内存、wasm 全局）。这是 wasm 嵌入 web 的基础——单纯一段 wasm 没法 fetch、没法操作 DOM、连 console.log 都没有，必须靠 JS 提供这些 API。
+        </p>
 
-        <h3>Wasm 内存模型与 V8 堆</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li>Wasm 线性内存是 ArrayBuffer（V8 外部内存，不在 cage 内）</li>
-          <li>WasmGC 对象在 V8 堆内（受 Pointer Compression / Sandbox 保护）</li>
-        </ul>
+        <h4>Imports / Exports：双向边界</h4>
+        <p>
+          典型用法：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// JS 端实例化 wasm 模块
+const wasmModule = await WebAssembly.instantiateStreaming(
+  fetch('image-processor.wasm'),
+  {
+    env: {
+      // 注入 JS 函数给 wasm 调用
+      log: (msg) =&gt; console.log(msg),
+      // 注入 JS 内存给 wasm 共享（少见）
+      memory: new WebAssembly.Memory({ initial: 256 })
+    }
+  }
+);
 
-        <h3>Memory64（提案 Stage 4，V8 11+ 实现）</h3>
-        <p><em>正文待写。</em></p>
+// JS 端调用 wasm 导出的函数
+const { processImage, getResult } = wasmModule.instance.exports;
+processImage(imageData);
+const result = getResult();</code></pre>
+        </div>
+
+        <h4>跨边界调用开销：从 100ns 降到 10ns</h4>
+        <p>
+          每次 JS 调 wasm 或 wasm 调 JS 都有<strong>边界税</strong>——参数转换（JS Number ↔ wasm i32/i64/f32/f64）+ 栈切换 + 调用约定转换。V8 早期（2017-2018）每次跨边界调用 ~100ns，对热路径来说不可接受——大多数早期 wasm 应用避免频繁调用 JS（一次调用处理一大批数据）。
+        </p>
+        <p>
+          V8 持续优化这个开销：今天典型跨边界调用 <strong>~10ns</strong>，特殊情况（如 monomorphic 站点 + 简单参数类型）<strong>能降到 ~3ns</strong>，逼近 JS 内部函数调用 ~1ns。但仍有"边界税"——在每秒百万级跨边界调用的场景仍可观。
+        </p>
+        <p>
+          一个隐藏不对称：<strong>wasm-to-JS 调用比 JS-to-wasm 慢</strong>——V8 优化方向不对称（用户更常 JS 调 wasm 用 wasm 性能，反向少见）。如果你设计 wasm-heavy 应用，<strong>让 wasm 主导调度</strong>比"JS 频繁回调 wasm"更高效。
+        </p>
+
+        <h4>Reference Types（externref / funcref）：让 wasm 持有 JS 对象</h4>
+        <p>
+          原始 wasm 类型只有 i32 / i64 / f32 / f64——<strong>无法直接持有 JS 对象</strong>。Reference Types 提案（2021）加了两个新类型：
+        </p>
         <ul>
-          <li><strong>背景</strong>：原 wasm 线性内存用 32-bit index，上限 4GB；图像处理 / 大型应用 / 数据库引擎不够用</li>
-          <li><strong>方案</strong>：扩展到 64-bit index，理论上限 16 EB（实际取决于宿主可分配地址）</li>
-          <li><strong>代价</strong>：每次 memory access 多用一条指令做 64-bit bound check；V8 在 fast path 上做了优化但仍有 ~5-15% 性能损失</li>
-          <li><strong>意义</strong>：让 SQLite-WASM、duckdb-wasm、ffmpeg.wasm 这些大数据应用真正能用 wasm 跑生产负载</li>
+          <li><strong>externref</strong>：不透明的 JS 对象引用——wasm 不能解引用，但可以传给 JS 函数</li>
+          <li><strong>funcref</strong>：函数引用——可以是 wasm 函数也可以是 JS 函数</li>
         </ul>
+        <p>
+          这是 WasmGC 之前的"半步" GC 支持——能持有 JS 对象但 GC 责任在 JS。WasmGC 之后这条路相对让位。
+        </p>
+
+        <h4>JS Promise Integration (JSPI)：同步 wasm 调异步 JS</h4>
+        <p>
+          一个真实痛点：很多 web API 是异步的（fetch、IndexedDB），但<strong>wasm 函数都是同步</strong>——Rust / C++ 编译到 wasm 后没法直接 await。早期解决方案是把整个 wasm 程序"切成多段"——每次需要异步 IO 都返回控制权给 JS，JS 等结果后再调下一段——极其难写。
+        </p>
+        <p>
+          <strong>JSPI</strong> 提案（Stage 4，2025 V8 实现）让 wasm 函数能<strong>"暂停"</strong>等 Promise resolve 再继续——本质是给 wasm 加了 stackful coroutine 支持。从 wasm 程序员视角看就是"调一个 fetch 直接拿结果"，从 V8 视角是把 wasm 栈帧整个保存挂起、Promise resolve 后恢复。这让 SQLite-WASM、PostgreSQL-WASM 等需要异步 IO 的应用真正可用。
+        </p>
+
+        <h3>Wasm 内存模型与 V8 堆的边界</h3>
+        <p>
+          Wasm 内存模型与 V8 堆是<strong>两套独立的内存系统</strong>，需要分清边界：
+        </p>
+        <ul>
+          <li><strong>Wasm 线性内存</strong>是个大块连续 byte buffer——背后是 V8 通过 ArrayBuffer Allocator 分配的 <code>ArrayBuffer</code>，<strong>在 V8 堆外</strong>（不进 Pointer Compression cage）。Wasm 的 i32/i64/f32/f64 全部存这里。</li>
+          <li><strong>WasmGC 对象</strong>（用 struct.new / array.new 创建）<strong>在 V8 堆内</strong>，受 Pointer Compression + V8 Sandbox 保护。</li>
+        </ul>
+        <p>
+          这种分离是务实选择：线性内存适合密集数值计算（图像、音频、物理），让 wasm 像 C 一样直接访问 byte；WasmGC 对象适合托管语言用例（Java / Kotlin），让 GC 自动管理。一个 wasm 程序可以两种都用。
+        </p>
+
+        <h3>Memory64：让 wasm 线性内存超过 4GB</h3>
+        <p>
+          原始 wasm 线性内存用 <strong>32-bit index</strong>——理论上限 4GB（实际由于 V8 内部限制更低）。这对图像处理、视频编辑、大型数据库 / 分析引擎 / 机器学习模型加载是<strong>真实瓶颈</strong>——一个 4K 视频帧就要几十 MB，几百帧就触上限。
+        </p>
+        <p>
+          <strong>Memory64</strong> 提案（Stage 4，V8 11+ 实现）扩展到 <strong>64-bit index</strong>——理论上限 16 EB，实际取决于宿主可分配地址（典型 256GB-1TB 数量级）。代价：每次 memory access 多一条指令做 64-bit bound check，V8 fast path 上做了优化但仍有 <strong>~5-15% 性能损失</strong>。
+        </p>
+        <p>
+          意义：让 <strong>SQLite-WASM</strong>（数据库引擎跑在浏览器，绕开服务端）、<strong>duckdb-wasm</strong>（OLAP 分析查询直接在浏览器跑）、<strong>ffmpeg.wasm</strong>（浏览器视频转码）这些<strong>"重量级 wasm 应用"</strong>真正能用于生产负载。这是把 wasm 从"轻量计算加速"推向"完整应用平台"的关键提案。
+        </p>
 
         <h3>Spectre 防护对 Wasm 的影响</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li>2018 后 V8 给 wasm 加了 process isolation（Site Isolation）+ guard pages</li>
-          <li>SharedArrayBuffer 在 wasm threads 中需要 COOP/COEP（详见 <a href="../../ecma/07-execution/05-memory-model.html">ECMA P7.5 · §24 Memory Model</a>）</li>
-        </ul>
+        <p>
+          2018 年 Spectre 漏洞发布后，wasm 也是攻击面之一——wasm 线性内存可以构造任意指针访问，而 wasm 与 JS 共享进程，理论上能利用 CPU 推测执行旁路读其他 origin 数据。
+        </p>
+        <p>
+          V8 应对：(1) <strong>Site Isolation</strong>——不同 origin 的 wasm 跑在不同进程，物理隔离 cache；(2) <strong>Guard pages</strong>——在 wasm 线性内存边界放不可访问页，OOB 访问 fault 而非泄漏；(3) <strong>SharedArrayBuffer 限制</strong>——wasm threads 用 SAB 共享内存的能力<strong>需要 COOP/COEP</strong>（Cross-Origin-Opener-Policy / Cross-Origin-Embedder-Policy）头部验证 cross-origin 安全；详见 <a href="../../ecma/07-execution/05-memory-model.html">ECMA P7.5 · §24 Memory Model</a>。
+        </p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A · 评估某段 wasm 应用的启动时间</h3>
-          <p><em>正文待写。</em>所有函数编译完才能跑 vs JS 边解释边跑（lazy parsing）。</p>
+          <h3 class="scenario-title">场景 A · 评估 wasm 应用启动时间</h3>
+          <p>
+            wasm 启动 ≠ JS 启动。<strong>wasm 是"启动 = Liftoff 编译完所有函数"</strong>——一个 100MB wasm 模块要花<strong>数秒</strong>编译，即使你只用其中 1 个函数。对比 JS 的 lazy parsing（详见 P2.2）只完整解析被调用的函数（约 50% 实际调用）——同样代码 JS 启动远快于 wasm。
+          </p>
+          <p>
+            优化方向：(1) <strong>Streaming compilation</strong>——<code>WebAssembly.instantiateStreaming(fetch(...))</code> 让 V8 边下载边编译，下载完编译也基本完成；(2) <strong>用更小的 wasm 模块</strong>——按 feature 切分多个小 wasm，按需 load；(3) <strong>用 Code Cache</strong>——V8 缓存编译过的 wasm 机器码，二次访问跳过编译。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B · 选择 wasm vs JS</h3>
-          <p><em>正文待写。</em>极算术密集（图像/音频/物理）肯定 wasm；逻辑密集 / 调用密集（DOM 交互）JS 更优。</p>
+          <h3 class="scenario-title">场景 B · wasm vs JS 选型判据</h3>
+          <p>
+            常见判据"wasm 比 JS 快"过于简化。实际选型：
+          </p>
+          <ul>
+            <li><strong>极算术密集</strong>（图像 / 音频 / 物理 / 加密 / ML 推理）：wasm 完胜——线性内存 + 静态类型让 SIMD / 紧密循环跑出近 native 性能</li>
+            <li><strong>调用密集 / DOM 交互</strong>：JS 更优——跨边界税在每秒百万级调用累计可观，wasm 还没法直接操作 DOM</li>
+            <li><strong>逻辑密集 / 业务代码</strong>：JS 通常够——TurboFan 优化后 JS 性能足以满足绝大多数业务逻辑，wasm 增加复杂度不值得</li>
+            <li><strong>已有 C/C++/Rust 库</strong>：wasm 是理性选择——Emscripten / wasm-bindgen 让现有库直接拿来用</li>
+          </ul>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C · WasmGC 落地</h3>
-          <p><em>正文待写。</em>Kotlin Multiplatform、Dart Web、Scala.js 都在迁移。</p>
+          <h3 class="scenario-title">场景 C · WasmGC 落地：Kotlin / Dart / Scala</h3>
+          <p>
+            托管语言的 wasm target 在 2023-2025 期间陆续可用：<strong>Kotlin Multiplatform</strong> 加 wasm target、<strong>Dart Web</strong> 用 WasmGC 替代 dart2js、<strong>Scala.js</strong> 团队探索 Scala-wasm。这些项目共同点：包体下降 80%+，性能比对应"编译到 JS"版本快 2-3×。如果你团队用这些语言开发 web，<strong>2025 年起值得评估迁移到 wasm target</strong>——生态成熟度还不如 wasm-Rust 但快速追赶中。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 重量级 wasm 应用：SQLite / DuckDB / ffmpeg</h3>
+          <p>
+            Memory64 + JSPI + WasmGC 让"重量级应用"能完整跑在浏览器里：<strong>SQLite-WASM</strong>（嵌入式数据库，绕开服务端 SQL）、<strong>duckdb-wasm</strong>（OLAP 分析查询，处理 GB 级 parquet 直接在浏览器）、<strong>ffmpeg.wasm</strong>（视频转码不需要服务器）、<strong>onnxruntime-web + WASM EP</strong>（ML 推理在客户端）。这是 wasm 真正成为"浏览器内的应用平台"的方向——很多原本必须服务端做的事开始客户端化，给隐私 / 离线 / 成本带来革命性影响。
+          </p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
