@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>V8 Engine 深度学习 · 编译、内存与嵌入</title>
+    <meta
+      name="description"
+      content="V8 JavaScript 引擎的内部机制深度学习。6 阶段、12 章：从 V8 项目史与同代人（JSC / SpiderMonkey / Hermes）讲起，沿数据流向铺开 —— 编译流水线（Ignition / Sparkplug / Maglev / TurboFan）、Hidden Class + Inline Cache、堆布局 + Orinoco GC、Embedder API（Isolate / Context / Snapshot）+ 诊断工具 + V8 Sandbox，最后 V8 与 WASM 衔接。回答「ECMA 规范怎么落到机器真的跑」最后一环。"
+    />
+    <link rel="stylesheet" href="../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a3a6e'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV8%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="index.html">
+          <span>V8 Engine 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.4 0.1 255); color: #fff">V8</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">← 深度学习</a>
+          <a href="https://v8.dev/docs" target="_blank" rel="noopener">官方文档</a>
+          <a href="https://v8.dev/blog" target="_blank" rel="noopener">团队博客</a>
+          <a href="#phases">章节</a>
+          <a href="../README.md">关于</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <main id="main" class="home">
+      <section class="hero">
+        <h1>V8 Engine 深度学习 · 编译、内存与嵌入</h1>
+        <p>
+          基于
+          <a href="https://v8.dev/docs" target="_blank" rel="noopener">v8.dev 官方文档</a>
+          与
+          <a href="https://v8.dev/blog" target="_blank" rel="noopener">V8 团队博客</a>
+          整理。回答三个问题：<strong>V8 怎么走到今天</strong>（17 年项目史 + 同代人对照）、<strong>它怎么把 JS 真正跑起来</strong>（4 层 JIT 流水线 + Hidden Class + Inline Cache）、<strong>它怎么不爆内存又能被嵌入到任何地方</strong>（Orinoco GC + Snapshot + Embedder API + V8 Sandbox）。补全 <a href="../javascript/index.html">JavaScript</a> 与 <a href="../ecma/index.html">ECMAScript</a> 之后的"机器怎么真的跑"最后一环。
+        </p>
+        <div class="hero-meta">
+          <span>受众 <code>已学完 JS / ECMA 的工程师</code></span>
+          <span>来源 <code>v8.dev / V8 GitHub / 团队博客</code></span>
+          <span>章节 <code>12 章 / 6 阶段</code></span>
+          <span>状态 <code>🛠 大纲完成 · 撰写中</code></span>
+        </div>
+      </section>
+
+      <h2 id="phases" style="margin-top: 0">分阶段目录</h2>
+      <p style="color: var(--text-muted); max-width: 720px">
+        共 6 个阶段、12 章，沿一段 JS 代码的旅程铺开：<strong>V8 是谁 → 编译流水线 → 让动态变快 → 内存与 GC → 嵌入与诊断 → V8 与 WASM</strong>。建议顺序阅读；性能调优工程师可直接跳到 P2.1 / P3 / P5.2，Node / Deno / Workers 嵌入开发者可直接跳到 P5.1。
+      </p>
+
+      <div class="phase-grid">
+        <a class="phase-card" href="01-overview/index.html" data-status="pending">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P1 · V8 是谁</h3>
+            <span class="phase-card-badge">⏳ 2 章规划中</span>
+          </div>
+          <p class="phase-card-desc">
+            V8 项目史 2008-2025（每次架构突变及其根因：Crankshaft 退役、Ignition+TurboFan 大重构、Sparkplug 与 Maglev 填空档、Pointer Compression、V8 Sandbox）+ 同代人对照（JSC / SpiderMonkey / Hermes 各自不同的设计选择）+ V8 自己的"分身史"（Chrome / Node / Deno / Workers / Electron）。
+          </p>
+          <div class="phase-card-topics">
+            <span>项目史 17 年</span>
+            <span>同代人 JSC / SM / Hermes</span>
+            <span>V8 嵌入生态</span>
+            <span>Workers Isolate-per-tenant</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="02-pipeline/index.html" data-status="pending">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P2 · 编译流水线</h3>
+            <span class="phase-card-badge">⏳ 3 章规划中</span>
+          </div>
+          <p class="phase-card-desc">
+            一段 JS 代码的完整旅程：Parser（lazy parsing）→ Ignition 解释器（register-based VM + bytecode + Feedback Vector + Code Cache + Generator 状态机 + Builtins/Torque）→ 优化编译器三件套（Sparkplug 1:1 JIT 无 IR、Maglev SSA 中层、TurboFan Sea of Nodes + Turboshaft 后端）+ 反优化（eager / lazy / OSR）+ 并发编译。
+          </p>
+          <div class="phase-card-topics">
+            <span>4 层 Pipeline</span>
+            <span>Ignition + Bytecode</span>
+            <span>Sparkplug / Maglev / TurboFan</span>
+            <span>Builtins / Torque</span>
+            <span>Code Cache</span>
+            <span>Deopt / OSR</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="03-speedup/index.html" data-status="pending">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P3 · 让动态语言变快</h3>
+            <span class="phase-card-badge">⏳ 2 章规划中</span>
+          </div>
+          <p class="phase-card-desc">
+            V8 的核心魔法：用 <strong>Hidden Class + Inline Cache</strong> 把 JavaScript 的"动态"伪造成"静态"。讲清 Map / DescriptorArray / TransitionArray 三件套、in-object / fast / dictionary 三档存储、Slack Tracking、Elements Kind；以及 IC 在 Mono → Poly → Mega 的状态机演化、Feedback Vector 与编译器的协作。
+          </p>
+          <div class="phase-card-topics">
+            <span>Hidden Class / Map</span>
+            <span>Transition Tree</span>
+            <span>Slack Tracking</span>
+            <span>Elements Kind</span>
+            <span>IC Mono → Mega</span>
+            <span>Feedback Vector</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="04-memory/index.html" data-status="pending">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P4 · 内存与 GC</h3>
+            <span class="phase-card-badge">⏳ 2 章规划中</span>
+          </div>
+          <p class="phase-card-desc">
+            V8 在堆上怎么放对象、怎么压缩指针、怎么不卡主线程地回收。Heap Layout（Young / Old / Code / Map / Trusted Space）+ Tagged Pointer + SMI + Pointer Compression（4GB cage） + Orinoco GC（Parallel Scavenger + Concurrent Marking + Mark-Compact + Write Barrier）+ Cppgc / Oilpan 与 V8 的双堆协作。
+          </p>
+          <div class="phase-card-topics">
+            <span>Heap Layout</span>
+            <span>SMI / HeapNumber</span>
+            <span>Pointer Compression</span>
+            <span>Orinoco GC</span>
+            <span>Concurrent Marking</span>
+            <span>Cppgc / Oilpan</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="05-embedding/index.html" data-status="pending">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P5 · 嵌入与诊断</h3>
+            <span class="phase-card-badge">⏳ 2 章规划中</span>
+          </div>
+          <p class="phase-card-desc">
+            从 C++ 视角看 V8。Embedder API（Isolate / Context / HandleScope / Persistent / TracedReference）+ Snapshot（Workers &lt; 5ms 冷启动核心）+ Promise / Microtask Hooks + N-API 桥；诊断工具（--trace-deopt / --trace-ic / --trace-turbo / d8 / Turbolizer / Inspector Protocol）+ V8 Sandbox（pointer cage + external pointer table）。
+          </p>
+          <div class="phase-card-topics">
+            <span>Isolate / Context</span>
+            <span>HandleScope</span>
+            <span>Snapshot</span>
+            <span>--trace-deopt</span>
+            <span>d8 / Turbolizer</span>
+            <span>V8 Sandbox</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="06-wasm/index.html" data-status="pending">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P6 · V8 与 WASM</h3>
+            <span class="phase-card-badge">⏳ 1 章规划中</span>
+          </div>
+          <p class="phase-card-desc">
+            V8 的 Wasm 实现 —— 不讲通用 Wasm 知识（那些在独立 WebAssembly 主题）。Liftoff baseline JIT（无 IR，类似 Sparkplug）+ TurboFan 共享路径 + WasmGC（让 Java/Kotlin/Dart 编译到 wasm 性能 2x）+ JSPI / Reference Types / Memory64 + 与 V8 堆的边界。
+          </p>
+          <div class="phase-card-topics">
+            <span>Liftoff JIT</span>
+            <span>WasmGC</span>
+            <span>JSPI</span>
+            <span>Memory64</span>
+            <span>跨边界调用开销</span>
+          </div>
+        </a>
+      </div>
+
+      <h2 style="margin-top: 48px">编写约定</h2>
+      <p style="color: var(--text-muted); max-width: 720px">
+        每章遵循统一的 6 段结构：<strong>速览 → 底层逻辑 → 应用场景 → 典型代码 → 常见陷阱 → 延伸阅读</strong>。但 V8 主题相比 ECMA 有以下额外约定：
+      </p>
+      <ul style="color: var(--text-muted); line-height: 1.8">
+        <li>
+          <strong>「短重述 + 链回」</strong> —— 当一个机制在
+          <a href="../ecma/index.html">ECMA</a> 主题已详述时（如 Internal Methods / Realm / Memory Model），本主题用 1-3 句话点到本质，紧跟一句"详细规范请参考 X"，重点讲 V8 怎么实现
+        </li>
+        <li>
+          <strong>版本号必标</strong> —— V8 改动激烈，没有版本号的论述不可信。每个特性必标"V8 X.Y 引入 / V8 X.Y 移除"
+        </li>
+        <li>
+          <strong>v8.dev 一手优先</strong> —— 每个机制的"权威原文"必须是 v8.dev 博客或 v8.dev/docs。社区博客只用来佐证或补充实测数据
+        </li>
+        <li>
+          <strong>机器码示例只用 d8</strong> —— 所有 <code>--print-bytecode</code> <code>--trace-deopt</code> <code>--trace-ic</code> 输出都要用 V8 自带 <code>d8</code> 命令复现，不依赖 Chrome / Node 内部
+        </li>
+        <li>
+          <strong>⚠️ 标注</strong> —— Crankshaft / Full-codegen 永远标"2017 已删除"；2018+ 出现这两个名字的资料是过时博客
+        </li>
+      </ul>
+
+      <h2 style="margin-top: 48px">与既有主题的关系</h2>
+      <p style="color: var(--text-muted); max-width: 720px">
+        V8 主题<strong>不重复</strong> ECMA / JS 主题已经讲透的规范定义，但会在每个交叉点提供"短重述 + 链接"，重点讲 V8 在实现层做的事。常见对应：
+      </p>
+      <ul style="color: var(--text-muted); line-height: 1.8">
+        <li>
+          P3.1 Hidden Class → ECMA
+          <a href="../ecma/06-internal-slots/01-internal-slots.html">P6.1 Internal Methods</a>（11 个 essential method 是 V8 用 Map 实现的对象） /
+          <a href="../ecma/04-data-types/01-data-types.html">P4 Property Descriptor</a>
+        </li>
+        <li>
+          P5.1 Embedder API → ECMA
+          <a href="../ecma/07-execution/01-execution-model.html">P7.1 执行模型</a>（Isolate ≈ Agent / Context ≈ Realm）
+        </li>
+        <li>
+          P5.1 Microtask Hooks → JS
+          <a href="../javascript/03-async/index.html">P3 异步</a> / ECMA
+          <a href="../ecma/07-execution/03-event-loop-async.html">P7.3 Event Loop</a>
+        </li>
+        <li>
+          P4 Memory → ECMA
+          <a href="../ecma/07-execution/05-memory-model.html">P7.5 §24 Memory Model</a>（SAB / Atomics 在 V8 堆里的实际承载）
+        </li>
+        <li>
+          P3.1 / P2.1 Hidden Class 入门 → JS
+          <a href="../javascript/02-advanced/05-prototype-deep.html">02 高级 / 原型链深入</a>（带过 V8 hidden class）
+        </li>
+        <li>
+          P2.2 Generator / Async 状态机 → JS
+          <a href="../javascript/03-async/index.html">03 异步</a>（用户视角语义）
+        </li>
+        <li>
+          P6.1 V8 与 WASM → 独立的 WebAssembly 主题（待写，讲 wasm32 ISA / WASI / Component Model）
+        </li>
+        <li>
+          P1.2 同代人 JSC → 独立的 Bun 主题（讲 JSC 与 Bun 一体化设计）
+        </li>
+        <li>
+          P5.1 Node 嵌入 → 独立的 Node.js Runtime 主题（讲 libuv + N-API + Worker Threads）
+        </li>
+      </ul>
+    </main>
+
+    <script src="../assets/app.js"></script>
+  </body>
+</html>

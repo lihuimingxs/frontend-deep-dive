@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Orinoco GC: Parallel + Concurrent + Incremental · P4 · V8 Engine 深度学习</title>
+    <meta name="description" content="V8 的 GC 项目代号 Orinoco（2016 启动）：把 stop-the-world 单线程 GC 重构成主线程几乎不停。Parallel Scavenger + Concurrent Marking + Mark-Compact + Write Barrier + Cppgc / Oilpan 双堆协作。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a3a6e'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV8%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>V8 Engine 深度学习</span><span class="site-title-badge" style="background: oklch(0.4 0.1 255); color: #fff">V8</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">V8 首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · 内存与 GC</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-heap-and-objects.html">01 · 堆布局与对象表示</a></li>
+          <li><a href="02-orinoco-gc.html" class="active">02 · Orinoco GC</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · V8 是谁</a></li>
+          <li><a href="../02-pipeline/index.html">P2 · 编译流水线</a></li>
+          <li><a href="../03-speedup/index.html">P3 · 让动态语言变快</a></li>
+          <li><a href="../05-embedding/index.html">P5 · 嵌入与诊断</a></li>
+          <li><a href="../06-wasm/index.html">P6 · V8 与 WASM</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">V8 Engine</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · 内存与 GC</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Orinoco GC</span>
+        </nav>
+        <h1>Orinoco GC：Parallel + Concurrent + Incremental</h1>
+        <p class="lead">
+          Orinoco 是 V8 的 GC 项目代号（2016 启动，至今仍在演进）。把"stop-the-world 单线程 GC"重构成"主线程几乎不停"。三件套：<strong>Parallel Scavenger</strong>（year gen，主线程暂停 1-3ms）+ <strong>Concurrent Marking</strong>（old gen，heavy WebGL 暂停 -50%）+ <strong>Mark-Compact</strong>。再讲与 Cppgc / Oilpan 的双堆协作 —— V8 工程上最复杂的 GC 集成之一。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~35 分钟</span>
+          <span><strong>前置</strong> P4.1 · 堆布局</span>
+          <span><strong>主要来源</strong> v8.dev/blog/trash-talk · concurrent-marking · orinoco-parallel-scavenger</span>
+        </div>
+        <div class="callout warn">
+          <div class="callout-title">📝 章节状态</div>
+          <p>骨架版本。对照大纲 <code>v8/outline.md § P4.2</code>。</p>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>"主线程几乎不停"是 Orinoco 的核心叙事</strong>：传统 mark-sweep 在长串引用上能 stop world 几百毫秒；并发 + 并行 + 增量三件套把这个降到 ~10ms 内。</li>
+          <li><strong>分代假说驱动设计</strong>：大多数对象死得早 → 把堆分代，年轻代频繁回收，老年代偶尔回收。</li>
+          <li><strong>性能优化基本只关注年轻代频率</strong>：年轻代 GC 极频繁（每秒数十次）但每次 1-3ms；老年代 GC 罕见但每次更长。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>分代假说与 Minor GC（Young Gen）—— Parallel Scavenger</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>算法：<strong>Cheney 半空间复制</strong>（From-space → To-space，活的对象拷过去，死的丢弃）</li>
+          <li>V8 6.2+：<strong>Parallel Scavenger</strong>，多线程 work stealing</li>
+          <li>主线程暂停时间：~1-3ms（典型）</li>
+          <li><strong>Promotion</strong>：在 young gen 里活过 N 次（默认 2）的对象升到 old gen</li>
+        </ul>
+
+        <h3>Major GC（Old Gen）—— Concurrent Mark-Compact</h3>
+        <p><em>正文待写。</em>3 阶段：</p>
+        <ul>
+          <li><strong>Marking</strong>（找活对象）：从根集合（栈、全局、handle）出发遍历指针图
+            <ul>
+              <li>Concurrent Marking（V8 6.4+，2018）：marking 在 helper thread 上做，主线程几乎不停</li>
+              <li>Incremental Marking 兜底：如果 concurrent 没赶上，主线程做小步增量</li>
+            </ul>
+          </li>
+          <li><strong>Sweeping</strong>（回收死对象空间）：Concurrent Sweeping，helper thread 标记 free list，主线程不停</li>
+          <li><strong>Compacting</strong>（消除碎片，可选）：Parallel Compaction，多线程同时移动对象 + 更新指针；不是每次都做（成本高）</li>
+        </ul>
+
+        <h3>Write Barrier 与 Remembered Set</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>问题</strong>：Minor GC 只看 young gen，但 old gen 可能持有指向 young gen 的指针 —— 不能漏掉</li>
+          <li><strong>方案</strong>：每次"old → young 写指针"时记录到 Remembered Set（实现为 card table 或精确 slot 集）</li>
+          <li>Minor GC 时把 Remembered Set 当作"额外 root"</li>
+        </ul>
+
+        <h3>Incremental Marking 与 Tri-color Abstraction</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>White：未访问 / 死</li>
+          <li>Grey：已访问但子节点未访问</li>
+          <li>Black：已完全处理</li>
+          <li>用 Snapshot-At-The-Beginning (SATB) 写屏障保证不漏</li>
+        </ul>
+
+        <h3>GC 调优旋钮</h3>
+        <p><em>正文待写。</em>Node 命令行：</p>
+        <ul>
+          <li><code>--max-old-space-size=N</code>（MB）：old gen 上限</li>
+          <li><code>--max-semi-space-size=N</code>（MB）：young gen 半空间大小</li>
+          <li><code>--gc-interval=N</code>：每 N 次分配触发一次 GC（debug）</li>
+          <li><code>--trace-gc</code> <code>--trace-gc-verbose</code>：打印每次 GC 详情</li>
+        </ul>
+
+        <h3>Cppgc / Oilpan 与 V8 的"双堆协作"</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>Oilpan</strong> 是 Blink（DOM）用的 C++ GC；2020 后从 Blink 抽出，独立成 V8 的 <strong>Cppgc</strong> 库</li>
+          <li><strong>场景</strong>：DOM 节点（C++ 对象）和 JS 包装对象（V8 堆对象）互相引用 —— 光靠 V8 GC 看不到 C++ 端，光靠 Oilpan 看不到 JS 端</li>
+          <li><strong>方案</strong>：<strong>Unified Heap</strong> 跨堆引用追踪 —— V8 marking 阶段会回调进 Cppgc 让它继续标记 C++ 对象图；Cppgc 的 marker 同样会回调进 V8</li>
+          <li><strong>TracedReference&lt;T&gt;</strong>：Embedder 用这个 handle 类型表示"C++ 持有 V8 对象" —— 参与 unified marking</li>
+          <li><strong>Conservative Stack Scanning</strong>（P4.1 介绍过）是 Unified Heap 的前置</li>
+          <li>意义：Chrome 内存表现的好坏一半看 V8 一半看 Oilpan</li>
+        </ul>
+
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · Chrome DevTools Memory Profiler 抓 heap snapshot</h3>
+          <p><em>正文待写。</em>找意外的 retainer。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 用 --trace-gc 看 GC 频率与暂停时间</h3>
+          <p><em>正文待写。</em>young/old 比例分析。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 服务端 Node 应用调优</h3>
+          <p><em>正文待写。</em>调大 max-old-space-size（默认 1.5GB-4GB 视 Node 版本）。</p>
+        </div>
+
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+<pre class="code"><code class="lang-bash"># Node 启动时调优
+node --max-old-space-size=4096 \
+     --max-semi-space-size=128 \
+     --trace-gc \
+     server.js
+
+# d8 详细 GC 追踪
+d8 --trace-gc --trace-gc-verbose script.js</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="pitfall">
+          <div class="pitfall-title">"强制 GC"的 global.gc() 只在 --expose-gc 标志下可用</div>
+          <p>生产<strong>不要用</strong> —— 你不比 V8 知道更多。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">大数组 promote 到 old gen 后不会被 promote 回 young</div>
+          <p>意味着短暂的大数组也走重 GC 路径。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">FinalizationRegistry / WeakRef 不保证立即调用 finalizer</div>
+          <p>V8 把它放在 idle task 里，不要用作资源释放（详见 <a href="../../ecma/06-internal-slots/02-reflect-meta.html">ECMA P6.2 · Reflect & WeakRef</a>）。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">DevTools Memory Profiler 抓的是"逻辑 retain 图"</div>
+          <p>和 V8 实际堆布局不完全对应。</p>
+        </div>
+
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://v8.dev/blog/trash-talk" target="_blank" rel="noopener">Trash talk: the Orinoco garbage collector</a> · 总览</li>
+          <li><a href="https://v8.dev/blog/orinoco-parallel-scavenger" target="_blank" rel="noopener">Orinoco: young generation garbage collection</a></li>
+          <li><a href="https://v8.dev/blog/concurrent-marking" target="_blank" rel="noopener">Concurrent marking in V8</a></li>
+          <li><a href="https://v8.dev/blog/oilpan-pointer-compression" target="_blank" rel="noopener">Pointer compression in Oilpan</a></li>
+          <li><a href="../../ecma/06-internal-slots/02-reflect-meta.html">ECMA P6.2 · WeakRef / FinalizationRegistry</a></li>
+          <li>下一阶段 → <a href="../05-embedding/index.html">P5 · 嵌入与诊断</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-heap-and-objects.html"><span class="label">← 上一章</span><span class="title">01 · 堆布局与对象表示</span></a>
+          <a class="next" href="../05-embedding/01-embedder-api.html"><span class="label">下一章 →</span><span class="title">P5.1 · Embedder API</span></a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录"><h3>本页目录</h3><ul></ul></aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

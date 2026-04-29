@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hidden Class（Map / Transition Tree）· P3 · V8 Engine 深度学习</title>
+    <meta name="description" content="V8 实现 ECMAScript Object Internal Methods 的关键数据结构。Map + DescriptorArray + TransitionArray 三件套、in-object / fast / dictionary 三档存储、Slack Tracking、Elements Kind。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a3a6e'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV8%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>V8 Engine 深度学习</span><span class="site-title-badge" style="background: oklch(0.4 0.1 255); color: #fff">V8</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">V8 首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · 让动态语言变快</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-hidden-class.html" class="active">01 · Hidden Class · Map · Transition</a></li>
+          <li><a href="02-inline-cache.html">02 · Inline Cache: Mono → Mega</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · V8 是谁</a></li>
+          <li><a href="../02-pipeline/index.html">P2 · 编译流水线</a></li>
+          <li><a href="../04-memory/index.html">P4 · 内存与 GC</a></li>
+          <li><a href="../05-embedding/index.html">P5 · 嵌入与诊断</a></li>
+          <li><a href="../06-wasm/index.html">P6 · V8 与 WASM</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">V8 Engine</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · 让动态语言变快</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Hidden Class</span>
+        </nav>
+        <h1>Hidden Class（Map / Transition Tree）</h1>
+        <p class="lead">
+          V8 实现 ECMAScript Object Internal Methods（<a href="../../ecma/06-internal-slots/01-internal-slots.html"><code>[[Get]]</code> / <code>[[Set]]</code> / <code>[[OwnPropertyKeys]]</code> 等</a>）的关键数据结构。讲清"为什么 JS 对象访问能跟 C 结构体一样快"——V8 把"动态语言"约束到运行时常见模式，<strong>大多数对象的属性集合在创建后不变</strong>，让相同形状的对象共享一个 Map（hidden class），让属性访问变成"Map check + offset load"两条指令。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~35 分钟</span>
+          <span><strong>前置</strong> ECMA P6（Internal Methods）</span>
+          <span><strong>主要来源</strong> v8.dev/docs/hidden-classes · slack-tracking 博客</span>
+        </div>
+        <div class="callout warn">
+          <div class="callout-title">📝 章节状态</div>
+          <p>骨架版本。对照大纲 <code>v8/outline.md § P3.1</code>。</p>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Hidden Class 是 V8 把"动态语言"伪造成"静态"的核心</strong>。所有 JS 对象的第一字段是一个 Map 指针，相同形状对象共享同一个 Map。</li>
+          <li><strong>属性存储 3 档</strong>：in-object（前 3 个 slot）/ fast properties（backing store）/ dictionary mode（hash table，慢路径）。</li>
+          <li><strong>属性添加顺序很重要</strong>：相同顺序 → 相同 Map；不同顺序 → 走不同 transition path → IC 站点会 polymorphic。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>三件套数据结构</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>Map</strong>（即 hidden class）：每个 object 第一字段，标识"形状"</li>
+          <li><strong>DescriptorArray</strong>：Map 共享，记录每个属性的名字 + storage location（in-object slot 或 backing store index）+ attributes</li>
+          <li><strong>TransitionArray</strong>：Map 之间的边，记录"如果加属性 X 则转到 Map Y"</li>
+        </ul>
+
+        <h3>Transition Tree 示意</h3>
+        <div class="code-block">
+          <span class="code-label">map-graph</span>
+<pre class="code"><code>{} (Map_0)
+ │ +x
+ ▼
+{x} (Map_1)
+ │ +y
+ ▼
+{x, y} (Map_2)
+ │ +z
+ ▼
+{x, y, z} (Map_3)
+
+所有 {x, y, z} 形状的 object 共享 Map_3
+内存占用极低且 Map 比较 = 指针比较</code></pre>
+        </div>
+
+        <h3>属性存储 3 档</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>In-object properties</strong>（前 3 个）：直接存在 object 字段里，访问 = 一次 load</li>
+          <li><strong>Fast properties</strong>（4+）：存在 backing store 数组，descriptor 给出 index</li>
+          <li><strong>Dictionary mode</strong>：当属性数量超过阈值 / 频繁 delete / 名字奇怪时降级成 hash table</li>
+        </ul>
+
+        <h3>从 ECMA Internal Method 到 V8 实现</h3>
+        <p><em>正文待写。</em>规范层与实现层的对应（详细规范定义见 <a href="../../ecma/06-internal-slots/01-internal-slots.html">ECMA P6.1</a>）：</p>
+        <ul>
+          <li><code>[[Get]] (P, Receiver)</code> 规范步骤一堆 → V8 编译成"Map check + offset load"两条指令</li>
+          <li><code>[[Set]] (P, V, Receiver)</code> → "Map check + transition lookup + store"</li>
+          <li><code>[[OwnPropertyKeys]] ()</code> → 遍历 DescriptorArray</li>
+        </ul>
+
+        <h3>'const' 标注与编译时内联</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>如果一个属性从未被改（V8 跟踪），DescriptorArray 把它标 <code>const</code></li>
+          <li>TurboFan 看到 <code>const</code> 直接把值内联进机器码（如 <code>obj.foo</code> 编译成 <code>mov eax, 42</code>）</li>
+          <li>后来如果属性变了 → Map deprecated → 触发 deopt</li>
+        </ul>
+
+        <h3>属性添加顺序的代价</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// 慢：两个 object 走不同 transition path
+const a = {}; a.x = 1; a.y = 2;
+const b = {}; b.y = 2; b.x = 1;
+// a 的 Map 和 b 的 Map 不同 —— IC 站点会 polymorphic
+
+// 快：相同顺序 → 相同 Map
+const a = {x: 1, y: 2};
+const b = {x: 1, y: 2};</code></pre>
+        </div>
+
+        <h3>数组也有 Map（"Elements Kind"）</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>PACKED_SMI</strong> → <strong>PACKED_DOUBLE</strong> → <strong>PACKED_ELEMENTS</strong>（一旦混入 string / object 就回不去）</li>
+          <li><strong>HOLEY_*</strong> vs <strong>PACKED_*</strong>：稀疏数组（如 <code>[,1,,3]</code>）走 holey 慢路径</li>
+        </ul>
+
+        <h3>Slack Tracking</h3>
+        <p><em>正文待写。</em>V8 处理"不知道最终多少属性"的工程式答案：</p>
+        <ul>
+          <li>构造对象时 V8 不知道用户最终会加多少属性 —— 给少了后期要走 backing store 慢路径，给多了浪费内存</li>
+          <li>初始 Map 上带一个 construction counter（默认 7），新对象多预留 8 个 in-object slot；每构造一次计数器递减</li>
+          <li>计数归零后 V8 认为构造模式稳定，<strong>填 filler 对象占住没用的 slot</strong>，下次 GC 时这些 filler 被回收，Map 收缩到实际用量</li>
+          <li>典型例子：<code>Peak</code> 对象初始 52 字节（10 slot），slack tracking 完成后缩到 20 字节（2 slot）</li>
+        </ul>
+
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 工厂模式让所有实例走同一 transition path</h3>
+          <p><em>正文待写。</em>类似 <code>class Point { constructor(x, y) { this.x = x; this.y = y; } }</code> 的模式。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 避免 delete 操作</h3>
+          <p><em>正文待写。</em>用 <code>obj.foo = undefined</code> 替代；delete 让对象走 dictionary mode。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 数组优化</h3>
+          <p><em>正文待写。</em>避免空洞（不用 <code>arr[1000] = x</code> 跳过 999 个 slot）；不要在 SMI 数组里塞 NaN。</p>
+        </div>
+
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// 用 %HaveSameMap 验证两 object 是否同 hidden class（仅 d8 / --allow-natives-syntax）
+const a = {x: 1, y: 2};
+const b = {x: 3, y: 4};
+const c = {y: 4, x: 3};
+
+console.log(%HaveSameMap(a, b));  // true
+console.log(%HaveSameMap(a, c));  // false（顺序不同）
+
+// 用 %DebugPrint 看 V8 内部表示
+%DebugPrint(a);
+// 输出包含 Map 地址、in-object slot 内容、descriptor array</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="pitfall">
+          <div class="pitfall-title">看到"V8 优化对象"博客时注意年代</div>
+          <p>2017 之前可能讲 Crankshaft 的 hidden class 优化（与今天的 Map 系统差异不大但实现细节不同）。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">class 不是魔法</div>
+          <p><code>class Foo { ... }</code> 和 <code>function Foo() { ... }</code> + prototype 在 V8 内部是同一套 Map 机制。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">Object.assign({}, src) 走 normalized 路径</div>
+          <p>性能不如直接 <code>{...src}</code>（V8 11+ 已优化但仍有差异）。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">delete 是 V8 性能反模式</div>
+          <p>transition tree 是单向不可逆的；一旦走到一个 Map，删属性也不会回到旧 Map，反而触发 dictionary mode。</p>
+        </div>
+
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://v8.dev/docs/hidden-classes" target="_blank" rel="noopener">v8.dev/docs/hidden-classes</a></li>
+          <li><a href="https://v8.dev/blog/slack-tracking" target="_blank" rel="noopener">Slack tracking</a></li>
+          <li><a href="https://v8.dev/blog/elements-kinds" target="_blank" rel="noopener">Elements kinds in V8</a></li>
+          <li><a href="../../ecma/06-internal-slots/01-internal-slots.html">ECMA P6.1 · Internal Methods</a> · 规范定义</li>
+          <li><a href="../../ecma/04-data-types/01-data-types.html">ECMA P4 · Property Descriptor</a></li>
+          <li><a href="../../javascript/02-advanced/05-prototype-deep.html">JS · 原型链深入</a> · Hidden Class 入门级介绍</li>
+          <li>下一章 → <a href="02-inline-cache.html">P3.2 · Inline Cache</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../02-pipeline/03-optimizing-compilers.html"><span class="label">← 上一章</span><span class="title">P2.3 · 优化编译器三件套</span></a>
+          <a class="next" href="02-inline-cache.html"><span class="label">下一章 →</span><span class="title">02 · Inline Cache</span></a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录"><h3>本页目录</h3><ul></ul></aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>堆布局与对象表示 · P4 · V8 Engine 深度学习</title>
+    <meta name="description" content="V8 在堆上怎么放对象、怎么压缩指针、怎么把 SMI 塞进指针位。Heap 分代结构 + Tagged Pointer + SMI + Pointer Compression + Mutable Heap Numbers + Conservative Stack Scanning。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a3a6e'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV8%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>V8 Engine 深度学习</span><span class="site-title-badge" style="background: oklch(0.4 0.1 255); color: #fff">V8</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">V8 首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · 内存与 GC</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-heap-and-objects.html" class="active">01 · 堆布局与对象表示</a></li>
+          <li><a href="02-orinoco-gc.html">02 · Orinoco GC</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · V8 是谁</a></li>
+          <li><a href="../02-pipeline/index.html">P2 · 编译流水线</a></li>
+          <li><a href="../03-speedup/index.html">P3 · 让动态语言变快</a></li>
+          <li><a href="../05-embedding/index.html">P5 · 嵌入与诊断</a></li>
+          <li><a href="../06-wasm/index.html">P6 · V8 与 WASM</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">V8 Engine</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · 内存与 GC</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 堆布局与对象表示</span>
+        </nav>
+        <h1>堆布局与对象表示</h1>
+        <p class="lead">
+          V8 在堆上怎么放对象、怎么压缩指针、怎么把 SMI 塞进指针位。这一章讲清"V8 堆是什么样子"：分代结构（Young / Old / Code / Map / Trusted Space）、Tagged Pointer 编码、SMI 与 HeapNumber 的边界、Pointer Compression（4GB cage 让堆 -43%）、多种 String 表示（ConsString / SlicedString / ExternalString）、以及 2023 加入的 Conservative Stack Scanning。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> ECMA P4（数据类型）</span>
+          <span><strong>主要来源</strong> v8.dev/blog/pointer-compression · mutable-heap-number</span>
+        </div>
+        <div class="callout warn">
+          <div class="callout-title">📝 章节状态</div>
+          <p>骨架版本。对照大纲 <code>v8/outline.md § P4.1</code>。</p>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>"V8 中的 number"是 SMI ⊎ HeapNumber 的 union</strong>：算术热路径上 V8 做 SMI fast path（无堆分配），溢出回 HeapNumber。</li>
+          <li><strong>Pointer Compression</strong>（V8 8.0+）：64-bit 系统中限制堆到 4GB cage，pointer 用 32-bit offset，堆 -43%。</li>
+          <li><strong>Pointer Compression 为 V8 Sandbox 铺路</strong>：当所有指针都是 32-bit offset 时，corruption 影响范围天然限制在 cage 内。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Heap 分代结构</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>Young Generation (NewSpace)</strong>：小、新对象、Scavenger 频繁回收（默认 16MB-64MB）；又分 From-space 和 To-space（Cheney 半空间复制）</li>
+          <li><strong>Old Generation</strong>：大、长寿对象、Mark-Compact 偶尔回收；又分 Old Pointer Space / Old Data Space</li>
+          <li><strong>Code Space</strong>：JIT 编译产物（机器码）</li>
+          <li><strong>Map Space</strong>：Hidden Class（Map 对象）单独区域</li>
+          <li><strong>Large Object Space</strong>：&gt; 大于 spaces 的对象（典型 1MB+）</li>
+          <li><strong>Trusted Space</strong> / <strong>Trusted Code Space</strong>（V8 Sandbox 引入）</li>
+        </ul>
+
+        <h3>Tagged Pointer（V8 表示一切的方式）</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>64-bit 系统：每个 V8 值是 64-bit 字</li>
+          <li>最低位 = 0 → <strong>SMI</strong> (Small Integer)，剩 31 位整数（compressed pointer 模式下）</li>
+          <li>最低位 = 1 → <strong>HeapObject 指针</strong>（实际指向堆，地址按 4 字节对齐所以低位为 0；运行时 -1 还原）</li>
+        </ul>
+
+        <h3>SMI 的代价</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>31-bit signed range：-2^30 到 2^30 - 1</li>
+          <li>超出 → 升级成 HeapNumber（堆上 8 字节 IEEE 754 double）</li>
+          <li>数组下标、循环计数器都希望落在 SMI 范围</li>
+        </ul>
+
+        <h3>Pointer Compression（V8 8.0+，2020）</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>问题</strong>：64-bit 系统的指针字段占 8 字节，但 V8 堆 &lt; 4GB → 高 32 位都一样</li>
+          <li><strong>方案</strong>：在虚拟地址空间预留 4GB 区域（<strong>isolate cage</strong>），所有堆对象住在里面；对象内部指针字段用 <strong>32-bit offset</strong> 表示</li>
+          <li><strong>效果</strong>：堆 -43%、指令 cache 命中率提升、SMI 改成 31-bit（与压缩指针一致）</li>
+          <li><strong>代价</strong>：堆上限 4GB（之前可以无限）；进入 isolate 时要计算 base</li>
+        </ul>
+
+        <h3>HeapObject 通用 layout</h3>
+        <div class="code-block">
+          <span class="code-label">layout</span>
+<pre class="code"><code>[ Map pointer (4B) ]    ← Hidden Class（即 [[Class]]）
+[ Properties (4B)  ]    ← 指向 properties backing store 数组
+[ Elements (4B)    ]    ← 指向 elements backing store（数组元素）
+[ in-object slot 0 ]    ← 前 N 个属性直接存这里
+[ in-object slot 1 ]
+...</code></pre>
+        </div>
+
+        <h3>String 表示（多种）</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>SeqOneByteString</strong>：纯 ASCII 单字节</li>
+          <li><strong>SeqTwoByteString</strong>：UTF-16</li>
+          <li><strong>ConsString</strong>：a + b 字符串拼接的"延迟链表"（不立即合并）</li>
+          <li><strong>SlicedString</strong>：另一字符串的子串（共享 backing）</li>
+          <li><strong>ExternalString</strong>：指向 V8 外部内存（嵌入器分配）</li>
+          <li><strong>InternalizedString</strong>：去重的字符串池（用于属性名）</li>
+        </ul>
+
+        <h3>Mutable Heap Numbers（V8 11+）</h3>
+        <p><em>正文待写。</em>当 V8 确定一个 HeapNumber 只被一个 object 引用时，让它 mutable，原地更新；否则每次浮点数变化都新分配。</p>
+
+        <h3>Conservative Stack Scanning（V8 11.2+，2023）</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>背景</strong>：V8 GC 一直是精确式 —— 每个栈位置都要精确知道是否是指针。要求编译器维护精确的 stack maps，复杂且慢</li>
+          <li><strong>做法</strong>：GC 扫描栈时，把所有"看起来像指针的字"都当作潜在 root —— 可能多保留一些对象（保守），但允许编译器丢掉 stack maps</li>
+          <li><strong>为什么现在能这么做</strong>：Pointer Compression 让指针只能落在 4GB cage 内，"看起来像指针"的判断准确率极高；误判保留的对象很少</li>
+          <li><strong>收益</strong>：编译器代码简化、Maglev 编译速度可观提升；为 V8 与 Cppgc / Oilpan 互操作铺路</li>
+        </ul>
+
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 内存敏感场景下避免 HeapNumber</h3>
+          <p><em>正文待写。</em>保持整数运算（<code>Math.floor</code> / <code>| 0</code>）。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 大字符串拼接</h3>
+          <p><em>正文待写。</em>知道 ConsString 是惰性合并 —— <code>for (s += chunk)</code> 在 V8 不会每次都拷贝（直到 access 时）。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · Buffer / TypedArray 用 ArrayBuffer</h3>
+          <p><em>正文待写。</em>这个 backing 在 ArrayBuffer Allocator 那层（嵌入器决定）而非 V8 堆。</p>
+        </div>
+
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// SMI vs HeapNumber 边界
+const small = 100;            // SMI（fast path）
+const big = 2 ** 31;          // HeapNumber（堆分配）
+const float = 1.5;            // HeapNumber（堆分配）
+
+// d8 用 %DebugPrint 看类型
+%DebugPrint(small);  // type: Smi
+%DebugPrint(big);    // type: HeapNumber
+%DebugPrint(float);  // type: HeapNumber</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="pitfall">
+          <div class="pitfall-title">Pointer Compression 的 4GB 上限是 per-isolate 不是进程</div>
+          <p>多 isolate（Workers）互不影响。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">--max-old-space-size 不是总堆上限</div>
+          <p>设的是 Old Gen 上限；总堆 ≈ Old + 1.5×Young + Code + ...</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">ConsString 内存延迟释放</div>
+          <p>切片大文本可能让源字符串永不能 GC（用 SlicedString 也有类似问题，需要 <code>flatten</code>）。</p>
+        </div>
+
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://v8.dev/blog/pointer-compression" target="_blank" rel="noopener">Pointer Compression in V8</a></li>
+          <li><a href="https://v8.dev/blog/mutable-heap-number" target="_blank" rel="noopener">Turbocharging V8 with mutable heap numbers</a></li>
+          <li><a href="../../ecma/04-data-types/01-data-types.html">ECMA P4 · §6 数据类型</a> · Number / String 规范</li>
+          <li><a href="../../ecma/07-execution/05-memory-model.html">ECMA P7.5 · §24 Memory Model</a> · SAB / Atomics 在 V8 堆里的承载</li>
+          <li>下一章 → <a href="02-orinoco-gc.html">P4.2 · Orinoco GC</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../03-speedup/02-inline-cache.html"><span class="label">← 上一章</span><span class="title">P3.2 · Inline Cache</span></a>
+          <a class="next" href="02-orinoco-gc.html"><span class="label">下一章 →</span><span class="title">02 · Orinoco GC</span></a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录"><h3>本页目录</h3><ul></ul></aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

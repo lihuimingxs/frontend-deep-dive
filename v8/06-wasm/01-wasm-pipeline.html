@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>V8 的 Wasm 编译流水线 · P6 · V8 Engine 深度学习</title>
+    <meta name="description" content="V8 怎么实现 WebAssembly：Liftoff baseline JIT（无 IR，类似 Sparkplug）+ TurboFan 共享路径 + WasmGC（让 Java/Kotlin/Dart 编译到 wasm 性能 2x）+ JSPI / Reference Types / Memory64。不讲通用 Wasm 知识。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a3a6e'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV8%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>V8 Engine 深度学习</span><span class="site-title-badge" style="background: oklch(0.4 0.1 255); color: #fff">V8</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">V8 首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · V8 与 WASM</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-wasm-pipeline.html" class="active">01 · V8 的 Wasm 编译流水线</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · V8 是谁</a></li>
+          <li><a href="../02-pipeline/index.html">P2 · 编译流水线</a></li>
+          <li><a href="../03-speedup/index.html">P3 · 让动态语言变快</a></li>
+          <li><a href="../04-memory/index.html">P4 · 内存与 GC</a></li>
+          <li><a href="../05-embedding/index.html">P5 · 嵌入与诊断</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">V8 Engine</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · V8 与 WASM</a><span class="breadcrumb-sep">/</span>
+          <span>01 · V8 的 Wasm 编译流水线</span>
+        </nav>
+        <h1>V8 的 Wasm 编译流水线</h1>
+        <p class="lead">
+          这一章是与独立的 <strong>WebAssembly 主题</strong>之间的"接口章" —— 只讲 V8 怎么实现 Wasm，不讲 wasm32 ISA / WASI / Component Model 等通用 Wasm 知识。把 V8 的 4 层 JS 管道和 2 层 Wasm 管道（<strong>Liftoff + TurboFan</strong>）放在一起对比，再讲 <strong>WasmGC</strong>（让 Java/Kotlin/Dart 编译到 wasm 性能 2x）、<strong>JSPI</strong>（同步 wasm 调异步 JS）、<strong>Memory64</strong>（让 SQLite-WASM 可用）。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P2.3（优化编译器）</span>
+          <span><strong>主要来源</strong> v8.dev/docs/wasm-compilation-pipeline · holiday-season-2023</span>
+        </div>
+        <div class="callout warn">
+          <div class="callout-title">📝 章节状态</div>
+          <p>骨架版本。对照大纲 <code>v8/outline.md § P6.1</code>。</p>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>wasm 没解释器是因为它本身就是 bytecode</strong>：JS 的 Ignition 把源码翻译成 bytecode；wasm 直接是 bytecode 形式 → V8 跳过翻译，直接 Liftoff 编译。</li>
+          <li><strong>WasmGC 的真正意义不是"快"，是"语言生态"</strong>：在它之前 Kotlin/wasm 必须自带 GC（包体大、性能差）；现在直接复用 V8 GC。</li>
+          <li><strong>wasm 在 V8 内部"和 JS 共享一切"</strong>：堆、GC、TurboFan、debugger、profiler —— 都是同一套，只是入口不同。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Wasm 双层管道</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>Liftoff</strong>（2018 引入）：baseline 编译器，wasm bytecode → 机器码 1:1，无 IR
+            <ul>
+              <li>类似 JS 的 Sparkplug：极快编译换更慢稳态</li>
+              <li>启动时<strong>所有函数同步编译为 Liftoff</strong> → 无解释器，所以"启动 = 编译完所有函数"</li>
+            </ul>
+          </li>
+          <li><strong>TurboFan</strong>（共享 JS 路径）：复用 sea of nodes，跑长期热点 wasm 函数</li>
+          <li><strong>Tier-up</strong>：和 JS 一样，hot 函数从 Liftoff 提到 TurboFan</li>
+        </ul>
+
+        <h3>WasmGC（2023 正式）</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>让 Java / Kotlin / Dart / Scala 这些"托管语言"能高效编译到 wasm</li>
+          <li>V8 直接用 Orinoco 管理 wasm GC 对象（不再通过 JS 包装）</li>
+          <li>性能：Java/Kotlin/Dart 编译版<strong>约为 wasm 直接版的 2x</strong>（vs 之前编译到 JS 慢几个数量级）</li>
+        </ul>
+
+        <h3>V8 Wasm 与 JS 的互操作</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>Imports / Exports</strong>：wasm 模块通过 import 拿到 JS 函数 / 内存；export 暴露 wasm 函数给 JS</li>
+          <li><strong>JS Promise Integration (JSPI)</strong>（2025 Stage 4）：让同步 wasm 调用异步 JS API（如 fetch）</li>
+          <li><strong>Reference Types</strong>（externref / funcref）：让 wasm 持有不透明的 JS 对象引用</li>
+          <li><strong>跨边界调用开销</strong>：early V8 是 ~100ns，今天 ~10ns；vs 普通 JS call ~1ns —— 仍有"边界税"</li>
+        </ul>
+
+        <h3>Wasm 内存模型与 V8 堆</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>Wasm 线性内存是 ArrayBuffer（V8 外部内存，不在 cage 内）</li>
+          <li>WasmGC 对象在 V8 堆内（受 Pointer Compression / Sandbox 保护）</li>
+        </ul>
+
+        <h3>Memory64（提案 Stage 4，V8 11+ 实现）</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>背景</strong>：原 wasm 线性内存用 32-bit index，上限 4GB；图像处理 / 大型应用 / 数据库引擎不够用</li>
+          <li><strong>方案</strong>：扩展到 64-bit index，理论上限 16 EB（实际取决于宿主可分配地址）</li>
+          <li><strong>代价</strong>：每次 memory access 多用一条指令做 64-bit bound check；V8 在 fast path 上做了优化但仍有 ~5-15% 性能损失</li>
+          <li><strong>意义</strong>：让 SQLite-WASM、duckdb-wasm、ffmpeg.wasm 这些大数据应用真正能用 wasm 跑生产负载</li>
+        </ul>
+
+        <h3>Spectre 防护对 Wasm 的影响</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>2018 后 V8 给 wasm 加了 process isolation（Site Isolation）+ guard pages</li>
+          <li>SharedArrayBuffer 在 wasm threads 中需要 COOP/COEP（详见 <a href="../../ecma/07-execution/05-memory-model.html">ECMA P7.5 · §24 Memory Model</a>）</li>
+        </ul>
+
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 评估某段 wasm 应用的启动时间</h3>
+          <p><em>正文待写。</em>所有函数编译完才能跑 vs JS 边解释边跑（lazy parsing）。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 选择 wasm vs JS</h3>
+          <p><em>正文待写。</em>极算术密集（图像/音频/物理）肯定 wasm；逻辑密集 / 调用密集（DOM 交互）JS 更优。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · WasmGC 落地</h3>
+          <p><em>正文待写。</em>Kotlin Multiplatform、Dart Web、Scala.js 都在迁移。</p>
+        </div>
+
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// 跨边界调用开销示例
+const wasmModule = await WebAssembly.instantiateStreaming(fetch('mod.wasm'));
+const { add } = wasmModule.instance.exports;
+
+// JS → Wasm：~10ns 边界税
+console.time('wasm');
+for (let i = 0; i &lt; 1e7; i++) add(i, 1);
+console.timeEnd('wasm');
+
+// 纯 JS 对照
+function jsAdd(a, b) { return a + b; }
+console.time('js');
+for (let i = 0; i &lt; 1e7; i++) jsAdd(i, 1);
+console.timeEnd('js');
+// 通常 wasm 慢一些 —— 因为简单算术 V8 内联得极好</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="pitfall">
+          <div class="pitfall-title">wasm 启动 ≠ JS 启动</div>
+          <p>一个 100MB wasm 模块要花数秒编译（即使 Liftoff），即使你只调用 1 个函数。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">wasm 不是"沙盒里的 JS"</div>
+          <p>是独立 ISA、独立内存模型、独立 spec。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">wasm-to-JS 调用比 JS-to-wasm 调用慢</div>
+          <p>V8 优化方向不对称。</p>
+        </div>
+
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://v8.dev/docs/wasm-compilation-pipeline" target="_blank" rel="noopener">v8.dev/docs/wasm-compilation-pipeline</a></li>
+          <li><a href="https://v8.dev/blog/holiday-season-2023" target="_blank" rel="noopener">V8 is Faster and Safer than Ever!</a> · WasmGC + Maglev + Sandbox 综述</li>
+          <li><a href="https://v8.dev/blog/wasm-gc-porting" target="_blank" rel="noopener">WebAssembly Garbage Collection</a></li>
+          <li><a href="https://v8.dev/blog/jspi" target="_blank" rel="noopener">JS Promise Integration</a></li>
+          <li><a href="../../ecma/07-execution/05-memory-model.html">ECMA P7.5 · §24 Memory Model</a> · SAB / Atomics / COOP-COEP</li>
+          <li>独立的 WebAssembly 主题（待写）—— 讲 wasm32 ISA / WASI / Component Model / Rust → wasm 编译路径</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../05-embedding/02-diagnostics-sandbox.html"><span class="label">← 上一章</span><span class="title">P5.2 · 诊断工具与 V8 Sandbox</span></a>
+          <a class="next" href="../index.html"><span class="label">回到主题首页 →</span><span class="title">V8 Engine 深度学习</span></a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录"><h3>本页目录</h3><ul></ul></aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

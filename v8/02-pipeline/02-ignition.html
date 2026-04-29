@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ignition 与字节码 · P2 · V8 Engine 深度学习</title>
+    <meta name="description" content="V8 的 Ignition 解释器：register-based VM、bytecode handlers（CSA / Torque）、Feedback Vector、Code Cache & Script Streaming、Generator / Async 状态机化、Builtins 不走 bytecode 路径。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a3a6e'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV8%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>V8 Engine 深度学习</span><span class="site-title-badge" style="background: oklch(0.4 0.1 255); color: #fff">V8</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">V8 首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · 编译流水线</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-pipeline-overview.html">01 · Pipeline 全景与 Tier-up</a></li>
+          <li><a href="02-ignition.html" class="active">02 · Ignition 与字节码</a></li>
+          <li><a href="03-optimizing-compilers.html">03 · 优化编译器三件套</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · V8 是谁</a></li>
+          <li><a href="../03-speedup/index.html">P3 · 让动态语言变快</a></li>
+          <li><a href="../04-memory/index.html">P4 · 内存与 GC</a></li>
+          <li><a href="../05-embedding/index.html">P5 · 嵌入与诊断</a></li>
+          <li><a href="../06-wasm/index.html">P6 · V8 与 WASM</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">V8 Engine</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · 编译流水线</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Ignition 与字节码</span>
+        </nav>
+        <h1>Ignition 解释器与字节码</h1>
+        <p class="lead">
+          Ignition 是 V8 的"嘴巴"——所有代码先变 bytecode 再说。这一章讲它的设计哲学与字节码格式：<strong>register-based VM</strong>（vs JSC LLInt 的 stack-based）、<strong>bytecode handler 用 CodeStubAssembler 写</strong>、<strong>Feedback Vector 是运行时画像簿</strong>。再补充三个常被忽略的话题：Code Cache & Script Streaming（启动期优化两条腿）、Generator / Async function 状态机化（含 V8 7.0 zero-cost desugar）、以及 <strong>Builtins 不走这条路</strong>——内置函数用 Torque DSL 写、预编译嵌进 Snapshot。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~35 分钟</span>
+          <span><strong>前置</strong> P2.1 + ECMA P4（数据类型）</span>
+          <span><strong>主要来源</strong> v8.dev/docs/ignition · v8.dev/docs/torque · slack-tracking 博客</span>
+        </div>
+        <div class="callout warn">
+          <div class="callout-title">📝 章节状态</div>
+          <p>骨架版本。对照大纲 <code>v8/outline.md § P2.2</code>。</p>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Ignition 是 register-based 解释器</strong>（不是 stack-based），bytecode 操作显式引用寄存器。</li>
+          <li><strong>bytecode 是 V8 内部的"通用语言"</strong> —— Sparkplug / Maglev / TurboFan 都从这里起步。</li>
+          <li><strong>Builtins 不走这条路</strong> —— Array.prototype.map / Object.assign 等用 Torque 写、预编译嵌进 Snapshot。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Register-based VM</h3>
+        <p><em>正文待写。</em>每个函数有 N 个虚拟寄存器（accumulator + locals + parameters）。bytecode 操作显式引用寄存器：<code>Add r0, r1, [feedback_slot_2]</code>。优势：减少 dispatch 次数；劣势：bytecode 体积稍大。</p>
+
+        <h3>bytecode handler 用 CodeStubAssembler (CSA) 写</h3>
+        <p><em>正文待写。</em>CSA 是 V8 内部的 portable assembler DSL（C++）；每个 opcode 对应一段 CSA 代码 → 编译时生成所有平台的机器码 handler → 运行时 dispatch 到对应 handler。</p>
+
+        <h3>典型 bytecode 示例</h3>
+        <div class="code-block">
+          <span class="code-label">bytecode</span>
+<pre class="code"><code>function sum(a, b) { return a + b; }
+sum(1, 2);
+
+// d8 --print-bytecode 输出（简化）：
+LdaSmi.Wide [1]            // Load SMI 1 to accumulator
+Star r0                    // Store to register r0
+LdaSmi.Wide [2]
+Star r1
+LdaUndefined
+CallUndefinedReceiver2 r2, r0, r1, [4]   // [4] is feedback slot
+Return</code></pre>
+        </div>
+
+        <h3>关键 opcode 类别</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>Lda* / Sta*</strong>：Load / Store accumulator</li>
+          <li><strong>Add / Sub / Mul / Div</strong>：算术（每个都带 feedback slot）</li>
+          <li><strong>LdaNamedProperty / StaNamedProperty</strong>：属性访问（带 feedback slot）</li>
+          <li><strong>Call*（多种特化形式）</strong>：根据 receiver / arg count 不同走不同路径</li>
+          <li><strong>Jump / JumpIfTrue / Throw</strong>：控制流</li>
+        </ul>
+
+        <h3>Feedback Vector：每个函数的"运行时画像簿"</h3>
+        <p><em>正文待写。</em>每个 IC 站点对应一个 slot；slot 内容：上次见到的 Map（hidden class）+ 状态机（Uninitialized / Mono / Poly / Mega）；Sparkplug / Maglev / TurboFan 都从这里读取类型反馈。</p>
+
+        <h3>替代了什么 —— Full-codegen 退役</h3>
+        <p><em>正文待写。</em>2008-2015 是 Full-codegen（直接 source → 机器码，无 bytecode）；2017 完全切到 Ignition。好处：内存 -50%（bytecode 比机器码小 4-8x）、统一了所有 tier 的输入。</p>
+
+        <h3>Code Cache & Script Streaming</h3>
+        <p><em>正文待写。</em>启动期优化的两条腿：</p>
+        <ul>
+          <li><strong>Code Cache</strong>（V8 4.2+）：首次执行某段脚本时把 bytecode + 编译元数据序列化到磁盘；下次同源脚本直接 deserialize，跳过 parse + bytecode generation</li>
+          <li><strong>Script Streaming</strong>（V8 4.6+）：网络下载 JS 时<strong>边下载边解析</strong>——不等整个脚本到达就开始 parsing</li>
+          <li>两者配合：典型大型 SPA 启动期 V8 工作量 -30%</li>
+          <li>Cache 失效条件：V8 版本变更、源码 hash 变更、flag 变更；命中失效时静默回退</li>
+        </ul>
+
+        <h3>Generator / Async function 怎么编（状态机化）</h3>
+        <p><em>正文待写。</em>关键点：</p>
+        <ul>
+          <li><code>function* foo() { yield a; yield b; }</code> 是 suspend/resume 语义；V8 编译成<strong>带状态字段的状态机</strong></li>
+          <li>bytecode 里出现 <code>SuspendGenerator</code> / <code>ResumeGenerator</code> 指令</li>
+          <li><strong>Async function</strong>：在规范层是"自动调用 await 的 generator"；V8 7.0+ 直接给 async 一组专门的字节码避免中间 Promise 分配</li>
+          <li><strong>Async/Await Zero-cost</strong>（V8 7.0，2018）：async 调用比同义 promise.then() 快约 11×、内存少 -2.5×</li>
+          <li>用户视角的 async/await 语义请参考 <a href="../../javascript/03-async/index.html">JS P3 · 异步</a></li>
+        </ul>
+
+        <h3>Strict Mode / TDZ 在 bytecode 层</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><code>'use strict'</code> 是 SourceTextModule 级 flag，影响 bytecode 生成时哪些 helper 被调用；不是单独 opcode</li>
+          <li><strong>TDZ</strong>（let / const）：bytecode 用 <code>ThrowReferenceErrorIfHole</code> 做未初始化检查；这就是 let/const 比 var 慢一点点的根因</li>
+        </ul>
+
+        <h3>内置函数（Builtins）不走这条路</h3>
+        <p><em>正文待写。</em>关键点：</p>
+        <ul>
+          <li><code>Array.prototype.map</code> / <code>Object.assign</code> / <code>String.prototype.split</code> / <code>Promise.then</code> 这些<strong>不是 JS 写的</strong>；是 V8 自己的代码，预编译成机器码嵌进 Snapshot</li>
+          <li>写法分两代：早期用 <strong>CodeStubAssembler (CSA)</strong>——C++ 内嵌的汇编 DSL；现在用 <strong>Torque</strong>——TypeScript 风格的高级 DSL，编译器生成 CSA 调用</li>
+          <li><strong>Why Torque</strong>：CSA 容易写错且无类型；Torque 强类型 + 结构化控制流 + 直接对应 ECMAScript 规范步骤号（如 <code>// 6.4.1.1 Step 3</code> 写法）</li>
+          <li><strong>Snapshot Embedded</strong>：Builtins 在 V8 编译期就生成机器码，启动时通过 mmap 进 Isolate；调用 builtins ≈ 调用 native function，没有 JIT 开销</li>
+        </ul>
+
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 用 --print-bytecode 看自己的函数</h3>
+          <p><em>正文待写。</em><code>node --print-bytecode-filter=sum --print-bytecode script.js</code></p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 优化建议</h3>
+          <p><em>正文待写。</em>函数变小让 lazy parsing 更高效；避免不必要的闭包（每个闭包是独立 feedback vector）。</p>
+        </div>
+
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// 看 generator 的 bytecode
+function* counter() {
+  let i = 0;
+  while (true) yield i++;
+}
+
+// 用 d8 跑：
+// d8 --print-bytecode --print-bytecode-filter=counter script.js
+// 会看到 SuspendGenerator / ResumeGenerator 指令</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="pitfall">
+          <div class="pitfall-title">bytecode 在不同 V8 版本间不兼容</div>
+          <p>不要保存 bytecode 缓存到磁盘期望跨版本可用（V8 自己的 code cache 会校验版本）。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">Wide opcode（.Wide / .ExtraWide）是操作数扩展，不是不同语义</div>
+          <p>看 bytecode dump 时容易误读。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">bytecode dump 中 register 编号是相对函数开始的偏移</div>
+          <p>不是绝对位置。</p>
+        </div>
+
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://v8.dev/docs/ignition" target="_blank" rel="noopener">v8.dev/docs/ignition</a></li>
+          <li><a href="https://v8.dev/docs/torque" target="_blank" rel="noopener">v8.dev/docs/torque</a> · Torque 语言介绍</li>
+          <li><a href="https://v8.dev/blog/code-caching-for-devs" target="_blank" rel="noopener">Code caching for JavaScript developers</a></li>
+          <li><a href="https://v8.dev/blog/fast-async" target="_blank" rel="noopener">Faster async functions and promises</a> · V8 7.0 async zero-cost</li>
+          <li><a href="../../ecma/04-data-types/01-data-types.html">ECMA P4 · §6 数据类型</a> · Reference Record / Completion Record</li>
+          <li><a href="../../javascript/03-async/index.html">JS P3 · 异步</a> · async/await 用户视角</li>
+          <li>下一章 → <a href="03-optimizing-compilers.html">P2.3 · 优化编译器三件套</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-pipeline-overview.html"><span class="label">← 上一章</span><span class="title">01 · Pipeline 全景与 Tier-up</span></a>
+          <a class="next" href="03-optimizing-compilers.html"><span class="label">下一章 →</span><span class="title">03 · 优化编译器三件套</span></a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录"><h3>本页目录</h3><ul></ul></aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

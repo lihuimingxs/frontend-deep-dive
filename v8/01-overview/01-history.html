@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>V8 项目史 2008-2025 · P1 · V8 Engine 深度学习</title>
+    <meta
+      name="description"
+      content="V8 17 年技术演化主线：从 2008 年 Lars Bak 的单层 JIT，到 2017 年 Ignition+TurboFan 大重构（Crankshaft 退役），再到 2021-2024 多层管道精细化（Sparkplug / Maglev / Pointer Compression / V8 Sandbox）。每次架构突变背后都有具体压力源。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a3a6e'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV8%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>V8 Engine 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.4 0.1 255); color: #fff">V8</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">V8 首页</a>
+          <a href="index.html">P1 目录</a>
+          <a href="https://v8.dev/blog/10-years" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · V8 是谁</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html" class="active">01 · V8 项目史 2008-2025</a></li>
+          <li><a href="02-engine-landscape.html">02 · V8 的同代人与分身</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../02-pipeline/index.html">P2 · 编译流水线</a></li>
+          <li><a href="../03-speedup/index.html">P3 · 让动态语言变快</a></li>
+          <li><a href="../04-memory/index.html">P4 · 内存与 GC</a></li>
+          <li><a href="../05-embedding/index.html">P5 · 嵌入与诊断</a></li>
+          <li><a href="../06-wasm/index.html">P6 · V8 与 WASM</a></li>
+        </ul>
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../ecma/01-standards/01-history.html">ECMAScript 标准发展史</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">V8 Engine</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · V8 是谁</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>01 · V8 项目史 2008-2025</span>
+        </nav>
+
+        <h1>V8 项目史 2008-2025</h1>
+        <p class="lead">
+          V8 17 年技术演化讲成一条主线 —— 不是按版本号流水账，而是按"<strong>每次架构突变及其根因</strong>"来组织。三个阶段：<strong>2008-2014 单层 JIT 时代</strong>（Crankshaft 救场） → <strong>2015-2017 重构为现代管道</strong>（Ignition+TurboFan 大重构、Crankshaft 退役） → <strong>2018-2025 多层管道精细化</strong>（Sparkplug 填空档、Maglev 提速度、Pointer Compression 省内存、V8 Sandbox 限影响）。读完能回答：为什么 Node 升级 V8 时性能曲线会突变、Crankshaft 这个名字为什么 2018+ 的资料里仍然出现。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> 任意 JavaScript 经验</span>
+          <span><strong>主要来源</strong> <a href="https://v8.dev/blog/10-years" target="_blank" rel="noopener">v8.dev/blog/10-years</a> · Wikipedia</span>
+        </div>
+
+        <div class="callout warn">
+          <div class="callout-title">📝 章节状态</div>
+          <p>
+            本章为<strong>骨架版本</strong> —— 大纲已通过，正文待逐节细化撰写。各小节当前列出关键知识点与权威来源链接；阅读时可对照大纲文件 <code>v8/outline.md § P1.1</code>。
+          </p>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>V8 是 Google 2008 年开源的 JavaScript / WebAssembly 引擎</strong>，最初由 Lars Bak 主导；命名取自肌肉车引擎，目标"让 web app 像桌面程序一样快"。
+          </li>
+          <li>
+            <strong>V8 历史上最关键的转折点是 2017 年 V8 5.9</strong> —— Ignition + TurboFan 成为默认管道，Crankshaft 与 Full-codegen 被完全删除。这是 V8 史上最大的一次架构换骨。
+          </li>
+          <li>
+            <strong>今天的 V8 是 4 层 JIT 管道</strong>（Ignition → Sparkplug → Maglev → TurboFan）+ Orinoco GC + Pointer Compression + V8 Sandbox 的工程综合体；每一层都对应一段历史压力。
+          </li>
+        </ol>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>史前史（2006-2008）：丹麦农场里写出来的引擎</h3>
+        <p>
+          <em>正文待写。</em>关键点：Lars Bak 在丹麦农场启动；Google 收购；命名取自肌肉车引擎；目标"让 web app 像桌面程序一样快"；2008-09 与 Chrome 同步开源。
+        </p>
+
+        <h3>第一阶段 · 2008-2014 · 单层 JIT 时代</h3>
+        <p><em>正文待写。</em>关键节点：</p>
+        <ul>
+          <li><strong>2008-09</strong>：V8 + Chrome 同步开源，初版仅 ia32 + ARM；<strong>直接 JIT 无解释器</strong>（Full-codegen）</li>
+          <li><strong>2009</strong>：x64 支持；Irregexp 正则引擎；<strong>Node.js 诞生并嵌入 V8</strong> —— V8 第一次走出浏览器</li>
+          <li><strong>2010-12</strong>：<strong>Crankshaft 优化编译器</strong>问世（机器码翻倍 / 体积 -30%）—— V8 正式有了"baseline + optimizer"双层</li>
+          <li><strong>2011</strong>：增量 GC、<strong>Isolates 概念引入</strong>（多线程隔离的基础）</li>
+          <li><strong>2013</strong>：Octane 2.0 基准；<strong>Handle API 重写</strong>（"Handlepocalypse"，破坏性 API 变更）</li>
+          <li><strong>2014</strong>：后台并发编译减少卡顿；<strong>TurboFan 初版落地</strong>（替代 Crankshaft 的下一代优化器）</li>
+        </ul>
+
+        <h3>第二阶段 · 2015-2017 · 重构为现代管道</h3>
+        <p><em>正文待写。</em>关键节点：</p>
+        <ul>
+          <li><strong>2015</strong>：代码缓存、脚本流式加载；<strong>Ignition 解释器启动开发</strong>（目标：减小 Android 内存）；strong mode（失败的实验）</li>
+          <li><strong>2016</strong>：ES2015/2016 全特性落地；<strong>Orinoco GC 启动</strong>（并行 + 并发 + 增量）；获 ACM SIGPLAN 软件奖</li>
+          <li><strong>2017 年 V8 5.9 · 大重构</strong>：Ignition + TurboFan 成为默认管道，<strong>移除 Crankshaft + Full-codegen</strong>；WebAssembly 正式启用 —— 这是 V8 史上最大的一次架构换骨</li>
+        </ul>
+
+        <h3>第三阶段 · 2018-2025 · 多层管道精细化</h3>
+        <p><em>正文待写。</em>关键节点：</p>
+        <ul>
+          <li><strong>2018</strong>：Spectre 防护补丁；<strong>Liftoff</strong> —— Wasm baseline 编译器；BigInt 原始类型；async/await zero-cost</li>
+          <li><strong>2020</strong>：<strong>Pointer Compression</strong>（64-bit 系统堆 -43%）—— 从此 V8 堆上限受 4GB 区域限制</li>
+          <li><strong>2021</strong>：<strong>Sparkplug</strong> —— non-optimizing JIT，bytecode → 机器码 1:1，无 IR；填补 Ignition 与 TurboFan 之间空档（+5-15%）</li>
+          <li><strong>2023</strong>：<strong>Maglev</strong>（M117 全平台）—— 中层优化器，编译速度比 TurboFan 快 10x，性能 80%；<strong>Turboshaft</strong>（TurboFan 后端重写，编译速度 2x）；<strong>WasmGC</strong> 正式发布</li>
+          <li><strong>2024</strong>：<strong>V8 Sandbox</strong>（Chrome 123 默认开启）—— pointer cage + heap sandbox 阻断从 V8 漏洞升级到进程级 RCE</li>
+          <li><strong>2025</strong>：管道层级稳定为 4 层 <strong>Ignition → Sparkplug → Maglev → TurboFan</strong></li>
+        </ul>
+
+        <h3>三个底层逻辑要点</h3>
+        <p><em>正文待写。</em>三条主线（每个写成一段）：</p>
+        <ul>
+          <li><strong>每次架构突变都有具体压力源</strong>：Crankshaft 退役不是因为"过时"，是因为"跟不上 ES2015+ 新语法的优化需求"；Sparkplug 的存在不是"还想再快一点"，是因为 Speedometer 衡量的是页面加载时段</li>
+          <li><strong>"删代码"和"加代码"一样重要</strong>：2017 删 Crankshaft + Full-codegen 让团队腾出 30% 工程精力投入 TurboFan；2024 V8 Sandbox 是把"修每一个内存安全 bug"换成"假设 bug 一定有，但限制其影响半径"</li>
+          <li><strong>嵌入式生态拉动 V8 设计</strong>：Isolates 由 Workers 驱动；Snapshot 由 Chrome 启动驱动；V8 Sandbox 由 Cloudflare Workers 驱动</li>
+        </ul>
+
+        <h3>V8 史与 ECMAScript 标准史是平行线</h3>
+        <p>
+          2008 V8 推出 → 2009 ES5 救场（V8 抢先实现）；2015 ES2015 → V8 同年完成 90% 落地；今天 TC39 提案进 Stage 3 后通常 V8 是第一个引擎实现。两条线互为驱动。完整 ECMAScript 标准史详见 <a href="../../ecma/01-standards/01-history.html">ECMA P1.1 · 标准发展史</a>。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 解释 Node 升级时的性能曲线突变</h3>
+          <p><em>正文待写。</em>例：Node 16 → 18 引入 Sparkplug，启动快但稳态相当；Node 20 → 22 引入 Maglev，中频代码加速明显。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 评估 V8 漏洞 (CVE) 对生产环境的影响</h3>
+          <p><em>正文待写。</em>是否在 Sandbox 范围内、是否需要立即升级、攻击面是 Chrome 还是 Node。</p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <p>本章为历史叙事章，无典型代码示例；版本号速查见下表。</p>
+        <table>
+          <thead>
+            <tr>
+              <th>年份</th>
+              <th>V8 版本</th>
+              <th>关键架构变化</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>2008</td><td>0.1</td><td>初版开源（Full-codegen 直接 JIT）</td></tr>
+            <tr><td>2010</td><td>3.0</td><td>Crankshaft 优化编译器</td></tr>
+            <tr><td>2014</td><td>3.27</td><td>TurboFan 初版</td></tr>
+            <tr><td>2016</td><td>5.4</td><td>Ignition 解释器投入生产</td></tr>
+            <tr><td>2017</td><td>5.9</td><td>⭐ Ignition+TurboFan 默认；Crankshaft / Full-codegen 删除</td></tr>
+            <tr><td>2020</td><td>8.0</td><td>Pointer Compression 默认开启</td></tr>
+            <tr><td>2021</td><td>9.1</td><td>Sparkplug</td></tr>
+            <tr><td>2023</td><td>11.7</td><td>Maglev（M117 全平台）+ Turboshaft 后端</td></tr>
+            <tr><td>2024</td><td>12.3</td><td>⭐ V8 Sandbox 默认开启（Chrome 123）</td></tr>
+          </tbody>
+        </table>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="pitfall">
+          <div class="pitfall-title">"V8 引擎"和"Chrome JS 引擎"不完全等同</div>
+          <p>Chrome 还有 Blink、Skia 等；V8 只是 JS / Wasm 部分。用 V8 ≠ 用 Chrome。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">Crankshaft / Full-codegen 在 2017 已删，2018+ 资料里出现这两个名字基本是过时博客</div>
+          <p>看 V8 性能调优博客时务必查发布日期 —— 在 2017 后讨论 Crankshaft 优化技巧的资料完全过时。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">"V8 没有解释器"是 2015 之前的事</div>
+          <p>现在 Ignition 是默认入口；所有代码先变 bytecode 再说。</p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://v8.dev/blog/10-years" target="_blank" rel="noopener">Celebrating 10 years of V8</a> · V8 团队 2018 自述（强烈推荐起点）</li>
+          <li><a href="https://v8.dev/blog/launching-ignition-and-turbofan" target="_blank" rel="noopener">Launching Ignition and TurboFan</a> · 2017 大重构官方说明</li>
+          <li><a href="https://v8.dev/blog/sparkplug" target="_blank" rel="noopener">Sparkplug — a non-optimizing JavaScript compiler</a></li>
+          <li><a href="https://v8.dev/blog/maglev" target="_blank" rel="noopener">Maglev — V8's Fastest Optimizing JIT</a></li>
+          <li><a href="https://v8.dev/blog/sandbox" target="_blank" rel="noopener">The V8 Sandbox</a></li>
+          <li><a href="https://en.wikipedia.org/wiki/V8_(JavaScript_engine)" target="_blank" rel="noopener">Wikipedia · V8 (JavaScript engine)</a> · 版本表交叉核对</li>
+          <li>下一章 → <a href="02-engine-landscape.html">P1.2 · V8 的同代人与分身</a>（横向对照 JSC / SM / Hermes 与各嵌入宿主）</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="index.html">
+            <span class="label">← 阶段概览</span>
+            <span class="title">P1 · V8 是谁</span>
+          </a>
+          <a class="next" href="02-engine-landscape.html">
+            <span class="label">下一章 →</span>
+            <span class="title">02 · V8 的同代人与分身</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

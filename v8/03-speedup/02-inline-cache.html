@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Inline Cache: Mono → Poly → Mega · P3 · V8 Engine 深度学习</title>
+    <meta name="description" content="IC 是连接 Hidden Class 与编译器的桥。状态机 Uninitialized → Monomorphic → Polymorphic → Megamorphic；Feedback Vector 驱动 Sparkplug / Maglev / TurboFan 做 speculation。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a3a6e'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV8%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>V8 Engine 深度学习</span><span class="site-title-badge" style="background: oklch(0.4 0.1 255); color: #fff">V8</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">V8 首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · 让动态语言变快</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-hidden-class.html">01 · Hidden Class · Map · Transition</a></li>
+          <li><a href="02-inline-cache.html" class="active">02 · Inline Cache: Mono → Mega</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · V8 是谁</a></li>
+          <li><a href="../02-pipeline/index.html">P2 · 编译流水线</a></li>
+          <li><a href="../04-memory/index.html">P4 · 内存与 GC</a></li>
+          <li><a href="../05-embedding/index.html">P5 · 嵌入与诊断</a></li>
+          <li><a href="../06-wasm/index.html">P6 · V8 与 WASM</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">V8 Engine</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · 让动态语言变快</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Inline Cache</span>
+        </nav>
+        <h1>Inline Cache：Mono → Poly → Mega</h1>
+        <p class="lead">
+          IC 是连接 Hidden Class（P3.1）与编译器（P2.3）的桥。每个属性访问 / 函数调用站点都有一个 IC，在运行时积累"我见过哪些形状"，再喂给优化编译器做 speculation。状态机 4 档：<strong>Uninitialized → Monomorphic → Polymorphic → Megamorphic</strong>。一旦 megamorphic V8 就放弃缓存，性能与未优化无异。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P3.1 · Hidden Class</span>
+          <span><strong>主要来源</strong> mrale.ph · v8-perf · V8 source</span>
+        </div>
+        <div class="callout warn">
+          <div class="callout-title">📝 章节状态</div>
+          <p>骨架版本。对照大纲 <code>v8/outline.md § P3.2</code>。</p>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>IC 是 V8 的"神经系统"</strong>：所有优化决策都依赖 IC 收集的运行时形状信息。</li>
+          <li><strong>4 个状态</strong>：Uninitialized → Monomorphic（最快）→ Polymorphic（2-4 形状，仍快）→ Megamorphic（≥5 形状，V8 放弃 IC）。</li>
+          <li><strong>megamorphic 不是末日</strong>：仍比纯解释执行快 —— 只是没有了 Hidden Class 带来的 1-2 条指令神话。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>IC 的 4 个状态</h3>
+        <p><em>正文待写。</em>按 Feedback Vector slot 中状态机：</p>
+        <ul>
+          <li><strong>Uninitialized</strong>：从未执行过</li>
+          <li><strong>Monomorphic</strong>：只见过 1 种 hidden class（<strong>最快</strong>：单次 Map check + 直接 offset load）</li>
+          <li><strong>Polymorphic</strong>：见过 2-4 种 hidden class（<strong>仍快</strong>：链式 Map check）</li>
+          <li><strong>Megamorphic</strong>：见过 5+ 种（<strong>放弃 IC</strong>：走全局 hash table 查询）</li>
+        </ul>
+
+        <h3>典型 IC 站点</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>LoadIC</strong>：<code>obj.foo</code></li>
+          <li><strong>StoreIC</strong>：<code>obj.foo = x</code></li>
+          <li><strong>CallIC</strong>：<code>f()</code>（区分 receiver 形状 + 函数指针）</li>
+          <li><strong>InstanceOfIC</strong> / <strong>InIC</strong> / <strong>TypeOfIC</strong> / <strong>CompareIC</strong> 等</li>
+        </ul>
+
+        <h3>从 Mono 升到 Poly 再到 Mega</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">function getX(obj) { return obj.x; }
+
+getX({x:1});       // IC: Mono (Map_A)
+getX({x:2});       // IC: Mono (Map_A) ← 同形状
+getX({x:1, y:2});  // IC: Poly (Map_A, Map_B) ← 加了 y，新 Map
+getX({x:1, z:3});  // IC: Poly (Map_A, Map_B, Map_C)
+getX({x:1, w:4});  // IC: Poly (4 maps)
+getX({x:1, q:5});  // IC: MEGA ← 5+ maps，放弃缓存</code></pre>
+        </div>
+
+        <h3>各 tier 的 IC 形态</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>Ignition</strong>：每条 IC 字节码运行时查 Feedback Vector</li>
+          <li><strong>Sparkplug</strong>：内联 IC stub 调用，每次仍走 stub</li>
+          <li><strong>Maglev</strong>：根据 Feedback Vector 内联 fast path（mono 时直接 inline，poly 时生成 switch）</li>
+          <li><strong>TurboFan</strong>：完全内联到 sea of nodes 中，可能 inline 到调用方函数</li>
+        </ul>
+
+        <h3>Feedback Vector 与编译触发</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>V8 用 IC 状态做 speculation：编译时看到 "100% mono on Map_A" → 内联 Map_A 的 fast path → 假设保持</li>
+          <li>如果运行时见到 Map_B → trigger lazy deopt → 跳回 Ignition → 重新积累 feedback → 可能下次编译为 poly</li>
+        </ul>
+
+        <h3>megamorphic 怎么救</h3>
+        <p><em>正文待写。</em>如果你必须支持多形状：</p>
+        <ul>
+          <li><strong>手动分离</strong>：写多个特化函数（<code>getXForCircle</code> <code>getXForSquare</code>）让每个 IC mono</li>
+          <li><strong>统一 shape</strong>：用 base class + 子类，但所有属性在 base 中初始化</li>
+          <li><strong>不可救场景</strong>：通用 deserializer / 反射库 —— 接受 megamorphic 现实</li>
+        </ul>
+
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 何时该担心 megamorphic IC</h3>
+          <p><em>正文待写。</em>每秒调用 100 万次 + IC 命中 mega → 累计影响 &gt; 1ms。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · DevTools Performance 找 megamorphic</h3>
+          <p><em>正文待写。</em><code>--trace-ic</code> + grep "MEGAMORPHIC"。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · JSON 解析后的对象</h3>
+          <p><em>正文待写。</em>所有同源 JSON 走同 transition path → mono；混合 schema 的 JSON → poly/mega。</p>
+        </div>
+
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+<pre class="code"><code class="lang-bash"># 用 --trace-ic 看 IC 状态变化
+d8 --trace-ic script.js 2&gt;&amp;1 | grep -E "(MONOMORPHIC|POLYMORPHIC|MEGAMORPHIC)"
+
+# 输出示例：
+# [LoadIC in script.js:5: 0 (UNINITIALIZED -&gt; PREMONOMORPHIC) ...
+# [LoadIC in script.js:5: 0 (PREMONOMORPHIC -&gt; MONOMORPHIC) ...
+# [LoadIC in script.js:5: 0 (MONOMORPHIC -&gt; POLYMORPHIC) ...
+# [LoadIC in script.js:5: 0 (POLYMORPHIC -&gt; MEGAMORPHIC) ...</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="pitfall">
+          <div class="pitfall-title">不要为了 mono 把所有对象设计成同 shape</div>
+          <p>大多数代码热度不够，过度优化 = 复杂度。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">Object.create(null) 的对象走专门路径</div>
+          <p>不走 prototype 链 IC，性能特征不同（但通常更快）。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">Symbol 属性走专门的 IC 路径</div>
+          <p>不和字符串属性共用 slot。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">Proxy 对象完全跳过 IC</div>
+          <p>任何 Proxy 操作都是慢路径（Proxy 详细机制见 <a href="../../ecma/06-internal-slots/01-internal-slots.html">ECMA P6.1</a>）。</p>
+        </div>
+
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://mrale.ph/blog/2015/01/11/whats-up-with-monomorphism.html" target="_blank" rel="noopener">What's up with monomorphism?</a> · Vyacheslav Egorov 经典文章</li>
+          <li><a href="https://github.com/thlorenz/v8-perf" target="_blank" rel="noopener">thlorenz/v8-perf</a> · 性能文档合集</li>
+          <li><a href="../../ecma/06-internal-slots/01-internal-slots.html">ECMA P6.1 · Internal Methods</a> · Proxy 与 IC 的关系</li>
+          <li>下一阶段 → <a href="../04-memory/index.html">P4 · 内存与 GC</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-hidden-class.html"><span class="label">← 上一章</span><span class="title">01 · Hidden Class</span></a>
+          <a class="next" href="../04-memory/01-heap-and-objects.html"><span class="label">下一章 →</span><span class="title">P4.1 · 堆布局与对象表示</span></a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录"><h3>本页目录</h3><ul></ul></aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
