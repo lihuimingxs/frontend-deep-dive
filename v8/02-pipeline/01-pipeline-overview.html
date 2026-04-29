@@ -57,11 +57,6 @@
           <span><strong>前置</strong> P1 完整</span>
           <span><strong>主要来源</strong> v8.dev/blog/launching-ignition-and-turbofan</span>
         </div>
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>骨架版本。对照大纲 <code>v8/outline.md § P2.1</code>。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>V8 现在是 4 层 JIT 管道</strong>：所有代码先变 bytecode（Ignition），然后按"热度"逐层提到 Sparkplug → Maglev → TurboFan。</li>
@@ -91,49 +86,93 @@
                                                    TurboFan (Sea of Nodes / Turboshaft)</code></pre>
         </div>
 
+        <p>
+          注意几件事：<strong>所有路径都从 Bytecode 开始</strong>——没有"直接编译源码"的捷径，2017 年大重构之后这是 V8 的硬约束。<strong>Sparkplug / Maglev / TurboFan 都从 bytecode 起步</strong>而不是从前一层的输出，意味着各 tier 之间不互相依赖产物，任何一层挂掉只是性能下降不会引起整链失效。<strong>Tier 提升是单向的</strong>（向下走从不向上走），但<strong>反优化是双向的</strong>——任何优化层都可能掉回 Ignition。
+        </p>
+
         <h3>Parser 工作分两段：Lazy Parsing</h3>
-        <p><em>正文待写。</em>关键点：</p>
-        <ul>
-          <li>默认对所有顶层函数 only pre-parse（只做语法检查 + 找作用域），不生成 bytecode</li>
-          <li>触发完整 parse 的条件：函数被调用 / 显式 IIFE</li>
-          <li>典型网页 JS 中 ~50% 函数从未被调用 —— lazy parsing 直接省掉这部分工作</li>
-        </ul>
+        <p>
+          V8 不会一上来就把整个脚本完整 parse 成 AST。Parser 默认对所有顶层函数走 <strong>pre-parse</strong>——只做语法检查 + 找作用域 + 记录函数边界，<strong>不生成 AST 也不生成 bytecode</strong>。pre-parse 比 full parse 快 2-3 倍。只有当函数被实际调用时，V8 才把它扔回 parser 做完整解析。
+        </p>
+        <p>
+          触发完整 parse 的条件：函数被调用、被赋值给某 named property、被 <code>Function.prototype.toString</code> 序列化、或写成显式 IIFE 形如 <code>(function() { ... })()</code>——后者告诉 parser"我马上要用，别 lazy"。
+        </p>
+        <p>
+          为什么这样设计？典型网页 JS 中 <strong>约 50% 函数从未被调用</strong>——它们要么是某分支才用到、要么是 polyfill 兜底逻辑、要么是 dead code。Lazy parsing 直接省掉这一半的解析工作，对启动期影响巨大。代价是 stack trace 行号在 lazy 函数里有时不准（pre-parse 阶段没建立完整源码 mapping），这是 V8 启动 vs 调试的微妙取舍。
+        </p>
 
         <h3>Tier-up 触发器</h3>
-        <p><em>正文待写。</em>每个函数 / 循环都有 call counter；越过阈值后 V8 异步触发下一层编译；编译完后 On-Stack Replacement (OSR) 替换栈帧。</p>
+        <p>
+          每个函数都有一个 <strong>call counter</strong>，每次进入加一；每个循环也有自己的 counter，每次回边（loop back-edge）执行加一。当 counter 越过阈值（V8 内部默认 ~150 / 几千 / 上万，视 tier 而定）时，V8 <strong>异步</strong>触发下一层编译——把编译任务推到 helper thread，主线程继续跑 Ignition / Sparkplug 版本。编译完成后再切换。
+        </p>
+        <p>
+          Counter 不是简单线性递增。V8 内部 counter 还结合了"feedback maturity"——如果某个 IC 站点还在 polymorphic 摇摆，即使 call counter 过线 V8 也会推迟 tier-up，因为提早编译只会很快被 deopt 浪费工作量。这就是为什么实测某段函数"循环了 5000 次还没被 TurboFan 优化"——可能是在等 IC 稳定。
+        </p>
+        <p>
+          编译完成后切换的机制叫 <strong>On-Stack Replacement (OSR)</strong>——把当前 stack frame 从 Ignition 版本"替换"成优化版本。如果函数正在长循环里跑，主线程不能等它跑完才切；OSR 让 V8 在循环回边的位置"原地"换栈，把所有寄存器从 Ignition 表示重新映射到优化版本表示。这就是为什么 V8 必须保留每条 bytecode 的"deopt info"——OSR 用的也是这套元数据，只是方向相反。
+        </p>
 
-        <h3>Concurrent Compilation</h3>
-        <p><em>正文待写。</em>关键点：</p>
-        <ul>
-          <li>Maglev / TurboFan 编译开销大（10ms-100ms 量级）—— 同步在主线程跑会卡 JS 执行</li>
-          <li>V8 给每种 tier 都开了 helper thread（<code>v8::Platform</code> 接口由 Embedder 提供线程池）—— 主线程只负责"提交编译任务 + 安装结果"</li>
-          <li>从 V8 3.x 到 12.x 编译期 jank 持续下降；今天大多数应用感受不到 JIT 编译卡顿</li>
-        </ul>
+        <h3>Concurrent Compilation：编译开销搬到 helper thread</h3>
+        <p>
+          Maglev / TurboFan 编译开销不小：一段中等函数 Maglev 编译几毫秒、TurboFan 几十毫秒甚至上百毫秒。如果同步在主线程跑会直接卡死 JS 执行——10ms 卡顿用户都能感觉到。
+        </p>
+        <p>
+          V8 自 2014 起把大部分编译工作搬到 <strong>helper thread</strong>。具体由嵌入器提供 <strong>v8::Platform</strong> 接口实现线程池——Node 用 libuv worker pool、Chrome 用自家 ThreadPool、Workers 各自实现。主线程职责只剩两件：<strong>把 bytecode + Feedback Vector 打包成编译任务推给 helper</strong>、<strong>编译完成后安装机器码</strong>。
+        </p>
+        <p>
+          这套机制 11 年来逐步加固。从 V8 3.x 到 12.x 编译期 jank 持续下降——2014 年还能感受到的"页面卡顿一下"今天几乎完全消失。但有个特殊场景：<strong>极度受 CPU 限制的设备</strong>（低端 Android、某些 Cloudflare Workers 实例）helper thread 自己就抢不到 CPU，编译会拖慢整体——这种环境下应用启动期间 V8 会主动降级到 Ignition-only 模式。
+        </p>
 
         <h3>反优化（Deoptimization）触发条件</h3>
-        <p><em>正文待写。</em></p>
+        <p>
+          deopt 是 V8 应对"类型不稳定"的兜底机制。优化编译器看到 Feedback Vector 里"100% mono on Map_A"就<strong>假设</strong>未来也是 Map_A，内联 fast path；如果运行时假设错了，就 deopt 跳回 Ignition 重新积累 feedback。常见触发：
+        </p>
         <ul>
-          <li><strong>类型反馈失败</strong>：之前假设参数是 SMI，结果传了 string</li>
-          <li><strong>Hidden Class 不匹配</strong>：之前内联了 fast property access，但运行时 object shape 变了</li>
-          <li><strong>Map deprecated</strong>：transition tree 中某个 Map 被标记 deprecated</li>
-          <li><strong>Eager deopt</strong> vs <strong>Lazy deopt</strong>：前者立即跳回 Ignition；后者标记函数下次入口时跳回</li>
+          <li><strong>类型反馈失败</strong>：编译时假设参数是 SMI，结果传了 string / object</li>
+          <li><strong>Hidden Class 不匹配</strong>：内联了 obj.x 的 fast load，但传进来的 obj 形状变了</li>
+          <li><strong>Map deprecated</strong>：transition tree 中某个 Map 被标记 deprecated（通常因为属性 const-ness 假设失效）</li>
+          <li><strong>Array elements kind 漂移</strong>：编译时假设 PACKED_SMI 数组，运行时塞了 double</li>
+          <li><strong>函数被改</strong>：内联了某个函数体，但 caller 把那个函数重新赋值了</li>
         </ul>
+        <p>
+          Deopt 分两种。<strong>Eager deopt</strong>：检查不通过立即跳回 Ignition——典型用于"参数类型与假设不符"。<strong>Lazy deopt</strong>：标记当前优化代码失效，但<strong>本次执行继续完成</strong>，下次进入函数时才跳回——典型用于"假设别处的 code 不会改但实际改了"，本次执行没有受影响所以不需要立即中断。
+        </p>
+        <div class="callout info">
+          <div class="callout-title">💡 deopt 不是 bug，反复 deopt 才是</div>
+          <p>
+            少量 lazy deopt 是 V8 在"适应"运行时类型变化——属于设计的一部分，不需要担心。真正的问题是 <strong>deopt loop</strong>：函数被 TurboFan 优化 → 立刻 deopt → 重新积累 feedback → 又优化 → 又 deopt——周而复始。这种情况下编译开销纯浪费，且每次跳转都有 ~10μs 开销。用 <code>--trace-deopt</code> 找反复 deopt 的函数，通常根因是<strong>同一站点被喂了形状不稳定的对象</strong>（megamorphic IC，详见 P3.2）。
+          </p>
+        </div>
 
         <h3>OSR 与 deopt 的栈帧兼容性</h3>
-        <p><em>正文待写。</em>Sparkplug 故意保持与 Ignition 同样的栈帧布局，让调试器 / profiler / 异常处理器透明穿越 tier 边界。</p>
+        <p>
+          Sparkplug 设计上有个不显眼但重要的约束：<strong>它的栈帧布局必须和 Ignition 完全一致</strong>。这看似限制了 Sparkplug 自由度（不能用更紧凑的寄存器分配），但换来一个巨大好处：<strong>调试器 / profiler / 异常处理器穿越 tier 边界完全透明</strong>。
+        </p>
+        <p>
+          想想看：DevTools 在你设了断点；同一个函数可能这次走 Ignition 下次走 Sparkplug 再下次走 Maglev——如果每层栈帧布局不一样，调试器要为每层做映射。Sparkplug 故意"装作"自己是 Ignition——同一个 stack trace 跨 tier 看起来一致。Maglev / TurboFan 因为做了优化无法保持完全一致，但它们维护精确的<strong>deopt info</strong>把优化栈帧能"还原"成 Ignition 风格栈帧——OSR 就是用这套元数据反向"穿越"。
+        </p>
+        <p>
+          这一点解释了为什么 Sparkplug 这么晚才出现（2021）。Crankshaft 时代没有 bytecode 中间层，没办法"复刻 Ignition 栈帧"——必须等 2017 Ignition 稳定后才有这个对象可复刻。这是<strong>架构演化的依赖关系</strong>——A 决策铺垫了 N 年后 B 决策才可能。
+        </p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
           <h3 class="scenario-title">场景 A · 用 --trace-opt --trace-deopt 看函数 tier-up 路径</h3>
-          <p><em>正文待写。</em>看一段函数在哪一层被优化、什么时候掉回去。</p>
+          <p>
+            遇到性能不符合预期的函数，第一步是用 <code>--trace-opt --trace-deopt</code> 跑一遍看它<strong>实际走到哪一层</strong>。常见输出：函数被 Maglev 编译 → 几秒后 lazy deopt → 又被 Maglev 编译 → 又 deopt——这就是典型的 deopt loop，根因要去查 <code>--trace-ic</code> 找 polymorphic IC。如果输出显示函数从未被 TurboFan 编译，要么是 call counter 没过线（说明这个函数其实没那么 hot），要么是某些代码模式阻止了 tier-up（如 V8 12 之前的 try/catch）。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B · 评估"为什么我加了 try/catch 后函数变慢"</h3>
-          <p><em>正文待写。</em>V8 12 之前 try/catch 阻止 TurboFan 编译。</p>
+          <h3 class="scenario-title">场景 B · 评估"加了 try/catch 后函数变慢"</h3>
+          <p>
+            历史上一个经典坑：V8 12 之前 TurboFan 不支持优化包含 try/catch 的函数——直接放弃整段代码留在 Ignition / Sparkplug。这导致大量"加错误处理就慢 10x"的迷因。<strong>V8 12 之后已修复</strong>，但仍有性能影响（catch handler 内的代码优化保守）。判断方式：用 <code>--trace-opt</code> 看函数有没有进 TF；如果没有再考虑是否 try/catch 阻止；最后才考虑把 try/catch 拆出去包成单独函数。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C · 启动时间敏感的应用（CLI 工具）</h3>
-          <p><em>正文待写。</em>理解为什么 Sparkplug + 代码缓存 + snapshot 是关键。</p>
+          <h3 class="scenario-title">场景 C · 启动时间敏感的 CLI / 函数计算</h3>
+          <p>
+            CLI 工具（如 npm / vite / next）和 Cloudflare Workers / Lambda 函数计算都对启动时间敏感——总执行时间可能就 100ms，TurboFan 来不及编译。这种场景<strong>不要追求稳态性能优化</strong>，要看的是 <strong>Code Cache 命中率</strong>（V8 4.2+ 的 bytecode 缓存）和 <strong>Snapshot</strong>（V8 built-ins 序列化）。Workers 冷启动 &lt; 5ms 就靠这两个机制 + Pointer Compression 共享布局。Node 启动慢的本质是 Snapshot 较保守 + 没有像 Chrome 那样的 cache 共享。
+          </p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
