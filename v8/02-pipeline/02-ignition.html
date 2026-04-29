@@ -57,11 +57,6 @@
           <span><strong>前置</strong> P2.1 + ECMA P4（数据类型）</span>
           <span><strong>主要来源</strong> v8.dev/docs/ignition · v8.dev/docs/torque · slack-tracking 博客</span>
         </div>
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>骨架版本。对照大纲 <code>v8/outline.md § P2.2</code>。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>Ignition 是 register-based 解释器</strong>（不是 stack-based），bytecode 操作显式引用寄存器。</li>
@@ -71,11 +66,30 @@
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
 
-        <h3>Register-based VM</h3>
-        <p><em>正文待写。</em>每个函数有 N 个虚拟寄存器（accumulator + locals + parameters）。bytecode 操作显式引用寄存器：<code>Add r0, r1, [feedback_slot_2]</code>。优势：减少 dispatch 次数；劣势：bytecode 体积稍大。</p>
+        <h3>Register-based VM（vs Stack-based）</h3>
+        <p>
+          解释器设计有两种基本架构：<strong>stack-based</strong>（操作数压栈、指令从栈顶取）和 <strong>register-based</strong>（指令显式引用虚拟寄存器）。JVM、CPython、JSC LLInt 都是 stack-based；V8 Ignition 是 register-based。这个选择不是随意的——register-based VM <strong>每条指令做更多事</strong>，dispatch 次数减少 30-50%。
+        </p>
+        <p>
+          具体差异：算个 <code>a + b</code>，stack-based 要 3 条指令（push a / push b / add）；register-based 一条 <code>Add r1, r2</code> 搞定。在 stack-based VM 里，dispatch（决定下一条指令是什么）的开销和 cache miss 相对计算占比很大——register-based VM 减少了 2/3 的 dispatch，对解释器整体性能提升明显。
+        </p>
+        <p>
+          代价是 bytecode <strong>体积稍大</strong>（每条指令要带寄存器编号操作数，stack-based 不需要）和 bytecode 生成<strong>实现复杂度更高</strong>（要做寄存器分配，stack-based 不需要）——但 V8 团队认为生产环境性能换这点工程成本值得。每个 Ignition 函数的虚拟寄存器集是 <strong>accumulator</strong>（特殊寄存器，许多算术指令默认用它）+ <strong>locals</strong>（用户局部变量）+ <strong>parameters</strong>（函数参数），编号都是相对函数起点的偏移。
+        </p>
 
-        <h3>bytecode handler 用 CodeStubAssembler (CSA) 写</h3>
-        <p><em>正文待写。</em>CSA 是 V8 内部的 portable assembler DSL（C++）；每个 opcode 对应一段 CSA 代码 → 编译时生成所有平台的机器码 handler → 运行时 dispatch 到对应 handler。</p>
+        <h3>Bytecode handler 用 CodeStubAssembler (CSA) 写</h3>
+        <p>
+          每条 bytecode 都对应一段叫 <strong>handler</strong> 的代码——它知道怎么执行这条指令并跳到下一条。这些 handler 怎么写？
+        </p>
+        <p>
+          一个朴素方案是用 C++ 写每个 handler。但 C++ 编译出来的 dispatch 代码不够紧凑——每条 handler 入口要做很多寄存器保存 / 调用约定处理，dispatch 一次的开销轻松到几十纳秒。另一个朴素方案是直接写汇编。但要给 x64 / ARM64 / ARM32 / RISC-V 都各自维护一份汇编，工程成本高得离谱。
+        </p>
+        <p>
+          V8 的方案是 <strong>CodeStubAssembler (CSA)</strong>——一个内嵌在 C++ 里的 portable assembler DSL。开发者用 C++ 接口写 handler 逻辑（如 <code>auto value = LoadObjectField(obj, kValueOffset)</code>），CSA 在 V8 编译期把它转换成各平台的机器码——开发者一次写完，多个 ISA 同时受益。这套机制其实是从 TurboFan 的指令选择阶段抽出来的：CSA 复用 TurboFan 的 backend 生成机器码，所以 handler 的代码质量和 TurboFan 自己生成的机器码相当。
+        </p>
+        <p>
+          后来 V8 发现 CSA 还是太底层、容易写错（比如忘记检查 hidden class、忘记 GC 安全），所以又在 CSA 之上做了一层叫 <strong>Torque</strong> 的 DSL（详见本章末尾"Builtins"段），现在新的 handler / built-in 优先用 Torque 写、旧的逐步迁移。
+        </p>
 
         <h3>典型 bytecode 示例</h3>
         <div class="code-block">
@@ -94,64 +108,149 @@ Return</code></pre>
         </div>
 
         <h3>关键 opcode 类别</h3>
-        <p><em>正文待写。</em></p>
+        <p>
+          Ignition 字节码集大约 200 条 opcode（V8 12.x），按功能分几大类：
+        </p>
         <ul>
-          <li><strong>Lda* / Sta*</strong>：Load / Store accumulator</li>
-          <li><strong>Add / Sub / Mul / Div</strong>：算术（每个都带 feedback slot）</li>
-          <li><strong>LdaNamedProperty / StaNamedProperty</strong>：属性访问（带 feedback slot）</li>
-          <li><strong>Call*（多种特化形式）</strong>：根据 receiver / arg count 不同走不同路径</li>
-          <li><strong>Jump / JumpIfTrue / Throw</strong>：控制流</li>
+          <li><strong>Load / Store</strong>（<code>Lda*</code> / <code>Sta*</code>）—— Lda = "Load to Accumulator"，Sta = "Store from Accumulator"。许多算术指令都隐式使用 accumulator，避免显式指定 destination 寄存器节省 bytecode 体积。</li>
+          <li><strong>算术族</strong>（<code>Add</code> / <code>Sub</code> / <code>Mul</code> / <code>Div</code> / <code>BitwiseOr</code> / ...）—— 每条都带 <strong>feedback slot</strong> 操作数，运行时记录"本次操作数类型是 SMI / HeapNumber / String"，编译器用这些信息做 speculation。</li>
+          <li><strong>属性访问族</strong>（<code>LdaNamedProperty</code> / <code>StaNamedProperty</code> / <code>LdaKeyedProperty</code> / ...）—— 属性访问是 V8 性能最关键的操作，每条 opcode 都有 feedback slot，运行时记录见过的 hidden class（详见 P3.2 IC）。</li>
+          <li><strong>调用族</strong>（<code>CallProperty0</code> / <code>CallUndefinedReceiver1</code> / <code>CallNoFeedback</code> / ...）—— V8 根据 <strong>receiver 类型 + 参数个数</strong>有多个特化版本。<code>CallProperty2</code> 表示"用 receiver 调用，2 个参数"——比通用 <code>Call</code> 少几次类型判断。这是用 bytecode 体积换运行时速度的典型例子。</li>
+          <li><strong>控制流</strong>（<code>Jump</code> / <code>JumpIfTrue</code> / <code>JumpIfNullOrUndefined</code> / <code>Throw</code> / <code>SuspendGenerator</code>）—— 包括 generator 专用的 suspend / resume 指令（详见后文 Generator 段）。</li>
+          <li><strong>对象创建</strong>（<code>CreateObjectLiteral</code> / <code>CreateArrayLiteral</code> / <code>CreateClosure</code>）—— 复杂对象构造单独 opcode 处理，编译器能识别这些是"已知形状"。</li>
         </ul>
+        <p>
+          每条 opcode 还有 <code>.Wide</code>（操作数 16-bit）/ <code>.ExtraWide</code>（操作数 32-bit）变体——不是不同语义，仅当寄存器编号 / feedback slot 编号大于 256 时使用。看 bytecode dump 时容易把 Wide 误读成"特殊指令"。
+        </p>
 
         <h3>Feedback Vector：每个函数的"运行时画像簿"</h3>
-        <p><em>正文待写。</em>每个 IC 站点对应一个 slot；slot 内容：上次见到的 Map（hidden class）+ 状态机（Uninitialized / Mono / Poly / Mega）；Sparkplug / Maglev / TurboFan 都从这里读取类型反馈。</p>
+        <p>
+          Feedback Vector 是 V8 性能体系的<strong>神经系统</strong>。每个被编译的 JS 函数都关联一个 Feedback Vector——本质是一个数组，存"运行时观察到的类型信息"。每个 IC 站点（属性访问 / 函数调用 / 算术 / 类型判断）在 Feedback Vector 里有一个 slot，slot 内容随运行时演化。
+        </p>
+        <p>
+          典型 slot 内容：<strong>状态机标记</strong>（Uninitialized / Premonomorphic / Monomorphic / Polymorphic / Megamorphic）+ <strong>观察到的 Map 列表</strong>（指向 hidden class）+ <strong>命中计数</strong>。Ignition 在执行每条 IC opcode 时<strong>同时</strong>更新 Feedback Vector 和返回结果——更新成本几纳秒，但收集的信息让后续优化层得以做激进决策。
+        </p>
+        <p>
+          这就是为什么 V8 性能优化的<strong>所有出发点都是 Feedback Vector</strong>：Sparkplug 在生成机器码时从这里读取"是否已 monomorphic"决定要不要内联快路径；Maglev 从这里读"用过的 Map 集合"决定 inline cache 链长度；TurboFan 从这里读"99% 是 SMI"假设并做 speculation。一旦运行时违反 Feedback Vector 的假设——deopt 跳回 Ignition，重新积累。这是个完整闭环：<strong>解释器边跑边记录 → 优化器读记录做假设 → 假设错了退回到解释器</strong>。
+        </p>
+        <p>
+          Feedback Vector 与函数<strong>独立</strong>——每个闭包实例都有自己的 Feedback Vector。这就是为什么"高频闭包工厂"（如 <code>arr.map(item => item.x)</code> 在循环里被调用上千次但每次都是新闭包）会让 V8 性能受损：每个闭包都要从头积累 feedback。这是 P3.2 详细讨论的话题，本章只点到。
+        </p>
 
         <h3>替代了什么 —— Full-codegen 退役</h3>
-        <p><em>正文待写。</em>2008-2015 是 Full-codegen（直接 source → 机器码，无 bytecode）；2017 完全切到 Ignition。好处：内存 -50%（bytecode 比机器码小 4-8x）、统一了所有 tier 的输入。</p>
+        <p>
+          Ignition 不是 V8 第一天就有的——它在 <strong>2017 年</strong>才取代 Full-codegen 成为默认入口。Full-codegen 是 2008-2015 期间 V8 的"基线编译器"——直接把源代码编译成机器码，无 bytecode 中间层。这在当时是激进选择（同代 SpiderMonkey 仍是解释器为主），但留下了几个不可调和的问题。
+        </p>
+        <p>
+          第一是<strong>内存</strong>。机器码比 bytecode 大 4-8 倍——一段简单的 <code>function add(a, b) { return a + b; }</code> 编译成 Full-codegen 机器码可能 200+ 字节，编成 bytecode 仅 20-30 字节。低端 Android 设备（2015 年 1GB 内存常见）跑 web 应用时 Full-codegen 占 RAM 100MB+ 是浏览器卡顿的主因。
+        </p>
+        <p>
+          第二是<strong>各 tier 输入不一致</strong>。Full-codegen 时代 Crankshaft 优化器从 AST 起步重新生成 IR，TurboFan 从 AST 起步生成 sea of nodes——两个优化器各自重做一遍 AST 走查。换成 Ignition 之后<strong>所有优化器都从 bytecode 起步</strong>，省了大量重复工作，且 bytecode 是稳定的中间格式，不会因为 parser 修改而连锁影响优化器。
+        </p>
+        <p>
+          第三是<strong>Code Cache</strong>难做。机器码与 CPU ISA 强绑定，缓存到磁盘后跨设备不能共享；bytecode 是平台无关的，可以在用户首次访问页面时缓存到磁盘，下次访问跳过 parse 直接 deserialize。Code Cache 是 Chrome 启动期的关键优化，Ignition 是它落地的前置条件。
+        </p>
+        <p>
+          这三个理由叠加，让 V8 团队在 2015-2017 完成了 Ignition 项目并在 V8 5.9 一次性删除 Full-codegen——也就是 P1.1 讲的"2017 大重构"那次。今天看 V8 内部的 bytecode，本质是一份"为支持低端设备 + 多 tier 优化器 + 跨设备 cache"三方需求设计的中间表示。
+        </p>
 
-        <h3>Code Cache & Script Streaming</h3>
-        <p><em>正文待写。</em>启动期优化的两条腿：</p>
-        <ul>
-          <li><strong>Code Cache</strong>（V8 4.2+）：首次执行某段脚本时把 bytecode + 编译元数据序列化到磁盘；下次同源脚本直接 deserialize，跳过 parse + bytecode generation</li>
-          <li><strong>Script Streaming</strong>（V8 4.6+）：网络下载 JS 时<strong>边下载边解析</strong>——不等整个脚本到达就开始 parsing</li>
-          <li>两者配合：典型大型 SPA 启动期 V8 工作量 -30%</li>
-          <li>Cache 失效条件：V8 版本变更、源码 hash 变更、flag 变更；命中失效时静默回退</li>
-        </ul>
+        <h3>Code Cache &amp; Script Streaming：启动期优化的两条腿</h3>
+        <p>
+          首次执行 Ignition 仍要做完整工作（parse 源码 → 生成 bytecode → 解释执行）；但一段脚本的<strong>第二次访问</strong>不应该重做这些。这就是 Code Cache 的目的。
+        </p>
+        <p>
+          <strong>Code Cache</strong>（V8 4.2+，2015 起）：第一次执行某脚本时，V8 把 bytecode + 编译元数据序列化到磁盘缓存；下次同源脚本（同 URL 或同 source hash）直接 deserialize，<strong>跳过 parse + bytecode generation</strong>。Chrome 把它存在 HTTP 缓存旁边——访问页面时和 HTML / JS / CSS 一起从磁盘读。Node 也暴露了这套机制：<code>vm.Script</code> 的 <code>cachedData</code> 选项让嵌入器手动管理 cache。
+        </p>
+        <p>
+          <strong>Script Streaming</strong>（V8 4.6+）：补 Code Cache 第一次访问的 case。网络下载 JS 时 V8 不等整个脚本到达，<strong>边下载边 parse</strong>——一段 1MB 的 JS 在 100KB 时就开始 parsing，下载完时 parsing 也基本完成。这把 V8 的工作"藏在"网络等待里，对感知性能影响巨大。
+        </p>
+        <p>
+          两者配合：典型大型 SPA 启动期 V8 工作量 -30%。失效条件：V8 版本变更（cache 格式改了）、源码 hash 变更、相关 flag 变更——命中失效时 V8 静默回退到完整 parse，没有性能崩溃只是没有加速。
+        </p>
 
         <h3>Generator / Async function 怎么编（状态机化）</h3>
-        <p><em>正文待写。</em>关键点：</p>
-        <ul>
-          <li><code>function* foo() { yield a; yield b; }</code> 是 suspend/resume 语义；V8 编译成<strong>带状态字段的状态机</strong></li>
-          <li>bytecode 里出现 <code>SuspendGenerator</code> / <code>ResumeGenerator</code> 指令</li>
-          <li><strong>Async function</strong>：在规范层是"自动调用 await 的 generator"；V8 7.0+ 直接给 async 一组专门的字节码避免中间 Promise 分配</li>
-          <li><strong>Async/Await Zero-cost</strong>（V8 7.0，2018）：async 调用比同义 promise.then() 快约 11×、内存少 -2.5×</li>
-          <li>用户视角的 async/await 语义请参考 <a href="../../javascript/03-async/index.html">JS P3 · 异步</a></li>
-        </ul>
+        <p>
+          看一段 generator：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">function* counter() {
+  let i = 0;
+  while (true) {
+    yield i++;
+    yield i * 2;
+  }
+}</code></pre>
+        </div>
+        <p>
+          每次外部调 <code>.next()</code> 函数要从上次 <code>yield</code> 处<strong>恢复</strong>——这不是普通函数调用语义，是 suspend / resume。V8 怎么实现？
+        </p>
+        <p>
+          编译时 V8 把 generator 转成<strong>带状态字段的状态机</strong>——bytecode 里多出 <code>SuspendGenerator</code> 和 <code>ResumeGenerator</code> 两条专用指令。<code>SuspendGenerator</code> 把当前所有 register 状态（locals、accumulator、当前 bytecode offset）保存到 generator object 上，然后 return 给调用方；下次 <code>ResumeGenerator</code> 时把这些状态还原回 register，从保存的 offset 继续执行。本质是<strong>显式做了协程的 stack switch</strong>。
+        </p>
+        <p>
+          <strong>Async function</strong> 在 ECMAScript 规范层是"自动调用 await 的 generator + Promise 包装"。早期 V8（5.x-6.x）就是这样实现的——把 <code>async</code> desugar 成 generator + Promise hook，每次 <code>await</code> 创建一个中间 Promise。这个实现简单但有性能问题：每个 <code>await</code> 都分配 Promise，造成大量短命对象给 GC 压力。
+        </p>
+        <p>
+          <strong>2018 年 V8 7.0 落地的 "Faster async functions and promises"</strong>（俗称 zero-cost async）改写了这套：V8 给 async 一组<strong>专门的字节码</strong>——<code>SuspendGenerator</code> 在 async 上下文中变体直接持有 await 的值不再创建中间 Promise，仅在最外层 return 时构造一个 Promise。<strong>结果：async 调用比同义 promise.then() 快约 11×、内存少 2.5×</strong>。这是 V8 历史上单一优化收益最大的一次之一。
+        </p>
+        <p>
+          用户视角的 async/await 语义请参考 <a href="../../javascript/03-async/index.html">JS P3 · 异步</a>；规范层定义参见 <a href="../../ecma/07-execution/03-event-loop-async.html">ECMA P7.3 · Event Loop &amp; 异步演进</a>。
+        </p>
 
         <h3>Strict Mode / TDZ 在 bytecode 层</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li><code>'use strict'</code> 是 SourceTextModule 级 flag，影响 bytecode 生成时哪些 helper 被调用；不是单独 opcode</li>
-          <li><strong>TDZ</strong>（let / const）：bytecode 用 <code>ThrowReferenceErrorIfHole</code> 做未初始化检查；这就是 let/const 比 var 慢一点点的根因</li>
-        </ul>
+        <p>
+          <strong>Strict Mode</strong>（<code>'use strict'</code>）不是单独的 opcode 集，而是<strong>SourceTextModule 级别的 flag</strong>——影响 bytecode 生成时调用哪些 helper。例：strict 下 <code>this</code> 不再自动盒装（<code>function f() { return this; }</code> 直接调用时返回 <code>undefined</code> 而非 global object）；这种行为差异不是运行时检查，而是 bytecode 生成时直接选了不同 opcode。所以 strict mode 没有运行时性能开销，反而因为 V8 能做更多假设有时<strong>更快</strong>。
+        </p>
+        <p>
+          <strong>Temporal Dead Zone</strong>（let / const 的"声明前不能用"）就需要运行时检查了。bytecode 里 V8 用 <code>ThrowReferenceErrorIfHole</code> 在每次访问 let / const 变量前做检查——如果当前 slot 还是 "the hole"（未初始化标记值），抛 ReferenceError。这是 let/const 比 var 慢一点点的根因——多了一次 hole check。在 hot loop 里 V8 优化层会把这个 check 提到循环外（一次 check 验证所有迭代），实际开销可忽略，但 cold path 上仍可观测。
+        </p>
 
-        <h3>内置函数（Builtins）不走这条路</h3>
-        <p><em>正文待写。</em>关键点：</p>
-        <ul>
-          <li><code>Array.prototype.map</code> / <code>Object.assign</code> / <code>String.prototype.split</code> / <code>Promise.then</code> 这些<strong>不是 JS 写的</strong>；是 V8 自己的代码，预编译成机器码嵌进 Snapshot</li>
-          <li>写法分两代：早期用 <strong>CodeStubAssembler (CSA)</strong>——C++ 内嵌的汇编 DSL；现在用 <strong>Torque</strong>——TypeScript 风格的高级 DSL，编译器生成 CSA 调用</li>
-          <li><strong>Why Torque</strong>：CSA 容易写错且无类型；Torque 强类型 + 结构化控制流 + 直接对应 ECMAScript 规范步骤号（如 <code>// 6.4.1.1 Step 3</code> 写法）</li>
-          <li><strong>Snapshot Embedded</strong>：Builtins 在 V8 编译期就生成机器码，启动时通过 mmap 进 Isolate；调用 builtins ≈ 调用 native function，没有 JIT 开销</li>
-        </ul>
+        <h3>内置函数（Builtins）不走 bytecode 路径</h3>
+        <p>
+          <code>Array.prototype.map</code> / <code>Object.assign</code> / <code>String.prototype.split</code> / <code>Promise.then</code> ——这些 ECMAScript 规范定义的"标准库函数"在 V8 内部不是用 JS 写的。它们是 V8 团队精心写的、被几十亿台设备每天执行数万亿次的核心代码。
+        </p>
+        <p>
+          为什么不用 JS 写？因为 built-in 写成 JS 会走 Ignition / Sparkplug / Maglev / TurboFan 全流水——每个 isolate 启动时都要重新编译，开销大且不稳定。所以 V8 把 built-in <strong>预编译成机器码嵌进 Snapshot</strong>——启动时直接 mmap 进 Isolate，调用 built-in ≈ 调用 native function，没有 JIT 开销也不需要重复编译。
+        </p>
+        <p>
+          写 built-in 的方式分两代：早期用 <strong>CSA</strong>（前文介绍过的 CodeStubAssembler）——C++ 嵌入式 DSL，但太底层、容易出错（忘记 hidden class 检查、忘记 GC 安全、寄存器分配错）。V8 团队 2018 起推出 <strong>Torque</strong>——TypeScript 风格的高级 DSL，强类型 + 结构化控制流 + GC 安全自动检查。Torque 编译器生成 CSA 调用，CSA 再生成机器码——三层架构看起来繁琐但每层有明确职责。
+        </p>
+        <div class="code-block">
+          <span class="code-label">torque</span>
+<pre class="code"><code>// V8 内部 Array.isArray 的 Torque 实现（简化）
+@export
+transitioning javascript builtin ArrayIsArray(
+    js-implicit context: NativeContext)(arg: JSAny): Boolean {
+  if (TaggedIsSmi(arg)) return False;
+  const argMap: Map = LoadMap(UnsafeCast&lt;HeapObject&gt;(arg));
+  return IsJSArrayMap(argMap) ? True : False;
+}</code></pre>
+        </div>
+        <p>
+          可以看到 Torque 长得很像 TypeScript，但每个类型都映射到 V8 内部表示（<code>Smi</code> / <code>HeapObject</code> / <code>Map</code>），<code>transitioning</code> 关键字标记函数可能触发 GC 等。Torque 还能直接对应 ECMA-262 规范步骤——很多 V8 built-in 源码里直接用 <code>// 6.4.1.1 Step 3</code> 这样的注释标规范位置，让代码与规范保持可追溯一一对应。
+        </p>
+        <p>
+          这意味着：JS 程序里看着像"标准库函数调用"的东西，背后是 Torque/CSA 的 native 代码。理解这一点解释了很多性能现象——例 <code>Array.from(iterable)</code> 比手写 for-of loop 快，是因为 Torque 实现避开了 IC 站点；而 <code>Object.keys(obj).map(...)</code> 链有时<strong>不</strong>比手写循环快，因为 <code>map</code> 的 callback 是用户 JS 函数，仍走 IC + tier-up 流程。</p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A · 用 --print-bytecode 看自己的函数</h3>
-          <p><em>正文待写。</em><code>node --print-bytecode-filter=sum --print-bytecode script.js</code></p>
+          <h3 class="scenario-title">场景 A · 用 --print-bytecode 验证 V8 实际看到了什么</h3>
+          <p>
+            最直接的调试方式：<code>node --print-bytecode-filter=funcName --print-bytecode script.js</code>。看到的 bytecode 是 V8 优化决策的<strong>实际输入</strong>——如果你以为某段代码"被内联了"，看 bytecode 就能直接验证。常见用法：观察某个函数在不同写法下生成的 bytecode 数量（更长 = 更慢解释 + 更慢 tier-up），或确认某个 ES 特性（如 destructuring）是否被编译器特别优化（destructuring 通常比手动 unpack 多几条指令但被后续优化层折叠）。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B · 优化建议</h3>
-          <p><em>正文待写。</em>函数变小让 lazy parsing 更高效；避免不必要的闭包（每个闭包是独立 feedback vector）。</p>
+          <h3 class="scenario-title">场景 B · 闭包 vs 共享函数：Feedback Vector 视角</h3>
+          <p>
+            常见反模式：<code>arr.map(item => process(item))</code> 在循环里被调用上千次。每次循环都创建新闭包——每个新闭包都有<strong>独立的 Feedback Vector</strong>，要从 Uninitialized 重新积累 IC 状态，且 Maglev/TF 不可能编译这个一次性闭包。优化方式：把 <code>item => process(item)</code> 提到循环外定义一次（共享闭包共享 Feedback Vector），或直接用 <code>arr.map(process)</code>（如果 process 签名匹配）。这条原则也适用 React 渲染——每次 render 都新建 callback 是同样问题。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 函数大小与 Lazy Parsing</h3>
+          <p>
+            大函数（&gt; 600 字符）V8 默认<strong>不做 lazy parsing</strong>——成本太高、不如直接完整 parse。这就是为什么"webpack bundle 一个超大模块" V8 启动慢的原因之一：所有函数被强制 eagerly parse。优化方向：让模块代码模块化、避免单文件几千行、用动态 import 切代码——既减小启动期 V8 工作量，又让被切出去的模块在真正用到时才 parse。这也是为什么 React Server Components 启动相对快——大量"只在服务端跑"的代码不会到客户端 V8 那里。
+          </p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
