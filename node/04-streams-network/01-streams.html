@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Streams 全谱 · P4 · Node.js Runtime 深度学习</title>
+    <meta name="description" content="Node 数据处理的统一抽象——4 类 stream（Readable/Writable/Duplex/Transform）+ flowing vs paused 两种模式 + highWaterMark + backpressure + pipeline + async iterator + WHATWG Streams。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23339933'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ENJ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Node.js Runtime 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.15 145); color: #fff">Node</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">Node 首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · Streams 与网络栈</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-streams.html" class="active">01 · Streams 全谱</a></li>
+          <li><a href="02-http-server.html">02 · HTTP / undici / fetch</a></li>
+          <li><a href="03-fs-process.html">03 · fs / Buffer / process</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · Node 是谁</a></li>
+          <li><a href="../02-event-loop/index.html">P2 · libuv 与 Event Loop</a></li>
+          <li><a href="../03-modules/index.html">P3 · 模块系统</a></li>
+          <li><a href="../05-multicore-native/index.html">P5 · 多核与原生扩展</a></li>
+          <li><a href="../06-modern/index.html">P6 · 现代 Node 工程</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Node.js Runtime</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · Streams 与网络栈</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Streams 全谱</span>
+        </nav>
+        <h1>Streams 全谱：4 类 + backpressure</h1>
+        <p class="lead">
+          Streams 是 <strong>Node 数据处理的统一抽象</strong>——http req/res 是 Stream、fs.createReadStream 是 Stream、Worker 通信也是 Stream。理解 Streams 是理解 Node 的关键。讲 4 类 stream + flowing vs paused 模式 + highWaterMark + backpressure + pipeline + async iterator + WHATWG Streams 跨标准融合。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~35 分钟</span>
+          <span><strong>前置</strong> P2 完整</span>
+          <span><strong>主要来源</strong> nodejs.org/api/stream</span>
+        </div>
+
+        <div class="callout warn">
+          <div class="callout-title">📝 章节状态</div>
+          <p>骨架版本。对照大纲 <code>node/outline.md § P4.1</code>。</p>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Streams 是 Node 数据处理的统一抽象</strong>——http req/res / fs / Worker 通信都是 Stream。</li>
+          <li><strong>Backpressure 让 Node 不爆内存</strong>—— write() 返回 false → 暂停 source → 'drain' 恢复。</li>
+          <li><strong>现代写法用 pipeline + async iterator</strong>——pipe 已不推荐（错误传播 / 资源释放有坑）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>4 类 stream</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>Readable</strong>：数据源（fs.createReadStream / http req / process.stdin）</li>
+          <li><strong>Writable</strong>：数据汇（fs.createWriteStream / http res / process.stdout）</li>
+          <li><strong>Duplex</strong>：双向，如 socket（net.Socket）</li>
+          <li><strong>Transform</strong>：过滤器（zlib.createGzip / crypto.createCipher）</li>
+        </ul>
+
+        <h3>两种模式：flowing vs paused</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>Flowing (push)</strong>：数据自动流，监听 'data' event 处理；数据来不及处理会丢失</li>
+          <li><strong>Paused (pull)</strong>：调用 .read() 主动拉数据；不丢失但需要主动循环</li>
+          <li><strong>切换</strong>：监听 'data' / .pipe() / .resume() → flowing；.pause() → paused</li>
+          <li>理解这俩是 stream 心智模型的关键</li>
+        </ul>
+
+        <h3>highWaterMark：内部 buffer 阈值</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>默认 <strong>16KB</strong>（字节流）或 <strong>16</strong>（object mode）</li>
+          <li>Duplex / Transform 有<strong>独立的 readableHighWaterMark / writableHighWaterMark</strong>（Node 8+）</li>
+          <li>调大可减少 read 次数（吞吐增加）；调小可减少内存占用</li>
+        </ul>
+
+        <h3>Backpressure：让 Node 不爆内存的核心机制</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><code>writable.write(chunk)</code> 返回 <strong>true</strong>：buffer 还没满，继续写</li>
+          <li><code>writable.write(chunk)</code> 返回 <strong>false</strong>：buffer 满了，暂停 source 等 'drain' event</li>
+          <li>'drain' 触发后恢复</li>
+          <li>这套机制让 Node 即使处理 10GB 文件也不会爆 16KB 内存</li>
+        </ul>
+
+        <h3>pipeline vs .pipe()</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>.pipe()</strong>：传统写法；错误传播不全（一个 stream 错另一个不会清理）</li>
+          <li><strong>stream.pipeline()</strong>：现代写法；自动处理错误传播 + 资源释放</li>
+          <li><strong>stream.promises.pipeline()</strong>：Promise 版本</li>
+        </ul>
+
+        <h3>Async iterator</h3>
+        <p><em>正文待写。</em><code>for await (const chunk of readable) { ... }</code> ——现代 stream 消费方式（Node 10+）。比 'data' 事件更易写、易读、错误处理自然。</p>
+
+        <h3>WHATWG Streams（stream/web）</h3>
+        <p><em>正文待写。</em>Node 16+ 加的<strong>web 标准 stream API</strong>（ReadableStream / WritableStream / TransformStream）——与传统 Node Streams<strong>不兼容</strong>但正在融合。<code>fetch</code> 返回的 body 就是 web stream。</p>
+
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 大文件处理用 stream 不爆内存</h3>
+          <p><em>正文待写。</em>10GB 文件读 + gzip + 写——pipeline 链式处理，内存占用稳定 16KB。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · backpressure 调试</h3>
+          <p><em>正文待写。</em>看 'drain' 事件触发频率；如果从不触发可能 source 太慢；触发太频繁可能 highWaterMark 太小。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · web 与 node streams 互转</h3>
+          <p><em>正文待写。</em>Readable.fromWeb() / Readable.toWeb() 桥接（Node 17+）。</p>
+        </div>
+
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">import { pipeline } from 'node:stream/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { createGzip } from 'node:zlib';
+
+// 现代写法：pipeline + Promise
+await pipeline(
+  createReadStream('input.txt'),
+  createGzip(),
+  createWriteStream('input.txt.gz')
+);
+
+// 用 async iterator 消费
+async function processLargeFile(path) {
+  const readable = createReadStream(path);
+  for await (const chunk of readable) {
+    // 每个 chunk 自动 backpressure
+    await processChunk(chunk);
+  }
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="pitfall">
+          <div class="pitfall-title">不要混用 .pipe() 和 await pipeline()</div>
+          <p>同一 stream 链选一种风格，避免错误传播混乱。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">监听 'data' 后无法回 paused 模式</div>
+          <p>除非显式 .pause()。新代码用 async iterator 避免这个状态机问题。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">node streams 与 web streams 不直接兼容</div>
+          <p>fetch 给的是 web ReadableStream，要用 Readable.fromWeb() 转成 node stream。</p>
+        </div>
+
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://nodejs.org/api/stream.html" target="_blank" rel="noopener">Node Stream 文档</a></li>
+          <li><a href="https://nodejs.org/learn/modules/backpressuring-in-streams" target="_blank" rel="noopener">Backpressuring 详解</a></li>
+          <li>下一章 → <a href="02-http-server.html">P4.2 · HTTP / undici / fetch</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../03-modules/02-dual-package-hazard.html"><span class="label">← 上一章</span><span class="title">P3.2 · Dual Package Hazard</span></a>
+          <a class="next" href="02-http-server.html"><span class="label">下一章 →</span><span class="title">02 · HTTP / undici / fetch</span></a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录"><h3>本页目录</h3><ul></ul></aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

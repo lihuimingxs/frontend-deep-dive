@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Worker Threads / Cluster / Child Process · P5 · Node.js Runtime 深度学习</title>
+    <meta name="description" content="Node 的三种多进程 / 多线程模型——什么时候用哪个：Worker Threads（CPU 密集 JS）/ Cluster（I/O 密集多实例）/ Child Process（外部程序）。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23339933'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ENJ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Node.js Runtime 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.15 145); color: #fff">Node</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">Node 首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · 多核与原生扩展</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-worker-cluster.html" class="active">01 · Worker Threads / Cluster</a></li>
+          <li><a href="02-n-api.html">02 · N-API 与 Native Module</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · Node 是谁</a></li>
+          <li><a href="../02-event-loop/index.html">P2 · libuv 与 Event Loop</a></li>
+          <li><a href="../03-modules/index.html">P3 · 模块系统</a></li>
+          <li><a href="../04-streams-network/index.html">P4 · Streams 与网络栈</a></li>
+          <li><a href="../06-modern/index.html">P6 · 现代 Node 工程</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Node.js Runtime</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · 多核与原生扩展</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Worker Threads / Cluster / Child Process</span>
+        </nav>
+        <h1>Worker Threads / Cluster / Child Process</h1>
+        <p class="lead">
+          Node "单线程"是 JS 层面的——通过三种多进程 / 多线程模型可以充分利用多核 CPU。三者各有适用场景：<strong>Worker Threads</strong>（CPU 密集 JS）/ <strong>Cluster</strong>（I/O 密集 web server 多实例）/ <strong>Child Process</strong>（调外部程序）。讲清三者选型判据 + Worker Threads 与 V8 Isolate 的关系。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> V8 P5.1 Isolate</span>
+          <span><strong>主要来源</strong> nodejs.org/api/worker_threads · cluster · child_process</span>
+        </div>
+
+        <div class="callout warn">
+          <div class="callout-title">📝 章节状态</div>
+          <p>骨架版本。对照大纲 <code>node/outline.md § P5.1</code>。</p>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>三者选型判据</strong>：CPU 密集 → Worker Threads；多 web server 实例 → Cluster；调外部程序 → Child Process。</li>
+          <li><strong>Worker Threads = 多 V8 Isolate</strong>（详见 V8 P5.1）——互相完全隔离，postMessage 必须 structured clone。</li>
+          <li><strong>SharedArrayBuffer 是 Workers 真正共享内存的唯一方式</strong>——其他都是拷贝。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>worker_threads（Node 10.5+）</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>进程内多 V8 Isolate；每 Worker 自己的堆 / GC / Event Loop</li>
+          <li>postMessage 走 structured clone 算法（与浏览器一致）</li>
+          <li>SharedArrayBuffer 共享内存；其他对象都拷贝</li>
+          <li>适合 CPU 密集 JS（图像处理、加密、AI 推理）</li>
+          <li><strong>不</strong>适合 I/O 密集——Node 主线程的 EventLoop 已经够 I/O 并发</li>
+        </ul>
+
+        <h3>cluster 模块</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>fork 多进程跑同一段代码</li>
+          <li>master 进程 listen 端口；worker 进程通过<strong>共享 socket</strong>处理请求</li>
+          <li>OS 内核做负载均衡（Linux 3.9+ SO_REUSEPORT）</li>
+          <li>适合 I/O 密集 web server 多核扩展</li>
+          <li>每个 worker 是独立进程——崩溃互不影响</li>
+        </ul>
+
+        <h3>child_process</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>spawn</strong>：低层 API，返回 streaming I/O</li>
+          <li><strong>fork</strong>：spawn 的 Node 特化版，子进程也是 Node + 自带 IPC</li>
+          <li><strong>exec</strong>：buffer 整个输出；适合短命令</li>
+          <li>适合调非 JS 程序（ffmpeg、git、python 脚本）</li>
+        </ul>
+
+        <h3>三者对比表</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>Worker Threads</th>
+              <th>Cluster</th>
+              <th>Child Process</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>隔离粒度</td><td>同进程不同 Isolate</td><td>独立进程</td><td>独立进程</td></tr>
+            <tr><td>启动开销</td><td>低（&lt; 50ms）</td><td>高（&gt; 100ms）</td><td>视目标程序</td></tr>
+            <tr><td>共享内存</td><td>SharedArrayBuffer</td><td>无</td><td>无</td></tr>
+            <tr><td>跑非 JS</td><td>否</td><td>否</td><td>是</td></tr>
+            <tr><td>适用</td><td>CPU 密集 JS</td><td>web server 多实例</td><td>外部命令</td></tr>
+          </tbody>
+        </table>
+
+        <h3>SharedArrayBuffer + Atomics</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>Workers 之间真正共享内存的唯一方式</li>
+          <li>必须用 Atomics 原子操作避免 race condition</li>
+          <li>详见 <a href="../../ecma/07-execution/05-memory-model.html">ECMA P7.5 · §24 Memory Model</a></li>
+          <li>用例：worker 之间共享配置 / 共享 image buffer / lock-free queue</li>
+        </ul>
+
+        <h3>MessageChannel / MessagePort</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>双向通信原语</li>
+          <li>可以跨 worker 转移（transfer）—— transferList 参数</li>
+          <li>用于建立 worker 之间的<strong>直接通信</strong>而不通过主线程中转</li>
+        </ul>
+
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 图像处理用 Worker Threads</h3>
+          <p><em>正文待写。</em>用 sharp 处理图片到主线程会卡 EventLoop；放进 Worker Pool 里跑。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · web server 用 Cluster 还是 PM2</h3>
+          <p><em>正文待写。</em>简单场景用 Cluster；生产推荐 PM2（更好的 monitor / restart 策略）。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 调 ffmpeg 用 spawn 不用 exec</h3>
+          <p><em>正文待写。</em>大输出用 spawn 的 streaming，避免 exec 的 buffer 爆内存。</p>
+        </div>
+
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// Worker Threads 跑 CPU 密集任务
+import { Worker } from 'node:worker_threads';
+
+function runCPUTask(data) {
+  return new Promise((resolve, reject) =&gt; {
+    const worker = new Worker('./cpu-task.js', { workerData: data });
+    worker.on('message', resolve);
+    worker.on('error', reject);
+  });
+}
+
+// Cluster web server
+import cluster from 'node:cluster';
+import { availableParallelism } from 'node:os';
+import http from 'node:http';
+
+if (cluster.isPrimary) {
+  for (let i = 0; i &lt; availableParallelism(); i++) cluster.fork();
+} else {
+  http.createServer((req, res) =&gt; res.end('OK')).listen(3000);
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="pitfall">
+          <div class="pitfall-title">postMessage 不能传函数 / 不能传 Promise</div>
+          <p>structured clone 不支持。要跨 Worker 传函数，用 MessageChannel + 自定义协议。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">Cluster 不是真正的"线程"</div>
+          <p>每个 worker 是独立进程；不能直接共享 V8 堆 / 内存。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">SharedArrayBuffer 必须配 Atomics</div>
+          <p>无 Atomics 直接读写会触发 V8 内部内存模型 UB；必然 race。</p>
+        </div>
+
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://nodejs.org/api/worker_threads.html" target="_blank" rel="noopener">Worker Threads 文档</a></li>
+          <li><a href="https://nodejs.org/api/cluster.html" target="_blank" rel="noopener">Cluster 文档</a></li>
+          <li><a href="../../v8/05-embedding/01-embedder-api.html">V8 P5.1 · Embedder API</a> · Isolate 隔离</li>
+          <li><a href="../../ecma/07-execution/05-memory-model.html">ECMA P7.5 · §24 Memory Model</a></li>
+          <li>下一章 → <a href="02-n-api.html">P5.2 · N-API 与 Native Module</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../04-streams-network/03-fs-process.html"><span class="label">← 上一章</span><span class="title">P4.3 · fs / Buffer / process</span></a>
+          <a class="next" href="02-n-api.html"><span class="label">下一章 →</span><span class="title">02 · N-API 与 Native Module</span></a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录"><h3>本页目录</h3><ul></ul></aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

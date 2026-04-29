@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Node.js Runtime 深度学习 · libuv、模块、Streams 与原生扩展</title>
+    <meta
+      name="description"
+      content="Node.js 运行时的内部机制深度学习。6 阶段、12 章：从 Node 项目史与同代人（Deno / Bun / Edge Runtime）讲起，沿包装层级铺开 —— libuv 设计 + Event Loop 6 phase、CJS/ESM 双模块系统 + Dual Package Hazard、Streams 全谱 + http/undici/fetch + fs/Buffer/process、Worker Threads/Cluster/Child Process 多核三件套 + N-API 原生扩展、内置 test runner/Permission/SEA/async_hooks 现代工程。回答「V8 怎么被包装成服务端运行时」。"
+    />
+    <link rel="stylesheet" href="../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23339933'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ENJ%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="index.html">
+          <span>Node.js Runtime 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.5 0.15 145); color: #fff">Node</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">← 深度学习</a>
+          <a href="https://nodejs.org/api/" target="_blank" rel="noopener">官方文档</a>
+          <a href="https://docs.libuv.org/en/v1.x/" target="_blank" rel="noopener">libuv</a>
+          <a href="#phases">章节</a>
+          <a href="../README.md">关于</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <main id="main" class="home">
+      <section class="hero">
+        <h1>Node.js Runtime 深度学习 · libuv、模块、Streams 与原生扩展</h1>
+        <p>
+          基于
+          <a href="https://nodejs.org/api/" target="_blank" rel="noopener">nodejs.org/api 官方文档</a>
+          与
+          <a href="https://docs.libuv.org/en/v1.x/" target="_blank" rel="noopener">libuv 设计文档</a>
+          整理。回答三个问题：<strong>Node 怎么走到今天</strong>（Ryan Dahl 起源 / io.js 分裂 / OpenJS 治理 / Bun 挑战）、<strong>它怎么把 V8 包装成服务端运行时</strong>（libuv + Event Loop + 标准库）、<strong>多核 / 原生扩展 / 现代工程怎么做</strong>（Worker Threads / N-API / Test Runner / Permission Model）。是 <a href="../v8/index.html">V8</a> 主题之上的"应用层"延伸。
+        </p>
+        <div class="hero-meta">
+          <span>受众 <code>已学完 V8 / ECMA / JS 的工程师</code></span>
+          <span>来源 <code>nodejs.org / libuv docs / Node 源码</code></span>
+          <span>章节 <code>12 章 / 6 阶段</code></span>
+          <span>状态 <code>🛠 大纲完成 · 撰写中</code></span>
+        </div>
+      </section>
+
+      <h2 id="phases" style="margin-top: 0">分阶段目录</h2>
+      <p style="color: var(--text-muted); max-width: 720px">
+        共 6 个阶段、12 章，按"包装层级"展开：<strong>Node 是谁 → libuv 与 Event Loop → 模块系统 → Streams 与网络栈 → 多核与原生扩展 → 现代 Node 工程</strong>。建议顺序阅读；已有 Node 经验的工程师可直接跳到 P2.2 / P3.2 / P4.1 补底层；写 native module 的看 P5.2 + V8 P5.1。
+      </p>
+
+      <div class="phase-grid">
+        <a class="phase-card" href="01-overview/index.html" data-status="pending">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P1 · Node 是谁</h3>
+            <span class="phase-card-badge">⏳ 2 章规划中</span>
+          </div>
+          <p class="phase-card-desc">
+            Node 17 年项目史（Ryan Dahl 2009 JSConf EU 起源 / 2014 io.js 分裂 / 2015 Foundation 治理 / 2018 Ryan 自我批评启发 Deno / 2022 Bun 发布挑战）+ 同代人对照（Deno / Bun / Edge Runtime 各自不同的设计选择）。讲清楚 Node 的护城河（生态）和当前张力（Bun 的"兼容 + 加速"路径）。
+          </p>
+          <div class="phase-card-topics">
+            <span>项目史 17 年</span>
+            <span>io.js 分裂</span>
+            <span>OpenJS Foundation</span>
+            <span>Ryan Dahl 自我批评</span>
+            <span>Deno / Bun 同代人</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="02-event-loop/index.html" data-status="pending">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P2 · libuv 与 Event Loop</h3>
+            <span class="phase-card-badge">⏳ 2 章规划中</span>
+          </div>
+          <p class="phase-card-desc">
+            Node 的核心创新：单线程 + 事件驱动 + 异步 I/O 跑高并发服务端。<strong>libuv</strong> 跨平台异步 I/O 库（handles vs requests / 6 phase / epoll-kqueue-IOCP / Worker Pool 4 线程）+ <strong>Node 视角的 Event Loop</strong>（与 V8 microtask 协作 / process.nextTick / setImmediate / AbortController / unhandled rejection）。
+          </p>
+          <div class="phase-card-topics">
+            <span>libuv handles / requests</span>
+            <span>6 phase</span>
+            <span>epoll / kqueue / IOCP</span>
+            <span>Worker Pool</span>
+            <span>nextTick vs setImmediate</span>
+            <span>AbortController</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="03-modules/index.html" data-status="pending">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P3 · 模块系统</h3>
+            <span class="phase-card-badge">⏳ 2 章规划中</span>
+          </div>
+          <p class="phase-card-desc">
+            Node 是 JS 历史上第一个有真模块系统的运行时。CJS（2009 起）+ ESM（Node 12+）双系统并存的工程现实：解析算法、<code>package.json</code> 字段全谱（type / main / exports / imports）、conditional exports、<strong>Dual Package Hazard</strong> 三种规避策略、现代库设计模板（tshy / tsup / unbuild）。
+          </p>
+          <div class="phase-card-topics">
+            <span>CJS 解析算法</span>
+            <span>ESM 解析</span>
+            <span>exports 字段</span>
+            <span>Conditional Exports</span>
+            <span>Dual Package Hazard</span>
+            <span>Top-Level Await</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="04-streams-network/index.html" data-status="pending">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P4 · Streams 与网络栈</h3>
+            <span class="phase-card-badge">⏳ 3 章规划中</span>
+          </div>
+          <p class="phase-card-desc">
+            Node 标准库最强部分。<strong>Streams 全谱</strong>（Readable/Writable/Duplex/Transform + flowing vs paused + highWaterMark + backpressure + pipeline + async iterator + WHATWG Streams）+ <strong>HTTP 服务端</strong>（http / https / HTTP/2 / undici / 内置 fetch）+ <strong>fs / Buffer / process</strong>（Promise API、createReadStream、Buffer 不在 V8 堆、process.env）。
+          </p>
+          <div class="phase-card-topics">
+            <span>Streams 4 类</span>
+            <span>backpressure</span>
+            <span>http / undici / fetch</span>
+            <span>HTTP/2</span>
+            <span>fs Promise API</span>
+            <span>Buffer</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="05-multicore-native/index.html" data-status="pending">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P5 · 多核与原生扩展</h3>
+            <span class="phase-card-badge">⏳ 2 章规划中</span>
+          </div>
+          <p class="phase-card-desc">
+            Node "单线程"是 JS 层面的——通过 Worker Threads / Cluster / Child Process 三件套和 N-API 原生扩展可以充分利用多核 + 调用 native 库。讲清三种多进程模型的选型判据 + N-API ABI 稳定性承诺 + node-addon-api / node-gyp / prebuild-install 工程实践 + WASM 替代方案。
+          </p>
+          <div class="phase-card-topics">
+            <span>Worker Threads</span>
+            <span>Cluster</span>
+            <span>Child Process</span>
+            <span>SharedArrayBuffer</span>
+            <span>N-API</span>
+            <span>node-addon-api</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="06-modern/index.html" data-status="pending">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P6 · 现代 Node 工程</h3>
+            <span class="phase-card-badge">⏳ 1 章规划中</span>
+          </div>
+          <p class="phase-card-desc">
+            Node 22+ 引入的"内置工具"——回应 Bun / Deno 的工具一体化趋势。内置 <strong>node:test</strong> runner（竞争 vitest/Jest）+ <strong>Permission Model</strong>（仿 Deno）+ <strong>Single Executable Application (SEA)</strong> + <strong>async_hooks / AsyncLocalStorage</strong>（OpenTelemetry 基础）+ Watch mode + Inspector Protocol。
+          </p>
+          <div class="phase-card-topics">
+            <span>node:test runner</span>
+            <span>Permission Model</span>
+            <span>SEA</span>
+            <span>async_hooks</span>
+            <span>AsyncLocalStorage</span>
+            <span>--watch</span>
+          </div>
+        </a>
+      </div>
+
+      <h2 style="margin-top: 48px">编写约定</h2>
+      <p style="color: var(--text-muted); max-width: 720px">
+        每章遵循统一的 6 段结构：<strong>速览 → 底层逻辑 → 应用场景 → 典型代码 → 常见陷阱 → 延伸阅读</strong>。Node 主题相比 V8 / ECMA 有以下额外约定：
+      </p>
+      <ul style="color: var(--text-muted); line-height: 1.8">
+        <li>
+          <strong>「短重述 + 链回」</strong> —— 当一个机制在
+          <a href="../v8/index.html">V8</a> /
+          <a href="../ecma/index.html">ECMA</a> /
+          <a href="../javascript/index.html">JavaScript</a> 主题已详述时（如 V8 Isolate / Microtask Queue 原语 / Module Records 规范 / Promise 用户视角），本主题用 1-3 句话点到本质，紧跟一句"详细的 X 请参考 Y"
+        </li>
+        <li>
+          <strong>版本号必标</strong> —— Node 改动也不慢，没有版本号的论述不可信。每个特性必标"Node X 引入 / Node Y 稳定"
+        </li>
+        <li>
+          <strong>nodejs.org 一手优先</strong> —— 每个 API 的"权威定义"必须是 nodejs.org/api。社区博客只用来佐证或补充实测数据
+        </li>
+        <li>
+          <strong>重视 RFC 与 Issue</strong> —— 很多 Node 设计决策记录在 nodejs/node GitHub PR / Issue 里——这是讲"为什么"最权威的资料
+        </li>
+        <li>
+          <strong>⚠️ 标注</strong> —— io.js 永远标"2014-2015 abandoned"；早期 callback API 不再推荐永远标"用 fs.promises"
+        </li>
+      </ul>
+
+      <h2 style="margin-top: 48px">与既有主题的关系</h2>
+      <p style="color: var(--text-muted); max-width: 720px">
+        Node 主题<strong>不重复</strong> V8 / ECMA / JS 主题已经讲透的底层机制，但会在每个交叉点提供"短重述 + 链接"，重点讲 Node 在应用层做的包装。常见对应：
+      </p>
+      <ul style="color: var(--text-muted); line-height: 1.8">
+        <li>
+          P2 Event Loop → V8
+          <a href="../v8/05-embedding/01-embedder-api.html">P5.1 Embedder API</a>（V8 不拥有 EL，只暴露 microtask 原语）+ ECMA
+          <a href="../ecma/07-execution/03-event-loop-async.html">P7.3 Event Loop 规范</a>
+        </li>
+        <li>
+          P3 模块系统 → ECMA
+          <a href="../ecma/07-execution/04-modules-tla.html">P7.4 Module Records + TLA</a>（规范定义）
+        </li>
+        <li>
+          P4.3 Buffer → V8
+          <a href="../v8/04-memory/01-heap-and-objects.html">P4.1 堆布局</a>（Buffer 不在 V8 堆，由 ArrayBuffer Allocator 分配）
+        </li>
+        <li>
+          P5.1 Worker Threads → V8
+          <a href="../v8/05-embedding/01-embedder-api.html">P5.1 Embedder API</a>（每 Worker 一个 Isolate）+ ECMA
+          <a href="../ecma/07-execution/05-memory-model.html">P7.5 §24 Memory Model</a>（SAB + Atomics）
+        </li>
+        <li>
+          P5.2 N-API → V8
+          <a href="../v8/05-embedding/01-embedder-api.html">P5.1 Embedder API</a>（V8 C++ API 之上的 ABI 稳定层）
+        </li>
+        <li>
+          P6 Inspector Protocol → V8
+          <a href="../v8/05-embedding/02-diagnostics-sandbox.html">P5.2 诊断工具</a>（V8 同一套协议）
+        </li>
+        <li>
+          P1.2 同代人 Bun → 独立的 Bun 主题（待写，讲 JSC + Zig + 工具一体化）
+        </li>
+        <li>
+          P1.2 同代人 Edge Runtime → V8
+          <a href="../v8/01-overview/02-engine-landscape.html">P1.2 V8 分身史</a>（Cloudflare Workers Isolate-per-tenant）
+        </li>
+      </ul>
+    </main>
+
+    <script src="../assets/app.js"></script>
+  </body>
+</html>

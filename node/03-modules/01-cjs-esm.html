@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CJS 与 ESM 双系统 · P3 · Node.js Runtime 深度学习</title>
+    <meta name="description" content="Node 模块系统的解析算法与配置：CommonJS 与 ESM 各自的解析、package.json 字段全谱、Conditional Exports、Loader Hooks。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23339933'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ENJ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Node.js Runtime 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.15 145); color: #fff">Node</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">Node 首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · 模块系统</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-cjs-esm.html" class="active">01 · CJS 与 ESM 双系统</a></li>
+          <li><a href="02-dual-package-hazard.html">02 · Dual Package Hazard</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · Node 是谁</a></li>
+          <li><a href="../02-event-loop/index.html">P2 · libuv 与 Event Loop</a></li>
+          <li><a href="../04-streams-network/index.html">P4 · Streams 与网络栈</a></li>
+          <li><a href="../05-multicore-native/index.html">P5 · 多核与原生扩展</a></li>
+          <li><a href="../06-modern/index.html">P6 · 现代 Node 工程</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Node.js Runtime</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · 模块系统</a><span class="breadcrumb-sep">/</span>
+          <span>01 · CJS 与 ESM 双系统</span>
+        </nav>
+        <h1>CJS 与 ESM 双系统：解析算法与配置</h1>
+        <p class="lead">
+          把"为什么我的 import 跑不起来"这种典型问题的根因讲清楚。重点是<strong>解析算法</strong> + <strong>package.json 字段</strong>。CJS 用 Node 自家算法，ESM 用 ECMA 规范算法——同一个路径可能解析成不同文件，这是双系统并存最大的工程现实。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> ECMA P7.4 Module Records</span>
+          <span><strong>主要来源</strong> nodejs.org/api/esm · nodejs.org/api/packages</span>
+        </div>
+
+        <div class="callout warn">
+          <div class="callout-title">📝 章节状态</div>
+          <p>骨架版本。对照大纲 <code>node/outline.md § P3.1</code>。</p>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>CJS 是"运行时模块"</strong>：被 require 时执行；同步；可以条件 require。</li>
+          <li><strong>ESM 是"静态模块"</strong>：解析时 V8 已知所有依赖；异步；不能条件 import（除非用 <code>import()</code>）。</li>
+          <li><strong>package.json 的 <code>exports</code> 字段是双系统兼容的核心</strong>——通过 conditional exports 给不同 import 方式不同入口。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>CommonJS 解析算法（Node 2009-）</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>同步：<code>require('foo')</code> 阻塞等加载完成</li>
+          <li>Node 自家算法（不是 ES 规范）：先看 core module → 再看 file → 再看 node_modules 向上查找</li>
+          <li>支持省略扩展名（<code>.js</code> / <code>.json</code> / <code>.node</code> 自动加）</li>
+          <li>支持条件 require：<code>if (x) require('./a'); else require('./b')</code></li>
+        </ul>
+
+        <h3>ESM 解析（Node 12+）</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>异步：<code>import</code> 是规范级 async</li>
+          <li>按 ECMA Module Records 规范解析（详见 <a href="../../ecma/07-execution/04-modules-tla.html">ECMA P7.4</a>）</li>
+          <li>HTTP / file URL 都支持</li>
+          <li><strong>必须带扩展名</strong>（<code>.js</code> / <code>.mjs</code>）—— 这是 ESM 与 CJS 最大的解析差异</li>
+          <li>不能条件 import（除非用动态 <code>import()</code>）</li>
+        </ul>
+
+        <h3>package.json 字段全谱</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong><code>type: "module"</code></strong>：把 .js 文件按 ESM 处理（默认是 CJS）</li>
+          <li><strong><code>main</code></strong>：CJS 入口（旧）</li>
+          <li><strong><code>module</code></strong>：ESM 入口（bundler 约定，非 Node 标准）</li>
+          <li><strong><code>exports</code></strong>：现代标准，覆盖以上字段</li>
+          <li><strong><code>imports</code></strong>：包内导入路径别名（如 <code>#config</code>）</li>
+          <li><strong><code>types</code></strong>：TypeScript 类型入口</li>
+        </ul>
+
+        <h3>Conditional Exports：key 顺序敏感</h3>
+        <p><em>正文待写。</em></p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+<pre class="code"><code class="lang-json">{
+  "name": "my-lib",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./utils": {
+      "import": "./dist/utils.js",
+      "require": "./dist/utils.cjs"
+    }
+  }
+}</code></pre>
+        </div>
+        <p>
+          <strong>key 顺序敏感</strong>：earlier entries 优先级更高。一般规则"specific → general"——types 在前，import 在后。
+        </p>
+
+        <h3>导入时的扩展名问题</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>ESM</strong>：必须 <code>import x from './foo.js'</code>（带 .js）</li>
+          <li><strong>CJS</strong>：可以 <code>require('./foo')</code>（不带）</li>
+          <li><strong>TypeScript 与 Node 的奇怪交互</strong>：写 <code>import x from './foo.js'</code>（带 .js 而非 .ts）才能让 tsc 输出后 Node ESM 能跑</li>
+          <li>这是 TS + ESM 项目最常见的踩坑点</li>
+        </ul>
+
+        <h3><code>--experimental-vm-modules</code> / <code>--loader</code> hooks</h3>
+        <p><em>正文待写。</em>自定义模块加载器（用于 ts-node、Jest ESM、Vitest 等）；Node 20+ 改名为 <code>--import</code> + register hook API。</p>
+
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 给项目从 CJS 迁到 ESM</h3>
+          <p><em>正文待写。</em>关键步骤：加 <code>"type": "module"</code> + 改所有 require → import + 修扩展名 + 修 __dirname / __filename。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 调试 import 解析失败</h3>
+          <p><em>正文待写。</em>用 <code>node --trace-deprecation</code> 看 ESM 警告；用 <code>node -e "console.log(require.resolve('foo'))"</code> 看 CJS 实际解析路径。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · TS + ESM 写法</h3>
+          <p><em>正文待写。</em>tsconfig.json 的 module / moduleResolution 设置 + 引入语法带 .js 后缀。</p>
+        </div>
+
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <div class="code-block">
+          <span class="code-label">json</span>
+<pre class="code"><code class="lang-json">// 现代库 package.json 双格式发布
+{
+  "name": "my-lib",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.js"
+    }
+  }
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="pitfall">
+          <div class="pitfall-title">ESM 里没有 __dirname / __filename</div>
+          <p>用 <code>import.meta.url</code> + <code>fileURLToPath</code> 替代。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">conditional exports 顺序不对会解析错文件</div>
+          <p>types 必须放最前；import / require 顺序也敏感。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">TS 里 import 必须带 .js 不是 .ts</div>
+          <p>这是 TS5 NodeNext 模式的"路径写运行时实际路径"约定。</p>
+        </div>
+
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://nodejs.org/api/esm.html" target="_blank" rel="noopener">Node ESM 文档</a></li>
+          <li><a href="https://nodejs.org/api/packages.html" target="_blank" rel="noopener">Node Packages 文档</a></li>
+          <li><a href="../../ecma/07-execution/04-modules-tla.html">ECMA P7.4 · Module Records</a> · 规范层定义</li>
+          <li>下一章 → <a href="02-dual-package-hazard.html">P3.2 · Dual Package Hazard</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../02-event-loop/02-node-event-loop.html"><span class="label">← 上一章</span><span class="title">P2.2 · Node 视角的 Event Loop</span></a>
+          <a class="next" href="02-dual-package-hazard.html"><span class="label">下一章 →</span><span class="title">02 · Dual Package Hazard</span></a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录"><h3>本页目录</h3><ul></ul></aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

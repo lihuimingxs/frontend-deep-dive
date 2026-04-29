@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dual Package Hazard 与现代库设计 · P3 · Node.js Runtime 深度学习</title>
+    <meta name="description" content="同一库被 require 和 import 加载时会产生两个独立实例 —— 单例失效、instanceof 失败、状态不一致。讲清 3 种规避策略 + 现代库设计模板（tshy / tsup / unbuild）。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23339933'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ENJ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Node.js Runtime 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.15 145); color: #fff">Node</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">Node 首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · 模块系统</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-cjs-esm.html">01 · CJS 与 ESM 双系统</a></li>
+          <li><a href="02-dual-package-hazard.html" class="active">02 · Dual Package Hazard</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · Node 是谁</a></li>
+          <li><a href="../02-event-loop/index.html">P2 · libuv 与 Event Loop</a></li>
+          <li><a href="../04-streams-network/index.html">P4 · Streams 与网络栈</a></li>
+          <li><a href="../05-multicore-native/index.html">P5 · 多核与原生扩展</a></li>
+          <li><a href="../06-modern/index.html">P6 · 现代 Node 工程</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Node.js Runtime</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · 模块系统</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Dual Package Hazard</span>
+        </nav>
+        <h1>Dual Package Hazard 与现代库设计</h1>
+        <p class="lead">
+          实战章。当一个库要同时支持 CJS 和 ESM 用户时会撞上"双实例"问题——<code>require('pkg')</code> 和 <code>import 'pkg'</code> 加载的是<strong>两个独立实例</strong>，单例失效、<code>instanceof</code> 失败、状态不一致。讲清楚怎么规避 + 现代库设计模板。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P3.1 解析算法</span>
+          <span><strong>主要来源</strong> nodejs.org/api/packages · tshy/tsup/unbuild 文档</span>
+        </div>
+
+        <div class="callout warn">
+          <div class="callout-title">📝 章节状态</div>
+          <p>骨架版本。对照大纲 <code>node/outline.md § P3.2</code>。</p>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Dual Package Hazard 是双系统兼容的最大风险</strong>——同一个库的两份独立实例破坏单例、instanceof、共享状态。</li>
+          <li><strong>3 种规避策略</strong>：纯无状态库（最推荐）/ CJS 设为 ESM wrapper / 只发 ESM 让 CJS 用 import()。</li>
+          <li><strong>现代库构建工具</strong>：tshy / tsup / unbuild —— 自动生成双格式 + types 的发布产物。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Dual Package Hazard 是什么</h3>
+        <p><em>正文待写。</em></p>
+        <p>当一个 package 同时提供 CJS 和 ESM 入口（通过 conditional exports），<strong>不同导入方式会加载不同文件</strong>——module loader 不知道两者是"同一个东西"，独立创建两份实例：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// CJS 用户
+const { Singleton } = require('my-lib');
+Singleton.set('foo');
+
+// ESM 用户（同一进程，同一 my-lib）
+import { Singleton } from 'my-lib';
+console.log(Singleton.get('foo'));  // ← undefined! 不同实例
+
+// 更隐蔽的：instanceof 失败
+const a = require('my-lib').create();
+import { Klass } from 'my-lib';
+console.log(a instanceof Klass);  // ← false! 不同 class</code></pre>
+        </div>
+
+        <h3>3 种规避策略</h3>
+        <p><em>正文待写。</em></p>
+
+        <h4>策略 1 · 纯无状态（推荐）</h4>
+        <p>
+          库只导出<strong>纯函数 / 常量 / 无状态 class</strong>——两份独立实例不冲突。这是最简单也最现代的做法，适合 utility 库（lodash、zod、date-fns 等）。
+        </p>
+
+        <h4>策略 2 · CJS 设为 ESM wrapper</h4>
+        <p>
+          CJS 入口文件实际只是一个 wrapper，运行时<strong>动态 require + re-export</strong> ESM 的内部实现。这样保证只有 ESM 一份实例。代价：CJS 入口变异步（要用 <code>import()</code>），少数同步库不能这样做。
+        </p>
+
+        <h4>策略 3 · 只发 ESM</h4>
+        <p>
+          直接放弃 CJS 用户—— Node 22+ 起 ESM 已经足够稳定，新库可以这样选。CJS 用户用 <code>const x = await import('pkg')</code> 也能用。代价：失去一些老项目的兼容性。
+        </p>
+
+        <h3>现代库设计模板</h3>
+        <p><em>正文待写。</em>主流构建工具：</p>
+        <ul>
+          <li><strong>tshy</strong>：TypeScript-native，自动生成双格式 + types</li>
+          <li><strong>tsup</strong>：基于 esbuild，配置简单，常用于现代库</li>
+          <li><strong>unbuild</strong>：UnJS 项目（Vite 生态），多入口友好</li>
+        </ul>
+
+        <h3><code>import.meta.resolve</code> / <code>require.resolve</code></h3>
+        <p><em>正文待写。</em>在 ESM / CJS 各自如何获取模块路径——做插件 loader、动态加载、路径解析时会用到。</p>
+
+        <h3>Top-Level Await 限制</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>仅 ESM 支持；CJS 不行</li>
+          <li>让 ESM 模块"等待"才完成 evaluation</li>
+          <li>详见 <a href="../../ecma/07-execution/04-modules-tla.html">ECMA P7.4 · Module Records + TLA</a> 死锁场景</li>
+          <li>常见用法：模块顶层 await config 加载</li>
+        </ul>
+
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 写一个新的 npm 库</h3>
+          <p><em>正文待写。</em>用 tshy / tsup 起手；优先纯无状态设计；同时发 CJS / ESM / types。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 诊断 instanceof 失败</h3>
+          <p><em>正文待写。</em>用户报"instanceof 在我的项目里 false"——大概率 dual package hazard，确认 require 和 import 路径是否解析到同一文件。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 老库迁现代发布</h3>
+          <p><em>正文待写。</em>从只发 CJS 到双格式，最小改动用 tsup + 加 exports 字段。</p>
+        </div>
+
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <div class="code-block">
+          <span class="code-label">json</span>
+<pre class="code"><code class="lang-json">// tsup 配置：双格式 + types
+// tsup.config.ts
+{
+  "entry": ["src/index.ts"],
+  "format": ["cjs", "esm"],
+  "dts": true,
+  "clean": true,
+  "sourcemap": true
+}
+
+// 配套 package.json
+{
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  }
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="pitfall">
+          <div class="pitfall-title">单例 / 全局状态会被双格式破坏</div>
+          <p>避免在库里维护可变模块级状态——或用 globalThis 共享。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">instanceof 跨格式不可靠</div>
+          <p>用 duck typing 或 Symbol 标记替代——不要在库 API 里要求 instanceof。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">Top-Level Await 可能引入死锁</div>
+          <p>循环依赖 + TLA 时模块永远 evaluate 不完。详见 ECMA P7.4。</p>
+        </div>
+
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://nodejs.org/api/packages.html#dual-commonjses-module-packages" target="_blank" rel="noopener">Node 官方 Dual Package 文档</a></li>
+          <li><a href="https://github.com/isaacs/tshy" target="_blank" rel="noopener">tshy</a> · TypeScript-native 双格式构建</li>
+          <li><a href="https://tsup.egoist.dev/" target="_blank" rel="noopener">tsup</a> · esbuild-powered</li>
+          <li><a href="https://github.com/unjs/unbuild" target="_blank" rel="noopener">unbuild</a> · UnJS 项目</li>
+          <li><a href="../../ecma/07-execution/04-modules-tla.html">ECMA P7.4 · Module Records + TLA</a></li>
+          <li>下一阶段 → <a href="../04-streams-network/index.html">P4 · Streams 与网络栈</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-cjs-esm.html"><span class="label">← 上一章</span><span class="title">01 · CJS 与 ESM 双系统</span></a>
+          <a class="next" href="../04-streams-network/01-streams.html"><span class="label">下一章 →</span><span class="title">P4.1 · Streams 全谱</span></a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录"><h3>本页目录</h3><ul></ul></aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

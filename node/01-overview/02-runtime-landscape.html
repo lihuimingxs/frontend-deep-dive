@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Node 与同代人 · P1 · Node.js Runtime 深度学习</title>
+    <meta name="description" content="Node vs Deno vs Bun vs Edge Runtime 对照。讲清各自不同的设计选择 + Node 的护城河（npm 生态）+ Bun 的兼容加速路径 + Edge 的受限子集策略。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23339933'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ENJ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Node.js Runtime 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.15 145); color: #fff">Node</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">Node 首页</a>
+          <a href="index.html">P1 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · Node 是谁</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html">01 · Node 项目史 2009-2025</a></li>
+          <li><a href="02-runtime-landscape.html" class="active">02 · Node 与同代人</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../02-event-loop/index.html">P2 · libuv 与 Event Loop</a></li>
+          <li><a href="../03-modules/index.html">P3 · 模块系统</a></li>
+          <li><a href="../04-streams-network/index.html">P4 · Streams 与网络栈</a></li>
+          <li><a href="../05-multicore-native/index.html">P5 · 多核与原生扩展</a></li>
+          <li><a href="../06-modern/index.html">P6 · 现代 Node 工程</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Node.js Runtime</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · Node 是谁</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Node 与同代人</span>
+        </nav>
+        <h1>Node 与同代人</h1>
+        <p class="lead">
+          横向对照。Node 不是孤立的——同时代有 <strong>Deno</strong>（Ryan Dahl 自己做的"反 Node"）、<strong>Bun</strong>（用 JSC + Zig 走兼容加速）、<strong>Edge Runtime</strong>（Cloudflare Workers / Vercel Edge 的受限子集）各自不同的设计选择。读完能回答：<strong>Node 的护城河是什么、Bun 的威胁有多大、Edge Runtime 为什么不是"小号 Node"</strong>。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P1.1 项目史</span>
+          <span><strong>主要来源</strong> Deno / Bun / Cloudflare Workers 官方文档</span>
+        </div>
+
+        <div class="callout warn">
+          <div class="callout-title">📝 章节状态</div>
+          <p>骨架版本。对照大纲 <code>node/outline.md § P1.2</code>。</p>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Node 的护城河是 npm 2.5M+ 包生态</strong>——任何替代品要么兼容 Node API，要么放弃 80% 现成生态。</li>
+          <li><strong>Bun 选择"兼容 + 加速"路径</strong>——比 Deno 的"另起炉灶"务实，威胁更直接。</li>
+          <li><strong>Edge Runtime 是受限子集</strong>——只支持 Node API 子集（无 fs / 长连接），写代码要做"边缘可移植性"判断。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>同代人 · Deno（Ryan Dahl 2018+）</h3>
+        <p><em>正文待写。</em>关键点：</p>
+        <ul>
+          <li>引擎：V8（与 Node 同）+ Tokio（Rust 异步运行时，替代 libuv）</li>
+          <li>Web 标准 API：<code>fetch</code> / <code>Response</code> / <code>URL</code> 与浏览器同名同义</li>
+          <li>权限模型：<code>--allow-read</code> / <code>--allow-net</code> 显式授权——是对 Node "默认全权"的反思</li>
+          <li>TypeScript 内置：通过 swc 即时转译</li>
+          <li>URL 导入：<code>import { x } from "https://deno.land/std/path/mod.ts"</code>——绕开 npm 包管理</li>
+          <li>试图解决 Ryan 自己批评的 Node 问题</li>
+        </ul>
+
+        <h3>同代人 · Bun（Jarred Sumner 2022+）</h3>
+        <p><em>正文待写。</em>关键点：</p>
+        <ul>
+          <li>引擎：JSC（不是 V8）+ Zig 写的运行时</li>
+          <li>定位：<strong>Node 兼容层 + 加速</strong>——大多数 Node 包能直接跑</li>
+          <li>工具一体化：runtime + bundler + package manager + test runner 全在一个 binary</li>
+          <li>启动速度优势：JSC 本身比 V8 启动快 + Zig 实现内存效率高 + 内置 bundler 减少 require 链</li>
+          <li>对 Node 的威胁：直接抢走 Node 用户而不要求生态迁移</li>
+        </ul>
+
+        <h3>同代人 · Edge Runtime（Cloudflare Workers / Vercel Edge）</h3>
+        <p><em>正文待写。</em>关键点：</p>
+        <ul>
+          <li>引擎：V8（Workers）或 V8 cold-start 优化（Lambda@Edge）</li>
+          <li>支持子集：只 Web 标准 API + 部分 Node API；通常无 <code>fs</code> / 长连接 / Worker Threads</li>
+          <li>冷启动：Workers Isolate-per-tenant 毫秒级；Lambda Container 秒级</li>
+          <li>详见 V8 P1.2「V8 分身史」段</li>
+          <li>"边缘可移植性"判断：写代码时考虑哪些 API 能在 Edge 跑</li>
+        </ul>
+
+        <h3>设计选择对比</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>Node</th>
+              <th>Deno</th>
+              <th>Bun</th>
+              <th>Edge Runtime</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>引擎</td><td>V8</td><td>V8</td><td>JSC</td><td>V8</td></tr>
+            <tr><td>异步</td><td>libuv</td><td>Tokio</td><td>Zig + uSockets</td><td>V8-only</td></tr>
+            <tr><td>包管理</td><td>npm</td><td>URL imports</td><td>Bun own</td><td>npm 子集</td></tr>
+            <tr><td>TS 支持</td><td>外部 (tsc/swc)</td><td>内置</td><td>内置 (transpile)</td><td>多数靠预编译</td></tr>
+            <tr><td>默认安全</td><td>无</td><td>权限白名单</td><td>无</td><td>沙箱隔离</td></tr>
+            <tr><td>生态成熟度</td><td>极高</td><td>中</td><td>增长中</td><td>N/A（API 限制）</td></tr>
+          </tbody>
+        </table>
+
+        <h3>三条底层逻辑</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>Node 的护城河是生态而非技术</strong>：V8 / libuv 是开源可复用的，独特的是 npm 生态规模</li>
+          <li><strong>Bun "兼容 + 加速"比 Deno "另起炉灶"更务实</strong>：声明 Node-compatible 然后做更快</li>
+          <li><strong>Edge Runtime 不是"小号 Node"是不同物种</strong>：受限子集 + Isolate 级隔离 + 毫秒冷启动</li>
+        </ul>
+
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 选型：Node vs Bun</h3>
+          <p><em>正文待写。</em>启动速度敏感选 Bun；生态成熟度优先选 Node。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 选型：什么场景用 Edge Runtime</h3>
+          <p><em>正文待写。</em>API gateway / Auth / 简单 SSR；不适合长连接 / 文件上传 / 重计算。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 多 runtime 兼容写法</h3>
+          <p><em>正文待写。</em>用 Web 标准 API（fetch / URL）的代码可以同时跑 Node / Deno / Bun / Edge。</p>
+        </div>
+
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <p>本章为对照叙事章。截至 2026-04 各 runtime 版本：</p>
+        <table>
+          <thead>
+            <tr><th>Runtime</th><th>当前版本</th><th>引擎</th><th>定位</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Node.js</td><td>22 LTS / 24 current</td><td>V8 12.x</td><td>主流服务端 JS</td></tr>
+            <tr><td>Deno</td><td>1.40+</td><td>V8 12.x</td><td>Web 标准 + 安全</td></tr>
+            <tr><td>Bun</td><td>1.1+</td><td>JSC</td><td>Node 兼容 + 加速</td></tr>
+            <tr><td>Cloudflare Workers</td><td>—</td><td>V8 12.x</td><td>Edge / Isolate-per-tenant</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="pitfall">
+          <div class="pitfall-title">"Bun 比 Node 快"过于简化</div>
+          <p>启动 / 短脚本 Bun 优势明显；长跑稳态因引擎差异（V8 vs JSC）部分场景 Node 反而快。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">Edge Runtime ≠ Node</div>
+          <p>没有 <code>fs</code> / 长连接 / setTimeout > 30s / Worker Threads。直接搬 Node 代码几乎一定坏。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">Deno 的 URL 导入并未成为主流</div>
+          <p>2024 起 Deno 也在加 npm 兼容（<code>npm:</code> 前缀）——市场用脚投票了。</p>
+        </div>
+
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://deno.com/" target="_blank" rel="noopener">Deno 官网</a></li>
+          <li><a href="https://bun.sh/" target="_blank" rel="noopener">Bun 官网</a></li>
+          <li><a href="https://developers.cloudflare.com/workers/" target="_blank" rel="noopener">Cloudflare Workers 文档</a></li>
+          <li><a href="../../v8/01-overview/02-engine-landscape.html">V8 P1.2 · V8 分身史</a> · Workers Isolate-per-tenant</li>
+          <li>下一阶段 → <a href="../02-event-loop/index.html">P2 · libuv 与 Event Loop</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-history.html"><span class="label">← 上一章</span><span class="title">01 · Node 项目史 2009-2025</span></a>
+          <a class="next" href="../02-event-loop/01-libuv-design.html"><span class="label">下一章 →</span><span class="title">P2.1 · libuv 设计</span></a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录"><h3>本页目录</h3><ul></ul></aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

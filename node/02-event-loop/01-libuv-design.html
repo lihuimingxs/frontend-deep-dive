@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>libuv 设计 · P2 · Node.js Runtime 深度学习</title>
+    <meta name="description" content="libuv 是 Node 用 C 写的跨平台异步 I/O 库——Node 异步行为 100% 由它定义。Handles vs Requests、跨平台 I/O 多路复用（epoll/kqueue/IOCP）、Worker Pool、6 个 Event Loop phase。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23339933'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ENJ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Node.js Runtime 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.15 145); color: #fff">Node</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">Node 首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · libuv 与 Event Loop</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-libuv-design.html" class="active">01 · libuv 设计</a></li>
+          <li><a href="02-node-event-loop.html">02 · Node 视角的 Event Loop</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · Node 是谁</a></li>
+          <li><a href="../03-modules/index.html">P3 · 模块系统</a></li>
+          <li><a href="../04-streams-network/index.html">P4 · Streams 与网络栈</a></li>
+          <li><a href="../05-multicore-native/index.html">P5 · 多核与原生扩展</a></li>
+          <li><a href="../06-modern/index.html">P6 · 现代 Node 工程</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Node.js Runtime</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · libuv 与 Event Loop</a><span class="breadcrumb-sep">/</span>
+          <span>01 · libuv 设计</span>
+        </nav>
+        <h1>libuv 设计：事件循环的"底盘"</h1>
+        <p class="lead">
+          libuv 是 Node 用 C 写的跨平台异步 I/O 库——<strong>Node 异步行为 100% 由它定义</strong>。这一章独立于 Node 讲 libuv 自己：核心抽象（Handle vs Request）、跨平台 I/O 多路复用（epoll / kqueue / IOCP）、Worker Pool（默认 4 线程）、6 个 Event Loop phase。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P1 完整</span>
+          <span><strong>主要来源</strong> docs.libuv.org</span>
+        </div>
+
+        <div class="callout warn">
+          <div class="callout-title">📝 章节状态</div>
+          <p>骨架版本。对照大纲 <code>node/outline.md § P2.1</code>。</p>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>libuv 是 Node 异步行为的来源</strong>——所有 fs / net / http 的"异步"都是 libuv 在底下做。</li>
+          <li><strong>libuv 给 Node 一个统一抽象</strong>——掩盖了 Linux epoll / macOS kqueue / Windows IOCP 的平台差异。</li>
+          <li><strong>网络 I/O 与文件 I/O 走不同路</strong>——网络用 epoll/kqueue 非阻塞 socket（OS 原生异步），文件 I/O 没有跨平台异步原语，靠 Worker Pool 模拟。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>libuv 起源与定位</h3>
+        <p><em>正文待写。</em>2011 从 Node ev/eio 抽离，2013 独立项目；后 Microsoft / Apple / 多家贡献者参与；现在是跨平台异步 I/O 的"事实标准"——Julia 编程语言、Luvit 等也用 libuv。</p>
+
+        <h3>核心抽象 1 · Handle</h3>
+        <p><em>正文待写。</em>长寿对象，能反复触发回调：</p>
+        <ul>
+          <li><strong>uv_timer_t</strong>：定时器（Node 的 setInterval 在底下）</li>
+          <li><strong>uv_tcp_t</strong>：TCP socket（Node 的 net.Server / net.Socket）</li>
+          <li><strong>uv_fs_event_t</strong>：文件 watcher（Node 的 fs.watch）</li>
+          <li><strong>uv_signal_t</strong>：信号处理（Node 的 process.on('SIGTERM')）</li>
+        </ul>
+
+        <h3>核心抽象 2 · Request</h3>
+        <p><em>正文待写。</em>短期一次性操作，完成后自动清理：</p>
+        <ul>
+          <li><strong>uv_write_t</strong>：写入操作</li>
+          <li><strong>uv_getaddrinfo_t</strong>：DNS 查询</li>
+          <li><strong>uv_fs_t</strong>：文件读写（虽然名字是 fs 但实际是 request）</li>
+        </ul>
+
+        <h3>跨平台 I/O 多路复用</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>Linux</strong>：epoll（Linux 2.5.44+）—— readiness model，文件描述符可读 / 可写时通知</li>
+          <li><strong>macOS / BSD</strong>：kqueue —— 类似 epoll 但能听更多事件类型</li>
+          <li><strong>Windows</strong>：IOCP（I/O Completion Port）—— completion model，I/O 完成时通知</li>
+          <li>libuv 把三种不同模型抽象成统一 API</li>
+        </ul>
+
+        <h3>Worker Pool（默认 4 线程）</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>处理"无原生异步"的操作</strong>：文件 I/O（POSIX 没有真异步文件 API）/ DNS / 用户 work（如 crypto 重计算）</li>
+          <li>默认 4 线程；通过 <code>UV_THREADPOOL_SIZE</code> 环境变量调整（最多 1024）</li>
+          <li><strong>隐藏限制</strong>：4 线程意味着 4 个并发文件读会"卡住"其他操作</li>
+          <li>大文件密集服务必须调大</li>
+        </ul>
+
+        <h3>6 个 Event Loop phase</h3>
+        <p><em>正文待写。</em>顺序：</p>
+        <ol>
+          <li><strong>timers</strong>：执行 setTimeout / setInterval 到期回调</li>
+          <li><strong>pending callbacks</strong>：执行某些 I/O 回调（如 TCP error 延迟回调）</li>
+          <li><strong>idle, prepare</strong>：内部使用</li>
+          <li><strong>poll</strong>：检索新 I/O 事件 + 执行 I/O 回调；Node 在这里阻塞等 I/O（如果其他 phase 都空闲）</li>
+          <li><strong>check</strong>：执行 setImmediate 回调</li>
+          <li><strong>close</strong>：执行 close 回调（如 socket.on('close')）</li>
+        </ol>
+
+        <h3>Node 20 (libuv 1.45) 的变化</h3>
+        <p><em>正文待写。</em>Timer 现在只在 poll 后跑，而非两次（更符合用户预期）。</p>
+
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 文件 I/O 密集场景调大 Worker Pool</h3>
+          <p><em>正文待写。</em>批处理大量文件时 <code>UV_THREADPOOL_SIZE=128 node app.js</code>。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 理解为什么"网络高并发不卡，文件读卡"</h3>
+          <p><em>正文待写。</em>网络走 epoll/kqueue 真异步，文件走 Worker Pool 4 线程。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 跨平台 watcher 行为差异</h3>
+          <p><em>正文待写。</em>Linux inotify / macOS FSEvents / Windows ReadDirectoryChangesW 行为不同。</p>
+        </div>
+
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+<pre class="code"><code class="lang-bash"># 调大 Worker Pool（默认 4，最多 1024）
+UV_THREADPOOL_SIZE=64 node app.js
+
+# 看 libuv 内部活动（debug build 才有）
+UV_DEBUG=1 node app.js</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="pitfall">
+          <div class="pitfall-title">UV_THREADPOOL_SIZE 在 Worker 启动后改无效</div>
+          <p>必须启动前设置环境变量。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">crypto 重计算也走 Worker Pool</div>
+          <p>大量 bcrypt / pbkdf2 操作会和文件 I/O 抢线程。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">setTimeout(fn, 0) 实际不是立即执行</div>
+          <p>libuv 内部会向上取整到 1ms。需要"下个 tick 执行"用 setImmediate / queueMicrotask。</p>
+        </div>
+
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://docs.libuv.org/en/v1.x/design.html" target="_blank" rel="noopener">libuv Design Overview</a></li>
+          <li><a href="https://docs.libuv.org/en/v1.x/guide/basics.html" target="_blank" rel="noopener">libuv Basics</a></li>
+          <li><a href="https://github.com/libuv/libuv" target="_blank" rel="noopener">libuv GitHub</a></li>
+          <li>下一章 → <a href="02-node-event-loop.html">P2.2 · Node 视角的 Event Loop</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../01-overview/02-runtime-landscape.html"><span class="label">← 上一章</span><span class="title">P1.2 · Node 与同代人</span></a>
+          <a class="next" href="02-node-event-loop.html"><span class="label">下一章 →</span><span class="title">02 · Node 视角的 Event Loop</span></a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录"><h3>本页目录</h3><ul></ul></aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>N-API 与 Native Module · P5 · Node.js Runtime 深度学习</title>
+    <meta name="description" content="用 C++ 写性能关键代码 + 调外部 C 库。N-API 是 Node 给 native module 的稳定 ABI 接口；node-addon-api 是 C++ 包装；node-gyp + prebuild-install 工程实践；WASM 替代方案。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23339933'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ENJ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Node.js Runtime 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.15 145); color: #fff">Node</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">Node 首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · 多核与原生扩展</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-worker-cluster.html">01 · Worker Threads / Cluster</a></li>
+          <li><a href="02-n-api.html" class="active">02 · N-API 与 Native Module</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · Node 是谁</a></li>
+          <li><a href="../02-event-loop/index.html">P2 · libuv 与 Event Loop</a></li>
+          <li><a href="../03-modules/index.html">P3 · 模块系统</a></li>
+          <li><a href="../04-streams-network/index.html">P4 · Streams 与网络栈</a></li>
+          <li><a href="../06-modern/index.html">P6 · 现代 Node 工程</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Node.js Runtime</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · 多核与原生扩展</a><span class="breadcrumb-sep">/</span>
+          <span>02 · N-API 与 Native Module</span>
+        </nav>
+        <h1>N-API 与 Native Module</h1>
+        <p class="lead">
+          用 C++ 写性能关键代码 + 调外部 C 库。<strong>N-API 是 Node 给 native module 的稳定 ABI 接口</strong>——保证用 N-API v8 写的二进制能在所有 Node 18+ 跑，不需重新编译。讲清三种写法（raw V8 / N-API / node-addon-api）+ node-gyp 工程实践 + WASM 替代方案。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> V8 P5.1 Embedder API</span>
+          <span><strong>主要来源</strong> nodejs.org/api/n-api · node-addon-api 文档</span>
+        </div>
+
+        <div class="callout warn">
+          <div class="callout-title">📝 章节状态</div>
+          <p>骨架版本。对照大纲 <code>node/outline.md § P5.2</code>。</p>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>三种 native module 写法</strong>：raw V8（最灵活）/ N-API（C 接口稳定 ABI）/ node-addon-api（C++ 包装，95% 现代库选择）。</li>
+          <li><strong>N-API ABI 稳定性</strong>：用 N-API v8 写的二进制能在所有 Node 18+ 跑——不需重新编译。</li>
+          <li><strong>WASM 是越来越多 native 需求的替代</strong>：esbuild / parcel-css 用 wasm 部署；跨平台、无 node-gyp 痛苦。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>三种 native module 写法</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>raw V8</strong>：直接调 V8 C++ API；最灵活、最快、最严绑定 V8 版本</li>
+          <li><strong>N-API</strong>（C 接口）：跨 Node 版本二进制兼容；C 风格写法 verbose</li>
+          <li><strong>node-addon-api</strong>（C++ 包装）：N-API 之上的 C++ 类包装；写法接近 raw V8 但保持 N-API 兼容性；<strong>95% 现代 native module 的选择</strong></li>
+        </ul>
+
+        <h3>N-API ABI 稳定性承诺</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>N-API v8 / v9 是<strong>版本化的 stable ABI</strong></li>
+          <li>承诺：用 N-API v8 写的 native module 二进制，<strong>从此后 Node 版本编译的都能跑</strong>，不需重新编译</li>
+          <li>对比直接用 V8：V8 升级会破坏二进制兼容性</li>
+          <li>这套机制让 Node 生态的 native module 不再需要"针对每个 Node 版本编译一份"</li>
+        </ul>
+
+        <h3>典型 native module</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>better-sqlite3</strong>：同步 SQLite 绑定；性能比 node-sqlite3 快几倍</li>
+          <li><strong>bcrypt</strong>：密码哈希原生实现</li>
+          <li><strong>sharp</strong>：图像处理，绑定 libvips</li>
+          <li><strong>node-gyp / node-pre-gyp / better-call</strong>：FFI 工具</li>
+        </ul>
+
+        <h3>node-gyp 构建系统</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>基于 GYP（Google）的 fork</li>
+          <li>用 <strong>binding.gyp</strong> 文件定义编译选项（include 目录、链接库、平台条件等）</li>
+          <li>跨平台编译（Linux gcc / macOS clang / Windows MSVC）</li>
+          <li>用户安装 npm 包时<strong>本地编译</strong>——这是 native module 安装慢 / 失败的主要原因</li>
+        </ul>
+
+        <h3>prebuild-install</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>避免用户安装时编译——<strong>下载预编译二进制</strong></li>
+          <li>开发者 publish 时用 <strong>prebuild</strong> 工具上传所有平台 / 架构 / Node 版本组合的二进制</li>
+          <li>用户 npm install 时尝试匹配 prebuild 二进制；匹配失败才回退到 node-gyp 编译</li>
+          <li><strong>实际生产 native module 几乎都用这套</strong>——没有预编译的库口碑会很差（安装慢 / 失败率高）</li>
+        </ul>
+
+        <h3>WASM 替代方案</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li>越来越多 native 需求改用 wasm（如 esbuild 用 Go + wasm，parcel-css 用 Rust + wasm）</li>
+          <li>优势：<strong>部署简单</strong>（一份 .wasm 文件全平台跑）/ 跨平台 / 无需 node-gyp 痛苦</li>
+          <li>劣势：性能略弱于 native（跨边界税）/ 不能调 OS 级 API</li>
+          <li>选型：纯计算用 wasm；要调系统库（如 libvips / libsqlite）仍用 native module</li>
+        </ul>
+
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 写一个新的 native 库</h3>
+          <p><em>正文待写。</em>用 node-addon-api + node-gyp 起手 + 配 prebuild-install；模板项目用 cargo-cp-artifact 之类的工具脚手架。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 评估某个 npm 库是否 native</h3>
+          <p><em>正文待写。</em>查 package.json 的 binding.gyp / install scripts / dependencies 里的 node-addon-api。native 包安装慢但生产性能好。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 选 wasm 还是 native</h3>
+          <p><em>正文待写。</em>跨平台分发优先 wasm；要调系统库（图像、数据库、加密硬件）仍用 native。</p>
+        </div>
+
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <div class="code-block">
+          <span class="code-label">cpp</span>
+<pre class="code"><code class="lang-cpp">// 用 node-addon-api 写一个简单的 native 函数
+#include &lt;napi.h&gt;
+
+Napi::Number Add(const Napi::CallbackInfo&amp; info) {
+  Napi::Env env = info.Env();
+  double a = info[0].As&lt;Napi::Number&gt;().DoubleValue();
+  double b = info[1].As&lt;Napi::Number&gt;().DoubleValue();
+  return Napi::Number::New(env, a + b);
+}
+
+Napi::Object Init(Napi::Env env, Napi::Object exports) {
+  exports.Set("add", Napi::Function::New(env, Add));
+  return exports;
+}
+
+NODE_API_MODULE(addon, Init)</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="pitfall">
+          <div class="pitfall-title">用 raw V8 直接绑定 Node 版本</div>
+          <p>除非写 V8 自家组件，否则永远用 N-API / node-addon-api。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">没配 prebuild-install 用户体验差</div>
+          <p>每次 npm install 都要本地编译，慢且容易失败。生产 native 库必配 prebuild。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">node-gyp 在 Node 版本切换时易坏</div>
+          <p>nvm / fnm 切版本后可能 binding 失效，需要 npm rebuild。</p>
+        </div>
+
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://nodejs.org/api/n-api.html" target="_blank" rel="noopener">N-API 文档</a></li>
+          <li><a href="https://github.com/nodejs/node-addon-api" target="_blank" rel="noopener">node-addon-api</a></li>
+          <li><a href="https://github.com/prebuild/prebuild-install" target="_blank" rel="noopener">prebuild-install</a></li>
+          <li><a href="../../v8/05-embedding/01-embedder-api.html">V8 P5.1 · Embedder API</a> · raw V8 视角</li>
+          <li>下一阶段 → <a href="../06-modern/index.html">P6 · 现代 Node 工程</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-worker-cluster.html"><span class="label">← 上一章</span><span class="title">01 · Worker Threads / Cluster</span></a>
+          <a class="next" href="../06-modern/01-modern-node.html"><span class="label">下一章 →</span><span class="title">P6.1 · 现代 Node 工程</span></a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录"><h3>本页目录</h3><ul></ul></aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Node 视角的 Event Loop · P2 · Node.js Runtime 深度学习</title>
+    <meta name="description" content="libuv 提供机制，Node 在上面叠了 V8 microtask、process.nextTick、unhandled rejection 等运行时语义。完整的 Node 异步模型。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23339933'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ENJ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Node.js Runtime 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.15 145); color: #fff">Node</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">Node 首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · libuv 与 Event Loop</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-libuv-design.html">01 · libuv 设计</a></li>
+          <li><a href="02-node-event-loop.html" class="active">02 · Node 视角的 Event Loop</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · Node 是谁</a></li>
+          <li><a href="../03-modules/index.html">P3 · 模块系统</a></li>
+          <li><a href="../04-streams-network/index.html">P4 · Streams 与网络栈</a></li>
+          <li><a href="../05-multicore-native/index.html">P5 · 多核与原生扩展</a></li>
+          <li><a href="../06-modern/index.html">P6 · 现代 Node 工程</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Node.js Runtime</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · libuv 与 Event Loop</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Node 视角的 Event Loop</span>
+        </nav>
+        <h1>Node 视角的 Event Loop</h1>
+        <p class="lead">
+          libuv 提供机制（P2.1），<strong>Node 在上面叠了 V8 microtask、process.nextTick、unhandled rejection 等运行时语义</strong>。这一章讲完整的 Node 异步模型——读完能精确说出"<code>await fetch()</code> 的回调究竟在哪个 phase 跑"。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P2.1 + V8 P5.1 Microtask Hooks</span>
+          <span><strong>主要来源</strong> nodejs.org/learn/event-loop · V8 Microtask Hook 文档</span>
+        </div>
+
+        <div class="callout warn">
+          <div class="callout-title">📝 章节状态</div>
+          <p>骨架版本。对照大纲 <code>node/outline.md § P2.2</code>。</p>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>V8 不拥有 Event Loop（详见 V8 P5.1）</strong>——V8 提供 microtask 原语，Node 决定每个 phase 之间调用 <code>PerformMicrotaskCheckpoint</code>。</li>
+          <li><strong>nextTick 是 Node 特有不是规范</strong>——在 Deno / Bun 行为可能略有差异。</li>
+          <li><strong>Microtask 在每个 phase 切换前 drain</strong>——所以 setTimeout 回调里 await 的 then，会在下一个 phase 之前执行完。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Node 的 6 phase 与 V8 microtask 协作</h3>
+        <p><em>正文待写。</em>每个 phase 之间 + nextTick queue + Promise.then 都要 drain microtask。</p>
+        <div class="code-block">
+          <span class="code-label">flow</span>
+<pre class="code"><code>┌──── timers phase ────┐
+│  setTimeout 回调       │
+└──────────┬───────────┘
+           │ ← drain nextTick queue + microtask queue
+┌──── pending callbacks ─┐
+│                        │
+└──────────┬─────────────┘
+           │ ← drain
+┌──── poll phase ────┐
+│  I/O 回调             │
+└──────────┬─────────┘
+           │ ← drain
+┌──── check phase ────┐
+│  setImmediate 回调      │
+└──────────┬──────────┘
+           │ ← drain
+┌──── close phase ────┐
+└─────────────────────┘</code></pre>
+        </div>
+
+        <h3>process.nextTick vs setImmediate vs Promise.then</h3>
+        <p><em>正文待写。</em>三者执行时机的精确差异：</p>
+        <ul>
+          <li><strong>process.nextTick</strong>：在<strong>当前操作完成后</strong>立即执行（在任何 phase 切换前）—— 最高优先级</li>
+          <li><strong>Promise.then / queueMicrotask</strong>：V8 microtask queue，在 nextTick queue 之后 drain（仍是 phase 切换前）</li>
+          <li><strong>setImmediate</strong>：check phase 才执行——慢一个完整 phase</li>
+        </ul>
+
+        <h3>process.nextTick 反模式：递归饿死后续 phase</h3>
+        <p><em>正文待写。</em>因为 microtask 在每次 phase 切换前 drain 不让出 CPU，递归 nextTick 会让 EventLoop 永远 drain 不完。</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// ❌ 灾难：会永远不到 setTimeout 回调
+function recurse() {
+  process.nextTick(recurse);
+}
+recurse();
+setTimeout(() =&gt; console.log('starved'), 0);  // 永远不执行</code></pre>
+        </div>
+
+        <h3>setTimeout vs setImmediate 的微妙差异</h3>
+        <p><em>正文待写。</em></p>
+        <ul>
+          <li><strong>I/O 回调内部</strong>：setImmediate <strong>一定</strong>先于 setTimeout(0)</li>
+          <li><strong>其他场景</strong>：顺序不定（取决于 EventLoop 进入时间精度）</li>
+          <li>这是 Node 异步模型最坑的一个细节</li>
+        </ul>
+
+        <h3>AbortController / AbortSignal 集成</h3>
+        <p><em>正文待写。</em>Node 14+ 的取消机制；async API 普遍支持（fetch / fs.readFile / setTimeout 都接受 signal 参数）。</p>
+
+        <h3>--unhandled-rejections=strict 行为</h3>
+        <p><em>正文待写。</em>从 Node 15 起 unhandled rejection 默认 crash；服务端调试时要注意。</p>
+
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 用 setImmediate 让出 CPU</h3>
+          <p><em>正文待写。</em>长循环里嵌入 <code>await new Promise(r =&gt; setImmediate(r))</code> 让 EventLoop 进 poll phase 处理 I/O。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 用 AbortController 实现超时取消</h3>
+          <p><em>正文待写。</em>现代 Node 的取消机制，比 Promise.race 干净。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 排查 EventLoop 卡顿</h3>
+          <p><em>正文待写。</em>用 <code>perf_hooks.monitorEventLoopDelay()</code> 监控；超过 100ms 是问题。</p>
+        </div>
+
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// AbortController 超时取消
+const ctrl = new AbortController();
+const timer = setTimeout(() =&gt; ctrl.abort(), 5000);
+try {
+  const res = await fetch('https://api.example.com', { signal: ctrl.signal });
+  clearTimeout(timer);
+  return await res.json();
+} catch (e) {
+  if (e.name === 'AbortError') console.error('超时');
+  throw e;
+}
+
+// 长循环让出 CPU
+async function processHugeArray(arr) {
+  for (let i = 0; i &lt; arr.length; i++) {
+    process(arr[i]);
+    if (i % 1000 === 0) await new Promise(r =&gt; setImmediate(r));
+  }
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="pitfall">
+          <div class="pitfall-title">不要用 process.nextTick 做"异步初始化"</div>
+          <p>用 queueMicrotask 或 Promise.resolve().then —— nextTick 容易引入饿死 bug。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">setTimeout(fn, 0) 不是立即</div>
+          <p>libuv 向上取整 1ms；想"下个 tick"用 queueMicrotask。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">unhandled rejection 默认 crash（Node 15+）</div>
+          <p>生产用 process.on('unhandledRejection') 兜底监控+优雅退出。</p>
+        </div>
+
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://nodejs.org/learn/asynchronous-work/event-loop-timers-and-nexttick" target="_blank" rel="noopener">Node Event Loop 官方说明</a></li>
+          <li><a href="../../v8/05-embedding/01-embedder-api.html">V8 P5.1 · Embedder API</a> · Microtask Hooks 原语</li>
+          <li><a href="../../ecma/07-execution/03-event-loop-async.html">ECMA P7.3 · Event Loop 规范</a></li>
+          <li>下一阶段 → <a href="../03-modules/index.html">P3 · 模块系统</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-libuv-design.html"><span class="label">← 上一章</span><span class="title">01 · libuv 设计</span></a>
+          <a class="next" href="../03-modules/01-cjs-esm.html"><span class="label">下一章 →</span><span class="title">P3.1 · CJS 与 ESM 双系统</span></a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录"><h3>本页目录</h3><ul></ul></aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
