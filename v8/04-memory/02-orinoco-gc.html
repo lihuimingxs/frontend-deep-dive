@@ -56,11 +56,6 @@
           <span><strong>前置</strong> P4.1 · 堆布局</span>
           <span><strong>主要来源</strong> v8.dev/blog/trash-talk · concurrent-marking · orinoco-parallel-scavenger</span>
         </div>
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>骨架版本。对照大纲 <code>v8/outline.md § P4.2</code>。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>"主线程几乎不停"是 Orinoco 的核心叙事</strong>：传统 mark-sweep 在长串引用上能 stop world 几百毫秒；并发 + 并行 + 增量三件套把这个降到 ~10ms 内。</li>
@@ -70,77 +65,236 @@
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
 
-        <h3>分代假说与 Minor GC（Young Gen）—— Parallel Scavenger</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li>算法：<strong>Cheney 半空间复制</strong>（From-space → To-space，活的对象拷过去，死的丢弃）</li>
-          <li>V8 6.2+：<strong>Parallel Scavenger</strong>，多线程 work stealing</li>
-          <li>主线程暂停时间：~1-3ms（典型）</li>
-          <li><strong>Promotion</strong>：在 young gen 里活过 N 次（默认 2）的对象升到 old gen</li>
-        </ul>
+        <h3>分代假说：90% 对象死得早</h3>
+        <p>
+          GC 设计的根本问题是<strong>规模</strong>——一个长跑应用堆里可能有几百万对象，每次 GC 都全扫一遍代价太大。Orinoco（和绝大多数现代 GC）用<strong>分代假说</strong>避免全扫：
+        </p>
+        <p>
+          <strong>统计观察</strong>：JS 程序里 <strong>90%+ 的对象在第一次 GC 时已经不可达</strong>。临时变量、循环内的中间结果、API 请求的临时 payload——大部分对象从生到死跨度极短。
+        </p>
+        <p>
+          <strong>设计推论</strong>：把堆分成"年轻代"和"老年代"，<strong>频繁回收年轻代</strong>（因为大多数死得早，回收 ROI 高），<strong>偶尔回收老年代</strong>（因为活下来的多半还会继续活）。这就是 Orinoco 的"双频道"设计：Minor GC 每秒几十次但每次极快、Major GC 几秒到几分钟一次但每次更深。
+        </p>
+
+        <h3>Minor GC（Young Gen）—— Parallel Scavenger</h3>
+        <p>
+          年轻代的回收算法叫 <strong>Cheney 半空间复制</strong>（1970 年 Cheney 发表的经典算法），是 V8 NewSpace 的工作原理。
+        </p>
+        <h4>Cheney 半空间复制：From → To</h4>
+        <p>
+          NewSpace 内部分两半（详见 P4.1）：<strong>From-space</strong> 和 <strong>To-space</strong>。新对象总是分配在 From-space。Minor GC 触发时：
+        </p>
+        <ol>
+          <li>从根集合（栈、全局、handle）出发遍历指针图，找出 From 中所有<strong>活的</strong>对象</li>
+          <li>把每个活对象<strong>拷贝到 To-space</strong>，原 From 位置留下"forwarding pointer"指向新位置</li>
+          <li>更新所有指向这些对象的指针为新位置</li>
+          <li>From-space 整体丢弃（不需要逐个回收死对象——就当 From 整个不存在）</li>
+          <li>From / To 角色互换，下次 GC 反向</li>
+        </ol>
+        <p>
+          这套设计精妙在<strong>不需要 sweep</strong>——死对象自动丢弃。代价是每次都要拷贝活对象，但因为分代假说活对象少（10% 以下），拷贝量小。<strong>分配也极快</strong>——只是 From-space 的指针递增，不需要 free list 管理。
+        </p>
+
+        <h4>Parallel Scavenger（V8 6.2+，2017）：多线程 work stealing</h4>
+        <p>
+          原始 Cheney 是单线程。V8 6.2 起改成 <strong>Parallel Scavenger</strong>——多个 helper thread 并行扫描和拷贝，用 <strong>work-stealing queue</strong> 平衡负载（一个 thread 队列空了就从别的 thread 队列偷活干）。
+        </p>
+        <p>
+          效果：典型 Minor GC 主线程暂停 <strong>1-3ms</strong>。这是 60FPS 流畅渲染（每帧 16.7ms 预算）时不会被察觉的级别。<strong>主线程仍要暂停</strong>——Cheney 复制要更新所有指针，并发 marking 不适用（详见后文 Major GC）；但 helper threads 大幅缩短了 stop-the-world 窗口。
+        </p>
+
+        <h4>Promotion：晋升到 Old Gen</h4>
+        <p>
+          活过 N 次 Minor GC（默认 N=2）的对象会被<strong>晋升</strong>到 Old Gen——V8 判断它"已经活过初始阶段，大概率是长寿对象"。晋升机制实现简单：拷贝到 Old Gen 而非 To-space。
+        </p>
+        <p>
+          晋升<strong>不可逆</strong>——一旦进 Old Gen 就永远不会回 NewSpace。这给一条避坑建议：<strong>不要在长循环中持续创建大对象</strong>——前几次循环创建的对象活过 2 次 Minor GC 后晋升 Old Gen，给 Major GC 增加压力。如果对象本来就是临时用的，应该控制循环节奏让它们在 Minor GC 阶段就被回收。
+        </p>
+        <div class="callout info">
+          <div class="callout-title">💡 NewSpace 满了不一定立即 GC</div>
+          <p>
+            实际上 V8 在 NewSpace 满时会触发 Minor GC——但 NewSpace 容量是<strong>动态调整</strong>的（受 <code>--max-semi-space-size</code> 上限）。短跑应用 NewSpace 较小、GC 频繁但快；长跑服务端应用 NewSpace 自适应变大，每次 GC 间隔更长但压力分散。这套自适应 V8 自己调节，几乎不需要手动干预。
+          </p>
+        </div>
 
         <h3>Major GC（Old Gen）—— Concurrent Mark-Compact</h3>
-        <p><em>正文待写。</em>3 阶段：</p>
+        <p>
+          老年代不能用 Cheney——老年代占堆的 80%+，复制半空间需要预留同样大的 To-space，浪费太多。Old Gen 用经典 <strong>Mark-Compact</strong>（标记 + 整理）算法，分 3 阶段：
+        </p>
+
+        <h4>阶段 1 · Marking：找出所有活对象</h4>
+        <p>
+          从根集合出发遍历指针图，把所有可达的对象标记为"活"，没标的就是死的。这是<strong>3 阶段中最耗时的</strong>——遍历整个对象图，每个对象至少访问一次。
+        </p>
+        <p>
+          原始 mark-sweep GC 在这阶段必须 stop-the-world——主线程暂停 100-500ms 是常态。这种暂停在 60FPS 应用里是<strong>致命卡顿</strong>。Orinoco 的核心创新就是把 Marking 阶段并发化：
+        </p>
         <ul>
-          <li><strong>Marking</strong>（找活对象）：从根集合（栈、全局、handle）出发遍历指针图
-            <ul>
-              <li>Concurrent Marking（V8 6.4+，2018）：marking 在 helper thread 上做，主线程几乎不停</li>
-              <li>Incremental Marking 兜底：如果 concurrent 没赶上，主线程做小步增量</li>
-            </ul>
-          </li>
-          <li><strong>Sweeping</strong>（回收死对象空间）：Concurrent Sweeping，helper thread 标记 free list，主线程不停</li>
-          <li><strong>Compacting</strong>（消除碎片，可选）：Parallel Compaction，多线程同时移动对象 + 更新指针；不是每次都做（成本高）</li>
+          <li><strong>Concurrent Marking</strong>（V8 6.4+，2018）：marking 在 <strong>helper thread 上做</strong>，主线程继续跑 JS。主线程偶尔需要短暂暂停做"<strong>safepoint</strong>"——确保 helper 看到一致的对象图状态。</li>
+          <li><strong>Incremental Marking</strong> 兜底：如果某些场景 concurrent 不可用（如 isolate 没启用 helper threads），主线程做小步增量——每次 1-5ms，多次累积完成 marking。</li>
+        </ul>
+        <p>
+          典型 heavy WebGL 游戏暂停时间从 100ms 级降到 10ms 级，<strong>暂停 -50%</strong>。
+
+        </p>
+
+        <h4>阶段 2 · Sweeping：回收死对象空间</h4>
+        <p>
+          Marking 完成后，遍历堆把所有"未标记"的对象空间登记到 free list，可供后续分配复用。
+        </p>
+        <p>
+          Sweeping 也能并发——<strong>Concurrent Sweeping</strong>：helper thread 在主线程跑 JS 时同步整理 free list。<strong>不需要 safepoint</strong>，因为 sweeping 不修改活对象图，只动死对象空间——主线程根本不可能访问到这部分。这是 Orinoco 设计的精彩点：分清"哪些操作改活图（需要 safepoint）"和"哪些只改死区（可完全并发）"。
+        </p>
+
+        <h4>阶段 3 · Compacting（可选）：消除碎片</h4>
+        <p>
+          Sweeping 后空间被回收但内存碎片化——free list 是一堆零散的小空段。<strong>Compacting</strong> 把活对象搬到一起，让自由空间合并成大块。<strong>Parallel Compaction</strong>：多 helper thread 同时移动对象 + 更新所有指向它们的指针。
+        </p>
+        <p>
+          Compacting <strong>不是每次都做</strong>——开销大（要更新所有指针），只在碎片严重影响分配时触发。这是 V8 自动判断的——典型几次 Major GC 才做一次 compact。
+        </p>
+
+        <h3>Tri-color Abstraction：并发 marking 怎么不漏？</h3>
+        <p>
+          并发 marking 有个核心难题：marking 在 helper thread 跑，<strong>主线程同时在改对象图</strong>——主线程新建对象、改属性、删引用——helper 怎么保证不漏标活对象？答案是经典的 <strong>Tri-color Abstraction</strong>（三色标记）+ <strong>Write Barrier</strong>。
+        </p>
+        <p>
+          每个对象在 marking 阶段属于三种颜色之一：
+        </p>
+        <ul>
+          <li><strong>White（白）</strong>：还没被访问过——marking 结束时仍是 white 的就是死对象，被回收</li>
+          <li><strong>Grey（灰）</strong>：自己已访问，但<strong>子节点还没全访问</strong>——marker 工作队列里待处理</li>
+          <li><strong>Black（黑）</strong>：自己和所有子节点都已访问——已经"安全确认活"</li>
+        </ul>
+        <p>
+          marking 流程：根从 black 起步 → 把直接引用的对象标 grey 进队列 → 队列里取出 grey 对象，把它引用的对象标 grey 进队列、自己变 black → 队列空时 marking 完成。
+        </p>
+        <p>
+          <strong>问题</strong>：主线程并发跑时如果做 <code>black_obj.foo = white_obj</code>（黑对象指向白对象），白对象再也不会被 marker 访问到——会被错误回收。这种情况叫"漏标"，是并发 marking 的致命 bug。
+        </p>
+
+        <h3>Write Barrier：写指针的安全网</h3>
+        <p>
+          解决漏标的机制是 <strong>Write Barrier</strong>——<strong>每次写指针都做一段额外检查代码</strong>，发现可能漏标时纠正。V8 用一种叫 <strong>Snapshot-At-The-Beginning (SATB)</strong> 的策略：
+        </p>
+        <p>
+          逻辑伪代码：
+        </p>
+        <div class="code-block">
+          <span class="code-label">write-barrier-pseudo</span>
+<pre class="code"><code>// 每次 obj.field = value 翻译成：
+function write_field(obj, field, value):
+  // SATB 写屏障
+  if marking_in_progress and value is white:
+    mark_grey(value)   // 把 value 加进 marker 队列
+  obj[field] = value</code></pre>
+        </div>
+        <p>
+          这样无论主线程怎么改图，helper marker 都不会漏看任何曾经被引用过的对象。代价是<strong>每次指针写多几条机器指令</strong>——这是分代 GC 的"固定税"。在 hot path 上累计可观（典型 +5-10% 写指针开销），但相比 stop-the-world 暂停，绝对值得。
+        </p>
+
+        <h3>Remembered Set：跨代引用的索引</h3>
+        <p>
+          Write Barrier 还解决另一个问题——<strong>跨代引用</strong>。Minor GC 只看 NewSpace，但 Old Gen 可能持有指向 NewSpace 的指针（如 cache 引用新对象）——如果不知道这些跨代引用，会错误回收 NewSpace 中其实活着的对象。
+        </p>
+        <p>
+          V8 让 Write Barrier 多做一件事：<strong>检测到 old → young 的写指针，记录到 Remembered Set</strong>。Minor GC 时把 Remembered Set 当作"额外 root"——既扫栈和全局，也扫这些跨代引用源。
+        </p>
+        <p>
+          Remembered Set 的实现是 <strong>card table</strong>（粗粒度）或精确 slot 集——card table 把堆划成 512 字节的 card，记录每个 card 是否含跨代指针。Minor GC 时只要扫"标了的 card"——不需要扫整个 Old Gen，效率极高。
+        </p>
+
+        <h3>GC 调优旋钮：什么时候手动调，什么时候不要碰</h3>
+        <p>
+          V8 自适应 GC 行为的能力很强——大多数应用<strong>完全不需要手动调</strong>。但有几个场景值得知道这些 flag 存在：
+        </p>
+        <h4>常用 Node 命令行 flag</h4>
+        <ul>
+          <li><code>--max-old-space-size=N</code>（MB）—— old gen 上限。Node 默认 1.5-4GB（视版本）。<strong>服务端长跑应用</strong>有时需要调大（如 10GB+ 内存数据库）。客户端 / Workers 默认就够。</li>
+          <li><code>--max-semi-space-size=N</code>（MB）—— NewSpace 半空间大小。默认 16MB-64MB 自适应。极少手动调。</li>
+          <li><code>--gc-interval=N</code> —— 每 N 次分配强制触发 GC。<strong>仅 debug 用</strong>——压力测试 GC 行为时用。</li>
+          <li><code>--trace-gc</code> / <code>--trace-gc-verbose</code> / <code>--trace-gc-nvp</code> —— 打印每次 GC 详情：触发原因、暂停时间、young/old 比例、堆大小变化。<strong>性能调优必备</strong>。</li>
+          <li><code>--expose-gc</code> + <code>global.gc()</code> —— 主动触发 Major GC。<strong>仅测试用</strong>，生产严禁（详见后文陷阱）。</li>
         </ul>
 
-        <h3>Write Barrier 与 Remembered Set</h3>
-        <p><em>正文待写。</em></p>
+        <h4>什么时候真的需要调？</h4>
+        <p>
+          典型有效场景：
+        </p>
         <ul>
-          <li><strong>问题</strong>：Minor GC 只看 young gen，但 old gen 可能持有指向 young gen 的指针 —— 不能漏掉</li>
-          <li><strong>方案</strong>：每次"old → young 写指针"时记录到 Remembered Set（实现为 card table 或精确 slot 集）</li>
-          <li>Minor GC 时把 Remembered Set 当作"额外 root"</li>
+          <li><strong>服务端 Node 应用 OOM</strong>：长跑服务堆涨到 1.5GB（Node 默认上限）就 OOM——确认确实需要这么多内存（不是泄漏）后，调 <code>--max-old-space-size=4096</code> 或更高。</li>
+          <li><strong>大数据处理脚本</strong>：批处理 10GB+ JSON / CSV 时调大 max-old-space-size 是必须的，否则 V8 会强制 OOM 而非 swap。</li>
         </ul>
-
-        <h3>Incremental Marking 与 Tri-color Abstraction</h3>
-        <p><em>正文待写。</em></p>
+        <p>
+          <strong>不该调的场景</strong>：
+        </p>
         <ul>
-          <li>White：未访问 / 死</li>
-          <li>Grey：已访问但子节点未访问</li>
-          <li>Black：已完全处理</li>
-          <li>用 Snapshot-At-The-Beginning (SATB) 写屏障保证不漏</li>
-        </ul>
-
-        <h3>GC 调优旋钮</h3>
-        <p><em>正文待写。</em>Node 命令行：</p>
-        <ul>
-          <li><code>--max-old-space-size=N</code>（MB）：old gen 上限</li>
-          <li><code>--max-semi-space-size=N</code>（MB）：young gen 半空间大小</li>
-          <li><code>--gc-interval=N</code>：每 N 次分配触发一次 GC（debug）</li>
-          <li><code>--trace-gc</code> <code>--trace-gc-verbose</code>：打印每次 GC 详情</li>
+          <li>"应用感觉慢"——这通常是 deopt loop / megamorphic IC（详见 P3.2），跟 GC 无关</li>
+          <li>"GC 暂停太长"——先用 <code>--trace-gc</code> 看暂停频率和时长。Orinoco 默认就很优秀，多半暂停是 1-3ms 级别，"觉得长"通常是错觉</li>
+          <li>"想让 GC 更激进"——调小 NewSpace 反而让 promotion 更频繁，给 Old Gen 增加压力，整体性能下降</li>
         </ul>
 
         <h3>Cppgc / Oilpan 与 V8 的"双堆协作"</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li><strong>Oilpan</strong> 是 Blink（DOM）用的 C++ GC；2020 后从 Blink 抽出，独立成 V8 的 <strong>Cppgc</strong> 库</li>
-          <li><strong>场景</strong>：DOM 节点（C++ 对象）和 JS 包装对象（V8 堆对象）互相引用 —— 光靠 V8 GC 看不到 C++ 端，光靠 Oilpan 看不到 JS 端</li>
-          <li><strong>方案</strong>：<strong>Unified Heap</strong> 跨堆引用追踪 —— V8 marking 阶段会回调进 Cppgc 让它继续标记 C++ 对象图；Cppgc 的 marker 同样会回调进 V8</li>
-          <li><strong>TracedReference&lt;T&gt;</strong>：Embedder 用这个 handle 类型表示"C++ 持有 V8 对象" —— 参与 unified marking</li>
-          <li><strong>Conservative Stack Scanning</strong>（P4.1 介绍过）是 Unified Heap 的前置</li>
-          <li>意义：Chrome 内存表现的好坏一半看 V8 一半看 Oilpan</li>
-        </ul>
+        <p>
+          一个浏览器场景的复杂问题：DOM 节点是 <strong>C++ 对象</strong>（Blink 创建），JS 包装对象（如 <code>document.body</code>）是 <strong>V8 堆对象</strong>——两边互相引用。光靠 V8 GC 看不到 C++ 端的对象图（不知道 DOM 节点之间的父子关系）；光靠 C++ GC 看不到 JS 端（不知道 JS 闭包持有了哪个 DOM 节点）。<strong>谁都不能独立判断对象是否可回收</strong>。
+        </p>
+        <h4>从 Oilpan 到 Cppgc：DOM GC 的演化</h4>
+        <p>
+          Blink 团队为 DOM 写了一个 C++ GC 叫 <strong>Oilpan</strong>（2014 年起）——支持 mark-sweep + concurrent，类似 Orinoco 但工作在 C++ 对象上。2020 年起 Oilpan 从 Blink 抽离，独立成 V8 的 <strong>Cppgc</strong> 库——这样不只 Blink、其他嵌入器（如 Cobalt 之类）也能用同一套 C++ GC。
+        </p>
+
+        <h4>Unified Heap：跨堆 marking 协作</h4>
+        <p>
+          V8 与 Cppgc 协作的设计叫 <strong>Unified Heap</strong>——两个独立的 GC 在 marking 阶段<strong>互相回调对方</strong>:
+        </p>
+        <ol>
+          <li>V8 marker 走到一个"指向 C++ 对象的引用" → 回调 Cppgc 让它继续标记 C++ 对象图</li>
+          <li>Cppgc marker 走到一个"指向 V8 对象的引用" → 回调 V8 让它继续标记 V8 对象图</li>
+          <li>两边并发运行，互相喂活对象</li>
+          <li>双方都达成"全图标记完成"才算 marking 完成</li>
+        </ol>
+        <p>
+          这设计精妙在<strong>不需要把两个堆合并</strong>——V8 和 Cppgc 各自独立的 GC 算法、生命周期、暂停时机都保留，只在 marking 阶段做"调用同步"。这就是 <strong>Unified Heap</strong> 这个名字的由来——逻辑上一个统一的可达性图，物理上两个独立堆。
+        </p>
+
+        <h4>TracedReference：Embedder 持有 V8 对象的安全 handle</h4>
+        <p>
+          Embedder 端 C++ 代码持有 V8 对象时不能直接持 raw pointer（V8 GC 会移动对象）。需要用 <strong>TracedReference&lt;T&gt;</strong>——这种 handle 类型参与 Unified Heap 的 marking——V8 GC 移动对象时它跟着更新指针。详见 <a href="../05-embedding/01-embedder-api.html">P5.1 Embedder API</a>。
+        </p>
+        <p>
+          P4.1 介绍的 <strong>Conservative Stack Scanning</strong> 是 Unified Heap 的前置——C++ 端栈本来就只能保守扫描（C++ 编译器不维护精确 stack maps），V8 端切换到保守扫描后两边一致，跨堆 GC 才好做。这是又一例"老优化解锁新优化"——Pointer Compression → Conservative Stack Scanning → Unified Heap，三步链式演化。
+        </p>
+        <div class="callout success">
+          <div class="callout-title">📊 Chrome 内存表现一半看 V8 一半看 Oilpan</div>
+          <p>
+            DOM 操作密集的场景（频繁创建/删除节点的 SPA），Oilpan 的回收效率直接影响内存占用。Chrome 改进 V8 GC 的同时也持续改进 Cppgc——两个 GC 协同优化才能让 Chrome 在高强度 web 应用下保持内存稳定。这也是为什么 Node 服务端 GC 调优经验（只调 V8）不能直接套用到 Chrome 扩展 / Electron 应用——后者的内存压力一半在 Cppgc 那边。
+          </p>
+        </div>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A · Chrome DevTools Memory Profiler 抓 heap snapshot</h3>
-          <p><em>正文待写。</em>找意外的 retainer。</p>
+          <h3 class="scenario-title">场景 A · Chrome DevTools Memory Profiler 抓 retainer 链</h3>
+          <p>
+            内存泄漏诊断的标准流程：DevTools → Memory → Take heap snapshot → 等待几秒 → 重复操作（点击、路由切换等）→ 再 snapshot → Comparison 视图比对两次差异。重点看"Allocated but not freed"对象，沿 Retainer 树往上看谁持有它们——通常根因是某个全局缓存 / event listener / closure 没释放。注意 DevTools 抓的是<strong>逻辑 retain 图</strong>，不是 V8 实际堆布局——一些 V8 内部结构（Map / Code 等）DevTools 不显示。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B · 用 --trace-gc 看 GC 频率与暂停时间</h3>
-          <p><em>正文待写。</em>young/old 比例分析。</p>
+          <h3 class="scenario-title">场景 B · 用 --trace-gc 看频率与暂停时间</h3>
+          <p>
+            Node 服务端调优起点：<code>node --trace-gc app.js</code>。输出每行对应一次 GC，包含<strong>触发原因</strong>（Scavenger / Mark-Sweep / Mark-Compact）、<strong>暂停时间</strong>（实际 stop-the-world 时长）、<strong>堆变化</strong>（before/after 大小）。健康指标：Minor GC 1-3ms 暂停 + 频率 &lt; 50/秒、Major GC &lt; 50ms 暂停 + 频率 &lt; 1/分钟。如果某项严重超标，看是否对象寿命异常（不该长存的对象在 Old Gen）或某些路径分配过多临时对象。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C · 服务端 Node 应用调优</h3>
-          <p><em>正文待写。</em>调大 max-old-space-size（默认 1.5GB-4GB 视 Node 版本）。</p>
+          <h3 class="scenario-title">场景 C · 服务端 Node 长跑应用堆调优</h3>
+          <p>
+            Node 默认 <code>--max-old-space-size</code> 是 1.5GB（&lt; v18）或 4GB（v18+）——服务端应用涨过这个值就 OOM。调整步骤：(1) 用 <code>--trace-gc</code> + Memory Profiler 确认确实需要更大堆（不是泄漏）；(2) 调到接近物理内存的合理值（如 8GB / 16GB）；(3) 监控生产环境实际峰值堆占用决定是否进一步调整。<strong>不要随意调到极大值</strong>——大堆会让 Major GC 暂停时间显著增加（Old Gen 大 → marking 时间长）。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · Electron / Chrome 扩展的 DOM 内存压力</h3>
+          <p>
+            DOM 操作密集场景（如可视化编辑器、画布应用、富文本编辑器），内存压力<strong>一半在 Cppgc 那边</strong>——只调 V8 flag 没用，要用 DevTools 看 DOM 节点数量 / Detached DOM Nodes（"已从 DOM 移除但 JS 还引用"的节点是常见泄漏源）。Electron 应用还要注意 Main Process（Node）和 Renderer Process（Chrome）各自有独立 V8 堆——内存峰值要分别看。
+          </p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
