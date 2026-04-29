@@ -57,11 +57,6 @@
           <span><strong>前置</strong> P2.1 + P2.2</span>
           <span><strong>主要来源</strong> v8.dev/blog/sparkplug · maglev · turboshaft 系列博客</span>
         </div>
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>骨架版本。对照大纲 <code>v8/outline.md § P2.3</code>。本章是 P2 最长一章。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>3 层不是"备份"是"分工"</strong>：Sparkplug 给所有代码用、Maglev 给中频代码用、TurboFan 给热点代码用。</li>
@@ -71,32 +66,151 @@
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
 
-        <h3>Sparkplug（2021 引入）</h3>
-        <p><em>正文待写。</em>关键点：</p>
-        <ul>
-          <li><strong>零 IR 设计</strong>：核心结构是 <code>for (each bytecode) switch (opcode) emit_machine_code()</code>，没有 IR、没有 SSA、没有寄存器分配</li>
-          <li><strong>栈帧与 Ignition 兼容</strong>：profiler / debugger / OSR 不需要任何特殊处理就能穿越</li>
-          <li><strong>不做优化但也不慢</strong>：因为消除了 bytecode dispatch + register decoding 开销，5-15% 性能提升</li>
-          <li><strong>Why 没有更早做</strong>：Crankshaft 时代没有 bytecode 中间层；只有等 Ignition 稳定后才有"忠实复刻"的对象</li>
-        </ul>
+        <h3>Sparkplug（2021 引入）：把 Ignition 直接"翻译"成机器码</h3>
+        <p>
+          Sparkplug 是 V8 最朴素的优化编译器——它的核心循环用一句伪代码就能写完：
+        </p>
+        <div class="code-block">
+          <span class="code-label">pseudocode</span>
+<pre class="code"><code>for (each bytecode in function):
+  switch (opcode):
+    case Add:        emit_add_machine_code()
+    case LdaSmi:     emit_load_smi_machine_code()
+    case LdaNamedProperty: emit_call_to_load_ic_stub()
+    ...
+return generated_machine_code</code></pre>
+        </div>
+        <p>
+          没有 IR、没有 SSA、没有控制流图分析、没有寄存器分配。<strong>每条 bytecode 直接 1:1 映射成一段机器码</strong>。这套设计看起来朴素得"不像优化编译器"——它确实不做任何优化，但消除了 Ignition 解释器的两类固定开销：<strong>bytecode dispatch</strong>（决定下一条 opcode）和 <strong>operand decoding</strong>（解析操作数编号）。这两类开销在解释器里占总执行时间 30-50%。
+        </p>
+        <p>
+          更重要的是 Sparkplug <strong>不重新发明语义</strong>——它不自己实现 <code>obj.foo</code> 怎么访问属性，而是 emit 一条"调用 LoadIC stub"的机器码。LoadIC stub 是 V8 内部已有的、Ignition 也用的同一份代码（Torque/CSA 写的，前文 P2.2 介绍过）。这意味着 Sparkplug 实现量极小——只需把每条 bytecode 翻译成"加载寄存器 + 跳到对应 stub"两三条机器指令。整个 Sparkplug 编译器代码量大约只有 TurboFan 的 1/100。
+        </p>
 
-        <h3>Maglev（2023，Chrome M117 全平台）</h3>
-        <p><em>正文待写。</em>关键点：</p>
-        <ul>
-          <li><strong>SSA + CFG</strong>（不是 sea of nodes）：所有变量唯一定义、控制流图明确</li>
-          <li><strong>单一 IR、最少 pass</strong>：从 bytecode 一步构建 SSA，做轻量优化（escape analysis 简化版、constant folding、dead code）</li>
-          <li>编译速度比 TurboFan 快 10x，性能 80%；填补 Sparkplug 与 TurboFan 之间空档</li>
-          <li><strong>Why SSA 而非 sea of nodes</strong>：sea of nodes 优化能力强但调度复杂；Maglev 故意选简单 IR 换更快编译</li>
-        </ul>
+        <h4>栈帧与 Ignition 完全兼容</h4>
+        <p>
+          Sparkplug 设计上有一个看似不显眼但极其重要的约束：<strong>它的栈帧布局必须和 Ignition 完全一致</strong>——同样的虚拟寄存器位置、同样的 accumulator slot、同样的 frame pointer 链接。这看似限制了 Sparkplug 的自由度（无法用更紧凑的寄存器分配），但换来一个巨大好处：<strong>调试器 / profiler / 异常处理器穿越 tier 边界完全透明</strong>。
+        </p>
+        <p>
+          想想看：DevTools 在你设了断点；同一个函数可能这次走 Ignition 下次走 Sparkplug——如果两层栈帧布局不一样，调试器要为每层做映射。Sparkplug 故意"装作"自己是 Ignition——同一个 stack trace 跨 tier 看起来一致，断点定位用同一套规则，profiler 的火焰图也不会因为 tier 切换而出现奇怪跳变。Maglev / TF 因为做了优化无法保持完全一致，但维护精确的 deopt info 元数据"反向还原"成 Ignition 风格栈帧——所以 OSR 和异常恢复仍能跨任意 tier 工作。
+        </p>
 
-        <h3>TurboFan（2014 引入，2024 后端换 Turboshaft）</h3>
-        <p><em>正文待写。</em>关键点：</p>
+        <h4>性能与编译开销：填 5-15% 空档</h4>
+        <p>
+          Sparkplug 性能数据（V8 团队公布）：典型应用 <strong>+5-15%</strong>，Speedometer +5-10%。这不是革命性提升，但因为<strong>编译开销几乎为零</strong>（几微秒级，比 Maglev 快 100×、比 TurboFan 快 1000×），它的开启成本极低——可以给所有进入第二层的代码用，不需要担心"编译花的时间多于执行节省的时间"这个常见 JIT 困境。
+        </p>
+
+        <h4>为什么 Sparkplug 2021 才出现？</h4>
+        <p>
+          这是个有趣的反向问题——这种朴素设计为什么不在 2010 就做？答案有两层。
+        </p>
+        <p>
+          技术层：Sparkplug 的核心是"忠实复刻 Ignition"——但 Crankshaft 时代根本<strong>没有 Ignition</strong>。Full-codegen 时代的"baseline JIT"就是把源码直接编成机器码，已经是基线了，没有更下面一层可"复刻"。Sparkplug 必须等 2017 Ignition 稳定后才有可能做。
+        </p>
+        <p>
+          优先级层：2017-2020 V8 团队精力都在打磨 Ignition + TurboFan + Orinoco GC 等核心架构，Sparkplug 这种"填空档式优化"被推后。2020 年大型应用启动期 V8 性能瓶颈被识别为"Ignition 太慢但 TurboFan 来不及编译"，团队才有动力做 Sparkplug。这是 V8 演化典型节奏：<strong>架构稳定 → 识别真实瓶颈 → 针对性补层</strong>。
+        </p>
+
+        <h3>Maglev（2023 Chrome M117 全平台）：中层优化器</h3>
+        <p>
+          Sparkplug 解决了"启动期"，TurboFan 解决了"稳态"，但中间还有一段——<strong>"中频代码"</strong>——被调用上百次但还没热到 TurboFan 级（TF 编译开销太大不值得花在这种代码上）。这段代码享受不到任何优化，只有 Sparkplug 的零优化机器码。Maglev 就是为补这段空档设计的。
+        </p>
+
+        <h4>SSA + CFG IR：故意选简单的</h4>
+        <p>
+          Maglev 在 2022-2023 设计阶段做的最关键决策是<strong>不用 sea of nodes</strong>——这是 V8 团队 9 年来第一次给优化编译器选 IR 时不选 sea of nodes。原因：sea of nodes 强大（节点之间没有显式顺序，调度自由度极大）但<strong>调度复杂、编译慢、调试难</strong>。Maglev 的目标是"快编译 + 中等优化"——sea of nodes 的强大正好是反向的优势。
+        </p>
+        <p>
+          Maglev 用经典的 <strong>SSA</strong>（Static Single Assignment，每个变量只赋值一次）+ <strong>CFG</strong>（Control Flow Graph，显式基本块和分支边）。这套 IR 从 1990 年代起就是工业级编译器的标配（GCC、LLVM、JVM HotSpot 都用），优化能力适中、编译速度快、调试友好。Maglev 从 bytecode 一步构建 SSA——<strong>不像 TurboFan 那样还要先转成 sea of nodes</strong>——这一步已经省了大量工作。
+        </p>
+
+        <h4>Prepass + 最少优化遍</h4>
+        <p>
+          Maglev 编译流程极其紧凑：
+        </p>
+        <ol>
+          <li><strong>Prepass</strong>：扫一遍 bytecode 找<strong>分支目标</strong>（哪些位置是基本块开始）+ <strong>循环中的赋值</strong>（哪些变量需要 SSA Phi 节点）+ <strong>liveness 信息</strong>（哪些寄存器在某点之后还会被用）。这一遍是"为了减少 SSA 构建工作"——不需要全图迭代，单遍线性扫描搞定。</li>
+          <li><strong>SSA 构建</strong>：用 Prepass 的信息一步构建 SSA + CFG，同时插入必要的 Phi 节点。</li>
+          <li><strong>轻量优化</strong>：constant folding（编译时计算 <code>2 + 3 = 5</code>）、dead code elimination（删掉永远不执行的代码）、简化版 escape analysis（识别哪些 object 没逃出当前函数可以栈分配）。这些是"低 hanging fruit"——开销小但收益明显。<strong>没有</strong> heavy inlining、heavy loop optimization 等 TF 强项。</li>
+          <li><strong>指令选择 + 寄存器分配 + 机器码生成</strong>：直接从 SSA 生成机器码，用快速的线性扫描寄存器分配。</li>
+        </ol>
+        <p>
+          整个流程编译速度<strong>比 TurboFan 快 10×</strong>，性能达到 TurboFan 的 80%。换言之：Maglev 用 1/10 的编译时间拿到 80% 的优化收益。这正好填补 Sparkplug（无优化）和 TurboFan（重优化）之间空档——中频代码享受 80% 优化收益是巨大胜利。
+        </p>
+
+        <h4>性能数据与全平台落地</h4>
+        <p>
+          V8 团队公布的数据：JetStream <strong>+8.2%</strong>、Speedometer <strong>+6%</strong>，因为减少了 TurboFan 的编译工作 V8 整体能耗 <strong>-10%</strong>。这是 Sparkplug 之后单一 tier 加入带来收益最大的一次。Chrome 117（M117，2023 年 9 月）开始全平台默认开启；Node 21 / 22 也跟进搭载。
+        </p>
+        <p>
+          Maglev 设计本身的论文级讨论也是反共识的有趣案例——SSA + CFG 不是新东西，但在 V8 这种历史上"<em>越复杂越好</em>"的优化器选型中，<strong>故意选简单的</strong>是难得的工程克制。和 JSC 用 LLVM 后来又换回自家 B3 是同一思路：<strong>web 场景的实时编译需要快编译，过度复杂的 IR 是负资产</strong>。</p>
+
+        <h3>TurboFan（2014 引入，2024 后端换 Turboshaft）：顶级优化器</h3>
+        <p>
+          TurboFan 是 V8 优化最深的一层——给"真正热"的代码用。比 Maglev 编译慢 10×，但生成代码可以达到 baseline 的几倍性能。它是 V8 性能上限的代表，也是 V8 内部最复杂、最学术化的组件。
+        </p>
+
+        <h4>Sea of Nodes IR：1995 论文 + V8 30 年来第一次大规模生产部署</h4>
+        <p>
+          Sea of Nodes 是 Cliff Click 1995 博士论文里提出的 IR——把值（如算术结果）和控制流（如 if 分支）<strong>都表示为图节点</strong>，节点之间的依赖关系作为边。和传统 CFG 最大的不同：<strong>没有显式的指令顺序</strong>。一段代码 <code>let x = a + b; let y = c * d;</code> 在 sea of nodes 里 x 节点和 y 节点没有先后关系，可以任意调度——只要它们的输入边都满足。
+        </p>
+        <p>
+          这种"自由"是 sea of nodes 的强大处。它特别擅长几类优化：
+        </p>
         <ul>
-          <li><strong>Sea of Nodes IR</strong>：节点表示值 + 控制流，依赖边显式 —— Cliff Click 1995 论文那个</li>
-          <li><strong>优化遍</strong>：inlining → escape analysis → loop peeling → load elimination → instruction selection → register allocation → code emission</li>
-          <li><strong>type feedback 驱动 speculation</strong>：从 Feedback Vector 读"这里 99% 是 SMI" → 内联 SMI fast path → 错了 deopt</li>
-          <li><strong>Turboshaft 后端</strong>（2024+）：替换 sea of nodes 的后端阶段（指令选择 / 调度 / 寄存器分配），编译速度 2x，<strong>前端仍是 sea of nodes</strong></li>
+          <li><strong>跨基本块代码移动</strong>——传统 CFG 移动指令需要复杂的 dominator 分析；sea of nodes 自然允许，"移动"就是改边</li>
+          <li><strong>Loop-invariant code motion</strong>——循环内不变的计算自然漂出循环，因为没有"我必须在循环里"的约束</li>
+          <li><strong>Global value numbering</strong>——同样的计算只做一次，sea of nodes 直接合并节点</li>
         </ul>
+        <p>
+          代价是<strong>调度复杂、编译慢、调试难</strong>——节点之间没有顺序意味着每个优化遍都要重新决定"先做什么"，最后还要做一遍 scheduling 决定指令实际顺序。这就是为什么 TurboFan 编译比 Maglev 慢 10×，也是为什么 Maglev 故意不选 sea of nodes。
+        </p>
+
+        <h4>优化遍：从 bytecode 到机器码的长链路</h4>
+        <p>
+          TurboFan 编译一个函数大约走 30+ 个 phase（具体数量随版本变化）。核心几遍：
+        </p>
+        <ol>
+          <li><strong>Bytecode → 初始 sea of nodes 图</strong>——构造图，从 Feedback Vector 读类型信息标注节点</li>
+          <li><strong>Inlining</strong>——把被调用的函数体内联进当前函数；对小函数收益巨大（消除 call overhead + 让后续优化看到更多代码）</li>
+          <li><strong>Escape analysis</strong>——分析哪些对象没逃出当前函数；逃不出的对象可以栈分配甚至消除（"object scalarization"）</li>
+          <li><strong>Loop peeling</strong>——把循环第一次迭代单独展开（消除某些只在第一次执行的检查）</li>
+          <li><strong>Load elimination / Store elimination</strong>——重复读同一内存合并、被覆盖的写删除</li>
+          <li><strong>Range analysis</strong>——推断变量取值范围，消除冗余的边界检查</li>
+          <li><strong>Instruction selection</strong>——把高层节点匹配成 ISA 具体指令（如 <code>Add SMI 1</code> 在 x64 上变 <code>inc</code>）</li>
+          <li><strong>Scheduling</strong>——给节点排序成线性指令流</li>
+          <li><strong>Register allocation</strong>——把虚拟寄存器映射到物理寄存器，处理 spill</li>
+          <li><strong>Machine code emission</strong>——生成最终机器码</li>
+        </ol>
+
+        <h4>Type Feedback 驱动 Speculation</h4>
+        <p>
+          TurboFan 的核心魔法是 speculation——它<strong>不</strong>试图静态推导每个操作可能的所有类型（那是 type inference 的工作，开销极大），而是<strong>读 Feedback Vector 看"实际见到过哪些类型"</strong>，然后做激进假设：
+        </p>
+        <p>
+          假设站点 99% 时间见到 SMI → TurboFan 内联 SMI fast path（<code>add eax, ebx</code> 一条指令）+ 在路径前加一个 type check（万一不是 SMI 跳到 deopt 入口）。结果是 hot path 上一条指令完成 <code>a + b</code>——比解释器快 100×。代价是 0.1% 不是 SMI 的情况触发 deopt 跳回 Ignition，但因为占比极低累计开销可忽略。
+        </p>
+        <p>
+          这套机制让 V8 在动态语言里达到接近静态语言的性能。详见 <a href="../03-speedup/02-inline-cache.html">P3.2 · Inline Cache</a>——IC 收集 feedback、TurboFan 用 feedback 做 speculation 是同一个闭环的两端。
+        </p>
+
+        <h4>Turboshaft（2024+）：后端重写</h4>
+        <p>
+          2023-2024 V8 团队启动了 <strong>Turboshaft</strong> 项目——重写 TurboFan 的<strong>后端</strong>（指令选择、调度、寄存器分配、机器码生成几个阶段），<strong>前端</strong>（sea of nodes 构建 + 主要优化遍）保持不变。Chrome 120（2023 年 12 月）起后端编译速度<strong>快 2×</strong>。
+        </p>
+        <p>
+          为什么不重写整个 TurboFan？因为前端的优化能力是 V8 历经 10 年迭代积累的核心资产，重写风险大；后端相对模式化（指令选择、寄存器分配是经典编译器问题），有更新换代的空间。Turboshaft 的具体改进是把后端 IR 从 sea of nodes 切换成更接近传统 CFG 的形式——更易加新优化、更易调试、更快编译。这呼应了 Maglev 的设计哲学："<strong>web 场景的实时编译需要快编译，sea of nodes 的强大不是后端阶段需要的</strong>"。
+        </p>
+
+        <div class="callout success">
+          <div class="callout-title">📊 三层 JIT 一图速记</div>
+          <p>
+            <strong>Sparkplug</strong>: bytecode → 1:1 机器码（无 IR）—— 编译极快、消除 dispatch 开销 <br>
+            <strong>Maglev</strong>: bytecode → SSA + CFG → 机器码 —— 中速编译、轻量优化、80% 收益 <br>
+            <strong>TurboFan</strong>: bytecode → Sea of Nodes（30+ phase）→ Turboshaft 后端 → 机器码 —— 慢编译、深度优化、100% 上限 <br>
+            三层是<strong>分工</strong>不是冗余——分别管启动期 / 中频代码 / 热点代码。
+          </p>
+        </div>
 
         <h3>3 层对比表</h3>
         <table>
@@ -112,26 +226,74 @@
           </tbody>
         </table>
 
-        <h3>反优化（Deoptimization）机制</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li><strong>Eager deopt</strong>：检查失败立即跳回 Ignition；用 deopt entry 表记录 bytecode offset</li>
-          <li><strong>Lazy deopt</strong>：标记 code 失效，下次进入时跳回；多用于"假设别处的 code 不会改但实际改了"</li>
-          <li><strong>OSR (On-Stack Replacement)</strong>：把当前 stack frame 从优化版本换成 Ignition 版本，逐 register 拷贝；反向也成立（Ignition → optimized）</li>
-        </ul>
+        <h3>反优化（Deoptimization）：speculation 的兜底</h3>
+        <p>
+          Speculation 是 V8 性能的源泉，但<strong>假设可能错</strong>——TurboFan 假设某站点是 SMI 但实际收到 string、Maglev 内联了某属性的 const 值但属性突然被改。错了怎么办？答案是 <strong>deopt</strong>——把当前优化代码废弃，跳回 Ignition 重新执行，让 Feedback Vector 重新积累信息。
+        </p>
+
+        <h4>Eager deopt：当场跳回</h4>
+        <p>
+          Eager deopt 是"检查不通过立即跳回"的形式。优化代码里在每个 speculation 站点前都有一段 type check 机器码，类似：
+        </p>
+        <div class="code-block">
+          <span class="code-label">pseudo-asm</span>
+<pre class="code"><code>; TurboFan 内联的 obj.x 访问（假设 obj 是 Map_A 形状）
+mov rax, [rdi]            ; 读 obj 的 Map 指针
+cmp rax, [Map_A_addr]     ; 比较与 Map_A
+jne deopt_entry_offset_42 ; 不等？跳到 deopt 入口
+mov rbx, [rdi + 16]       ; 读 obj.x（Map_A 的 in-object slot 1）</code></pre>
+        </div>
+        <p>
+          每个 deopt 入口对应一个 <strong>bytecode offset + register 状态映射表</strong>——告诉 V8 "如果从这里 deopt，对应 bytecode 在 offset N，当前各物理寄存器值要恢复到哪些虚拟寄存器"。这套元数据由 TurboFan 在编译时生成、运行时索引。每个 deopt 元数据条目大约 50-100 字节，总开销不可忽略——但比反复"全面正确"的 type inference 便宜得多。
+        </p>
+
+        <h4>Lazy deopt：标记失效，下次入口处理</h4>
+        <p>
+          Lazy deopt 是"标记当前优化版本失效但本次执行继续完成"。典型场景：函数 A 内联了对函数 B 的调用，但运行时 B 被重新赋值了——虽然 A 本次执行已经走了内联版本（结果可能已经错了或没影响），但<strong>下次</strong>进入 A 时必须用新版 B。Lazy deopt 不立即中断本次执行，而是把 A 的优化代码标记为 invalidated，下次进入 A 时跳到 Ignition。
+        </p>
+        <p>
+          为什么需要这种"延迟"？因为<strong>立即中断当前执行栈是危险的</strong>——current frame 可能持有锁、可能有未释放的资源。Lazy 方式让 V8 等到自然边界（函数返回 / 下次进入）再切换，更安全。
+        </p>
+
+        <h4>OSR：双向穿越栈帧</h4>
+        <p>
+          On-Stack Replacement 是 deopt 元数据的"反向"用法——既然能从优化代码 deopt 回 Ignition，自然也能从 Ignition <strong>OSR up</strong> 到优化代码。典型场景：函数刚开始 hot loop 还没结束，循环 counter 已经过线 → V8 后台编译 Maglev 版本 → 编译完后 OSR 跳过去，<strong>不需要等当前调用结束</strong>。这对长循环（如大数组处理）至关重要——不然函数要跑到自然返回才能换层，可能要等几秒。
+        </p>
+        <p>
+          OSR 的关键点：进入位置必须是<strong>循环回边</strong>（loop back-edge）——只有这种地方两层 tier 的 register 状态才有清晰的对应。函数中间随机一行不能 OSR（V8 保留的 deopt info 只覆盖循环回边和函数入口）。
+        </p>
+
+        <div class="callout warn">
+          <div class="callout-title">⚠️ deopt 不是 bug，反复 deopt 才是</div>
+          <p>
+            Lazy deopt 偶尔触发是设计的一部分——V8 在适应运行时类型变化。<strong>真正的问题</strong>是 deopt loop：函数被 TurboFan 优化 → 立刻 deopt → 重新积累 feedback → 又优化 → 又 deopt。这种情况编译开销纯浪费，且每次跳转有 ~10μs 开销。用 <code>--trace-deopt</code> 找反复 deopt 的函数；通常根因是同一站点被喂了形状不稳定的对象（megamorphic IC，详见 <a href="../03-speedup/02-inline-cache.html">P3.2</a>）。
+          </p>
+        </div>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
           <h3 class="scenario-title">场景 A · 用 --trace-deopt 找反复 deopt 的函数</h3>
-          <p><em>正文待写。</em>通常是某处 hidden class 漂移（详见 P3.1）。</p>
+          <p>
+            性能问题的第一步诊断。<code>node --trace-deopt app.js 2&gt;&amp;1 | grep deoptimize | sort | uniq -c | sort -rn | head</code> ——这条命令列出反复 deopt 最频繁的函数。如果某函数 deopt 几百次以上，几乎肯定是 deopt loop。下一步用 <code>--trace-ic</code> 看这个函数所在站点是否 polymorphic / megamorphic（详见 P3.2）；通常根因是同一站点被喂了形状不稳定的对象。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B · 用 --trace-opt-verbose 看 TurboFan 的优化决策</h3>
-          <p><em>正文待写。</em>inlining / escape analysis / type narrowing。</p>
+          <h3 class="scenario-title">场景 B · 用 --trace-turbo + Turbolizer 看优化决策</h3>
+          <p>
+            想知道某个函数是否真的被 TurboFan 内联、是否做了 escape analysis、是否消除了边界检查——用 <code>--trace-turbo</code> 生成 <code>turbo.json</code>，然后用 <a href="https://v8.github.io/tools/head/turbolizer/" target="_blank" rel="noopener">Turbolizer</a> 可视化 sea of nodes IR 在每个 phase 的演化。这是 V8 内部工程师调试 TurboFan 的同一套工具。学习曲线陡但效果直接——能看到每条优化决策的"前后"。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C · 性能调优范式</h3>
-          <p><em>正文待写。</em>让函数走"monomorphic + 不引入 megamorphic IC + 不触发 deopt"。</p>
+          <h3 class="scenario-title">场景 C · 性能调优三段范式</h3>
+          <p>
+            综合 P2.3 内容形成的实战范式：<strong>(1) 让 IC monomorphic</strong>——同一站点喂同形状对象（详见 P3.2）；<strong>(2) 不触发 deopt</strong>——避免类型漂移、避免 const 属性后期被改；<strong>(3) 让函数足够简单足以被 inline</strong>——TurboFan 倾向内联小函数（&lt; 100 字节 bytecode）。这三条做到，热路径上几乎能跑出 V8 上限性能。剩下的优化空间通常在算法层而非引擎层。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 用 %OptimizeFunctionOnNextCall 强制编译</h3>
+          <p>
+            学习 / 调试时常用：<code>node --allow-natives-syntax</code> 启用后，<code>%PrepareFunctionForOptimization(f); f(); %OptimizeFunctionOnNextCall(f); f();</code> 让 V8 在下次调用 f 时强制 TurboFan 编译。这<strong>不是</strong>生产手段——<code>%XXX</code> 函数破坏 V8 自身的优化决策、可能掩盖真实瓶颈。但学习时配合 <code>--trace-opt --trace-deopt</code> 看 V8 实际行为，是最直接的"做实验"方式。
+          </p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
