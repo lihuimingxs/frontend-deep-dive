@@ -56,11 +56,6 @@
           <span><strong>前置</strong> P3.1 · Hidden Class</span>
           <span><strong>主要来源</strong> mrale.ph · v8-perf · V8 source</span>
         </div>
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>骨架版本。对照大纲 <code>v8/outline.md § P3.2</code>。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>IC 是 V8 的"神经系统"</strong>：所有优化决策都依赖 IC 收集的运行时形状信息。</li>
@@ -70,23 +65,88 @@
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
 
-        <h3>IC 的 4 个状态</h3>
-        <p><em>正文待写。</em>按 Feedback Vector slot 中状态机：</p>
-        <ul>
-          <li><strong>Uninitialized</strong>：从未执行过</li>
-          <li><strong>Monomorphic</strong>：只见过 1 种 hidden class（<strong>最快</strong>：单次 Map check + 直接 offset load）</li>
-          <li><strong>Polymorphic</strong>：见过 2-4 种 hidden class（<strong>仍快</strong>：链式 Map check）</li>
-          <li><strong>Megamorphic</strong>：见过 5+ 种（<strong>放弃 IC</strong>：走全局 hash table 查询）</li>
-        </ul>
+        <h3>从"我们刚刚见过同样的形状"开始</h3>
+        <p>
+          P3.1 讲清了 Hidden Class 怎么让<strong>形状相同的对象</strong>访问起来跟 C 一样快。但有个隐含前提：V8 怎么知道运行时下一次访问看到的形状跟上次一样？答案是 <strong>Inline Cache</strong>——每个属性访问 / 函数调用站点都"<strong>就地缓存</strong>上次见过的形状信息"，下次访问先快速比对，命中就走快路径。
+        </p>
+        <p>
+          名字"Inline"不是空话——这套缓存就<strong>埋在调用站点的机器码里</strong>。每个站点对应 Feedback Vector 的一个 slot（详见 P2.2），slot 内容随运行时演化。Sparkplug / Maglev / TurboFan 编译时读这些 slot 决定怎么生成机器码——<strong>IC 是连接 Hidden Class（数据结构）和编译器（速度）的桥</strong>。
+        </p>
+
+        <h3>IC 的 4 个状态：Uninitialized → Mono → Poly → Mega</h3>
+        <p>
+          每个 IC 站点都按一个状态机演化，根据"见过几种不同形状"逐级劣化。
+        </p>
+
+        <h4>Uninitialized · 从未执行过</h4>
+        <p>
+          函数刚被调用、IC 站点还没积累任何信息。Feedback Vector slot 是空的。下次执行时按"通用慢路径"走（<code>Runtime::Get</code> 这种 V8 内部函数），同时记录"这次见到的 Map 是 X"——下次进入就升级到 Premonomorphic / Monomorphic。
+        </p>
+
+        <h4>Monomorphic · 黄金状态</h4>
+        <p>
+          只见过<strong>1 种</strong> hidden class（Map_A）。这是性能最优的状态——V8 可以为这一种形状生成<strong>最特化的机器码</strong>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">pseudo-asm</span>
+<pre class="code"><code>; obj.foo (mono on Map_A，foo 在 in-object slot 1)
+mov rax, [rdi]            ; 读 obj 的 Map 指针
+cmp rax, [Map_A_addr]     ; 比对是否 Map_A
+jne deopt_or_miss_handler ; 不等？走慢路径或 deopt
+mov rbx, [rdi + 16]       ; 直接 load 属性值（offset 16 是 slot 1）</code></pre>
+        </div>
+        <p>
+          这就是 V8 让 JS 接近静态语言性能的真正机器码层证据——<strong>3 条指令完成属性访问</strong>，其中 2 条是 Map check 安全开销。
+        </p>
+
+        <h4>Polymorphic · 链式 Map check</h4>
+        <p>
+          见过 <strong>2-4 种</strong> hidden class。V8 仍能生成快路径，但要做<strong>链式比对</strong>——挨个检查每个 Map：
+        </p>
+        <div class="code-block">
+          <span class="code-label">pseudo-asm</span>
+<pre class="code"><code>; obj.foo (poly on Map_A, Map_B, Map_C)
+mov rax, [rdi]
+cmp rax, [Map_A_addr]
+je load_for_A           ; 是 A？跳到 A 的 load 代码
+cmp rax, [Map_B_addr]
+je load_for_B
+cmp rax, [Map_C_addr]
+je load_for_C
+jmp slow_path            ; 都不是？走慢路径
+load_for_A: mov rbx, [rdi + 16]; jmp continue
+load_for_B: mov rbx, [rdi + 8]; jmp continue
+...</code></pre>
+        </div>
+        <p>
+          典型情况下 IC 命中第一个 Map（最常见的形状），实际只多一两个 cmp 指令。但 cache 利用率下降（多个 Map 的 metadata 都要在 L1 cache 里），整体性能比 mono 慢 1.5-2×。仍比走全局 hash table 查询快得多。
+        </p>
+
+        <h4>Megamorphic · V8 放弃 IC</h4>
+        <p>
+          见过 <strong>5+ 种</strong> hidden class。V8 认为"形状不稳定"，<strong>放弃缓存</strong>——把这个 IC 站点降级成走全局共享的 hash table 查询。访问开销跳到 ~10ns，跟 dictionary mode 类似。
+        </p>
+        <p>
+          这是 V8 性能调优的重要分水岭。<strong>Mono / Poly 都还有救</strong>，megamorphic 几乎没救——因为编译器看到 mega 时就放弃了 speculation。但要注意：<strong>megamorphic 不是末日</strong>。megamorphic IC 走 stub 查询仍比纯解释执行快——只是没有了 Hidden Class 带来的 1-2 条指令神话。在 hot path 之外的代码里，megamorphic 完全没问题；真正的问题只在<strong>每秒调用上百万次的核心路径</strong>。
+        </p>
 
         <h3>典型 IC 站点</h3>
-        <p><em>正文待写。</em></p>
+        <p>
+          V8 内部有十几种 IC 类型，按操作不同分类。最重要的几种：
+        </p>
         <ul>
-          <li><strong>LoadIC</strong>：<code>obj.foo</code></li>
-          <li><strong>StoreIC</strong>：<code>obj.foo = x</code></li>
-          <li><strong>CallIC</strong>：<code>f()</code>（区分 receiver 形状 + 函数指针）</li>
-          <li><strong>InstanceOfIC</strong> / <strong>InIC</strong> / <strong>TypeOfIC</strong> / <strong>CompareIC</strong> 等</li>
+          <li><strong>LoadIC</strong>：属性读 <code>obj.foo</code>。最常用、性能影响最大。</li>
+          <li><strong>StoreIC</strong>：属性写 <code>obj.foo = x</code>。比 LoadIC 复杂——可能触发 Hidden Class transition（详见 P3.1）。</li>
+          <li><strong>CallIC</strong>：函数调用 <code>f()</code> / <code>obj.method()</code>。除了 receiver 形状还要追踪<strong>函数本身的指针</strong>——同一站点调过哪几个函数。这就是"<code>arr.map(callback)</code> 用同一 callback 比每次新建快"的根因。</li>
+          <li><strong>StoreOwnIC</strong>：对象字面量定义属性（<code>{x: 1}</code> 内部）。</li>
+          <li><strong>BinaryOp / CompareIC</strong>：算术（<code>a + b</code>）/ 比较（<code>a == b</code>）。Feedback 记录"操作数类型组合"——SMI+SMI / String+String / Mixed。</li>
+          <li><strong>InstanceOfIC</strong>：<code>x instanceof Y</code>。追踪 Y 的 prototype 形状。</li>
+          <li><strong>InIC</strong>：<code>'foo' in obj</code>。</li>
+          <li><strong>TypeOfIC</strong>：<code>typeof x</code>。</li>
         </ul>
+        <p>
+          每种 IC 都有自己的状态机但都遵循"见 1 种 → mono → 见 N 种 → poly → 见太多 → mega"的演化模式。性能调优的目标是<strong>让 hot path 上的关键 IC 站点保持 mono</strong>——这就是 V8 性能优化的"主旋律"。
+        </p>
 
         <h3>从 Mono 升到 Poly 再到 Mega</h3>
         <div class="code-block">
@@ -101,42 +161,181 @@ getX({x:1, w:4});  // IC: Poly (4 maps)
 getX({x:1, q:5});  // IC: MEGA ← 5+ maps，放弃缓存</code></pre>
         </div>
 
-        <h3>各 tier 的 IC 形态</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li><strong>Ignition</strong>：每条 IC 字节码运行时查 Feedback Vector</li>
-          <li><strong>Sparkplug</strong>：内联 IC stub 调用，每次仍走 stub</li>
-          <li><strong>Maglev</strong>：根据 Feedback Vector 内联 fast path（mono 时直接 inline，poly 时生成 switch）</li>
-          <li><strong>TurboFan</strong>：完全内联到 sea of nodes 中，可能 inline 到调用方函数</li>
-        </ul>
+        <h3>各 tier 的 IC 形态：从 stub 调用到完全内联</h3>
+        <p>
+          IC 在 V8 4 层 JIT 里的形态各不相同——越上层优化越激进、IC 检查越被"消化"进周围代码。
+        </p>
 
-        <h3>Feedback Vector 与编译触发</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li>V8 用 IC 状态做 speculation：编译时看到 "100% mono on Map_A" → 内联 Map_A 的 fast path → 假设保持</li>
-          <li>如果运行时见到 Map_B → trigger lazy deopt → 跳回 Ignition → 重新积累 feedback → 可能下次编译为 poly</li>
-        </ul>
+        <h4>Ignition：动态查 Feedback Vector</h4>
+        <p>
+          解释器对每条 IC 字节码都要<strong>运行时查 Feedback Vector</strong>——读出当前状态（mono/poly/mega）+ 缓存的 Map 列表，再调对应 IC stub。这套机制开销比 mono fast path 大几纳秒，但灵活：状态变化随时反映。
+        </p>
 
-        <h3>megamorphic 怎么救</h3>
-        <p><em>正文待写。</em>如果你必须支持多形状：</p>
+        <h4>Sparkplug：内联 IC stub 调用</h4>
+        <p>
+          Sparkplug 还是要走 IC stub（前文 P2.2 提过——它"不重新发明语义"），但<strong>不再做 dispatch + operand decoding</strong>，而是直接 emit 一条机器码 call 到对应 stub。所以 Sparkplug 加速主要来自消除解释器开销而非优化 IC 本身——这就是 Sparkplug 只 +5-15% 的根因。
+        </p>
+
+        <h4>Maglev：根据 Feedback 内联 fast path</h4>
+        <p>
+          Maglev 是<strong>第一层真正"读 Feedback Vector 做 speculation"的层</strong>。编译时它看 IC 当前状态：
+        </p>
         <ul>
-          <li><strong>手动分离</strong>：写多个特化函数（<code>getXForCircle</code> <code>getXForSquare</code>）让每个 IC mono</li>
-          <li><strong>统一 shape</strong>：用 base class + 子类，但所有属性在 base 中初始化</li>
-          <li><strong>不可救场景</strong>：通用 deserializer / 反射库 —— 接受 megamorphic 现实</li>
+          <li><strong>Mono on Map_A</strong>：直接<strong>内联</strong> Map_A 的 fast path（Map check + offset load 两条机器指令），跳过 stub 调用</li>
+          <li><strong>Poly</strong>：生成<strong>switch</strong> 结构链式 Map check，每个 case 是对应 Map 的 fast path</li>
+          <li><strong>Mega</strong>：仍走 stub，因为 Maglev 不值得为 mega 做特化（大概率本来就不在热路径上）</li>
         </ul>
+        <p>
+          如果 Maglev 编译版本运行时 Map check 失败（即出现编译时没见过的 Map）→ <strong>触发 deopt</strong> 跳回 Ignition，让 Feedback 继续积累。下次 Maglev 编译可能升级到 poly 版本。
+        </p>
+
+        <h4>TurboFan：完全内联到 sea of nodes，跨函数 inline</h4>
+        <p>
+          TurboFan 走得更远——它把 IC 信息<strong>完全融进 sea of nodes IR</strong>，让其他优化遍能利用这些类型信息。例：mono on SMI 的 <code>a + b</code> 编译时直接变成"SMI add"节点，escape analysis / range analysis 都能用这个类型做进一步推导。
+        </p>
+        <p>
+          更厉害的是 <strong>跨函数 inline</strong>——TurboFan 看到 <code>arr.map(callback)</code>、callback 站点 mono on 某函数 X → 直接把 X 的 sea of nodes 图<strong>嵌进当前函数的图</strong>，连同 X 内部的 IC 也一起利用。这是为什么 TurboFan 能跑出近 native 性能：所有 speculation 链条全部展开成单一 sea of nodes 图。
+        </p>
+        <p>
+          代价是：<strong>任何一处 speculation 错都会让整个内联函数 deopt</strong>。这就是为什么 TurboFan 需要精细的 deopt info——能从内联深处跳回原始 bytecode 的对应位置（详见 P2.3 反优化）。
+        </p>
+
+        <h3>Feedback Vector 是闭环的中心</h3>
+        <p>
+          可以把 V8 的 speculation 体系画成一个闭环：
+        </p>
+        <div class="code-block">
+          <span class="code-label">feedback-loop</span>
+<pre class="code"><code>┌──────────────────────────────────────────────┐
+│  Ignition / Sparkplug 执行 → 更新 Feedback Vector  │
+│         ↓                                    │
+│  (call counter 过线 + IC mature)             │
+│         ↓                                    │
+│  Maglev / TurboFan 编译 → 读 Feedback Vector │
+│         ↓                                    │
+│  Speculation 内联 fast path                   │
+│         ↓                                    │
+│  运行时 Map check 失败 → Deopt              │
+│         ↓                                    │
+│  跳回 Ignition → 继续积累 Feedback ─────────┘</code></pre>
+        </div>
+        <p>
+          这条闭环回答了几乎所有 V8 性能现象：为什么循环 5000 次还没被优化（IC 不够 mature）、为什么 deopt loop（Feedback 反复变 + 反复编译）、为什么"同样的代码不同输入跑得慢"（IC 站点被喂了不稳定形状）。
+        </p>
+        <p>
+          理解这个闭环 + P3.1 的 Hidden Class，就掌握了 V8 性能的<strong>所有底层逻辑</strong>。后续 P4 内存 / P5 嵌入都是相对独立的话题，性能层面已经讲完。
+        </p>
+
+        <h3>megamorphic 怎么救：三种救法 + 一种放弃</h3>
+        <p>
+          诊断出某 IC 站点 megamorphic 后（用 <code>--trace-ic</code> 看，详见后文场景），如果它确实在 hot path 上影响可观，有几种修法。
+        </p>
+
+        <h4>救法 1 · 手动分离：写多个特化函数</h4>
+        <p>
+          常见反模式是"通用处理函数被喂多形状"：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// ❌ 反模式：getX 接受 Circle / Square / Triangle 三种形状 → mega
+function getX(shape) {
+  return shape.x;
+}
+shapes.forEach(s =&gt; getX(s));   // shapes 里有三种形状
+// IC 在 getX 内部一个站点，看到三种 Map → poly 升级到 mega
+
+// ✅ 修正：分离成多个特化函数
+function getXFromCircle(circle)   { return circle.x; }
+function getXFromSquare(square)   { return square.x; }
+function getXFromTriangle(triangle) { return triangle.x; }
+// 调用前先按类型分组
+circles.forEach(c =&gt; getXFromCircle(c));     // mono
+squares.forEach(s =&gt; getXFromSquare(s));     // mono
+triangles.forEach(t =&gt; getXFromTriangle(t)); // mono</code></pre>
+        </div>
+        <p>
+          代价：代码重复。收益：每个 IC 站点都 mono，hot path 上 3-5× 加速。视场景判断是否值得。
+        </p>
+
+        <h4>救法 2 · 统一 shape：base class 包含所有属性</h4>
+        <p>
+          如果几个对象逻辑上是同一族（如 UI 元素），可以让它们用<strong>同一个 Map</strong>——base class 里初始化所有可能的属性，子类只改值不加结构：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// ❌ 反模式：每个子类自己加属性 → 不同 Map
+class Circle   { constructor(r) { this.x = 0; this.r = r; } }
+class Square   { constructor(s) { this.x = 0; this.s = s; } }
+
+// ✅ 修正：base class 初始化所有属性
+class Shape {
+  constructor() {
+    this.x = 0; this.y = 0;
+    this.r = 0;       // radius (for circles)
+    this.s = 0;       // side (for squares)
+    this.kind = '';
+  }
+}
+class Circle extends Shape { constructor(r) { super(); this.r = r; this.kind = 'circle'; } }
+class Square extends Shape { constructor(s) { super(); this.s = s; this.kind = 'square'; } }
+// 所有实例形状相同 → 同一个 Map → mono</code></pre>
+        </div>
+        <p>
+          代价：每个对象稍多内存（多了未用的属性）。收益：所有 IC 站点 mono。适合"少数几种相关类型"的场景，不适合"无关对象族"。
+        </p>
+
+        <h4>救法 3 · 用 Map 数据结构而非动态属性</h4>
+        <p>
+          如果对象本质是"动态 key-value 集合"（如 i18n 翻译表、配置对象、运行时数据），<strong>不要用普通 object</strong>——直接用 ES6 <code>Map</code>。Map 内部是优化好的 hash table，根本不走 IC + Hidden Class 系统，性能稳定可预测：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// ❌ 反模式：把 object 当 dict 用 → dictionary mode 降级
+const cache = {};
+for (const key of dynamicKeys) cache[key] = compute(key);
+
+// ✅ 修正：用 Map
+const cache = new Map();
+for (const key of dynamicKeys) cache.set(key, compute(key));</code></pre>
+        </div>
+
+        <h4>放弃：通用 deserializer / 反射 / 库代码</h4>
+        <p>
+          有些场景<strong>本质上就是 megamorphic</strong>，没法救：
+        </p>
+        <ul>
+          <li><strong>JSON.parse 后的反序列化处理</strong>——不同 schema 的 JSON 走同一段代码</li>
+          <li><strong>ORM / 数据库映射库</strong>——映射任意 entity 形状到 SQL</li>
+          <li><strong>测试 / 序列化 / 比较库</strong>（lodash、deep-equal 等）——按定义就要支持任意形状</li>
+        </ul>
+        <p>
+          这些场景接受 megamorphic 现实——库作者不要为这种通用性焦虑，<strong>用户应用层的 mono 才是性能主战场</strong>。
+        </p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
           <h3 class="scenario-title">场景 A · 何时该担心 megamorphic IC</h3>
-          <p><em>正文待写。</em>每秒调用 100 万次 + IC 命中 mega → 累计影响 &gt; 1ms。</p>
+          <p>
+            判据：<strong>调用频次 × 单次开销 &gt; 1ms 累计影响</strong>才值得修。例：每秒调用 100 万次的 hot path 上 mega IC，每次比 mono 多花 ~10ns → 累计 10ms/秒，明显影响。但每秒调用 100 次的代码 mega 完全没事。<strong>不要为冷代码做 IC 优化</strong>——可读性 / 维护性优先于这种纳秒级提升。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B · DevTools Performance 找 megamorphic</h3>
-          <p><em>正文待写。</em><code>--trace-ic</code> + grep "MEGAMORPHIC"。</p>
+          <h3 class="scenario-title">场景 B · 用 --trace-ic 找 megamorphic 站点</h3>
+          <p>
+            <code>node --trace-ic app.js 2&gt;&amp;1 | grep "MEGAMORPHIC" | sort | uniq -c | sort -rn | head</code>——这条命令列出 mega 转换最多的站点。输出包含<strong>文件:行号:列号</strong>，能直接定位到代码。如果某个站点在 hot path 上反复 mega，就是优化目标。注意 <code>--trace-ic</code> 输出极大（每个 IC 状态变化都打），grep 必须配合 head/tail 限量。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C · JSON 解析后的对象</h3>
-          <p><em>正文待写。</em>所有同源 JSON 走同 transition path → mono；混合 schema 的 JSON → poly/mega。</p>
+          <h3 class="scenario-title">场景 C · JSON 解析后的对象 IC 行为</h3>
+          <p>
+            <strong>同源 JSON 走同 transition path → mono</strong>：API 返回相同 schema 的对象，<code>JSON.parse</code> 出来的对象都是同一形状，访问代码 IC 自然 mono。<strong>混合 schema → poly/mega</strong>：例如某接口返回 <code>{type: 'user', name: ...}</code> 和 <code>{type: 'post', title: ...}</code> 两种形状，统一处理代码就 poly/mega。修法：按 type 分支后用 P3.2 的"手动分离"或"base class 统一 shape"。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 闭包工厂的 IC 站点独立</h3>
+          <p>
+            <code>arr.map(item =&gt; item.x)</code> 在循环里被调用上千次——每次创建新闭包，每个闭包的 <code>item.x</code> IC 站点都<strong>独立</strong>从 Uninitialized 起步，永远积累不出 mature feedback。这就是为什么"循环内 inline 闭包"总比"提到外面的命名函数"慢——根本不是创建闭包的开销，是 IC 站点不能复用 Feedback。修正：把 callback 提到循环外定义共享，或直接 <code>arr.map(getX)</code>（如果签名匹配）。
+          </p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
