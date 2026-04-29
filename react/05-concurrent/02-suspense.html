@@ -1,0 +1,802 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>P5.2 · Suspense 用户视角 · React 深度学习</title>
+    <meta
+      name="description"
+      content="Suspense 完整用法：fallback 边界、配合 React.lazy 代码分割、配合 use(promise) 数据 fetching（19+）、配合 RSC 流式渲染、嵌套 Suspense + showFallback 行为、SuspenseList 实验性、与 useTransition 配合。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2361dafb'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23000000'%3EReact%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>React 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.13 220); color: #fff">R</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">React 首页</a>
+          <a href="index.html">阶段目录</a>
+          <a href="https://react.dev/reference/react/Suspense" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · Concurrent 并发</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-concurrent-overview.html">01 · Concurrent 总览</a></li>
+          <li><a href="02-suspense.html" class="active">02 · Suspense</a></li>
+          <li><a href="03-transition.html">03 · useTransition / useDeferredValue</a></li>
+          <li><a href="04-error-boundary.html">04 · Error Boundary</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · React 是谁</a></li>
+          <li><a href="../02-mental-model/index.html">P2 · 渲染心智模型</a></li>
+          <li><a href="../03-hooks/index.html">P3 · Hooks 全谱</a></li>
+          <li><a href="../04-fiber/index.html">P4 · Fiber 内部机制</a></li>
+          <li><a href="../06-modern/index.html">P6 · Server Components 与 Actions</a></li>
+          <li><a href="../07-ecosystem/index.html">P7 · 生态与工程化</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">React</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · Concurrent 并发</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>02 · Suspense</span>
+        </nav>
+
+        <h1>P5.2 · Suspense 用户视角</h1>
+        <p class="lead">
+          P5.1 讲了 Suspense 的"<em>throw promise</em>" 引擎机制。本章讲<strong>用户怎么用</strong>—— 4 种典型用法（代码分割 / use(promise) / RSC 流式 / 嵌套）+ 边界粒度设计 + 与 useTransition 配合。读完后你能解释"<em>什么时候 fallback 闪烁</em>" 和"<em>怎么用 Suspense 取代 useEffect 加载</em>"。
+        </p>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 Suspense 不是"<em>异步组件</em>"，是"<em>异步等待边界</em>"</div>
+          <p>
+            Suspense 不让组件本身变异步—— 它建立<strong>边界</strong>，捕获 throw 的 promise / lazy / RSC payload，显示 fallback 直到 ready。<strong>组件本身代码看起来同步</strong>—— 这是 Suspense 设计的精妙之处（P5.1 详述）。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> <a href="01-concurrent-overview.html">P5.1 Concurrent</a>（Suspense 引擎机制）</span>
+          <span><strong>对应 react.dev</strong>
+            <a href="https://react.dev/reference/react/Suspense" target="_blank" rel="noopener">Suspense</a> ·
+            <a href="https://react.dev/reference/react/lazy" target="_blank" rel="noopener">lazy</a> ·
+            <a href="https://react.dev/reference/react/use" target="_blank" rel="noopener">use</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong><code>&lt;Suspense fallback={ui}&gt;...&lt;/Suspense&gt;</code> 是"<em>异步等待边界</em>"</strong>。子树中任何组件 throw promise（含 React.lazy / use(promise) / RSC）都被这个边界捕获 → 显示 fallback → promise resolve 后渲染真实内容。
+          </li>
+          <li>
+            <strong>4 种典型用法</strong>：① <strong>React.lazy 代码分割</strong>（最常见）② <strong>use(promise) 数据 fetching</strong>（19+ 取代 useEffect）③ <strong>RSC 流式渲染</strong>（Next.js 服务端组件）④ <strong>嵌套 Suspense</strong>（不同粒度的 loading 状态）。
+          </li>
+          <li>
+            <strong>边界粒度是核心设计决策</strong>：粗边界（外层一个）→ 整页 spinner（用户体感差）；细边界（每个组件）→ fallback 闪烁（"<em>跳来跳去</em>"）；<strong>合理粒度按"<em>逻辑组件块</em>" 分</strong>（list / sidebar / card）。配合 <code>useTransition</code> 可避免"<em>已显示内容被替换为 fallback</em>" 的回退闪烁。
+          </li>
+        </ol>
+
+        <p>看一段最小代码识别 Suspense 三种用法：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Suspense 三种典型用法</span>
+          <pre class="code"><code class="lang-js">// 用法 1：React.lazy 代码分割
+const Dashboard = lazy(() =&gt; import('./Dashboard'));
+
+function App() {
+  return (
+    &lt;Suspense fallback={&lt;PageSpinner /&gt;}&gt;
+      &lt;Dashboard /&gt;       {/* 加载 chunk 时显示 PageSpinner */}
+    &lt;/Suspense&gt;
+  );
+}
+
+// 用法 2：use(promise) 数据加载（19+）
+function UserProfile({ userPromise }) {
+  const user = use(userPromise);   // promise 未 resolve 时 throw → Suspense 捕获
+  return &lt;div&gt;{user.name}&lt;/div&gt;;
+}
+
+&lt;Suspense fallback={&lt;Spinner /&gt;}&gt;
+  &lt;UserProfile userPromise={fetchUser(42)} /&gt;
+&lt;/Suspense&gt;
+
+// 用法 3：RSC（Next.js App Router）
+async function Page() {
+  const data = await db.fetch();   // Server Component 直接 await
+  return (
+    &lt;&gt;
+      &lt;h1&gt;{data.title}&lt;/h1&gt;
+      &lt;Suspense fallback={&lt;Skeleton /&gt;}&gt;
+        &lt;SlowChart dataPromise={db.fetchSlowStats()} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ================================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Suspense 完整签名与心智</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript · Suspense props</span>
+          <pre class="code"><code class="lang-ts">type SuspenseProps = {
+  children?: ReactNode;
+  fallback?: ReactNode;       // 加载时显示的内容（可以是任何 JSX）
+  // 19 加：name 用于 React DevTools 显示（仅调试用）
+  name?: string;
+};
+
+// 心智模型：
+// Suspense 是 React 树中的一个特殊节点
+// 子树渲染时如果有 throw promise → 沿 Fiber 向上找到最近 Suspense
+// → 渲染 fallback、注册 promise.then 回调
+// → promise resolve 后，重新尝试渲染子树
+// → 如果还有 throw → 继续 fallback；如果 resolve 了 → 渲染真实内容</code></pre>
+        </div>
+
+        <h3>用法 1：<code>React.lazy</code> 代码分割（最常见）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 代码分割完整模式</span>
+          <pre class="code"<code class="lang-js">// 1. lazy 包装动态 import
+import { lazy, Suspense } from 'react';
+
+const Dashboard = lazy(() =&gt; import('./Dashboard'));
+const Settings = lazy(() =&gt; import('./Settings'));
+const Reports = lazy(() =&gt; import('./Reports'));
+
+// 2. 用 Suspense 包裹
+function App() {
+  return (
+    &lt;Routes&gt;
+      &lt;Route path="/dashboard" element={
+        &lt;Suspense fallback={&lt;PageSpinner /&gt;}&gt;
+          &lt;Dashboard /&gt;
+        &lt;/Suspense&gt;
+      } /&gt;
+      &lt;Route path="/settings" element={
+        &lt;Suspense fallback={&lt;PageSpinner /&gt;}&gt;
+          &lt;Settings /&gt;
+        &lt;/Suspense&gt;
+      } /&gt;
+    &lt;/Routes&gt;
+  );
+}
+
+// 3. 配 bundler 自动 chunk 拆分
+// Vite / Webpack / Rollup 都自动处理 dynamic import 拆 chunk
+// 用户访问 /dashboard 才下载 dashboard.chunk.js
+
+// 4. 给 lazy 加 named export 支持
+// dynamic import 默认拿 default export，要用 named export：
+const Dashboard = lazy(() =&gt;
+  import('./Dashboard').then(m =&gt; ({ default: m.Dashboard }))
+);
+
+// 5. 预加载（用户即将访问时提前下载）
+function NavLink({ to, children }) {
+  const handleHover = () =&gt; {
+    if (to === '/dashboard') import('./Dashboard');  // 预热
+  };
+  return &lt;a href={to} onMouseEnter={handleHover}&gt;{children}&lt;/a&gt;;
+}
+
+// 工程意义：
+// - 减小初始 bundle 体积（仅当前页面 chunk 加载）
+// - 路由级懒加载（每路由独立 chunk）
+// - 大第三方库懒加载（如 chart.js / monaco-editor）</code></pre>
+        </div>
+
+        <h3>用法 2：<code>use(promise)</code> 数据 fetching（React 19）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · use API 数据加载完整模式</span>
+          <pre class="code"<code class="lang-js">import { use, Suspense } from 'react';
+
+function UserProfile({ userPromise }) {
+  const user = use(userPromise);   // promise 未 resolve 时 throw
+  return &lt;div&gt;{user.name}&lt;/div&gt;;
+}
+
+// 用法
+function App() {
+  // ⚠️ 关键：promise 必须在更高层创建（引用稳定）
+  const userPromise = useMemo(() =&gt; fetchUser(42), []);
+
+  return (
+    &lt;Suspense fallback={&lt;Spinner /&gt;}&gt;
+      &lt;UserProfile userPromise={userPromise} /&gt;
+    &lt;/Suspense&gt;
+  );
+}
+
+// ❌ 致命错误：每次 render 创建新 promise
+function App() {
+  return (
+    &lt;Suspense fallback={&lt;Spinner /&gt;}&gt;
+      &lt;UserProfile userPromise={fetchUser(42)} /&gt;
+                              {/* ↑ 每次 render 新 promise！*/}
+    &lt;/Suspense&gt;
+  );
+}
+// 后果：① 每次都新建 fetch 请求 ② Suspense 无限触发 → 死循环
+
+// 替代当前 useEffect 模式：
+// === 18 风格（useEffect + useState）===
+function UserProfile({ id }) {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() =&gt; {
+    fetch(`/api/users/${id}`).then(r =&gt; r.json()).then(d =&gt; {
+      setUser(d); setLoading(false);
+    });
+  }, [id]);
+  if (loading) return &lt;Spinner /&gt;;
+  return &lt;div&gt;{user.name}&lt;/div&gt;;
+}
+
+// === 19 风格（use + Suspense）===
+async function fetchUser(id) {
+  return fetch(`/api/users/${id}`).then(r =&gt; r.json());
+}
+function UserProfile({ userPromise }) {
+  const user = use(userPromise);
+  return &lt;div&gt;{user.name}&lt;/div&gt;;
+}
+// 父：
+const userPromise = useMemo(() =&gt; fetchUser(id), [id]);
+return (
+  &lt;Suspense fallback={&lt;Spinner /&gt;}&gt;
+    &lt;UserProfile userPromise={userPromise} /&gt;
+  &lt;/Suspense&gt;
+);
+
+// 优势：
+// - 组件代码看起来同步（无 loading state）
+// - Suspense fallback 由调用方定（更灵活）
+// - 错误用 ErrorBoundary 统一处理（P5.4）
+
+// 但注意：
+// - use 可在条件分支调用（P5.1 / P3.3 提过）
+// - 但 promise 引用必须稳定 —— 在 RSC 中天然稳定（每次请求服务端创建）
+// - 在 Client Component 中要 useMemo / useRef / 父级管理</code></pre>
+        </div>
+
+        <h3>用法 3：RSC 流式渲染（Next.js App Router）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · RSC + Suspense 流式渲染</span>
+          <pre class="code"<code class="lang-js">// app/page.tsx —— Server Component（默认）
+async function Page() {
+  // 同步部分（快）
+  const user = await db.users.findById(currentUserId);
+
+  return (
+    &lt;&gt;
+      &lt;h1&gt;Welcome, {user.name}&lt;/h1&gt;       {/* 立即渲染 */}
+
+      {/* 异步部分流式 */}
+      &lt;Suspense fallback={&lt;PostsSkeleton /&gt;}&gt;
+        &lt;UserPosts userId={user.id} /&gt;     {/* SlowChart 是 async Server Component */}
+      &lt;/Suspense&gt;
+
+      &lt;Suspense fallback={&lt;StatsSkeleton /&gt;}&gt;
+        &lt;UserStats userId={user.id} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}
+
+async function UserPosts({ userId }) {
+  const posts = await db.posts.findByUser(userId);  // 假设要 800ms
+  return &lt;PostList posts={posts} /&gt;;
+}
+
+async function UserStats({ userId }) {
+  const stats = await db.stats.compute(userId);     // 假设要 1500ms
+  return &lt;StatsChart stats={stats} /&gt;;
+}
+
+// 服务器流式渲染时序：
+// 1. 服务器立即发送同步部分 HTML：
+//    &lt;h1&gt;Welcome, Alice&lt;/h1&gt;
+//    &lt;div&gt;PostsSkeleton&lt;/div&gt;     {/* fallback 占位 */}
+//    &lt;div&gt;StatsSkeleton&lt;/div&gt;
+// 2. 浏览器立即显示骨架（用户感知"<em>页面已加载</em>"）
+// 3. UserPosts 异步完成（800ms 后）→ 服务器流式补发：
+//    &lt;script&gt;React.replace('id-1', ...);&lt;/script&gt;
+//    替换 PostsSkeleton 为真实内容
+// 4. UserStats 完成（1500ms）→ 同上替换 StatsSkeleton
+
+// 用户体感：
+// - TTFB（首字节时间）：很快（同步部分立即返回）
+// - 主要内容：分阶段填充
+// - 没有"<em>整页空白等几秒</em>" 的体验</code></pre>
+        </div>
+
+        <h3>用法 4：嵌套 Suspense + showFallback 行为</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 嵌套 Suspense fallback 触发规则</span>
+          <pre class="code"<code class="lang-js">function App() {
+  return (
+    &lt;Suspense fallback={&lt;PageSpinner /&gt;}&gt;        {/* 外层 */}
+      &lt;Header /&gt;
+      &lt;Suspense fallback={&lt;ListSpinner /&gt;}&gt;     {/* 内层 1 */}
+        &lt;UserList /&gt;
+      &lt;/Suspense&gt;
+      &lt;Suspense fallback={&lt;ChartSpinner /&gt;}&gt;    {/* 内层 2 */}
+        &lt;Chart /&gt;
+      &lt;/Suspense&gt;
+      &lt;Footer /&gt;
+    &lt;/Suspense&gt;
+  );
+}
+
+// 触发规则：throw promise 沿 Fiber 树向上找<strong>最近的 Suspense</strong>
+//
+// UserList throw promise → 沿 Fiber 上溯
+//   → 找到 &lt;Suspense fallback={&lt;ListSpinner /&gt;}&gt;（内层 1）
+//   → 显示 ListSpinner
+//   → Header / Chart / Footer 不受影响（已渲染或独立 Suspense）
+//
+// Chart throw promise → 同样找内层 2 → 显示 ChartSpinner
+//
+// 如果 Header throw promise（很少见，比如 Header 也有 use）：
+//   → 沿 Fiber 上溯找不到内层 Suspense（Header 不在内层 Suspense 内）
+//   → 找到外层 Suspense → 显示 PageSpinner（整页 loading）
+
+// 设计原则：按"<em>逻辑组件块</em>" 分边界
+// - 一个 list / 一个 sidebar / 一个 card 各自一个 Suspense
+// - 不要"<em>每个数据点一个 Suspense</em>"（fallback 闪烁）
+// - 也不要"<em>整页只有一个 Suspense</em>"（用户体感差）</code></pre>
+        </div>
+
+        <h3><code>SuspenseList</code>（实验性，仅 unstable）</h3>
+
+        <p>
+          <strong><code>SuspenseList</code></strong> 是<strong>实验性 API</strong>，协调多个 Suspense 的显示顺序：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · SuspenseList 实验性</span>
+          <pre class="code"<code class="lang-js">// ⚠️ 不稳定：仅 react@experimental 可用
+import { unstable_SuspenseList as SuspenseList } from 'react';
+
+&lt;SuspenseList revealOrder="forwards" tail="collapsed"&gt;
+  &lt;Suspense fallback={&lt;Skeleton /&gt;}&gt;&lt;Card1 /&gt;&lt;/Suspense&gt;
+  &lt;Suspense fallback={&lt;Skeleton /&gt;}&gt;&lt;Card2 /&gt;&lt;/Suspense&gt;
+  &lt;Suspense fallback={&lt;Skeleton /&gt;}&gt;&lt;Card3 /&gt;&lt;/Suspense&gt;
+&lt;/SuspenseList&gt;
+
+// revealOrder：
+// - "forwards"：按顺序显示（前面 ready 才显示前面，后面等）
+// - "backwards"：反顺序显示
+// - "together"：等所有 ready 一起显示
+
+// tail：
+// - "collapsed"：仅显示下一个 fallback（其余隐藏）
+// - "hidden"：所有未 ready 的都隐藏（不显示 fallback）
+
+// 用例：避免"<em>列表项乱序闪现</em>"
+
+// 当前状态（写作时点 2026-04）：
+// - 仍是 unstable_ 前缀
+// - React 团队还在评估稳定 API 形态
+// - 生产代码不要用</code></pre>
+        </div>
+
+        <h3>与 <code>useTransition</code> 配合（避免 fallback 回退闪烁）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · transition 防止 fallback 闪烁</span>
+          <pre class="code"<code class="lang-js">// 痛点：用户切换 tab → 已显示的内容被 fallback 替换 → 闪烁
+
+// ❌ 不用 transition
+function App() {
+  const [tab, setTab] = useState('home');
+  return (
+    &lt;&gt;
+      &lt;Tabs activeTab={tab} onChange={setTab} /&gt;
+      &lt;Suspense fallback={&lt;Spinner /&gt;}&gt;
+        {tab === 'home' &amp;&amp; &lt;HomeContent /&gt;}
+        {tab === 'profile' &amp;&amp; &lt;ProfileContent /&gt;}
+      &lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}
+// 切换时：HomeContent 立即被卸载 → ProfileContent throw promise → 显示 Spinner
+// 用户看到"<em>已显示的 home → spinner → profile</em>" 的 3 阶段闪烁
+
+// ✅ 用 useTransition
+function App() {
+  const [tab, setTab] = useState('home');
+  const [isPending, startTransition] = useTransition();
+
+  const handleTabChange = (next) =&gt; {
+    startTransition(() =&gt; setTab(next));
+  };
+
+  return (
+    &lt;&gt;
+      &lt;Tabs activeTab={tab} onChange={handleTabChange} /&gt;
+      {isPending &amp;&amp; &lt;ProgressBar /&gt;}
+      &lt;Suspense fallback={&lt;Spinner /&gt;}&gt;
+        {tab === 'home' &amp;&amp; &lt;HomeContent /&gt;}
+        {tab === 'profile' &amp;&amp; &lt;ProfileContent /&gt;}
+      &lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}
+// 切换时：tab 在 transition lane（低优先级）
+// React 在新内容 ready 之前<strong>保留旧内容</strong>
+// 用户看到"<em>home（仍显示）+ ProgressBar → profile（替换 home）</em>"
+// fallback 不会触发（因为有旧内容可保留）
+
+// 详细 useTransition 见 P5.3（编写中）</code></pre>
+        </div>
+
+        <!-- 03 应用场景 ================================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 路由级代码分割</h3>
+          <p>
+            大型应用按路由拆分 chunk—— 每个路由独立 Suspense + lazy：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 路由级 lazy + Suspense</span>
+            <pre class="code"<code class="lang-js">import { lazy, Suspense } from 'react';
+import { Routes, Route } from 'react-router-dom';
+
+// 每个路由的页面组件懒加载
+const HomePage = lazy(() =&gt; import('./pages/Home'));
+const DashboardPage = lazy(() =&gt; import('./pages/Dashboard'));
+const SettingsPage = lazy(() =&gt; import('./pages/Settings'));
+
+function App() {
+  return (
+    &lt;Routes&gt;
+      &lt;Route path="/" element={
+        &lt;Suspense fallback={&lt;PageSpinner /&gt;}&gt;
+          &lt;HomePage /&gt;
+        &lt;/Suspense&gt;
+      } /&gt;
+      &lt;Route path="/dashboard" element={
+        &lt;Suspense fallback={&lt;PageSpinner /&gt;}&gt;
+          &lt;DashboardPage /&gt;
+        &lt;/Suspense&gt;
+      } /&gt;
+      &lt;Route path="/settings" element={
+        &lt;Suspense fallback={&lt;PageSpinner /&gt;}&gt;
+          &lt;SettingsPage /&gt;
+        &lt;/Suspense&gt;
+      } /&gt;
+    &lt;/Routes&gt;
+  );
+}
+
+// Vite/Webpack 自动拆 chunk：
+// - app.[hash].js   主 bundle
+// - Home.[hash].js
+// - Dashboard.[hash].js
+// - Settings.[hash].js
+
+// 优化建议：
+// 1. 用 Suspense 套一层共享路由布局，避免每个 Route 重复包装
+// 2. 配合 useTransition 让路由切换不闪 fallback
+// 3. 鼠标 hover 链接时预加载下一页（import('./pages/Dashboard')）</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 详情页 + 推荐区块独立 Suspense</h3>
+          <p>
+            商品详情页有 3 个独立数据：商品信息（快）/ 用户评价（中）/ 推荐商品（慢）。每个独立 Suspense 让用户尽快看到主信息：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 多独立 Suspense 边界</span>
+            <pre class="code"<code class="lang-js">// Next.js RSC 风格
+async function ProductPage({ productId }) {
+  // 主信息 await（关键路径，必须有）
+  const product = await db.products.findById(productId);
+
+  return (
+    &lt;&gt;
+      &lt;ProductHeader product={product} /&gt;
+      &lt;ProductGallery images={product.images} /&gt;
+
+      {/* 评价独立加载 */}
+      &lt;Suspense fallback={&lt;ReviewsSkeleton /&gt;}&gt;
+        &lt;ProductReviews productId={productId} /&gt;
+      &lt;/Suspense&gt;
+
+      {/* 推荐独立加载（慢，放最后）*/}
+      &lt;Suspense fallback={&lt;RecommendationsSkeleton /&gt;}&gt;
+        &lt;Recommendations productId={productId} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}
+
+async function ProductReviews({ productId }) {
+  const reviews = await db.reviews.findByProduct(productId);
+  return &lt;ReviewList reviews={reviews} /&gt;;
+}
+
+async function Recommendations({ productId }) {
+  // 推荐用 ML 模型计算，可能 2-3s
+  const items = await ml.recommend(productId);
+  return &lt;ItemGrid items={items} /&gt;;
+}
+
+// 用户体感：
+// - 0ms：进入路由开始 SSR
+// - 200ms：商品信息显示（关键路径完成）
+// - 500ms：评价骨架被真实评价替换
+// - 2000ms：推荐骨架被真实推荐替换
+// - 全程"<em>渐进显示</em>"，不阻塞主信息</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 用 use API 重写老 useEffect 数据加载</h3>
+          <p>
+            老项目用 useEffect + useState 加载数据。React 19 + use API 重写更简洁：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 18 vs 19 重写</span>
+            <pre class="code"<code class="lang-js">// === React 18 风格 ===
+function UserProfile({ userId }) {
+  const [user, setUser] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() =&gt; {
+    let cancelled = false;
+    setLoading(true);
+    fetchUser(userId)
+      .then(d =&gt; { if (!cancelled) { setUser(d); setLoading(false); } })
+      .catch(e =&gt; { if (!cancelled) { setError(e); setLoading(false); } });
+    return () =&gt; { cancelled = true; };
+  }, [userId]);
+
+  if (loading) return &lt;Spinner /&gt;;
+  if (error) return &lt;ErrorMsg error={error} /&gt;;
+  return &lt;UserCard user={user} /&gt;;
+}
+
+// === React 19 + use API ===
+function UserProfile({ userPromise }) {
+  const user = use(userPromise);   // 同步代码看起来
+  return &lt;UserCard user={user} /&gt;;
+}
+
+function UserPanel({ userId }) {
+  const userPromise = useMemo(() =&gt; fetchUser(userId), [userId]);
+  return (
+    &lt;ErrorBoundary fallback={&lt;ErrorMsg /&gt;}&gt;
+      &lt;Suspense fallback={&lt;Spinner /&gt;}&gt;
+        &lt;UserProfile userPromise={userPromise} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/ErrorBoundary&gt;
+  );
+}
+
+// 优势：
+// 1. UserProfile 代码量减半
+// 2. loading / error 状态由 Suspense / ErrorBoundary 集中管理
+// 3. 配合 RSC 时 promise 可在 server 端创建（更优）
+
+// 实际工程仍推荐 TanStack Query —— 它内置缓存 / 后台刷新 / 乐观更新
+// use API 适合简单场景 / 配合 RSC</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 ================================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>共享路由布局 + Suspense 边界</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 共享布局减少重复 Suspense</span>
+          <pre class="code"<code class="lang-js">// ❌ 每个 Route 重复包装 Suspense（P4.2 场景 A 那样）
+&lt;Routes&gt;
+  &lt;Route path="/home" element={&lt;Suspense fallback={&lt;PageSpinner /&gt;}&gt;&lt;Home /&gt;&lt;/Suspense&gt;} /&gt;
+  &lt;Route path="/dash" element={&lt;Suspense fallback={&lt;PageSpinner /&gt;}&gt;&lt;Dash /&gt;&lt;/Suspense&gt;} /&gt;
+&lt;/Routes&gt;
+
+// ✅ Layout 层共享 Suspense
+function AppLayout() {
+  return (
+    &lt;&gt;
+      &lt;Header /&gt;
+      &lt;Suspense fallback={&lt;PageSpinner /&gt;}&gt;
+        &lt;Outlet /&gt;       {/* React Router v7 子路由出口 */}
+      &lt;/Suspense&gt;
+      &lt;Footer /&gt;
+    &lt;/&gt;
+  );
+}
+
+&lt;Routes&gt;
+  &lt;Route element={&lt;AppLayout /&gt;}&gt;
+    &lt;Route path="/home" element={&lt;Home /&gt;} /&gt;
+    &lt;Route path="/dash" element={&lt;Dash /&gt;} /&gt;
+  &lt;/Route&gt;
+&lt;/Routes&gt;
+
+// 优势：
+// 1. Header / Footer 始终显示（不会被 fallback 覆盖）
+// 2. 仅 Outlet 区域显示 PageSpinner
+// 3. 路由切换时 layout 复用 → 用户感知"<em>仅内容更新</em>"</code></pre>
+        </div>
+
+        <h3>Suspense + ErrorBoundary 双重边界</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 异步加载 + 错误处理</span>
+          <pre class="code"<code class="lang-js">import { ErrorBoundary } from 'react-error-boundary';   // 社区库
+import { Suspense, lazy } from 'react';
+
+const Dashboard = lazy(() =&gt; import('./Dashboard'));
+
+function App() {
+  return (
+    &lt;ErrorBoundary
+      fallback={({ error, resetErrorBoundary }) =&gt; (
+        &lt;div&gt;
+          &lt;h1&gt;Error: {error.message}&lt;/h1&gt;
+          &lt;button onClick={resetErrorBoundary}&gt;Try again&lt;/button&gt;
+        &lt;/div&gt;
+      )}
+    &gt;
+      &lt;Suspense fallback={&lt;PageSpinner /&gt;}&gt;
+        &lt;Dashboard /&gt;
+      &lt;/Suspense&gt;
+    &lt;/ErrorBoundary&gt;
+  );
+}
+
+// 双重边界协作：
+// - Suspense 处理 loading state
+// - ErrorBoundary 处理错误
+// - 都不需要在 Dashboard 内部写状态管理代码
+
+// 推荐组合：ErrorBoundary 在外、Suspense 在内
+// - lazy chunk 加载失败 → ErrorBoundary 捕获
+// - 数据加载中 → Suspense 显示 fallback
+// - 数据加载失败 → use 抛错 → ErrorBoundary 捕获
+
+// 详见 P5.4 Error Boundary 章节（编写中）</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ================================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：promise 引用不稳定致 use 死循环</div>
+          <p>
+            <code>&lt;UserProfile userPromise={fetchUser(42)} /&gt;</code>—— 父每次 render 都新建 promise → use 等待 → resolve 后 render → 又新 promise → 死循环。P5.1 / P3.1 已警告。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：promise 必须在更高层创建。Client Component 用 <code>useMemo(() =&gt; fetchUser(id), [id])</code>。RSC 中天然稳定（每次请求服务端创建）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：Suspense 边界粒度太细 fallback 闪烁</div>
+          <p>
+            每个 list item 一个 Suspense → 项数据 ready 时间略不同 → 看到 spinner 一个个跳出来。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：按"<em>逻辑组件块</em>" 分（一个 list / 一个 sidebar 共享 Suspense）。或者用 SuspenseList（实验性）协调显示顺序。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：Suspense fallback 也使用 use → 死循环</div>
+          <p>
+            <code>&lt;Suspense fallback={&lt;LoadingFromAPI /&gt;}&gt;&lt;Content /&gt;&lt;/Suspense&gt;</code>—— LoadingFromAPI 内部也用 use(promise)—— Content throw → 显示 LoadingFromAPI → LoadingFromAPI throw → 没法捕获（fallback 已经在 fallback 位置）→ 死循环或崩溃。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：fallback 是<strong>同步组件</strong>—— 不要在 fallback 中用 lazy / use / 任何 throw promise 的东西。fallback 应该是简单 spinner / skeleton。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：tab 切换 Suspense 闪烁（不用 useTransition）</div>
+          <p>
+            切换 tab 时 React 立即卸载旧内容 → 新内容 throw → 显示 fallback。用户体感"<em>已加载内容被 spinner 替换</em>"。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：用 <code>useTransition</code> 包 setState（P5.3）—— React 在新内容 ready 前保留旧内容显示。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：lazy chunk 加载失败没 ErrorBoundary 兜底</div>
+          <p>
+            网络问题导致 chunk 下载失败—— 没 ErrorBoundary 时整个 app 崩溃白屏。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：每个 lazy 都用 ErrorBoundary 包裹（P5.4）。Suspense 处理 loading，ErrorBoundary 处理错误，是 19 时代标准组合。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ================================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>权威来源</h3>
+        <ul>
+          <li><a href="https://react.dev/reference/react/Suspense" target="_blank" rel="noopener">react.dev · Suspense</a></li>
+          <li><a href="https://react.dev/reference/react/lazy" target="_blank" rel="noopener">react.dev · lazy</a></li>
+          <li><a href="https://react.dev/reference/react/use" target="_blank" rel="noopener">react.dev · use</a></li>
+          <li><a href="https://nextjs.org/docs/app/api-reference/file-conventions/loading" target="_blank" rel="noopener">Next.js · loading.tsx convention</a></li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="../04-fiber/02-reconciliation.html">P4.2 Reconciliation</a></li>
+          <li>下一章：<a href="03-transition.html">P5.3 useTransition</a>（编写中）</li>
+          <li>引擎机制：<a href="01-concurrent-overview.html">P5.1 Concurrent</a> —— Suspense throw promise 引擎</li>
+          <li>错误处理：<a href="04-error-boundary.html">P5.4 Error Boundary</a>（编写中）</li>
+          <li>RSC 详细：<a href="../06-modern/01-server-components.html">P6.1 Server Components</a>（编写中）</li>
+          <li>use API 详细：<a href="../06-modern/03-use-api.html">P6.3 use API</a>（编写中）</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-concurrent-overview.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P5.1 · Concurrent 总览</span>
+          </a>
+          <a class="next" href="03-transition.html">
+            <span class="label">下一章 →</span>
+            <span class="title">P5.3 · useTransition / useDeferredValue</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

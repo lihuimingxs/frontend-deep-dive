@@ -1,0 +1,792 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>P6.1 · Server Components · React 深度学习</title>
+    <meta
+      name="description"
+      content="React Server Components 完整心智：双图模型（Server / Client）、'use client' / 'use server' 边界、RSC payload 序列化、props 序列化要求、Server Actions、与 Next.js App Router 集成、不能用 useState / useEffect / 浏览器 API 的根因。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2361dafb'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23000000'%3EReact%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>React 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.13 220); color: #fff">R</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">React 首页</a>
+          <a href="index.html">阶段目录</a>
+          <a href="https://react.dev/reference/rsc/server-components" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · Server Components 与 Actions</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-server-components.html" class="active">01 · Server Components</a></li>
+          <li><a href="02-actions.html">02 · Actions</a></li>
+          <li><a href="03-use-api.html">03 · use API</a></li>
+          <li><a href="04-misc.html">04 · 现代杂项</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · React 是谁</a></li>
+          <li><a href="../02-mental-model/index.html">P2 · 渲染心智模型</a></li>
+          <li><a href="../03-hooks/index.html">P3 · Hooks 全谱</a></li>
+          <li><a href="../04-fiber/index.html">P4 · Fiber 内部机制</a></li>
+          <li><a href="../05-concurrent/index.html">P5 · Concurrent 并发</a></li>
+          <li><a href="../07-ecosystem/index.html">P7 · 生态与工程化</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">React</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · Server Components 与 Actions</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>01 · Server Components</span>
+        </nav>
+
+        <h1>P6.1 · Server Components</h1>
+        <p class="lead">
+          React Server Components（以下简称 <strong>RSC</strong>）是 React 19 最大的<strong>心智转变</strong>—— 也是过去 11 年里 React 最有争议的特性。本章不讲 Next.js 怎么配，讲 RSC 的<strong>双图模型</strong>（Server graph + Client graph）、<code>'use client'</code> / <code>'use server'</code> 边界、为什么 RSC 不能用 <code>useState</code> / <code>useEffect</code>、RSC payload 是什么（不是 HTML 也不是 JSON）、props 序列化要求。读完后你能解释 React 团队为什么花了 5 年才把它推到稳定版，以及它和"<em>SSR</em>" 的根本区别。
+        </p>
+
+        <div class="callout warn" style="margin: 16px 0">
+          <div class="callout-title">⚠️ RSC ≠ SSR ≠ SSG（必须区分）</div>
+          <p>
+            <strong>SSR</strong>（Next.js Pages Router 时代）：服务器把同一份组件 render 成 HTML 字符串，客户端再 hydrate 一次（同一份组件跑两遍）。<strong>RSC</strong>（App Router 默认）：组件分两类——<strong>Server Components 只在服务器跑、永不到客户端</strong>；<strong>Client Components 仍是 SSR + hydrate</strong>。RSC 的革命点是<strong>"<em>有些组件根本不发到客户端</em>"</strong>—— bundle 减小 + 直连数据库变可能。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~35 分钟</span>
+          <span><strong>前置</strong> <a href="../05-concurrent/02-suspense.html">P5.2 Suspense</a> + <a href="../05-concurrent/01-concurrent-overview.html">P5.1 Concurrent</a>（RSC 引擎机制）</span>
+          <span><strong>对应 react.dev</strong>
+            <a href="https://react.dev/reference/rsc/server-components" target="_blank" rel="noopener">Server Components</a> ·
+            <a href="https://react.dev/reference/rsc/use-client" target="_blank" rel="noopener">'use client'</a> ·
+            <a href="https://react.dev/reference/rsc/use-server" target="_blank" rel="noopener">'use server'</a>
+          </span>
+          <span><strong>RFC</strong> <a href="https://github.com/reactjs/rfcs/pull/188" target="_blank" rel="noopener">#188 React Server Components</a></span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>四句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>RSC 把组件分两类</strong>：<strong>Server Components</strong>（默认，仅服务器执行，<strong>永不发到客户端 bundle</strong>）和 <strong>Client Components</strong>（顶部 <code>'use client'</code> 指令标记，正常的客户端组件）。Server Components 可以是 <code>async</code> 函数，能 <code>await</code> 直连数据库 / 读 env / 读文件，但<strong>不能用 useState / useEffect / 浏览器 API / event handler</strong>。
+          </li>
+          <li>
+            <strong>边界用指令声明</strong>：模块顶部写 <code>'use client'</code> 表示"<em>本模块以下导出的组件是 Client Component</em>"，跨边界的 props <strong>必须可序列化</strong>（数字 / 字符串 / 数组 / 对象 / Promise / Server Reference / 不可传 class 实例 / 函数 / Symbol / Map / Set 等）。<code>'use server'</code> 是反向：声明一个<strong>客户端可调用的服务器函数</strong>（Server Action）。
+          </li>
+          <li>
+            <strong>RSC 输出的不是 HTML、也不是 JSON、是 RSC payload</strong>—— 一种序列化的 React 元素树（含 Client Component 的引用 + 序列化后的 props）。客户端拿到 payload 后，渲染 Server 部分（直接读取已序列化的元素）+ 加载 Client 模块并执行（正常的 hydration）。SSR 是它的可选附加层（先把 payload + Client Component 渲染成 HTML，再水合）。
+          </li>
+          <li>
+            <strong>必须配套 RSC framework 才能用</strong>—— React 自身只提供原语（指令解析 / payload 协议 / Suspense 集成），<strong>不提供完整运行时</strong>。生产可用的 framework：<a href="https://nextjs.org/docs/app" target="_blank" rel="noopener">Next.js App Router</a>（事实标准）、<a href="https://waku.gg/" target="_blank" rel="noopener">Waku</a>（轻量学习用）、<a href="https://parceljs.org/recipes/rsc/" target="_blank" rel="noopener">Parcel</a> / <a href="https://vite.dev/" target="_blank" rel="noopener">Vite</a> 实验性插件。<strong>纯 CRA / Vite SPA 用不了 RSC</strong>。
+          </li>
+        </ol>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 双图模型（最重要的心智）</div>
+          <p>
+            脑子里要建立两张图：<strong>Server graph</strong>（在服务器执行的组件树，根是 page.tsx）+ <strong>Client graph</strong>（被 <code>'use client'</code> 切出来的子树）。<strong>Client Component 在 Server graph 中以"<em>引用 + 序列化的 props</em>"形式存在</strong>—— 服务器不会执行它的 render 函数，只把"<em>用什么 Client 组件 + 什么 props</em>" 序列化进 payload。客户端拿到后才真正 render 这个 Client Component。
+          </p>
+        </div>
+
+        <!-- 02 底层逻辑 ================================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>1. RSC 解决的真实问题</h3>
+        <p>
+          React 14-18 时代，工程师为了"<em>组件 A 需要服务器数据</em>"踩了 11 年坑：
+        </p>
+        <ul>
+          <li>
+            <strong>路径 1（CSR + useEffect fetch）</strong>：组件 mount → useEffect → fetch → setState → render。问题：① 瀑布式（父组件渲染完才知道要 fetch 什么）② 每次都要"<em>转 spinner → 显示</em>" ③ SEO 差 ④ 数据库查询要走完整 HTTP API 层
+          </li>
+          <li>
+            <strong>路径 2（getServerSideProps / getStaticProps）</strong>：Next.js Pages Router 的方案。问题：① 只能页面级（不能给单个组件 fetch）② props drilling（数据从顶层一路往下传）③ 数据 fetch 和组件代码在不同位置
+          </li>
+          <li>
+            <strong>路径 3（GraphQL fragment colocation）</strong>：Relay 方案，能 colocate。问题：① 需要 GraphQL（强约束）② 学习曲线陡 ③ 仍是客户端 fetch（bundle 不减）
+          </li>
+        </ul>
+        <p>
+          RSC 的回答是<strong>第 4 条路径</strong>：组件本身就在服务器上 render —— 数据 fetch 和组件代码 colocate（写在一个文件里），结果是序列化好的元素树，零客户端 JS 成本。
+        </p>
+
+        <div class="code-block"><pre class="code"><code class="lang-js">// 14-18 时代的 useEffect 模式（4 个问题）
+function ProductDetail({ productId }) {
+  const [product, setProduct] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() =&gt; {
+    fetch(`/api/products/${productId}`)
+      .then(r =&gt; r.json())
+      .then(setProduct)
+      .catch(setError)
+      .finally(() =&gt; setLoading(false));
+  }, [productId]);
+
+  if (loading) return &lt;Spinner /&gt;;
+  if (error) return &lt;ErrorMessage error={error} /&gt;;
+  return &lt;ProductView product={product} /&gt;;
+  // ❌ 瀑布式 / SEO 差 / 多一层 HTTP API / bundle 含 fetch + 状态机代码
+}
+
+// 19 时代的 Server Component（同一段逻辑）
+async function ProductDetail({ productId }) {
+  const product = await db.products.findUnique({ where: { id: productId } });
+  // ✅ 直连数据库 / 一次往返 / 零客户端 JS
+  // ✅ loading 由父级 &lt;Suspense&gt; 处理（P5.2）
+  // ✅ error 由父级 &lt;ErrorBoundary&gt; 处理（P5.4）
+  return &lt;ProductView product={product} /&gt;;
+}</code></pre></div>
+
+        <h3>2. 'use client' 是"<em>边界声明</em>"，不是"<em>开关</em>"</h3>
+        <p>
+          很多人误解 <code>'use client'</code> = "<em>把这个组件标记为客户端组件</em>"。<strong>更准确的理解：它是从 Server graph 切到 Client graph 的边界</strong>。具体规则：
+        </p>
+        <ol>
+          <li>
+            模块顶部写 <code>'use client'</code> → <strong>该模块及其 import 的所有依赖</strong>都进入 Client graph
+          </li>
+          <li>
+            一个 Server Component 可以 import Client Component 并使用 → 边界是<strong>有向的</strong>（Server → Client 单向，反向用 children prop）
+          </li>
+          <li>
+            Client Component <strong>不能 import Server Component 用于渲染</strong>—— Server Component 不能跑在客户端
+          </li>
+          <li>
+            <strong>但 Client Component 可以接收 Server Component 作为 children prop</strong>—— 因为 children 此时已是<strong>序列化好的元素</strong>，不是要执行的代码
+          </li>
+        </ol>
+
+        <div class="code-block"><pre class="code"><code class="lang-js">// ❌ 错：Client Component 直接 import Server Component
+'use client';
+import ServerComp from './ServerComp'; // ServerComp 是 async 函数 / 用了 await db
+function ClientComp() {
+  return &lt;ServerComp /&gt;; // 编译报错或运行时崩溃
+}
+
+// ✅ 对：通过 children 传递（"<em>组合而非嵌套</em>"模式）
+// page.tsx（Server Component，default）
+import ClientShell from './ClientShell';
+import ServerData from './ServerData';
+export default function Page() {
+  return (
+    &lt;ClientShell&gt;
+      &lt;ServerData /&gt;  {/* 在 Server graph render 完，作为序列化元素传入 */}
+    &lt;/ClientShell&gt;
+  );
+}
+
+// ClientShell.tsx
+'use client';
+export default function ClientShell({ children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    &lt;div&gt;
+      &lt;button onClick={() =&gt; setOpen(o =&gt; !o)}&gt;Toggle&lt;/button&gt;
+      {open &amp;&amp; children}  {/* children 已是序列化好的 React 元素 */}
+    &lt;/div&gt;
+  );
+}</code></pre></div>
+
+        <h3>3. props 序列化要求（最容易踩的坑）</h3>
+        <p>
+          跨 <code>'use client'</code> 边界传 props 时，props 必须是<strong>RSC payload 可序列化</strong>的。规则：
+        </p>
+        <table>
+          <thead>
+            <tr><th>类型</th><th>能否序列化</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>原始类型（数字 / 字符串 / 布尔 / null / undefined）</td><td>✅</td><td>原样发送</td></tr>
+            <tr><td>BigInt / Symbol（只 Symbol.for）</td><td>✅</td><td>BigInt 自带支持，Symbol 限注册过的</td></tr>
+            <tr><td>普通对象 / 数组</td><td>✅</td><td>递归序列化字段</td></tr>
+            <tr><td><code>Date</code> / <code>Map</code> / <code>Set</code></td><td>✅</td><td>RSC payload 协议支持，比 JSON 强</td></tr>
+            <tr><td><code>Promise</code></td><td>✅</td><td>边界两侧自动配对（P6.3 use API 详述）</td></tr>
+            <tr><td>React 元素（JSX）</td><td>✅</td><td>序列化为 RSC payload 节点</td></tr>
+            <tr><td><strong>Server Reference（'use server' 函数）</strong></td><td>✅</td><td>序列化为引用 ID，客户端调用时走 RPC</td></tr>
+            <tr><td>普通函数</td><td>❌</td><td><strong>报错</strong>—— 函数无法跨进程</td></tr>
+            <tr><td>class 实例</td><td>❌</td><td>方法 / 原型链不可序列化</td></tr>
+            <tr><td>循环引用对象</td><td>❌</td><td>无法序列化</td></tr>
+          </tbody>
+        </table>
+
+        <p>
+          这条规则的根因：RSC payload 要从服务器经网络发到客户端，<strong>它和 JSON 一样是字节流</strong>—— 服务端的函数闭包、类原型、DOM 引用都没法跨进程。React 团队设计了比 JSON 强的协议（支持 Date / Map / Set / Promise），但函数和 class 实例的限制没法绕。
+        </p>
+
+        <h3>4. RSC payload 长什么样</h3>
+        <p>
+          RSC payload 是一种类似 JSON 但更强的格式（用编号 + 类型前缀）。一个简化的例子：
+        </p>
+        <div class="code-block"><pre class="code"><code class="lang-js">// 假设页面是这样：
+// page.tsx (Server)
+async function Page() {
+  const user = await db.users.findUnique({ where: { id: 1 } });
+  return (
+    &lt;div&gt;
+      &lt;h1&gt;Welcome, {user.name}&lt;/h1&gt;
+      &lt;ClientCounter initial={user.points} /&gt;
+    &lt;/div&gt;
+  );
+}
+
+// 简化的 RSC payload（实际格式更紧凑）
+0:["$","div",null,{"children":[
+  ["$","h1",null,{"children":["Welcome, ","Alice"]}],
+  ["$","$L1",null,{"initial":42}]   // $L1 是 ClientCounter 的引用 ID
+]}]
+1:I["./ClientCounter.js",["chunk-A.js"],"default"]
+// L1 引用 = 客户端要从 chunk-A.js 加载 ./ClientCounter.js 的 default 导出</code></pre></div>
+
+        <p>
+          这个 payload 流到客户端后，React 客户端运行时：
+        </p>
+        <ol>
+          <li>解析 payload 中的 div 和 h1 → 直接用作 React 元素（已是结果）</li>
+          <li>遇到 <code>$L1</code> 引用 → 加载 ClientCounter.js → 用解析出来的 props 渲染</li>
+          <li>如果有 SSR，第 1-2 步先在服务器执行一次产生 HTML（流式 + Suspense 分块）</li>
+          <li>客户端水合时，水合的只有 Client Component 部分（Server 部分永远是结果）</li>
+        </ol>
+
+        <h3>5. 为什么 RSC 不能用 useState / useEffect</h3>
+        <p>
+          这是最常见的疑问。根因：
+        </p>
+        <ul>
+          <li>
+            <strong>RSC 在服务器执行一次就结束</strong>—— 没有"<em>重新渲染</em>" 的概念。<code>useState</code> 的本质是"<em>跨多次渲染保持值</em>"，单次执行场景下毫无意义
+          </li>
+          <li>
+            <strong>没有 commit 阶段</strong>—— RSC 不挂 DOM，<code>useEffect</code> 是"<em>挂载后副作用</em>"，根本没"<em>挂载</em>" 这件事
+          </li>
+          <li>
+            <strong>没有事件循环</strong>—— RSC 输出 payload 后就结束了，event handler 没地方注册
+          </li>
+          <li>
+            <strong>没有浏览器 API</strong>—— window / document / localStorage 在服务器不存在
+          </li>
+        </ul>
+        <p>
+          需要状态 / 副作用 / 事件 / 浏览器 API 时，把那部分组件标 <code>'use client'</code> 即可。<strong>RSC 不是"<em>更强的 Client Component</em>"，是"<em>不同范畴的东西</em>"</strong>—— 一个像数据库查询，一个像 UI 状态机。
+        </p>
+
+        <h3>6. 'use server'：反向边界 + Server Action</h3>
+        <p>
+          <code>'use server'</code> 不是"<em>这个文件是 Server Component</em>"（默认就是 Server Component，不需要标）。它是<strong>另一个机制</strong>：声明一个<strong>客户端可以调用的服务器函数</strong>。两种用法：
+        </p>
+        <div class="code-block"><pre class="code"><code class="lang-js">// 用法 1：模块顶部 'use server' → 整个文件导出的所有函数都是 Server Action
+'use server';
+import { db } from './db';
+
+export async function createPost(formData: FormData) {
+  const title = formData.get('title');
+  await db.posts.create({ data: { title } });
+  revalidatePath('/posts');
+}
+
+// Client Component 直接 import 调用
+'use client';
+import { createPost } from './actions';
+export function PostForm() {
+  return (
+    &lt;form action={createPost}&gt;  {/* form action 自动调用 */}
+      &lt;input name="title" /&gt;
+      &lt;button&gt;Create&lt;/button&gt;
+    &lt;/form&gt;
+  );
+}
+
+// 用法 2：函数体内 'use server' → 单个 inline action
+async function Page() {
+  async function deletePost(id: string) {
+    'use server';
+    await db.posts.delete({ where: { id } });
+  }
+  return &lt;DeleteButton onDelete={deletePost} /&gt;;  // onDelete 是 Server Reference
+}</code></pre></div>
+
+        <p>
+          底层机制：编译器把 <code>'use server'</code> 函数<strong>转成一个 Server Reference</strong>（带 ID）。Client 调用时实际是 POST 到一个 framework 提供的 endpoint，参数序列化、服务器查表执行、结果序列化回来。<strong>对开发者来说像"<em>直接 await 服务器函数</em>"，对运行时来说是 RPC</strong>。P6.2 Actions 章节会详述。
+        </p>
+
+        <!-- 03 应用场景 ================================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3>场景 1：数据展示页（直连数据库 / API / 文件系统）</h3>
+          <p>
+            最经典的 RSC 用法。原本要走 BFF / API Route 的数据获取，现在 colocate 到组件里：
+          </p>
+          <div class="code-block"><pre class="code"><code class="lang-js">// app/posts/[id]/page.tsx (Next.js App Router)
+import { db } from '@/lib/db';
+import { notFound } from 'next/navigation';
+import Comments from './Comments'; // 'use client' 组件
+
+export default async function PostPage({ params }: { params: { id: string } }) {
+  const post = await db.posts.findUnique({
+    where: { id: params.id },
+    include: { author: true, tags: true }
+  });
+  if (!post) notFound();
+
+  return (
+    &lt;article&gt;
+      &lt;h1&gt;{post.title}&lt;/h1&gt;
+      &lt;p&gt;by {post.author.name}&lt;/p&gt;
+      &lt;div dangerouslySetInnerHTML={{ __html: post.contentHtml }} /&gt;
+      &lt;Comments postId={post.id} /&gt;  {/* Client Component 处理评论交互 */}
+    &lt;/article&gt;
+  );
+}
+
+// 收益：
+// ✅ 零客户端 fetch 代码 / 零 loading 状态机 / 零 SEO 问题
+// ✅ db 连接池只在服务器（不会泄漏到 bundle）
+// ✅ 评论的交互代码隔离在 &lt;Comments&gt; 这个 Client Component</code></pre></div>
+        </div>
+
+        <div class="scenario">
+          <h3>场景 2：流式 + Suspense 分块加载（用户感知最快首屏）</h3>
+          <p>
+            RSC 配合 Suspense 实现"<em>有结果就先发，慢的部分稍后流过来</em>"：
+          </p>
+          <div class="code-block"><pre class="code"><code class="lang-js">// 慢接口（推荐 / 销量榜）不阻塞主商品信息
+export default async function ProductPage({ params }) {
+  const product = await db.products.findUnique({ where: { id: params.id } });
+  // ↑ 主信息快，~10ms
+
+  return (
+    &lt;div&gt;
+      &lt;ProductInfo product={product} /&gt;  {/* 立即 render */}
+
+      &lt;Suspense fallback={&lt;Skeleton /&gt;}&gt;
+        &lt;Recommendations productId={product.id} /&gt;
+        {/* ↑ async server component，慢接口（300ms+）在这里独立等待 */}
+      &lt;/Suspense&gt;
+
+      &lt;Suspense fallback={&lt;Skeleton /&gt;}&gt;
+        &lt;SalesRanking categoryId={product.categoryId} /&gt;
+        {/* ↑ 另一个独立 Suspense 边界，并行加载 */}
+      &lt;/Suspense&gt;
+    &lt;/div&gt;
+  );
+}
+// 用户体验：~50ms 看到主信息 → ~300ms 推荐进来 → ~500ms 销量榜进来
+// 比传统 SSR（必须等所有数据） + 比 CSR（什么都没有就转圈）都好</code></pre></div>
+        </div>
+
+        <div class="scenario">
+          <h3>场景 3：表单 mutation（Server Actions 替代 API Route）</h3>
+          <p>
+            原本要写 Express / API Route + fetch + state 机的事，现在一个 <code>action</code> prop 搞定：
+          </p>
+          <div class="code-block"><pre class="code"><code class="lang-js">// app/todos/actions.ts
+'use server';
+import { db } from '@/lib/db';
+import { revalidatePath } from 'next/cache';
+
+export async function addTodo(formData: FormData) {
+  const title = formData.get('title') as string;
+  if (!title.trim()) return { error: 'Title required' };
+  await db.todos.create({ data: { title } });
+  revalidatePath('/todos');
+}
+
+// app/todos/page.tsx (Server Component)
+import { addTodo } from './actions';
+import { db } from '@/lib/db';
+
+export default async function TodosPage() {
+  const todos = await db.todos.findMany();
+  return (
+    &lt;div&gt;
+      &lt;form action={addTodo}&gt;
+        &lt;input name="title" /&gt;
+        &lt;button&gt;Add&lt;/button&gt;
+      &lt;/form&gt;
+      &lt;ul&gt;
+        {todos.map(t =&gt; &lt;li key={t.id}&gt;{t.title}&lt;/li&gt;)}
+      &lt;/ul&gt;
+    &lt;/div&gt;
+  );
+}
+// 注意：纯 Server Component 也能用 form action，无需 'use client'
+// 进阶（带 pending 状态 / 错误展示 / 乐观更新）→ P6.2 Actions</code></pre></div>
+        </div>
+
+        <div class="scenario">
+          <h3>场景 4：dashboard 混合应用（多种边界粒度）</h3>
+          <p>
+            真实业务里的典型组合：外层 Server fetch 数据 + 内层 Client 处理交互 + Suspense 分块：
+          </p>
+          <div class="code-block"><pre class="code"><code class="lang-js">// Server / Client 混合：每个块按"<em>是否需要交互</em>" 决定边界
+async function Dashboard() {
+  return (
+    &lt;Layout&gt;
+      &lt;Header user={await getUser()} /&gt;       {/* Server，零交互 */}
+
+      &lt;Suspense fallback={&lt;ChartSkeleton /&gt;}&gt;
+        &lt;ChartsSection /&gt;                       {/* Server，慢，独立 Suspense */}
+      &lt;/Suspense&gt;
+
+      &lt;FilterBar&gt;                              {/* Client，需要 useState */}
+        &lt;Suspense fallback={&lt;TableSkeleton /&gt;}&gt;
+          &lt;DataTable filters={DEFAULT_FILTERS} /&gt;  {/* Server，初始数据 */}
+        &lt;/Suspense&gt;
+      &lt;/FilterBar&gt;
+    &lt;/Layout&gt;
+  );
+}
+
+// 'use client' 边界尽量靠近交互点：
+// - FilterBar 自己是 Client，但 children &lt;DataTable&gt; 仍是 Server（通过 children prop 通道）</code></pre></div>
+        </div>
+
+        <!-- 04 典型代码 ================================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>例 1：完整的 RSC 项目结构（Next.js App Router）</h3>
+        <div class="code-block"><pre class="code"><code class="lang-js">// app/products/page.tsx — Server Component（默认）
+import { db } from '@/lib/db';
+import ProductList from './ProductList';
+import SearchInput from './SearchInput';
+
+export default async function ProductsPage({
+  searchParams,
+}: {
+  searchParams: { q?: string }
+}) {
+  const products = await db.products.findMany({
+    where: searchParams.q
+      ? { name: { contains: searchParams.q } }
+      : undefined,
+  });
+
+  return (
+    &lt;main&gt;
+      &lt;h1&gt;Products&lt;/h1&gt;
+      &lt;SearchInput defaultValue={searchParams.q} /&gt;
+      &lt;ProductList products={products} /&gt;
+    &lt;/main&gt;
+  );
+}
+
+// app/products/SearchInput.tsx
+'use client';
+import { useRouter } from 'next/navigation';
+import { useState, useTransition } from 'react';
+
+export default function SearchInput({ defaultValue }: { defaultValue?: string }) {
+  const router = useRouter();
+  const [value, setValue] = useState(defaultValue ?? '');
+  const [isPending, startTransition] = useTransition();
+
+  return (
+    &lt;input
+      value={value}
+      onChange={(e) =&gt; {
+        setValue(e.target.value);
+        startTransition(() =&gt; {
+          router.push(`?q=${encodeURIComponent(e.target.value)}`);
+        });
+      }}
+      placeholder={isPending ? 'Searching…' : 'Search'}
+    /&gt;
+  );
+}
+
+// app/products/ProductList.tsx — 注意：这里没有 'use client'
+// 是 Server Component，但接收 Client Component 不能传给它的 props
+import ProductCard from './ProductCard';
+export default function ProductList({ products }) {
+  return (
+    &lt;ul&gt;
+      {products.map(p =&gt; &lt;ProductCard key={p.id} product={p} /&gt;)}
+    &lt;/ul&gt;
+  );
+}</code></pre></div>
+
+        <h3>例 2：Composition 模式（在 Client Component 里嵌入 Server Component）</h3>
+        <div class="code-block"><pre class="code"><code class="lang-js">// 错误尝试：在 Client Component 里 import Server Component
+// app/some-client.tsx
+'use client';
+import ServerData from './ServerData';  // ❌ ServerData 是 async Server Component
+export default function SomeClient() {
+  const [open, setOpen] = useState(false);
+  return open ? &lt;ServerData /&gt; : null;  // 报错：can't render async function as JSX
+}
+
+// 正确做法：通过 children prop "<em>组合而非嵌套</em>"
+// app/some-client.tsx
+'use client';
+export default function Drawer({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    &lt;&gt;
+      &lt;button onClick={() =&gt; setOpen(o =&gt; !o)}&gt;Toggle&lt;/button&gt;
+      {open &amp;&amp; &lt;div className="drawer"&gt;{children}&lt;/div&gt;}
+    &lt;/&gt;
+  );
+}
+
+// app/page.tsx (Server)
+import Drawer from './some-client';
+import ServerData from './ServerData';
+
+export default function Page() {
+  return (
+    &lt;Drawer&gt;
+      &lt;ServerData /&gt;  {/* Server 端先 render 完，作为序列化元素传入 */}
+    &lt;/Drawer&gt;
+  );
+}
+// 关键洞察：children 是已 render 好的元素，不是要执行的代码
+// 所以 Client Component 可以"持有" Server Component 元素而不实际执行它</code></pre></div>
+
+        <h3>例 3：Server Action + 乐观更新（与 P6.2 衔接）</h3>
+        <div class="code-block"><pre class="code"><code class="lang-js">// app/likes/actions.ts
+'use server';
+export async function toggleLike(postId: string, currentlyLiked: boolean) {
+  if (currentlyLiked) {
+    await db.likes.delete({ where: { postId } });
+    return { liked: false };
+  }
+  await db.likes.create({ data: { postId } });
+  return { liked: true };
+}
+
+// app/likes/LikeButton.tsx
+'use client';
+import { useOptimistic, useTransition } from 'react';
+import { toggleLike } from './actions';
+
+export default function LikeButton({
+  postId,
+  initialLiked,
+}: {
+  postId: string;
+  initialLiked: boolean;
+}) {
+  const [optimisticLiked, setOptimisticLiked] = useOptimistic(initialLiked);
+  const [, startTransition] = useTransition();
+
+  return (
+    &lt;button
+      onClick={() =&gt; {
+        startTransition(async () =&gt; {
+          setOptimisticLiked(!optimisticLiked); // 立即更新 UI
+          await toggleLike(postId, optimisticLiked);
+          // 服务器返回后会通过 revalidate 刷新真实状态
+        });
+      }}
+    &gt;
+      {optimisticLiked ? '❤️' : '🤍'}
+    &lt;/button&gt;
+  );
+}
+// useOptimistic / useActionState 详细机制 → P6.2</code></pre></div>
+
+        <!-- 05 常见陷阱 ================================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <h3>陷阱 1：在 Server Component 里写 useState / useEffect</h3>
+          <p>
+            <strong>现象</strong>：编译报错 <code>You're importing a component that needs useState. It only works in a Client Component but none of its parents are marked with "use client", so they're Server Components by default.</code>
+          </p>
+          <p>
+            <strong>根因</strong>：Server Component 单次执行后输出 payload，没有"<em>渲染周期</em>" / "<em>挂载</em>" / "<em>事件循环</em>"。所有 Hook（除了 <code>use</code> 等少数 RSC-safe 的）都是 Client-only。
+          </p>
+          <p>
+            <strong>规避</strong>：把需要 state / effect 的部分提取成单独的 <code>'use client'</code> 组件，通过 props 接收数据。<strong>边界尽量靠近交互点</strong>—— 不要把整个页面标 <code>'use client'</code>，那等于退化成 SPA。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <h3>陷阱 2：跨边界传函数 prop（最常见）</h3>
+          <p>
+            <strong>现象</strong>：<code>Functions cannot be passed directly to Client Components unless you explicitly expose it by marking it with "use server".</code>
+          </p>
+          <p>
+            <strong>根因</strong>：Client Component 在浏览器执行，从 RSC payload 反序列化 props。<strong>函数闭包 / 引用无法跨进程</strong>。要么传 Server Action（编译器转 Reference ID），要么不传。
+          </p>
+          <div class="code-block"><pre class="code"><code class="lang-js">// ❌ 错：Server Component 给 Client Component 传普通函数
+async function Page() {
+  const handleClick = () =&gt; console.log('clicked');  // 普通函数
+  return &lt;ClientButton onClick={handleClick} /&gt;;     // 报错
+}
+
+// ✅ 对方案 A：把回调标 'use server' 变成 Server Action
+async function Page() {
+  async function handleClick() {
+    'use server';
+    // 在服务器上执行
+    await db.logs.create({ data: { event: 'click' } });
+  }
+  return &lt;ClientButton onClick={handleClick} /&gt;;  // OK
+}
+
+// ✅ 对方案 B：把交互逻辑搬进 Client Component 自身
+'use client';
+function ClientButton() {
+  return &lt;button onClick={() =&gt; console.log('clicked')}&gt;Click&lt;/button&gt;;
+}</code></pre></div>
+        </div>
+
+        <div class="pitfall">
+          <h3>陷阱 3：Client Component 里 import 含 server-only 代码的模块</h3>
+          <p>
+            <strong>现象</strong>：bundle 包含数据库连接代码，或<strong>敏感 env 泄漏到客户端</strong>，或运行时崩溃。
+          </p>
+          <p>
+            <strong>根因</strong>：<code>'use client'</code> 标的模块及其<strong>所有 import 链</strong>都进 Client bundle。如果不小心 import 了带 <code>db</code> / <code>process.env.SECRET_KEY</code> 的模块，整个 server-only 代码会被打包到客户端 JS。
+          </p>
+          <p>
+            <strong>规避</strong>：① 用 <a href="https://www.npmjs.com/package/server-only" target="_blank" rel="noopener">server-only</a> 包做"<em>护栏</em>"——在 server-only 模块顶部 <code>import 'server-only'</code>，被 Client 链 import 时构建直接报错 ② 用 <a href="https://www.npmjs.com/package/client-only" target="_blank" rel="noopener">client-only</a> 反向保护 ③ 把 server-only 工具函数和 Client utility 物理分离到不同目录（<code>/lib/server</code> vs <code>/lib/client</code>）
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <h3>陷阱 4：把整个页面标 'use client' 退化为 SPA</h3>
+          <p>
+            <strong>现象</strong>：app/layout.tsx 或顶层页面顶上写 <code>'use client'</code> 想"<em>简单点</em>"，结果整个 app 进 Client graph，RSC 收益归零。
+          </p>
+          <p>
+            <strong>根因</strong>：<code>'use client'</code> 的传播是<strong>从这个模块向下</strong>—— 所有被它直接引用的组件树都被卷入 Client graph。
+          </p>
+          <p>
+            <strong>规避</strong>：<strong>边界往内缩，不往外扩</strong>。默认所有组件是 Server，<strong>只有真正需要 useState / 浏览器 API 的"<em>叶子</em>"组件才标 'use client'</strong>。判断标准：① 有用户输入交互？② 有动画 / 滚动监听？③ 用浏览器 API（localStorage / window）？三者都没有就让它留在 Server graph。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <h3>陷阱 5：误以为 RSC = SSR，HTML 已经发了所以"<em>不需要 Suspense fallback</em>"</h3>
+          <p>
+            <strong>现象</strong>：开发者认为 Server 部分已经渲染完，不需要包 Suspense。结果慢的查询<strong>阻塞整个页面 HTML 输出</strong>—— TTFB 很差。
+          </p>
+          <p>
+            <strong>根因</strong>：没用 Suspense 时，Next.js 会等所有 async server component 完成才发第一个字节。包了 Suspense 才能流式输出 —— 主体先发，慢的部分用 chunked transfer 后续注入。
+          </p>
+          <p>
+            <strong>规避</strong>：<strong>对慢接口必须包 Suspense</strong>—— 即使在 RSC 里也是。把"<em>慢部分</em>" 用 Suspense 边界切开是 RSC 性能优化的核心手段。规则：单个组件 await 超过 100ms → 应该被 Suspense 包裹。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <h3>陷阱 6：Context Provider 必须在 Client 边界内</h3>
+          <p>
+            <strong>现象</strong>：尝试在 Server Component 里 <code>&lt;ThemeContext.Provider value={...}&gt;</code>，报错或 value 不生效。
+          </p>
+          <p>
+            <strong>根因</strong>：Context 是<strong>跨渲染共享值</strong>的机制（P3.3）—— 它依赖 React 客户端 Fiber tree。Server Component 单次执行后就结束，没有 Fiber tree 概念。
+          </p>
+          <p>
+            <strong>规避</strong>：把 Provider 包成 Client Component，再在 Server tree 里使用：
+          </p>
+          <div class="code-block"><pre class="code"><code class="lang-js">// theme-provider.tsx
+'use client';
+import { createContext, useState } from 'react';
+export const ThemeContext = createContext('light');
+export default function ThemeProvider({ children }) {
+  const [theme] = useState('light');
+  return &lt;ThemeContext.Provider value={theme}&gt;{children}&lt;/ThemeContext.Provider&gt;;
+}
+
+// app/layout.tsx (Server)
+import ThemeProvider from './theme-provider';
+export default function Layout({ children }) {
+  return (
+    &lt;html&gt;
+      &lt;body&gt;
+        &lt;ThemeProvider&gt;{children}&lt;/ThemeProvider&gt;
+      &lt;/body&gt;
+    &lt;/html&gt;
+  );
+}</code></pre></div>
+        </div>
+
+        <!-- 06 延伸阅读 ================================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>权威来源</h3>
+        <ul>
+          <li><a href="https://react.dev/reference/rsc/server-components" target="_blank" rel="noopener">react.dev · Server Components</a></li>
+          <li><a href="https://react.dev/reference/rsc/use-client" target="_blank" rel="noopener">react.dev · 'use client'</a></li>
+          <li><a href="https://react.dev/reference/rsc/use-server" target="_blank" rel="noopener">react.dev · 'use server'</a></li>
+          <li><a href="https://github.com/reactjs/rfcs/pull/188" target="_blank" rel="noopener">RFC #188 React Server Components</a> —— 设计动机原始来源</li>
+          <li><a href="https://github.com/reactjs/rfcs/blob/main/text/0227-server-module-conventions.md" target="_blank" rel="noopener">RFC #227 Server Module Conventions</a> —— 'use client' / 'use server' 指令</li>
+        </ul>
+
+        <h3>Framework 文档</h3>
+        <ul>
+          <li><a href="https://nextjs.org/docs/app/getting-started/server-and-client-components" target="_blank" rel="noopener">Next.js · Server &amp; Client Components</a> —— 事实标准</li>
+          <li><a href="https://waku.gg/" target="_blank" rel="noopener">Waku</a> —— 轻量 RSC framework，学习用</li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>引擎层：<a href="../05-concurrent/01-concurrent-overview.html">P5.1 Concurrent</a> —— RSC 与 Suspense / 流式渲染的关系</li>
+          <li>对比：<a href="../03-hooks/02-use-effect.html">P3.2 useEffect</a> —— useEffect 数据 fetching 模式（RSC 取代之）</li>
+          <li>下一章：<a href="02-actions.html">P6.2 Actions + useFormStatus + useOptimistic</a></li>
+          <li>异步资源：<a href="03-use-api.html">P6.3 use API</a> —— 配合 RSC 读 Promise</li>
+          <li>生态：<a href="../07-ecosystem/01-ecosystem-decision.html">P7.1 现代生态</a> —— Meta-framework 决策树</li>
+        </ul>
+
+        <h3>外部资料</h3>
+        <ul>
+          <li><a href="https://www.joshwcomeau.com/react/server-components/" target="_blank" rel="noopener">Josh W Comeau · Making Sense of React Server Components</a> —— 心智模型最清晰的入门</li>
+          <li><a href="https://overreacted.io/the-two-reacts/" target="_blank" rel="noopener">Dan Abramov · The Two Reacts</a> —— RSC 设计哲学</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../05-concurrent/04-error-boundary.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P5.4 · Error Boundary</span>
+          </a>
+          <a class="next" href="02-actions.html">
+            <span class="label">下一章 →</span>
+            <span class="title">P6.2 · Actions</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

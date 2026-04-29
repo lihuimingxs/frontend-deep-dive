@@ -1,0 +1,881 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>P3.5 · useRef / useImperativeHandle · React 深度学习</title>
+    <meta
+      name="description"
+      content="useRef 心智模型（{ current: T } 容器、修改不触发渲染）+ 3 种用法（DOM ref / 跨渲染保留可变值 / 缓存上次值）+ useImperativeHandle 自定义 ref 暴露的方法 + React 19 ref as prop 取代 forwardRef + callback ref。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2361dafb'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23000000'%3EReact%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>React 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.13 220); color: #fff">R</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">React 首页</a>
+          <a href="index.html">阶段目录</a>
+          <a href="https://react.dev/reference/react/useRef" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · Hooks 全谱</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-use-state.html">01 · useState 深入</a></li>
+          <li><a href="02-use-effect.html">02 · useEffect ⭐</a></li>
+          <li><a href="03-use-reducer-context.html">03 · useReducer / useContext</a></li>
+          <li><a href="04-use-memo-callback.html">04 · useMemo / useCallback</a></li>
+          <li><a href="05-use-ref.html" class="active">05 · useRef</a></li>
+          <li><a href="06-custom-hooks.html">06 · 自定义 Hooks</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · React 是谁</a></li>
+          <li><a href="../02-mental-model/index.html">P2 · 渲染心智模型</a></li>
+          <li><a href="../04-fiber/index.html">P4 · Fiber 内部机制</a></li>
+          <li><a href="../05-concurrent/index.html">P5 · Concurrent 并发</a></li>
+          <li><a href="../06-modern/index.html">P6 · Server Components 与 Actions</a></li>
+          <li><a href="../07-ecosystem/index.html">P7 · 生态与工程化</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">React</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · Hooks 全谱</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>05 · useRef</span>
+        </nav>
+
+        <h1>P3.5 · useRef / useImperativeHandle</h1>
+        <p class="lead">
+          <code>useRef</code> 是 React 的<strong>"<em>逃生口</em>"</strong>—— 让你脱离 React 的渲染体系，操作 DOM 或保留跨渲染的可变值。<code>useImperativeHandle</code> 是配套的"<em>自定义 ref 接口</em>" 工具。React 19 引入<strong>ref as prop</strong>—— 不再需要 <code>forwardRef</code>，直接 <code>function Comp({ ref })</code> 接收 ref。本章讲清这两个 Hook 的<strong>3 种典型用法</strong>、<strong>callback ref 模式</strong>、<strong>19 时代 ref API 演进</strong>，以及"<em>什么时候不该用 ref</em>" 的关键判断。
+        </p>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 useRef 是逃生口，不是常规工具</div>
+          <p>
+            React 哲学是"<em>UI = f(state)</em>"（P1.2）—— 任何能用 state 表达的，都该用 state，不该用 ref。useRef 的合法场景是"<em>非 React 体系的可变值</em>"（DOM 节点 / 命令式 SDK / 跨渲染保留的临时变量）。**滥用 useRef 是新人转 React 最常见的反模式之一**。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> <a href="../02-mental-model/04-state-basics.html">P2.4 State 基础</a> + <a href="02-use-effect.html">P3.2 useEffect</a></span>
+          <span><strong>对应 react.dev</strong>
+            <a href="https://react.dev/reference/react/useRef" target="_blank" rel="noopener">useRef</a> ·
+            <a href="https://react.dev/reference/react/useImperativeHandle" target="_blank" rel="noopener">useImperativeHandle</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong><code>useRef(initialValue)</code> 返回 <code>{ current: T }</code> 容器</strong>。<strong>修改 ref.current 不触发重渲染</strong>—— 这是 ref 与 state 的核心区别。ref 对象引用<strong>跨渲染稳定</strong>（同一引用），可以放心传给任何依赖数组（同 setState dispatch，P3.1 讲过）。
+          </li>
+          <li>
+            <strong>3 个合法用法</strong>：① <strong>DOM ref</strong>（操作 DOM 节点）② <strong>跨渲染保留可变值</strong>（如 timer ID / 第三方 SDK 实例 / 滚动位置）③ <strong>缓存上次的 props / state</strong>（实现 usePrevious）。<strong>不该用</strong>：派生 state（用 useMemo）/ 触发渲染的状态（用 useState）。
+          </li>
+          <li>
+            <strong>React 19 革命：ref as prop 取代 forwardRef</strong>。19 之前自定义组件接收 ref 必须 <code>forwardRef(function...)</code>，19 之后直接 <code>function Comp({ ref })</code>。<code>useImperativeHandle</code> 仍存在但<strong>不需要 forwardRef</strong> 包装。callback ref 在 19 也支持 cleanup 函数。
+          </li>
+        </ol>
+
+        <p>看一段最小代码识别 useRef 的核心特性：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · useRef 完整骨架</span>
+          <pre class="code"><code class="lang-js">function Component() {
+  // ① DOM ref —— 引用 DOM 节点
+  const inputRef = useRef(null);
+
+  // ② 跨渲染可变值 —— interval ID
+  const timerRef = useRef(null);
+
+  useEffect(() =&gt; {
+    timerRef.current = setInterval(() =&gt; {
+      // 修改 ref 不触发渲染
+      console.log('tick');
+    }, 1000);
+    return () =&gt; clearInterval(timerRef.current);
+  }, []);
+
+  // ③ 缓存上次 props
+  const prevQueryRef = useRef('');
+  // 用 useEffect 记录每次 query 变化
+  // ...
+
+  return (
+    &lt;input
+      ref={inputRef}                              {/* React 自动设 inputRef.current */}
+      onChange={() =&gt; inputRef.current?.focus()}  {/* 命令式调用 */}
+    /&gt;
+  );
+}
+
+// 关键：
+// - inputRef = { current: null } 一直保持同一引用
+// - 修改 inputRef.current 不触发任何渲染
+// - 直到组件 mount 后 React 自动赋值（ref attach 在 commit 阶段）</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ================================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>useRef 完整签名与心智</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript · useRef 类型定义</span>
+          <pre class="code"><code class="lang-ts">// 重载 1：传初始值
+function useRef&lt;T&gt;(initialValue: T): MutableRefObject&lt;T&gt;;
+
+// 重载 2：T 包含 null 时（DOM ref 的常见用法）
+function useRef&lt;T&gt;(initialValue: T | null): RefObject&lt;T&gt;;
+
+// 重载 3：完全 readonly（极少用）
+function useRef&lt;T = undefined&gt;(): MutableRefObject&lt;T | undefined&gt;;
+
+interface MutableRefObject&lt;T&gt; { current: T; }
+interface RefObject&lt;T&gt; { readonly current: T | null; }
+
+// 用法对比：
+const inputRef = useRef&lt;HTMLInputElement&gt;(null);   // RefObject（DOM ref）
+//    inputRef: { readonly current: HTMLInputElement | null }
+//    React 内部赋值，开发者只读
+
+const counterRef = useRef(0);                       // MutableRefObject（手动管理）
+//    counterRef: { current: number }
+//    可写：counterRef.current = 5
+
+// 关键事实：
+// 1. ref 对象引用永远稳定 —— 同一组件实例的 useRef 永远返回同一对象
+// 2. 修改 ref.current 不触发渲染（React 不订阅 ref 变化）
+// 3. 初始值仅在首次 render 设置（同 useState 行为）
+// 4. ref 在 commit 阶段被 React 赋值（DOM ref）—— 早期 render 阶段是 null</code></pre>
+        </div>
+
+        <h3>用法 1：DOM ref（操作 DOM 节点）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · DOM ref 经典模式</span>
+          <pre class="code"<code class="lang-js">// 1. 自动 focus
+function AutoFocusInput() {
+  const inputRef = useRef&lt;HTMLInputElement&gt;(null);
+
+  useEffect(() =&gt; {
+    inputRef.current?.focus();  // mount 后聚焦
+  }, []);
+
+  return &lt;input ref={inputRef} /&gt;;
+}
+
+// 2. 滚动控制
+function ScrollableList() {
+  const listRef = useRef&lt;HTMLUListElement&gt;(null);
+
+  const scrollToTop = () =&gt; {
+    listRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  return (
+    &lt;&gt;
+      &lt;button onClick={scrollToTop}&gt;Top&lt;/button&gt;
+      &lt;ul ref={listRef}&gt;...&lt;/ul&gt;
+    &lt;/&gt;
+  );
+}
+
+// 3. 测量 DOM 尺寸
+function MeasuredDiv() {
+  const divRef = useRef&lt;HTMLDivElement&gt;(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+
+  useLayoutEffect(() =&gt; {  // 用 useLayoutEffect 避免闪烁（P3.2）
+    if (divRef.current) {
+      const { width, height } = divRef.current.getBoundingClientRect();
+      setSize({ width, height });
+    }
+  }, []);
+
+  return &lt;div ref={divRef}&gt;{size.width} × {size.height}&lt;/div&gt;;
+}
+
+// 4. 集成第三方 DOM 库（详见 P3.2 应用场景）
+function ChartContainer() {
+  const containerRef = useRef&lt;HTMLDivElement&gt;(null);
+  useEffect(() =&gt; {
+    const chart = new ChartJS(containerRef.current, ...);
+    return () =&gt; chart.destroy();
+  }, []);
+  return &lt;div ref={containerRef} /&gt;;
+}
+
+// 关键时序：
+// - render 阶段：inputRef.current 仍是初始值（null）
+// - commit 阶段（P4.1 详述）：React attach DOM 节点到 ref.current
+// - useEffect / useLayoutEffect 跑时：可访问 ref.current
+// - useState 触发的 render 中：ref.current 仍指向上次 commit 的 DOM</code></pre>
+        </div>
+
+        <h3>用法 2：跨渲染保留可变值</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 跨渲染可变值经典模式</span>
+          <pre class="code"<code class="lang-js">// 1. 保存 timer ID（避免泄漏）
+function Countdown() {
+  const [seconds, setSeconds] = useState(60);
+  const timerRef = useRef&lt;number | null&gt;(null);
+
+  const start = () =&gt; {
+    if (timerRef.current) return;  // 已开始，跳过
+    timerRef.current = window.setInterval(() =&gt; {
+      setSeconds(s =&gt; s - 1);
+    }, 1000);
+  };
+
+  const stop = () =&gt; {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  useEffect(() =&gt; stop, []);  // unmount cleanup
+
+  return ...;
+}
+
+// 2. 保存第三方 SDK 实例
+function MapView({ center }) {
+  const containerRef = useRef(null);
+  const mapRef = useRef&lt;MapSDK | null&gt;(null);
+
+  useEffect(() =&gt; {
+    mapRef.current = new MapSDK(containerRef.current);
+    return () =&gt; mapRef.current?.destroy();
+  }, []);
+
+  // 后续 effect 访问 mapRef.current 操作 map
+  useEffect(() =&gt; {
+    mapRef.current?.setCenter(center);
+  }, [center]);
+
+  return &lt;div ref={containerRef} /&gt;;
+}
+
+// 3. 缓存最新值供 effect 访问（解 useEffect 闭包陷阱）
+function Component({ onChange }) {
+  // onChange 每次 render 可能新引用 —— 不想列入 effect 依赖
+  const onChangeRef = useRef(onChange);
+
+  // 每次 render 同步最新 onChange 到 ref
+  useEffect(() =&gt; {
+    onChangeRef.current = onChange;
+  });   // 不传依赖 —— 每次 render 后跑一次
+
+  // effect 不依赖 onChange，但能访问最新版本
+  useEffect(() =&gt; {
+    const handler = (e) =&gt; onChangeRef.current(e);  // 永远最新
+    window.addEventListener('keydown', handler);
+    return () =&gt; window.removeEventListener('keydown', handler);
+  }, []);   // 仅 mount 时建立
+  // 注意：React 19 useEffectEvent 提案（P3.2）是这个模式的官方解
+}
+
+// 4. 跟踪 mount 状态（避免组件卸载后 setState）
+function Component() {
+  const isMountedRef = useRef(true);
+  useEffect(() =&gt; () =&gt; { isMountedRef.current = false; }, []);
+
+  const fetchData = async () =&gt; {
+    const data = await fetch('/api');
+    if (!isMountedRef.current) return;  // 已卸载，跳过 setState
+    setData(data);
+  };
+  // 注意：现代代码用 AbortController 更优（P3.2 详述）
+}</code></pre>
+        </div>
+
+        <h3>用法 3：缓存上次值（usePrevious 模式）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · usePrevious 经典实现</span>
+          <pre class="code"<code class="lang-js">function usePrevious&lt;T&gt;(value: T): T | undefined {
+  const ref = useRef&lt;T&gt;();
+
+  useEffect(() =&gt; {
+    ref.current = value;  // commit 后存当前值
+  });
+
+  return ref.current;  // render 中返回的是"上次 commit 的值"
+}
+
+// 用法
+function Component({ count }) {
+  const prevCount = usePrevious(count);
+
+  return (
+    &lt;div&gt;
+      Now: {count}, was: {prevCount}
+    &lt;/div&gt;
+  );
+}
+
+// 时序：
+// 第一次 render（count = 0）：
+//   - ref.current 还是 undefined（effect 还没跑）
+//   - 返回 undefined
+//   - commit 后 effect 跑：ref.current = 0
+//
+// 第二次 render（count = 1）：
+//   - ref.current 是 0（上次 commit 的值）
+//   - 返回 0
+//   - commit 后 effect 跑：ref.current = 1
+//
+// 这是 React 中"<em>读取上次状态</em>" 的经典模式
+// 注意：ref 在 render 中读 / effect 中写 —— 渲染纯函数性不破坏（render 不写 ref）</code></pre>
+        </div>
+
+        <h3><code>useImperativeHandle</code> 自定义 ref 接口</h3>
+        <p>
+          默认 ref 转发拿到的是 DOM 节点。<code>useImperativeHandle</code> 让组件<strong>自定义 ref 暴露的方法</strong>—— 类似类的 imperative API：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · useImperativeHandle 完整模式</span>
+          <pre class="code"<code class="lang-js">// React 19+ 写法（无 forwardRef）
+type ModalHandle = {
+  open: () =&gt; void;
+  close: () =&gt; void;
+};
+
+function Modal({ ref }: { ref?: React.Ref&lt;ModalHandle&gt; }) {
+  const [open, setOpen] = useState(false);
+
+  // 自定义 ref 暴露的方法
+  useImperativeHandle(ref, () =&gt; ({
+    open: () =&gt; setOpen(true),
+    close: () =&gt; setOpen(false),
+  }), []);  // 依赖数组：仅 mount 时创建一次
+
+  if (!open) return null;
+  return &lt;div className="modal"&gt;...&lt;/div&gt;;
+}
+
+// 用法
+function App() {
+  const modalRef = useRef&lt;ModalHandle&gt;(null);
+  return (
+    &lt;&gt;
+      &lt;button onClick={() =&gt; modalRef.current?.open()}&gt;Open Modal&lt;/button&gt;
+      &lt;Modal ref={modalRef} /&gt;
+    &lt;/&gt;
+  );
+}
+
+// React 18 及以下写法（forwardRef）—— 19 退役但仍兼容
+const Modal = forwardRef&lt;ModalHandle&gt;(function Modal(props, ref) {
+  const [open, setOpen] = useState(false);
+
+  useImperativeHandle(ref, () =&gt; ({
+    open: () =&gt; setOpen(true),
+    close: () =&gt; setOpen(false),
+  }), []);
+
+  if (!open) return null;
+  return &lt;div className="modal"&gt;...&lt;/div&gt;;
+});
+
+// 何时该用 useImperativeHandle：
+// 1. 组件需要暴露命令式 API（open / close / focus / scrollTo / play）
+// 2. 不想直接暴露内部 DOM 节点（封装边界）
+// 3. 整合命令式第三方库时
+
+// 何时不该用：
+// - 大多数 React 模式 —— 用 props + state 表达，更声明式
+// - 仅暴露一个 DOM 操作 —— 直接用 ref={内部节点 ref}</code></pre>
+        </div>
+
+        <h3>React 19 ref as prop（取代 forwardRef）⭐</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · forwardRef → ref as prop</span>
+          <pre class="code"<code class="lang-js">// React 18 及以下：必须 forwardRef
+const Input = forwardRef&lt;HTMLInputElement, InputProps&gt;(function Input(props, ref) {
+  return &lt;input {...props} ref={ref} /&gt;;
+});
+
+// 用 forwardRef 的痛点：
+// 1. 函数签名复杂（props 在第一个参数，ref 在第二个）
+// 2. TypeScript 类型啰嗦
+// 3. 多包一层导致 displayName 容易丢
+// 4. 与高阶组件配合困难
+
+// React 19+：ref 作为普通 prop
+function Input({ ref, ...props }: InputProps &amp; { ref?: React.Ref&lt;HTMLInputElement&gt; }) {
+  return &lt;input {...props} ref={ref} /&gt;;
+}
+
+// 优势：
+// 1. 函数签名扁平（ref 就是 prop）
+// 2. TypeScript 类型自然
+// 3. 与高阶组件配合简单（ref 只是 prop）
+// 4. 不需要包装层
+
+// 19 兼容性：
+// - forwardRef 仍可用（向后兼容）
+// - 推荐新代码用 ref as prop
+// - 老库逐步迁移
+// - codemod 工具：npx react-codemod replace-act-import
+
+// 完整 19 模式：自定义 imperative handle
+type DialogHandle = {
+  open: () =&gt; void;
+  close: () =&gt; void;
+};
+
+function Dialog({ ref, title, children }: {
+  ref?: React.Ref&lt;DialogHandle&gt;;
+  title: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  useImperativeHandle(ref, () =&gt; ({
+    open: () =&gt; setOpen(true),
+    close: () =&gt; setOpen(false),
+  }), []);
+  return open ? (
+    &lt;div className="dialog"&gt;
+      &lt;h2&gt;{title}&lt;/h2&gt;
+      {children}
+    &lt;/div&gt;
+  ) : null;
+}</code></pre>
+        </div>
+
+        <h3>callback ref + React 19 cleanup ⭐</h3>
+        <p>
+          除了对象 ref（<code>useRef</code> 返回的），React 还支持 <strong>callback ref</strong>—— 把函数当 ref 传：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · callback ref 模式</span>
+          <pre class="code"<code class="lang-js">// 基础 callback ref
+&lt;input ref={(node) =&gt; {
+  console.log('attached:', node);
+  // node 是 DOM 节点（mount 时）或 null（unmount 时）
+}} /&gt;
+
+// 经典用例：测量 DOM
+function MeasuredDiv() {
+  const [size, setSize] = useState(null);
+
+  return (
+    &lt;div ref={(node) =&gt; {
+      if (node) {
+        const rect = node.getBoundingClientRect();
+        setSize({ width: rect.width, height: rect.height });
+      }
+    }}&gt;
+      {size ? `${size.width} × ${size.height}` : '...'}
+    &lt;/div&gt;
+  );
+}
+
+// React 19 增强：callback ref 支持 cleanup 函数
+&lt;input ref={(node) =&gt; {
+  console.log('attached');
+  // 注册某些操作
+  return () =&gt; {
+    console.log('detached');
+    // cleanup 操作（19 之前必须用 useEffect）
+  };
+}} /&gt;
+
+// 实际用例（19）：
+&lt;div ref={(node) =&gt; {
+  if (!node) return;
+  const observer = new ResizeObserver(handleResize);
+  observer.observe(node);
+  return () =&gt; observer.disconnect();   // 19 自动调用
+}} /&gt;
+
+// 19 之前同款逻辑要这样写：
+const divRef = useRef(null);
+useEffect(() =&gt; {
+  if (!divRef.current) return;
+  const observer = new ResizeObserver(handleResize);
+  observer.observe(divRef.current);
+  return () =&gt; observer.disconnect();
+}, []);
+&lt;div ref={divRef} /&gt;
+// 19 callback ref 模式更简洁
+
+// callback ref vs 对象 ref 取舍：
+// - 对象 ref：组件多处用、传给子组件、配合 useImperativeHandle
+// - callback ref：仅 attach/detach 时点要做事 / 多 ref 合并 / 需要 cleanup（19）</code></pre>
+        </div>
+
+        <h3>useRef 不该当 useState 用</h3>
+        <p>
+          <strong>这是新人最常踩的反模式</strong>—— 用 ref "<em>避免重渲染</em>" 但导致 UI 不更新：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · ref 不该当 state 用</span>
+          <pre class="code"<code class="lang-js">// ❌ 用 ref 存"会显示在 UI 上的值"
+function BrokenCounter() {
+  const countRef = useRef(0);
+
+  return (
+    &lt;button onClick={() =&gt; {
+      countRef.current++;        // 修改 ref
+      console.log(countRef.current);  // log 是更新的
+    }}&gt;
+      Count: {countRef.current}    // ⚠️ UI 永远显示 0！
+                                    // 因为修改 ref 不触发渲染
+    &lt;/button&gt;
+  );
+}
+
+// ✅ UI 显示的值用 useState
+function CorrectCounter() {
+  const [count, setCount] = useState(0);
+  return &lt;button onClick={() =&gt; setCount(c =&gt; c + 1)}&gt;{count}&lt;/button&gt;;
+}
+
+// 决策：
+// - 修改后要在 UI 上反映 → useState
+// - 修改后不需要在 UI 上反映 → useRef
+// - 派生值（其他 state 计算出来的）→ 直接计算或 useMemo
+// - 跨渲染的副作用结果（timer ID / SDK 实例）→ useRef
+
+// 测试：在脑里问 "<em>这个值变化时 UI 需要重新渲染吗</em>"
+// - 是 → useState
+// - 否 → useRef</code></pre>
+        </div>
+
+        <!-- 03 应用场景 ================================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 实现 useDebounce 自定义 Hook</h3>
+          <p>
+            搜索框防抖：用户停止输入 500ms 后才触发查询。用 useRef 保存 timer ID：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · useDebounce</span>
+            <pre class="code"<code class="lang-js">function useDebounce&lt;T&gt;(value: T, delay = 500): T {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+  const timerRef = useRef&lt;number | null&gt;(null);
+
+  useEffect(() =&gt; {
+    if (timerRef.current) clearTimeout(timerRef.current);
+
+    timerRef.current = window.setTimeout(() =&gt; {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () =&gt; {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [value, delay]);
+
+  return debouncedValue;
+}
+
+// 用法
+function Search() {
+  const [query, setQuery] = useState('');
+  const debouncedQuery = useDebounce(query, 500);
+
+  // 仅 debouncedQuery 变化时才触发
+  useEffect(() =&gt; {
+    if (debouncedQuery) fetchResults(debouncedQuery);
+  }, [debouncedQuery]);
+
+  return &lt;input value={query} onChange={e =&gt; setQuery(e.target.value)} /&gt;;
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 集成命令式动画库（GSAP / Framer Motion）</h3>
+          <p>
+            用 GSAP 做复杂动画。useRef 引用 DOM + useImperativeHandle 暴露 play / pause API：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · GSAP 动画封装</span>
+            <pre class="code"<code class="lang-js">type AnimationHandle = {
+  play: () =&gt; void;
+  pause: () =&gt; void;
+  reset: () =&gt; void;
+};
+
+function AnimatedBox({ ref, color }: {
+  ref?: React.Ref&lt;AnimationHandle&gt;;
+  color: string;
+}) {
+  const boxRef = useRef&lt;HTMLDivElement&gt;(null);
+  const tweenRef = useRef&lt;gsap.core.Tween | null&gt;(null);
+
+  useEffect(() =&gt; {
+    if (!boxRef.current) return;
+    tweenRef.current = gsap.to(boxRef.current, {
+      x: 200,
+      duration: 2,
+      paused: true,  // 不立即播放
+    });
+    return () =&gt; tweenRef.current?.kill();
+  }, []);
+
+  useImperativeHandle(ref, () =&gt; ({
+    play: () =&gt; tweenRef.current?.play(),
+    pause: () =&gt; tweenRef.current?.pause(),
+    reset: () =&gt; tweenRef.current?.progress(0).pause(),
+  }), []);
+
+  return &lt;div ref={boxRef} style={{ background: color, width: 50, height: 50 }} /&gt;;
+}
+
+// 用法
+function App() {
+  const animRef = useRef&lt;AnimationHandle&gt;(null);
+  return (
+    &lt;&gt;
+      &lt;AnimatedBox ref={animRef} color="red" /&gt;
+      &lt;button onClick={() =&gt; animRef.current?.play()}&gt;Play&lt;/button&gt;
+      &lt;button onClick={() =&gt; animRef.current?.pause()}&gt;Pause&lt;/button&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 19 callback ref 替代 useEffect 测量 DOM</h3>
+          <p>
+            React 19 callback ref + cleanup 让"<em>测量 DOM 尺寸</em>"模式更简洁：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 18 vs 19 测量 DOM</span>
+            <pre class="code"<code class="lang-js">// === React 18 写法 ===
+function MeasuredBox() {
+  const ref = useRef&lt;HTMLDivElement&gt;(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() =&gt; {
+    if (!ref.current) return;
+    const observer = new ResizeObserver(([entry]) =&gt; {
+      const { width, height } = entry.contentRect;
+      setSize({ width, height });
+    });
+    observer.observe(ref.current);
+    return () =&gt; observer.disconnect();
+  }, []);
+
+  return &lt;div ref={ref}&gt;{size.width} × {size.height}&lt;/div&gt;;
+}
+
+// === React 19 callback ref 写法（更简洁）===
+function MeasuredBox() {
+  const [size, setSize] = useState({ width: 0, height: 0 });
+
+  return (
+    &lt;div ref={(node) =&gt; {
+      if (!node) return;
+      const observer = new ResizeObserver(([entry]) =&gt; {
+        const { width, height } = entry.contentRect;
+        setSize({ width, height });
+      });
+      observer.observe(node);
+      return () =&gt; observer.disconnect();   // 19 自动调用 cleanup
+    }}&gt;
+      {size.width} × {size.height}
+    &lt;/div&gt;
+  );
+}
+// 减少 useRef + useEffect 两层嵌套</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 ================================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>多 ref 合并（forkRef 模式）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 同一节点多个 ref</span>
+          <pre class="code"<code class="lang-js">// 痛点：同一 DOM 节点要给多个用户（自家 ref + 第三方库 ref）
+// 用 callback ref 合并
+
+function mergeRefs&lt;T&gt;(...refs: Array&lt;React.Ref&lt;T&gt; | undefined&gt;): React.RefCallback&lt;T&gt; {
+  return (node) =&gt; {
+    refs.forEach((ref) =&gt; {
+      if (!ref) return;
+      if (typeof ref === 'function') ref(node);
+      else (ref as React.MutableRefObject&lt;T | null&gt;).current = node;
+    });
+  };
+}
+
+// 用法
+function Input({ ref: externalRef }: { ref?: React.Ref&lt;HTMLInputElement&gt; }) {
+  const internalRef = useRef&lt;HTMLInputElement&gt;(null);
+
+  return &lt;input ref={mergeRefs(internalRef, externalRef)} /&gt;;
+}
+
+// 现在 internalRef 和 externalRef 都指向同一个 input 节点
+// 库类用例：react-aria、react-spring 等都用这个模式</code></pre>
+        </div>
+
+        <h3>用 useRef 跟踪首次渲染</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · useFirstRender 自定义 Hook</span>
+          <pre class="code"<code class="lang-js">function useIsFirstRender() {
+  const isFirstRef = useRef(true);
+  useEffect(() =&gt; {
+    isFirstRef.current = false;
+  }, []);
+  return isFirstRef.current;
+}
+
+// 用法
+function Component({ value }) {
+  const isFirstRender = useIsFirstRender();
+
+  useEffect(() =&gt; {
+    if (isFirstRender) return;   // 首次 render 跳过
+    // 仅后续 value 变化时执行
+    fetchData(value);
+  }, [value]);
+
+  return ...;
+}
+
+// 注意 StrictMode 双调：开发环境 isFirstRender 行为可能不直观
+// 更可靠：用 useEffect 不跑 vs 跑（自然区分 mount vs update）</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ================================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：用 ref 当 state（UI 不更新）</div>
+          <p>
+            <code>const countRef = useRef(0)</code> + 在 JSX 用 <code>{countRef.current}</code>—— 修改 ref 不触发渲染，UI 永远显示初值。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：UI 显示的值<strong>必须用 useState</strong>。判断方法：<em>这个值变化时 UI 需要更新吗</em>—— 是用 state，否用 ref。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：在 render 阶段读 / 写 ref</div>
+          <p>
+            <code>function Component() { ref.current = 5; return ...; }</code>—— render 阶段写 ref<strong>破坏纯函数性</strong>，Concurrent rendering 时不安全（多次调用会写多次）。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：render 阶段<strong>不读不写</strong> ref（除非确实需要 lazy initial 类的特殊场景）。读写都放 useEffect / event handler / useImperativeHandle。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：DOM ref 在 render 阶段访问报 null</div>
+          <p>
+            <code>const inputRef = useRef(null); console.log(inputRef.current);</code>（在 render 函数体）—— 永远 null，因为 ref 在 commit 阶段才 attach。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：DOM ref 仅在 useEffect / useLayoutEffect / event handler 内访问（mount 之后才有 DOM）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：useImperativeHandle 不传 deps 导致每次 render 重建</div>
+          <p>
+            <code>useImperativeHandle(ref, () =&gt; ({ ... }))</code>（不传 deps）—— 每次 render 重建 ref handle 对象，传给 parent 的 ref 永远变化，破坏 memo / useEffect 稳定性。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：always 传 deps 数组。<code>useImperativeHandle(ref, () =&gt; ({ ... }), [])</code> 或者列出影响 handle 内函数行为的依赖。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：把 setState 放进 ref 看起来 OK 但 stale</div>
+          <p>
+            <code>const setStateRef = useRef(setState)</code>—— setState 引用永远稳定（P3.1），不需要 ref 包装。这种"<em>过度防御</em>"反而让代码难读 + 容易 stale（如果之后改成 set state 通过 props 传，ref 不会更新）。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：理解哪些值引用稳定（setState / dispatch / Context Provider value 等），不要给它们加 ref 包装。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ================================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>权威来源</h3>
+        <ul>
+          <li><a href="https://react.dev/reference/react/useRef" target="_blank" rel="noopener">react.dev · useRef</a></li>
+          <li><a href="https://react.dev/reference/react/useImperativeHandle" target="_blank" rel="noopener">react.dev · useImperativeHandle</a></li>
+          <li><a href="https://react.dev/learn/manipulating-the-dom-with-refs" target="_blank" rel="noopener">react.dev · Manipulating the DOM with Refs</a></li>
+          <li><a href="https://react.dev/learn/referencing-values-with-refs" target="_blank" rel="noopener">react.dev · Referencing Values with Refs</a></li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="04-use-memo-callback.html">P3.4 useMemo / useCallback</a></li>
+          <li>下一章：<a href="06-custom-hooks.html">P3.6 自定义 Hooks + Rules of Hooks</a>（编写中）</li>
+          <li>详细 forwardRef 退役 / 19 ref as prop：<a href="../06-modern/04-misc.html">P6.4 杂项</a>（编写中）</li>
+          <li>引擎层：<a href="../04-fiber/01-fiber-architecture.html">P4.1 Fiber 架构</a> —— ref attach/detach 在 commit 的 mutation/layout 子阶段</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="04-use-memo-callback.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P3.4 · useMemo / useCallback</span>
+          </a>
+          <a class="next" href="06-custom-hooks.html">
+            <span class="label">下一章 →</span>
+            <span class="title">P3.6 · 自定义 Hooks</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,963 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>P3.6 · 自定义 Hooks + Rules of Hooks · React 深度学习</title>
+    <meta
+      name="description"
+      content="Hooks 命名约定 use* 前缀、Rules of Hooks 2 条铁律的引擎根因、经典自定义 Hooks 6 模式（useFetch / useDebounce / useEventListener / useLocalStorage / usePrevious / useIsMounted）、命名 vs 实现解耦、何时不该抽自定义 Hook。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2361dafb'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23000000'%3EReact%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>React 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.13 220); color: #fff">R</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">React 首页</a>
+          <a href="index.html">阶段目录</a>
+          <a href="https://react.dev/learn/reusing-logic-with-custom-hooks" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · Hooks 全谱</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-use-state.html">01 · useState 深入</a></li>
+          <li><a href="02-use-effect.html">02 · useEffect ⭐</a></li>
+          <li><a href="03-use-reducer-context.html">03 · useReducer / useContext</a></li>
+          <li><a href="04-use-memo-callback.html">04 · useMemo / useCallback</a></li>
+          <li><a href="05-use-ref.html">05 · useRef</a></li>
+          <li><a href="06-custom-hooks.html" class="active">06 · 自定义 Hooks</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · React 是谁</a></li>
+          <li><a href="../02-mental-model/index.html">P2 · 渲染心智模型</a></li>
+          <li><a href="../04-fiber/index.html">P4 · Fiber 内部机制</a></li>
+          <li><a href="../05-concurrent/index.html">P5 · Concurrent 并发</a></li>
+          <li><a href="../06-modern/index.html">P6 · Server Components 与 Actions</a></li>
+          <li><a href="../07-ecosystem/index.html">P7 · 生态与工程化</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">React</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · Hooks 全谱</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>06 · 自定义 Hooks</span>
+        </nav>
+
+        <h1>P3.6 · 自定义 Hooks + Rules of Hooks</h1>
+        <p class="lead">
+          自定义 Hooks 是 React Hooks 设计的<strong>精髓</strong>—— 把行为从组件抽离到可复用单元，比 HOC / Render Props 更扁平、类型友好（P2.3 已对比）。本章讲清<strong>命名约定</strong>（use* 前缀）、<strong>Rules of Hooks 的 2 条铁律</strong>（含 P4.1 Hook linked list 引擎根因短重述）、<strong>6 个经典模式</strong>（useFetch / useDebounce / useEventListener / useLocalStorage / usePrevious / useIsMounted），以及<strong>"<em>何时该抽 / 不该抽</em>" 决策框架</strong>。本章是 P3 Hooks 全谱的<strong>收官章</strong>—— 读完 P3 你具备完整 Hooks 心智 + 复用能力。
+        </p>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 P3 收官章</div>
+          <p>
+            读完 P3.1-P3.6 共 6 章 Hooks 全谱后，你掌握了 React 19 的<strong>所有核心 Hooks</strong> + 复用模式。下一步进入 P4-P5（P4.2-P5.4）渲染与并发，从用户视角讲 Reconciliation / Suspense / Transition / Error Boundary。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P3 全部 + <a href="../04-fiber/01-fiber-architecture.html">P4.1 Fiber</a>（理解 Rules of Hooks 引擎根因）</span>
+          <span><strong>对应 react.dev</strong>
+            <a href="https://react.dev/learn/reusing-logic-with-custom-hooks" target="_blank" rel="noopener">Reusing Logic with Custom Hooks</a> ·
+            <a href="https://react.dev/reference/rules/rules-of-hooks" target="_blank" rel="noopener">Rules of Hooks</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>自定义 Hook 是普通函数 + 内部用其他 Hooks + 名字以 <code>use</code> 开头</strong>。命名约定不是装饰—— ESLint <code>react-hooks/rules-of-hooks</code> 用前缀<strong>识别</strong>什么是 Hook 调用，从而强制 Rules of Hooks。
+          </li>
+          <li>
+            <strong>Rules of Hooks 2 条铁律</strong>：① <strong>只在顶层调用</strong>（不在 if / for / try / nested function 里）② <strong>只在 React 函数 / 自定义 Hook 内调用</strong>（不在普通函数 / class / event handler 里）。<strong>引擎根因</strong>：P4.1 讲过 React 完全靠"<em>调用顺序</em>" 配对 Hook linked list 节点—— 顺序变 = 节点错位 = bug。
+          </li>
+          <li>
+            <strong>判断"<em>该抽自定义 Hook 吗</em>"</strong>：① 多组件复用相同逻辑？✅ 抽 ② 单组件但逻辑复杂（&gt; 30 行 effect / useReducer）？✅ 抽（提高可读性）③ 单组件 + 逻辑简单？❌ 别抽（增加心智成本）④ 想抽 HOC 替代？✅ 用自定义 Hook（19 时代主流，P2.3）。
+          </li>
+        </ol>
+
+        <p>看一段最小代码识别自定义 Hook 三要素：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 自定义 Hook 完整骨架</span>
+          <pre class="code"><code class="lang-js">// ① 名字 use 开头（ESLint 识别）
+// ② 普通函数（参数任意 / 返回值任意）
+// ③ 内部可用 useState / useEffect 等其他 Hooks
+function useToggle(initial = false) {
+  const [value, setValue] = useState(initial);
+
+  // 自定义返回值（数组 / 对象 / 单值都可以）
+  return [value, setValue] as const;
+  //     ↑ TypeScript: as const 让返回类型推导为元组
+}
+
+// 用法：调用方完全像用内置 Hook
+function Component() {
+  const [isOpen, setIsOpen] = useToggle(false);
+
+  return &lt;button onClick={() =&gt; setIsOpen((prev) =&gt; !prev)}&gt;
+    {isOpen ? 'Open' : 'Closed'}
+  &lt;/button&gt;;
+}
+
+// 关键：自定义 Hook 不是"组件" —— 它<strong>不渲染 UI</strong>，只复用逻辑
+// 每个使用 useToggle 的组件，都有<strong>独立的 isOpen state</strong>
+// （不像 Context 那样共享状态）</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ================================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>自定义 Hook 是什么</h3>
+        <p>
+          自定义 Hook <strong>不是新概念</strong>—— 它就是<strong>普通 JS 函数</strong>，唯一特殊之处是：
+        </p>
+        <ul>
+          <li><strong>名字以 <code>use</code> 开头</strong>（不是技术限制，是 ESLint 识别 + 团队约定）</li>
+          <li><strong>内部可调用其他 Hooks</strong>（useState / useEffect / 其他自定义 Hook）</li>
+          <li><strong>遵守 Rules of Hooks</strong>（顶层调用、React 函数内）</li>
+        </ul>
+
+        <p>
+          <strong>关键认知</strong>：每次 Component 调用 <code>useToggle</code>—— 每个调用都<strong>独立工作</strong>，像内嵌 useState 一样。两个组件用 useToggle 不共享 state（不像 Context）。<strong>自定义 Hook 是"<em>逻辑模板</em>"</strong>，不是"<em>共享状态</em>"。
+        </p>
+
+        <h3>命名约定：<code>use*</code> 前缀</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 命名规则</span>
+          <pre class="code"><code class="lang-js">// ✅ 命名规则
+function useUserData() {}        // 推荐
+function useFetch() {}            // 推荐
+function useDebounce() {}         // 推荐
+function useIsMounted() {}        // 推荐（即使不是 use + Verb 也合法）
+
+// ❌ 命名错误
+function fetchData() {}           // 没有 use 前缀 —— ESLint 不识别为 Hook
+function getUserData() {}         // 同上
+function useFn() {}               // 太抽象，可读性差
+function UseFetch() {}            // 大写 = 看起来像组件
+function use_fetch() {}           // snake_case 不是 React 风格
+
+// 命名规则深度：
+// 1. ESLint react-hooks/rules-of-hooks 用 use 前缀 + 小写第二字母作为识别
+//    use + V (大写) → Hook
+//    UseV → 组件 / 类
+//    use V (小写) → 普通函数（如 useragent —— 巧合，但 ESLint 看 useV 模式判断）
+// 2. 团队代码评审时 use* 一眼看出"<em>这调用了 Hook</em>"
+// 3. 编辑器 IntelliSense 按 use 前缀分组显示
+
+// 自定义 Hook 的"<em>嵌套</em>"也合法：
+function useUserData(id) {
+  const cache = useRef(new Map());           // 内嵌 useRef
+  const [data, setData] = useState(null);    // 内嵌 useState
+  const debouncedId = useDebounce(id, 500);  // 调用其他自定义 Hook
+
+  useEffect(() =&gt; { ... }, [debouncedId]);   // 内嵌 useEffect
+
+  return { data, refetch: () =&gt; ... };
+}
+// 多层嵌套调用都遵守 Rules of Hooks（每个 Hook 都在顶层调）</code></pre>
+        </div>
+
+        <h3>Rules of Hooks 2 条铁律 ⭐</h3>
+
+        <div class="callout danger">
+          <div class="callout-title">🎯 Rules of Hooks 是规范级要求，不是约定</div>
+          <p>
+            违反 Rules of Hooks <strong>不是风格问题</strong>—— 是 React 引擎层<strong>必然出错</strong>。Hook 在不同 render 间靠"<em>调用顺序</em>" 配对 Fiber.memoizedState 链表节点（P4.1 详述）—— 顺序变化 = 节点错位 = state 数据混乱、可能崩溃、可能静默 bug。
+          </p>
+        </div>
+
+        <h4>规则 1：只在顶层调用</h4>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 规则 1 反例与修复</span>
+          <pre class="code"><code class="lang-js">// ❌ 在 if 里调
+function Component({ shouldTrack }) {
+  if (shouldTrack) {
+    const [count, setCount] = useState(0);  // 违规
+  }
+  return ...;
+}
+
+// ❌ 在 for 里调
+function Component({ items }) {
+  for (const item of items) {
+    const [name, setName] = useState(item.name);  // 违规
+  }
+}
+
+// ❌ 在 try-catch 里调
+function Component() {
+  try {
+    const data = useFetch('/api');  // 违规
+  } catch (e) { ... }
+}
+
+// ❌ 在嵌套函数里调
+function Component() {
+  const handler = () =&gt; {
+    const [count, setCount] = useState(0);  // 违规：在 event handler 里
+  };
+}
+
+// ❌ 早返回后调
+function Component({ user }) {
+  if (!user) return &lt;Login /&gt;;
+  const data = useFetch(`/api/users/${user.id}`);  // 违规：早返回让 useFetch 调用次数不固定
+  return ...;
+}
+
+// ✅ 修复：所有 hook 顶层调，把条件移到 hook 内部
+function Component({ shouldTrack }) {
+  // 始终调用 useState，但用 shouldTrack 决定是否同步
+  const [count, setCount] = useState(0);
+  // 在 effect 内做条件判断
+  useEffect(() =&gt; {
+    if (shouldTrack) trackEvent(count);
+  }, [count, shouldTrack]);
+}
+
+function Component({ user }) {
+  // 给 useFetch 传 null 让它跳过
+  const data = useFetch(user ? `/api/users/${user.id}` : null);
+  if (!user) return &lt;Login /&gt;;
+  return ...;
+}
+
+// 19 引入 use API（P6.3）—— 唯一可以条件调用的"hook 风格"调用
+// const theme = use(ThemeContext);  // 可在条件分支调
+// 但 use 不是 hook（不依赖 hooks linked list）</code></pre>
+        </div>
+
+        <h4>规则 2：只在 React 函数内调用</h4>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 规则 2 合法位置</span>
+          <pre class="code"<code class="lang-js">// ✅ 合法位置：
+// 1. 函数组件
+function Component() {
+  const [count, setCount] = useState(0);  // ✅
+}
+
+// 2. 自定义 Hook
+function useCount() {
+  return useState(0);  // ✅
+}
+
+// ❌ 非法位置：
+// 1. 普通 JS 函数
+function helper() {
+  const [count, setCount] = useState(0);  // ❌
+}
+
+// 2. class component
+class MyComponent extends React.Component {
+  render() {
+    const [count, setCount] = useState(0);  // ❌
+  }
+}
+
+// 3. event handler / callback
+function Component() {
+  const handler = () =&gt; {
+    const [count, setCount] = useState(0);  // ❌
+  };
+}
+
+// 4. 模块顶层
+const [count, setCount] = useState(0);  // ❌（没在组件内）
+
+// 5. 异步函数
+async function loadData() {
+  const data = await fetch('/api');
+  const [state, setState] = useState(data);  // ❌（async 函数不是组件）
+}
+
+// 引擎根因：Hook 通过 dispatcher 全局变量找到当前 Fiber
+// React 在调用组件函数前 set dispatcher，调用完后 reset
+// 在非组件函数里调 useState → dispatcher 是 null/wrong → throw error</code></pre>
+        </div>
+
+        <h3>引擎根因：Hook linked list 配对（短重述链回 P4.1）</h3>
+
+        <p>
+          <strong>短重述</strong>：P4.1 Fiber 架构详述了 Hook linked list 的完整数据结构。本节用一段代码<strong>具象化</strong>"<em>顺序错位</em>" 的危害：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 顺序错位的危害实测</span>
+          <pre class="code"><code class="lang-js">function BadCounter({ shouldShow }) {
+  // ❌ 条件 hook 调用
+  let count, setCount;
+  if (shouldShow) {
+    [count, setCount] = useState(0);   // 仅 shouldShow=true 时调用
+  }
+  const [name, setName] = useState('Alice');
+
+  // 第一次 render（shouldShow = true）：
+  //   useState(0)      → Hook 节点 #1: { memoizedState: 0 }
+  //   useState('Alice') → Hook 节点 #2: { memoizedState: 'Alice' }
+  // 链表：#1 → #2
+  //
+  // 第二次 render（shouldShow = false）：
+  //   useState('Alice') → 取链表第 1 个！但第 1 个是 number 0
+  //   → 类型错位
+  //   → 可能崩溃 / 静默 bug / 行为乱
+  //
+  // React 19 检测到 hook 数量变化会 throw：
+  // "Rendered fewer hooks than expected. This may be caused by an
+  //  accidental early return statement."
+  //
+  // 但这只是<strong>幸运</strong>—— 同样调用次数但<strong>顺序变了</strong> 检测不到
+  return shouldShow ? &lt;div&gt;{count} {name}&lt;/div&gt; : &lt;div&gt;{name}&lt;/div&gt;;
+}
+
+// ✅ 正确写法
+function GoodCounter({ shouldShow }) {
+  const [count, setCount] = useState(0);     // 始终调
+  const [name, setName] = useState('Alice');  // 始终调
+
+  return shouldShow ? &lt;div&gt;{count} {name}&lt;/div&gt; : &lt;div&gt;{name}&lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <p>
+          <strong>检测工具</strong>：
+        </p>
+        <ul>
+          <li><strong>ESLint <code>react-hooks/rules-of-hooks</code></strong>—— 静态分析 + lint 阶段拦截</li>
+          <li><strong>React DevTools</strong>—— 运行时检测 Hook 数量变化并警告</li>
+          <li><strong>React 19 错误信息</strong>—— "Rendered fewer / more hooks than expected"</li>
+        </ul>
+        <p>
+          <strong>务必在 CI 强制 ESLint 规则</strong>—— 不要把 Rules of Hooks 当"<em>风格建议</em>"，它是规范要求。
+        </p>
+
+        <h3>经典自定义 Hooks 6 模式</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 1. useDebounce</span>
+          <pre class="code"<code class="lang-js">function useDebounce&lt;T&gt;(value: T, delay = 500): T {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() =&gt; {
+    const id = setTimeout(() =&gt; setDebouncedValue(value), delay);
+    return () =&gt; clearTimeout(id);
+  }, [value, delay]);
+
+  return debouncedValue;
+}
+
+// 用法
+function Search() {
+  const [query, setQuery] = useState('');
+  const debouncedQuery = useDebounce(query, 500);
+
+  useEffect(() =&gt; {
+    if (debouncedQuery) fetchResults(debouncedQuery);
+  }, [debouncedQuery]);
+
+  return &lt;input value={query} onChange={e =&gt; setQuery(e.target.value)} /&gt;;
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 2. useEventListener</span>
+          <pre class="code"<code class="lang-js">function useEventListener&lt;K extends keyof WindowEventMap&gt;(
+  eventName: K,
+  handler: (e: WindowEventMap[K]) =&gt; void,
+  element: Window | Document = window,
+) {
+  // 用 ref 保存最新 handler，避免依赖 changes 让 effect 重跑
+  const savedHandler = useRef(handler);
+
+  useEffect(() =&gt; {
+    savedHandler.current = handler;
+  }, [handler]);
+
+  useEffect(() =&gt; {
+    const listener: EventListener = (e) =&gt; savedHandler.current(e as any);
+    element.addEventListener(eventName, listener);
+    return () =&gt; element.removeEventListener(eventName, listener);
+  }, [eventName, element]);
+}
+
+// 用法
+function Component() {
+  const [scrollY, setScrollY] = useState(0);
+  useEventListener('scroll', () =&gt; setScrollY(window.scrollY));
+  return &lt;div&gt;Scroll Y: {scrollY}&lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 3. useLocalStorage</span>
+          <pre class="code"<code class="lang-js">function useLocalStorage&lt;T&gt;(key: string, initial: T) {
+  // Lazy initial：仅首次 render 读 localStorage
+  const [value, setValue] = useState&lt;T&gt;(() =&gt; {
+    try {
+      const stored = localStorage.getItem(key);
+      return stored ? JSON.parse(stored) : initial;
+    } catch {
+      return initial;
+    }
+  });
+
+  // 同步到 localStorage
+  useEffect(() =&gt; {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (e) {
+      console.error('localStorage write failed', e);
+    }
+  }, [key, value]);
+
+  return [value, setValue] as const;
+}
+
+// 用法
+function Component() {
+  const [theme, setTheme] = useLocalStorage&lt;'light' | 'dark'&gt;('theme', 'light');
+  return (
+    &lt;button onClick={() =&gt; setTheme(t =&gt; t === 'light' ? 'dark' : 'light')}&gt;
+      Toggle theme: {theme}
+    &lt;/button&gt;
+  );
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 4. usePrevious</span>
+          <pre class="code"<code class="lang-js">function usePrevious&lt;T&gt;(value: T): T | undefined {
+  const ref = useRef&lt;T&gt;();
+  useEffect(() =&gt; {
+    ref.current = value;
+  });
+  return ref.current;
+}
+
+// 用法（P3.5 已演示）
+function Component({ count }) {
+  const prevCount = usePrevious(count);
+  return &lt;div&gt;Now: {count}, was: {prevCount ?? 'N/A'}&lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 5. useIsMounted</span>
+          <pre class="code"<code class="lang-js">function useIsMounted() {
+  const ref = useRef(true);
+
+  useEffect(() =&gt; {
+    return () =&gt; { ref.current = false; };
+  }, []);
+
+  return useCallback(() =&gt; ref.current, []);
+}
+
+// 用法（避免组件卸载后 setState）
+function Component() {
+  const isMounted = useIsMounted();
+  const [data, setData] = useState(null);
+
+  const handleClick = async () =&gt; {
+    const result = await fetch('/api').then(r =&gt; r.json());
+    if (!isMounted()) return;  // 已卸载，跳过
+    setData(result);
+  };
+
+  return ...;
+}
+
+// 注意：现代代码用 AbortController 更优（P3.2 详述）</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 6. useFetch（生产推荐 TanStack Query）</span>
+          <pre class="code"<code class="lang-js">// 教学版 useFetch（生产推荐用 TanStack Query / SWR）
+function useFetch&lt;T&gt;(url: string | null, options?: RequestInit) {
+  const [data, setData] = useState&lt;T | null&gt;(null);
+  const [error, setError] = useState&lt;Error | null&gt;(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() =&gt; {
+    if (!url) return;
+    const controller = new AbortController();
+    setLoading(true);
+    setError(null);
+
+    fetch(url, { ...options, signal: controller.signal })
+      .then(r =&gt; {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json() as Promise&lt;T&gt;;
+      })
+      .then(d =&gt; { setData(d); setLoading(false); })
+      .catch(e =&gt; {
+        if (e.name !== 'AbortError') {
+          setError(e);
+          setLoading(false);
+        }
+      });
+
+    return () =&gt; controller.abort();
+  }, [url, options]);
+
+  return { data, error, loading };
+}
+
+// 用法
+function UserPanel({ userId }) {
+  const { data: user, loading, error } = useFetch&lt;User&gt;(
+    userId ? `/api/users/${userId}` : null
+  );
+  if (loading) return &lt;Spinner /&gt;;
+  if (error) return &lt;ErrorMsg error={error} /&gt;;
+  if (!user) return null;
+  return &lt;UserCard {...user} /&gt;;
+}
+
+// 生产推荐 TanStack Query —— 缓存 / 后台刷新 / 乐观更新等都内置
+import { useQuery } from '@tanstack/react-query';
+const { data, error, isLoading } = useQuery({
+  queryKey: ['user', userId],
+  queryFn: () =&gt; fetch(`/api/users/${userId}`).then(r =&gt; r.json()),
+});</code></pre>
+        </div>
+
+        <h3>命名 vs 实现解耦</h3>
+        <p>
+          自定义 Hook <strong>名字</strong> 和 <strong>实现</strong> 完全解耦—— 用户只关心"<em>这个 Hook 给我什么</em>"，不关心"<em>它内部用什么 Hook</em>"。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 命名 vs 实现解耦</span>
+          <pre class="code"<code class="lang-js">// 用户只关心 useUserData 的输入和输出
+function UserPanel({ id }) {
+  const { user, loading, refetch } = useUserData(id);
+  ...
+}
+
+// 实现可以是任何方式 —— 用户不关心
+// 版本 1：fetch + useState
+function useUserData(id) {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() =&gt; {
+    fetch(`/api/users/${id}`).then(r =&gt; r.json()).then(setUser);
+  }, [id]);
+  return { user, loading, refetch: () =&gt; ... };
+}
+
+// 版本 2：用 TanStack Query 内部实现（用户代码不变）
+function useUserData(id) {
+  const query = useQuery({
+    queryKey: ['user', id],
+    queryFn: () =&gt; fetch(`/api/users/${id}`).then(r =&gt; r.json()),
+  });
+  return {
+    user: query.data,
+    loading: query.isLoading,
+    refetch: query.refetch,
+  };
+}
+
+// 版本 3：用 RSC（React 19）—— 但这要求 useUserData 不存在（直接在 Server Component await）
+// 这种"<em>API 抽象 + 实现可换</em>" 是自定义 Hook 的核心价值
+// 它让重构 / 性能优化 / 切换库 都不影响业务代码</code></pre>
+        </div>
+
+        <h3>何时该抽 / 不该抽自定义 Hook</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 40%">情况</th>
+              <th>该抽吗</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>多组件复用相同逻辑（&gt;= 2 处）</td>
+              <td>✅ 抽</td>
+            </tr>
+            <tr>
+              <td>单组件但逻辑复杂（&gt; 30 行 effect / useReducer）</td>
+              <td>✅ 抽（提高可读性）</td>
+            </tr>
+            <tr>
+              <td>把 HOC 重构（P2.3 已讲）</td>
+              <td>✅ 抽（19 主流模式）</td>
+            </tr>
+            <tr>
+              <td>给团队 / 库分发可复用逻辑</td>
+              <td>✅ 抽</td>
+            </tr>
+            <tr>
+              <td>单组件 + 逻辑简单（&lt; 10 行）</td>
+              <td>❌ 别抽（增加心智成本）</td>
+            </tr>
+            <tr>
+              <td>仅是为"<em>看起来更整洁</em>"</td>
+              <td>❌ 别抽（无实质价值）</td>
+            </tr>
+            <tr>
+              <td>逻辑紧紧耦合于业务上下文</td>
+              <td>❌ 别抽（抽出去也不能复用）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>判断要点</strong>：自定义 Hook 是<strong>抽象</strong>—— 抽象有<strong>认知成本</strong>（学新名字 + 看实现 + 理解返回值含义）。仅当抽象带来的<strong>复用价值 / 可读性提升 &gt; 认知成本</strong> 时才值得抽。
+        </p>
+
+        <!-- 03 应用场景 ================================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 抽业务自定义 Hook（团队共享）</h3>
+          <p>
+            团队多个组件都用"<em>当前用户 + 权限检查</em>" 模式。抽 useCurrentUser + usePermission：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 业务自定义 Hooks</span>
+            <pre class="code"<code class="lang-js">// useCurrentUser.ts —— 包装 Context + 错误兜底
+function useCurrentUser() {
+  const ctx = useContext(UserContext);
+  if (!ctx) throw new Error('useCurrentUser must be used within UserProvider');
+  return ctx;
+}
+
+// usePermission.ts —— 检查当前用户是否有某权限
+function usePermission(permission: string) {
+  const user = useCurrentUser();
+  return user.permissions.includes(permission);
+}
+
+// 业务组件
+function AdminPanel() {
+  const canEdit = usePermission('edit_admin');
+  if (!canEdit) return &lt;NoPermission /&gt;;
+  return &lt;EditableForm /&gt;;
+}
+
+// 优势：
+// 1. 业务代码自描述（usePermission('edit_admin') 比 user.permissions.includes 清晰）
+// 2. 实现集中（权限逻辑改了只改一个文件）
+// 3. 测试方便（mock useCurrentUser 即可）
+// 4. 类型安全（permission 字符串可用 union 限制）</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 给开源库分发可复用逻辑</h3>
+          <p>
+            写 React 工具库（如 react-use / usehooks-ts），核心是<strong>把通用逻辑抽成自定义 Hook 集合</strong>：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · 库式自定义 Hooks</span>
+            <pre class="code"<code class="lang-js">// 库设计要点：
+// 1. 单一职责（每个 Hook 做一件事）
+// 2. 类型友好（TS 泛型）
+// 3. cleanup 完整（所有订阅都正确取消）
+// 4. SSR 安全（不直接访问 window / document）
+// 5. 文档清晰（参数 / 返回值 / 副作用）
+
+// 例：useMediaQuery
+export function useMediaQuery(query: string): boolean {
+  // SSR 兜底
+  const getMatch = () =&gt; {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia(query).matches;
+  };
+
+  const [matches, setMatches] = useState(getMatch);
+
+  useEffect(() =&gt; {
+    const mq = window.matchMedia(query);
+    const handler = (e: MediaQueryListEvent) =&gt; setMatches(e.matches);
+
+    setMatches(mq.matches);  // 初始同步
+    mq.addEventListener('change', handler);
+    return () =&gt; mq.removeEventListener('change', handler);
+  }, [query]);
+
+  return matches;
+}
+
+// 用户用：
+const isMobile = useMediaQuery('(max-width: 640px)');
+const isDarkMode = useMediaQuery('(prefers-color-scheme: dark)');
+
+// 推荐参考：
+// - https://github.com/uidotdev/usehooks
+// - https://github.com/streamich/react-use
+// 学他们怎么写库式 Hook 是个好教材</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 把已有 HOC 重构为自定义 Hook</h3>
+          <p>
+            老项目 <code>withAuth(Component)</code> HOC—— P2.3 已讲过怎么改 useAuth Hook。本节展示<strong>渐进迁移策略</strong>：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · HOC → Hook 渐进迁移</span>
+            <pre class="code"<code class="lang-js">// 老代码（保留）
+const ProtectedDashboard = withAuth(Dashboard);
+const ProtectedSettings = withAuth(Settings);
+// 不动 —— 仍然能用
+
+// 新代码用 Hook
+function NewFeature() {
+  const user = useAuth();
+  if (!user) return &lt;Login /&gt;;
+  return &lt;Feature user={user} /&gt;;
+}
+
+// 内部实现：useAuth + withAuth 共享同一逻辑
+function useAuth() {
+  const user = useContext(UserContext);
+  return user;
+}
+
+function withAuth(Component) {
+  return function ProtectedComponent(props) {
+    const user = useAuth();   // 内部用 useAuth
+    if (!user) return &lt;Login /&gt;;
+    return &lt;Component {...props} user={user} /&gt;;
+  };
+}
+
+// 这样：
+// 1. 老 HOC 仍 work（兼容老代码）
+// 2. 新代码用 Hook（写起来扁平）
+// 3. 共享一份实现（修 bug 改一个地方）
+// 4. 慢慢把老 HOC 用法改成 Hook（不需要"<em>大爆炸式</em>" 重构）</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 ================================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>组合多个自定义 Hook</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 自定义 Hook 组合 —— 完整搜索功能</span>
+          <pre class="code"<code class="lang-js">// 组合 useDebounce + useFetch + useLocalStorage 实现完整搜索
+function useSearch&lt;T&gt;(endpoint: string) {
+  const [query, setQuery] = useLocalStorage('search:lastQuery', '');
+  const debouncedQuery = useDebounce(query, 500);
+
+  const { data, loading, error } = useFetch&lt;T[]&gt;(
+    debouncedQuery ? `${endpoint}?q=${encodeURIComponent(debouncedQuery)}` : null
+  );
+
+  return {
+    query,
+    setQuery,
+    results: data ?? [],
+    loading,
+    error,
+    hasResults: !!data &amp;&amp; data.length &gt; 0,
+  };
+}
+
+// 用法 —— 组件代码极简
+function SearchPanel() {
+  const { query, setQuery, results, loading } = useSearch&lt;User&gt;('/api/users/search');
+
+  return (
+    &lt;&gt;
+      &lt;input value={query} onChange={e =&gt; setQuery(e.target.value)} /&gt;
+      {loading &amp;&amp; &lt;Spinner /&gt;}
+      &lt;ul&gt;
+        {results.map(user =&gt; &lt;li key={user.id}&gt;{user.name}&lt;/li&gt;)}
+      &lt;/ul&gt;
+    &lt;/&gt;
+  );
+}
+
+// 关键观察：
+// 1. useSearch 内部组合 3 个自定义 Hook —— 各自单一职责
+// 2. 用户代码极简 —— 一行 useSearch 拿到所有需要的
+// 3. 切换实现：改 useSearch 内部不影响用户
+// 4. 类型安全：TS 泛型把 T 透传到 results 类型</code></pre>
+        </div>
+
+        <h3>测试自定义 Hook（@testing-library/react）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 自定义 Hook 单元测试</span>
+          <pre class="code"<code class="lang-js">import { renderHook, act } from '@testing-library/react';
+import { useToggle } from './useToggle';
+
+describe('useToggle', () =&gt; {
+  it('initial value defaults to false', () =&gt; {
+    const { result } = renderHook(() =&gt; useToggle());
+    expect(result.current[0]).toBe(false);
+  });
+
+  it('initial value can be set', () =&gt; {
+    const { result } = renderHook(() =&gt; useToggle(true));
+    expect(result.current[0]).toBe(true);
+  });
+
+  it('toggles between true and false', () =&gt; {
+    const { result } = renderHook(() =&gt; useToggle());
+    const [, setValue] = result.current;
+
+    act(() =&gt; setValue(prev =&gt; !prev));
+    expect(result.current[0]).toBe(true);
+
+    act(() =&gt; setValue(prev =&gt; !prev));
+    expect(result.current[0]).toBe(false);
+  });
+});
+
+// renderHook 是 @testing-library/react 提供
+// 它创建一个测试组件 + 调用你的 Hook + 让你访问返回值
+// act() 包裹任何会触发 setState 的操作 —— 确保 React 完成所有 effect
+// 推荐配合 vitest 一起用（P7.1 生态）</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ================================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：自定义 Hook 名字不以 use 开头</div>
+          <p>
+            <code>function getUserData()</code>—— ESLint 不识别为 Hook，违反 Rules of Hooks 时不报错。某天突然遇到莫名 bug 才发现。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：CI 强制 ESLint <code>react-hooks/rules-of-hooks</code> + <code>react-hooks/exhaustive-deps</code>。代码评审拒绝非 use 命名。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：在条件 / 循环 / 嵌套函数里调用 Hook</div>
+          <p>
+            违反 Rules of Hooks 规则 1。React 19 通常会 throw "Rendered fewer hooks than expected"，但<strong>调用次数同但顺序变</strong>（极少见但可能）会静默 bug。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：始终顶层调。把条件移到 Hook 内部（传 null 等参数让 Hook 跳过）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：自定义 Hook 返回值引用不稳定</div>
+          <p>
+            <code>return { data, refetch: () =&gt; ... }</code>—— 每次返回新对象 / 新函数，调用方传 useEffect 依赖会反复触发。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：返回函数用 useCallback 稳定（P3.1 / P3.4）。返回对象用 useMemo（如果用户可能解构后用 useEffect 依赖）。<strong>setState dispatch 引用永远稳定不需 wrap</strong>（P3.1）。React Compiler 19 启用后这些 wrap 自动加。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：滥抽自定义 Hook</div>
+          <p>
+            把<code>const [open, setOpen] = useState(false); const toggle = () =&gt; setOpen(o =&gt; !o);</code> 抽成 useToggle—— 用 1 次没必要，增加心智成本。
+          </p>
+          <p style="margin-put: 8px">
+            <strong>规避</strong>：Rule of three —— 至少 3 处用相同逻辑才抽。<strong>过早抽象比重复更糟</strong>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：自定义 Hook 内调用 Hooks 时漏 deps</div>
+          <p>
+            <code>useEffect(() =&gt; doSomething(propValue))</code>（漏 propValue 依赖）—— 嵌在自定义 Hook 里更难发现。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：自定义 Hook 同样受 ESLint <code>react-hooks/exhaustive-deps</code> 约束。CI 强制 + 代码评审。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ================================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>权威来源</h3>
+        <ul>
+          <li><a href="https://react.dev/learn/reusing-logic-with-custom-hooks" target="_blank" rel="noopener">react.dev · Reusing Logic with Custom Hooks</a></li>
+          <li><a href="https://react.dev/reference/rules/rules-of-hooks" target="_blank" rel="noopener">react.dev · Rules of Hooks</a></li>
+          <li><a href="https://react.dev/reference/react/hooks" target="_blank" rel="noopener">react.dev · Hooks API Reference</a></li>
+        </ul>
+
+        <h3>开源 Hook 集合（学习参考）</h3>
+        <ul>
+          <li><a href="https://github.com/uidotdev/usehooks" target="_blank" rel="noopener">usehooks</a> —— 现代 Hook 集合</li>
+          <li><a href="https://github.com/streamich/react-use" target="_blank" rel="noopener">react-use</a> —— 100+ Hooks</li>
+          <li><a href="https://usehooks-ts.com/" target="_blank" rel="noopener">usehooks-ts</a> —— TS 友好版</li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="05-use-ref.html">P3.5 useRef</a></li>
+          <li>
+            <strong>🎉 P3 Hooks 全谱完结</strong>。下一步进入 <strong>P4-P5（渲染与并发）</strong>（P4.2-P5.4）
+          </li>
+          <li>下一章：<a href="../04-fiber/02-reconciliation.html">P4.2 Reconciliation 用户视角</a>（编写中）</li>
+          <li>引擎层：<a href="../04-fiber/01-fiber-architecture.html">P4.1 Fiber 架构</a> —— Hook linked list 完整数据结构</li>
+        </ul>
+
+        <h3>跨主题参考</h3>
+        <ul>
+          <li><a href="../../typescript/02-type-manipulation/07-generics.html">TS · Generics</a> —— 自定义 Hook 泛型设计</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="05-use-ref.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P3.5 · useRef</span>
+          </a>
+          <a class="next" href="../04-fiber/01-fiber-architecture.html">
+            <span class="label">下一章 →</span>
+            <span class="title">P4.1 · Fiber 架构</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

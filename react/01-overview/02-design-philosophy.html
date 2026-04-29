@@ -1,0 +1,822 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>P1.2 · 设计哲学 ——「它是什么？」 · React 深度学习</title>
+    <meta
+      name="description"
+      content="React 的 4 个核心设计决策：UI = f(state) / 单向数据流 / Composition over inheritance / 不可变 + 重新渲染。每个决策的痛点驱动、与 Vue/Angular/Svelte 的横向对比、必须接受的代价。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2361dafb'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23000000'%3EReact%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>React 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.13 220); color: #fff">R</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">React 首页</a>
+          <a href="index.html">阶段目录</a>
+          <a href="https://react.dev/learn/thinking-in-react" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · React 是谁</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html">01 · React 项目史 2013-2025</a></li>
+          <li><a href="02-design-philosophy.html" class="active">02 · 设计哲学</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../02-mental-model/index.html">P2 · 渲染心智模型</a></li>
+          <li><a href="../03-hooks/index.html">P3 · Hooks 全谱</a></li>
+          <li><a href="../04-fiber/index.html">P4 · Fiber 内部机制</a></li>
+          <li><a href="../05-concurrent/index.html">P5 · Concurrent 并发</a></li>
+          <li><a href="../06-modern/index.html">P6 · Server Components 与 Actions</a></li>
+          <li><a href="../07-ecosystem/index.html">P7 · 生态与工程化</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">React</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · React 是谁</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>02 · 设计哲学</span>
+        </nav>
+
+        <h1>P1.2 · 设计哲学 ——「它是什么？」</h1>
+        <p class="lead">
+          P1.1 讲了 React 的<strong>历史时间线</strong>。本章讲 React 的<strong>设计基因</strong>—— 4 个核心决策，每个都对应一个具体痛点（Facebook 2010-2013 年遇到的 jQuery 时代问题）。理解这 4 个决策能解释 React 的<strong>所有"古怪"行为</strong>：为什么 JSX 不是模板？为什么不能直接 mutate state？为什么 useEffect 看起来像生命周期但实际不是？为什么需要 key？答案<strong>都在 4 个决策里</strong>。
+        </p>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 本章的"心智地基"角色</div>
+          <p>
+            本章是 React 主题<strong>所有 API 章节（B 轨）的"<em>为什么</em>"</strong>。读完后再看 useState / useEffect / Reconciliation / Server Components，所有"<em>API 为什么是这个样子</em>"的问题都有了一致的答案。如果只读 React 主题一章，应该是这一章。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> <a href="01-history.html">P1.1 起源与演化</a> + 任意 JS 框架经验（jQuery / Vue / Angular 中至少一个）</span>
+          <span><strong>权威来源</strong>
+            <a href="https://react.dev/learn/thinking-in-react" target="_blank" rel="noopener">react.dev · Thinking in React</a> ·
+            <a href="https://overreacted.io/" target="_blank" rel="noopener">Dan Abramov · overreacted.io</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义 React 的设计本质：</p>
+        <ol>
+          <li>
+            <strong>React 的 4 个核心决策构成"<em>声明式 UI 系统</em>"</strong>：① <strong>UI = f(state)</strong>（声明式 vs 命令式）② <strong>单向数据流</strong>（vs 双向绑定）③ <strong>Composition over inheritance</strong>（组合 vs 继承）④ <strong>不可变 + 重新渲染</strong>（vs Proxy 反应式）。<strong>4 个决策互相支撑</strong>，去掉任何一个 React 都不再是 React。
+          </li>
+          <li>
+            <strong>每个决策都是为了解决具体痛点</strong>。不是哲学洁癖，是工程答案：
+            <ul>
+              <li>UI = f(state) → 解决"<em>状态散布在 DOM 各处</em>"（jQuery 时代痛点）</li>
+              <li>单向数据流 → 解决"<em>双向绑定让数据传播路径不可预测</em>"（Angular 1.x 痛点）</li>
+              <li>Composition → 解决"<em>类继承的菱形问题</em>"</li>
+              <li>不可变 + 重渲染 → 解决"<em>怎么知道要重渲染</em>" 的工程问题（O(1) 引用比较 vs O(n) 结构比较）</li>
+            </ul>
+          </li>
+          <li>
+            <strong>每个决策都有代价</strong>，必须接受才能用 React。<strong>"<em>React 怪</em>" = 不接受这些代价</strong>。比如：JSX 不是 HTML（class → className）、key 必须稳定唯一、不可变更新繁琐（Immer 缓解）、函数组件每次重新创建函数（useMemo/useCallback 缓解）。
+          </li>
+        </ol>
+
+        <p>用一张表把 4 个决策和"<em>它替代了什么</em>" 对齐：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 24%">决策</th>
+              <th style="width: 28%">解决的痛点</th>
+              <th>替代了什么</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>UI = f(state)</td>
+              <td>状态散布 DOM 各处</td>
+              <td>jQuery 命令式 DOM 操作 / Backbone view.render</td>
+            </tr>
+            <tr>
+              <td>单向数据流</td>
+              <td>状态传播路径不可预测</td>
+              <td>Angular 1.x 双向绑定 / Knockout observable</td>
+            </tr>
+            <tr>
+              <td>Composition</td>
+              <td>类继承的菱形 / mixin 冲突</td>
+              <td>Backbone extend / Angular service 注入</td>
+            </tr>
+            <tr>
+              <td>不可变 + 重渲染</td>
+              <td>怎么知道要重渲染（O(1) vs O(n)）</td>
+              <td>Vue Proxy 反应式 / MobX observable</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>① UI = f(state) —— 声明式编程的具体落地</h3>
+        <p>
+          这是 React 的<strong>第一公理</strong>。你不告诉 React "<em>把这个 div 的 textContent 改成 X</em>"，你告诉它"<em>状态是这样，UI 应该长这样</em>"——由 React 决定怎么变 DOM。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 命令式 vs 声明式</span>
+          <pre class="code"><code class="lang-js">// 命令式（jQuery 时代）—— "怎么做"
+$('#count-display').text(count);
+$('#increment-btn').on('click', function () {
+  count++;
+  $('#count-display').text(count);  // 必须手动同步 DOM
+});
+
+// 声明式（React）—— "是什么"
+function Counter() {
+  const [count, setCount] = useState(0);
+  return (
+    &lt;div&gt;
+      &lt;span&gt;{count}&lt;/span&gt;                          {/* 状态变 → UI 自动变 */}
+      &lt;button onClick={() =&gt; setCount(count + 1)}&gt;+&lt;/button&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>
+          <strong>这个决策的痛点驱动</strong>是 P1.1 讲过的"<em>chat bug</em>"——当多个事件处理器各自更新 DOM，<strong>没人有"<em>整体状态</em>" 视角</strong>，bug 必然出现。UI = f(state) 把"<em>整体状态</em>" 强制集中到 React state，<strong>UI 永远是状态的纯函数派生</strong>，bug 来源被根除。
+        </p>
+
+        <p>
+          <strong>横向对比</strong>：
+        </p>
+
+        <table>
+          <thead>
+            <tr><th style="width: 24%">框架</th><th>声明方式</th><th>实现机制</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>React</td>
+              <td>JSX（JS 表达式）</td>
+              <td>每次状态变化重新调用组件函数 → Fiber 比对差异 → 最小 DOM 更新</td>
+            </tr>
+            <tr>
+              <td>Vue 3</td>
+              <td>SFC 模板（HTML 风格）</td>
+              <td>Proxy 拦截属性访问，自动追踪依赖，依赖变才重新渲染</td>
+            </tr>
+            <tr>
+              <td>Svelte</td>
+              <td>SFC 模板</td>
+              <td>编译时优化为 imperative DOM 操作（"<em>消失的框架</em>"）</td>
+            </tr>
+            <tr>
+              <td>Solid</td>
+              <td>JSX（看起来像 React）</td>
+              <td>signals 细颗粒度订阅，<strong>组件函数只跑一次</strong>，状态变化只更新订阅它的 DOM</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>关键洞察</strong>：4 个框架都是声明式 UI，但<strong>实现机制完全不同</strong>。React 的"<em>每次状态变化重新调用整个组件函数</em>"是最简单 / 最可预测的模型，但<strong>性能上限受限</strong>——这就是 Fiber + Concurrent rendering 存在的原因（P4.1 详述）。
+        </p>
+
+        <p>
+          <strong>UI = f(state) 的进一步推论</strong>：
+        </p>
+        <ul>
+          <li><strong>组件函数必须是纯函数</strong>：相同 props + state 必须返回相同 JSX。<strong>渲染期间不能修改 state、不能调 API、不能改 DOM</strong>—— 副作用必须放 useEffect</li>
+          <li><strong>同一段代码可能跑多次</strong>：React 18 StrictMode 下开发环境会双重渲染，正是利用"<em>纯函数应该幂等</em>" 这个性质来检测副作用</li>
+          <li><strong>状态变化触发整个子树重渲染</strong>—— 不是"<em>差量更新</em>"。你看到的 "<em>性能很好</em>" 是 Fiber 比对后只更新差异 DOM 的结果，不是 React 跳过组件函数</li>
+        </ul>
+
+        <h3>② 单向数据流 —— 数据传播路径可预测</h3>
+        <p>
+          数据从 parent 通过 props 传到 child。<strong>child 不能修改 props</strong>——只能通过调用 parent 传下来的回调函数请求 parent 修改它自己的 state。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 单向数据流模式</span>
+          <pre class="code"><code class="lang-js">function Parent() {
+  const [count, setCount] = useState(0);
+  return &lt;Child count={count} onIncrement={() =&gt; setCount(c =&gt; c + 1)} /&gt;;
+}
+
+function Child({ count, onIncrement }) {
+  // child 只能"<em>请求</em>"修改，不能直接改 props
+  return (
+    &lt;div&gt;
+      Count: {count}
+      &lt;button onClick={onIncrement}&gt;+&lt;/button&gt;
+    &lt;/div&gt;
+  );
+}
+
+// 数据流：Parent state → Child props（向下）
+// 事件流：Child onClick → 调用 onIncrement → Parent setCount（向上请求）
+// 永远不会：Child 直接修改 count（这是 props，不可变）</code></pre>
+        </div>
+
+        <p>
+          <strong>这个决策的痛点驱动</strong>是 Angular 1.x 时代的"<em>双向绑定地狱</em>"——<code>ng-model</code> 让 input 和 controller 双向同步，看起来很方便但<strong>多个 input 互相影响时，状态传播路径完全无法追踪</strong>。Angular 团队在 2.0+ 也<strong>放弃了双向绑定</strong>（默认改单向）。
+        </p>
+
+        <p>
+          <strong>横向对比</strong>：
+        </p>
+
+        <table>
+          <thead>
+            <tr><th style="width: 24%">框架</th><th>父子通信</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>React</td>
+              <td>props 向下 + 回调向上请求（默认且唯一）</td>
+            </tr>
+            <tr>
+              <td>Vue 3</td>
+              <td>props 向下 + emit 向上 + <code>v-model</code>（双向语法糖，本质仍是 props + emit）</td>
+            </tr>
+            <tr>
+              <td>Angular（2+）</td>
+              <td><code>@Input</code> + <code>@Output</code>（默认单向）+ <code>[(ngModel)]</code>（双向语法糖）</td>
+            </tr>
+            <tr>
+              <td>Svelte 5</td>
+              <td>$bindable rune（双向但显式标注）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>关键洞察</strong>：现代框架<strong>默认都是单向</strong>。双向绑定退化为"<em>语法糖</em>" + "<em>显式标注</em>"。React 是最严格的——<strong>没有双向语法糖</strong>，永远是 "<em>props 向下 + 回调向上</em>" 模式。
+        </p>
+
+        <p>
+          <strong>单向数据流的代价</strong>：
+        </p>
+        <ul>
+          <li><strong>表单写法繁琐</strong>：每个 <code>&lt;input&gt;</code> 都要 <code>value + onChange</code> 双绑（受控组件）。Vue 一个 <code>v-model</code> 解决</li>
+          <li><strong>跨多层组件传 state 痛苦</strong>：要么逐层 props 传（"prop drilling"），要么用 Context / 状态管理库</li>
+          <li><strong>"提升 state"的额外步骤</strong>：两个兄弟组件需要共享 state 时，必须把 state 提升到共同 parent</li>
+        </ul>
+
+        <p>
+          这些代价催生了大量<strong>缓解方案</strong>：React Hook Form（表单库）、Context API（跨层）、Zustand / Redux（全局状态）。理解 React 的单向决策是这些方案存在的<strong>根本原因</strong>。
+        </p>
+
+        <h3>③ Composition over inheritance —— 组合而非继承</h3>
+        <p>
+          React 组件<strong>从不通过继承复用</strong>—— 不存在 <code>class Card extends BaseCard</code> 这种模式。复用通过 3 种 composition 模式：
+        </p>
+
+        <ul>
+          <li><strong>Children prop</strong>（最常见）：<code>&lt;Card&gt;&lt;CardBody /&gt;&lt;/Card&gt;</code></li>
+          <li><strong>Render Props</strong>：<code>&lt;DataLoader&gt;{(data) =&gt; &lt;ui /&gt;}&lt;/DataLoader&gt;</code></li>
+          <li><strong>自定义 Hooks</strong>（19 时代主流）：<code>const { data, loading } = useFetch(url)</code></li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 3 种 composition 模式</span>
+          <pre class="code"><code class="lang-js">// ① Children prop —— "把内容传给我的 slot"
+function Card({ children, title }) {
+  return (
+    &lt;div className="card"&gt;
+      &lt;h2&gt;{title}&lt;/h2&gt;
+      {children}
+    &lt;/div&gt;
+  );
+}
+
+&lt;Card title="Welcome"&gt;
+  &lt;p&gt;This is the body&lt;/p&gt;
+&lt;/Card&gt;
+
+// ② Render Props —— "我提供数据，你决定怎么渲染"
+function DataLoader({ url, children }) {
+  const [data, setData] = useState(null);
+  useEffect(() =&gt; { fetch(url).then(r =&gt; r.json()).then(setData); }, [url]);
+  return children(data);
+}
+
+&lt;DataLoader url="/api/user"&gt;
+  {(data) =&gt; (data ? &lt;UserCard {...data} /&gt; : &lt;Spinner /&gt;)}
+&lt;/DataLoader&gt;
+
+// ③ 自定义 Hooks —— "我提供逻辑，你自己渲染"（19 时代首选）
+function useFetch(url) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() =&gt; {
+    setLoading(true);
+    fetch(url).then(r =&gt; r.json()).then(d =&gt; { setData(d); setLoading(false); });
+  }, [url]);
+  return { data, loading };
+}
+
+function UserPanel() {
+  const { data, loading } = useFetch('/api/user');
+  if (loading) return &lt;Spinner /&gt;;
+  return &lt;UserCard {...data} /&gt;;
+}</code></pre>
+        </div>
+
+        <p>
+          <strong>这个决策的痛点驱动</strong>是<strong>类继承的"<em>菱形问题</em>"</strong>——多继承时，两条父类链都包含同一基类的方法，子类继承哪个？Java / C# 通过 interface 解决；Mixin（Ruby / Python）通过 MRO 解决；JS 之前用 mixin（如 Vue 2 的 mixin），但仍有命名冲突 / 调试困难等问题。Composition 通过<strong>"<em>显式参数传递</em>"</strong>避开所有继承问题。
+        </p>
+
+        <p>
+          <strong>横向对比</strong>：
+        </p>
+        <ul>
+          <li><strong>Vue 3</strong>：<code>&lt;slot&gt;</code>（类似 children）+ provide/inject（类似 Context）+ Composition API（类似自定义 Hooks）。<strong>3 种机制几乎一对一</strong></li>
+          <li><strong>Angular</strong>：内容投影（<code>ng-content</code>）+ DI service（依赖注入复用逻辑）—— 依赖注入仍是 OOP 心智</li>
+          <li><strong>Svelte 5</strong>：<code>&lt;slot&gt;</code> + Snippets（render props 的等价物）+ Runes（响应式逻辑可在普通 JS 文件复用）</li>
+        </ul>
+
+        <p>
+          React 在 Composition 这点上<strong>是极致主义者</strong>——连 mixin 都不支持（Vue 2 / Vue 3 / Angular 都有过 mixin 设计）。所有复用必须通过显式 composition。
+        </p>
+
+        <h3>④ 不可变 + 重新渲染 —— "<em>怎么知道要重渲染</em>" 的工程答案</h3>
+        <p>
+          React 的 state 必须<strong>不可变</strong>。修改 state 的唯一方式是调用 <code>setState</code> 传入<strong>新引用</strong>：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 必须新引用</span>
+          <pre class="code"><code class="lang-js">// ❌ Mutate —— React 不知道 state 变了
+const [user, setUser] = useState({ name: 'Alice', age: 30 });
+user.age = 31;             // 直接 mutate
+setUser(user);             // 同一引用！React 跳过更新
+
+// ✅ 创建新引用
+setUser({ ...user, age: 31 });          // 新对象
+setUser(prev =&gt; ({ ...prev, age: 31 })); // updater function（推荐）
+
+// ❌ 数组 mutate
+const [items, setItems] = useState([1, 2, 3]);
+items.push(4);
+setItems(items);           // 同一引用，React 跳过
+
+// ✅ 数组新引用
+setItems([...items, 4]);
+setItems(prev =&gt; [...prev, 4]);</code></pre>
+        </div>
+
+        <p>
+          <strong>"为什么不可变"的本质</strong>：React 在每次状态变化时需要回答"<em>哪些组件需要重渲染</em>"。两个候选答案：
+        </p>
+        <ul>
+          <li><strong>引用比较（O(1)）</strong>：用 <code>Object.is(prevState, nextState)</code> 比较两个引用。新对象 → 重渲染；同一引用 → 跳过。<strong>极快但要求开发者保证 mutate state 时创建新引用</strong></li>
+          <li><strong>结构比较（O(n)）</strong>：递归比较两个对象的所有属性。能检测到 mutate，但<strong>性能差且对深嵌套数据爆炸</strong></li>
+        </ul>
+
+        <p>
+          React 选了<strong>引用比较</strong>—— 这就是<strong>不可变要求的根因</strong>。不是哲学洁癖，是工程权衡的<strong>必然结果</strong>。
+        </p>
+
+        <p>
+          <strong>详细引用比较机制</strong>请参考 <a href="../../javascript/01-fundamentals/01-types.html">JS · 数据类型系统</a>（<code>Object.is</code> / SameValueZero / 引用相等）和 <a href="../../ecma/05-abstract-ops/01-abstract-operations.html">ECMA · P2.3 抽象操作</a>（IsStrictlyEqual）。
+        </p>
+
+        <p>
+          <strong>横向对比</strong>：
+        </p>
+
+        <table>
+          <thead>
+            <tr><th style="width: 24%">框架</th><th>"知道要重渲染"机制</th><th>开发者代价</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>React</td>
+              <td>引用比较（不可变要求）</td>
+              <td>必须创建新引用</td>
+            </tr>
+            <tr>
+              <td>Vue 3</td>
+              <td>Proxy 拦截属性访问，自动追踪依赖</td>
+              <td>可以直接 mutate（<code>state.x = 1</code>）</td>
+            </tr>
+            <tr>
+              <td>MobX</td>
+              <td>同 Vue 3（observable + 自动追踪）</td>
+              <td>同 Vue 3</td>
+            </tr>
+            <tr>
+              <td>Solid</td>
+              <td>signals 显式订阅</td>
+              <td>用 <code>setCount(c =&gt; c + 1)</code> 模式</td>
+            </tr>
+            <tr>
+              <td>Svelte 5</td>
+              <td>Runes（编译时分析 + 运行时 signals）</td>
+              <td>$state 直接赋值</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>关键洞察</strong>：React 是<strong>5 个框架里"<em>开发者代价最高</em>"的</strong>—— Vue/MobX 直接 mutate、Solid/Svelte 直接赋值，只有 React 必须 <code>{...state, x: 1}</code>。<strong>但 React 的引用比较心智也是最简单的</strong>——只要"<em>新引用 = 重渲染</em>"，没有"<em>这个属性被 Proxy 追踪了吗</em>" 这种隐式问题。代价换简单。
+        </p>
+
+        <p>
+          这就是为什么 <strong>Immer</strong>（社区方案）这么流行—— 它让你"<em>看起来 mutate</em>"，底层用 Proxy 自动产生新引用：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Immer 缓解不可变更新繁琐</span>
+          <pre class="code"><code class="lang-js">import { produce } from 'immer';
+
+// 不用 Immer：嵌套更新地狱
+setUser(prev =&gt; ({
+  ...prev,
+  profile: {
+    ...prev.profile,
+    address: {
+      ...prev.profile.address,
+      city: 'Beijing',
+    },
+  },
+}));
+
+// 用 Immer：看起来 mutate，实际产生新引用
+setUser(produce(prev =&gt; {
+  prev.profile.address.city = 'Beijing';
+}));
+
+// Zustand 内置 Immer 支持
+useStore.setState(produce(state =&gt; { state.x = 1 }));</code></pre>
+        </div>
+
+        <h3>设计决策的代价 —— 必须接受才能用 React</h3>
+        <p>
+          4 个决策合在一起带来一组"<em>代价</em>"，<strong>不接受这些代价 = 觉得 React 怪</strong>：
+        </p>
+
+        <ul>
+          <li><strong>JSX 不是 HTML</strong>：<code>class</code> → <code>className</code>（class 是 JS 关键字）/ <code>for</code> → <code>htmlFor</code>（同上）/ <code>style</code> 是对象 / 注释用 <code>{/* */}</code>。这是 JS 限制，不是 React 选择</li>
+          <li><strong>必须 key 才能高效 list reconciliation</strong>：UI = f(state) + 重渲染机制要求识别"<em>哪些元素是同一个</em>"。key 是身份证。详见 <a href="../02-mental-model/05-conditional-list-event-form.html">P2.5</a>（编写中）</li>
+          <li><strong>不可变更新繁琐</strong>：嵌套数据更新写起来痛苦。Immer / Zustand-with-immer / Redux Toolkit 缓解</li>
+          <li><strong>函数组件每次渲染都重新创建函数</strong>：每个 <code>onClick={() =&gt; ...}</code> 都是新函数。useCallback 缓解但加心智成本。React 19 实验性的 React Compiler 自动加 memoization 是这个问题的"<em>系统级答案</em>"</li>
+          <li><strong>useEffect 心智复杂</strong>：依赖数组、cleanup、闭包陷阱。详见 <a href="../03-hooks/02-use-effect.html">P3.2 useEffect</a>（编写中）</li>
+          <li><strong>性能优化不直观</strong>：什么时候该用 memo / useMemo / useCallback 没有绝对规则—— 只能基于实际 measure</li>
+        </ul>
+
+        <p>
+          这些代价让 React<strong>不是"<em>最易学的</em>" 框架</strong>—— Vue 和 Svelte 入门曲线低得多。但 React 的设计决策让它在<strong>大型项目 / 长期维护</strong> 上有结构优势：单向数据流可预测、不可变让 time-travel debugging 可能、Composition 让代码组织灵活。<strong>选 React 是选"<em>初期代价高但长期可维护</em>" 的工程权衡</strong>。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 给 Vue / Angular / Svelte 工程师讲 React</h3>
+          <p>
+            最有效的切入点是<strong>"4 个决策 + 它解决了什么"</strong>，而不是从语法 / API 开始。具体讲法：
+          </p>
+          <ol>
+            <li><strong>从痛点开始</strong>：先讲 jQuery 时代的 chat bug 和 Angular 1.x 的双向绑定地狱。让对方理解"<em>为什么需要新框架</em>"</li>
+            <li><strong>4 个决策按顺序</strong>：UI=f(state) → 单向 → Composition → 不可变。每个决策都给"<em>没有它会怎样</em>"的反例</li>
+            <li><strong>用对方框架的 API 做对照</strong>：<code>v-if</code> ↔ <code>{cond &amp;&amp; ...}</code>、<code>@click</code> ↔ <code>onClick</code>、<code>props</code>（Vue）↔ <code>props</code>（React）</li>
+            <li><strong>承认代价</strong>：JSX 怪、key 必要、不可变繁琐——但这些是 4 个决策的<strong>必然</strong>代价</li>
+          </ol>
+          <p>
+            最常见的转换困难：① Vue 工程师习惯直接 <code>state.x = 1</code> mutate，React 必须 <code>setState({...})</code>；② Angular 工程师习惯 DI service，React 用自定义 Hooks 替代但语义不同。<strong>提前讲清这两点</strong>能减少 80% 的"<em>React 怪</em>" 抱怨。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 设计自己的状态管理库</h3>
+          <p>
+            团队需要轻量状态管理，不想引第三方库——自己写一个"<em>类 Zustand</em>"。设计要点：
+          </p>
+          <ol>
+            <li><strong>必须遵守"<em>不可变 + 引用比较</em>"</strong>—— 用 <code>Object.is</code> 浅比较 selected slice</li>
+            <li><strong>API 设计仿 Hooks</strong>：<code>const count = useStore(s =&gt; s.count)</code>（selector 模式）</li>
+            <li><strong>更新 API 强制不可变</strong>：<code>setState((prev) =&gt; ({...}))</code> 或集成 Immer</li>
+            <li><strong>跨组件共享靠 module scope + subscribers</strong>：不依赖 Context（Context 性能陷阱见 <a href="../03-hooks/03-use-reducer-context.html">P3.3</a>）</li>
+          </ol>
+          <p>
+            读 Zustand / Jotai / Valtio 的源码会发现它们都遵守这些设计。理解了 React 的 4 个决策，<strong>你能预测一个状态管理库的设计</strong>。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 评估第三方组件是否符合 React 哲学</h3>
+          <p>
+            选 UI 库 / 业务组件时，可以用 4 个决策做"嗅觉测试"：
+          </p>
+          <ul>
+            <li><strong>API 形态遵循 UI = f(state) 吗</strong>？<code>&lt;Modal open={isOpen} onClose={...} /&gt;</code> ✅ vs <code>modalRef.current.show()</code> ❌</li>
+            <li><strong>遵守单向数据流吗</strong>？<code>onChange</code> 形式 vs 内部 mutate parent 传入的对象</li>
+            <li><strong>Composition 友好吗</strong>？支持 children / render props / asChild 等组合模式</li>
+            <li><strong>不可变安全吗</strong>？传入数据后内部不会 mutate</li>
+          </ul>
+          <p>
+            <strong>不符合 4 个决策的组件 = 与 React 哲学冲突</strong>，长期维护成本高。Material UI v5 / shadcn/ui / Radix UI 都符合这 4 点，是"<em>哲学一致</em>" 的库。某些 jQuery 时代移植到 React 的库（如老版 antd）有"<em>命令式 API</em>" 残留——避免使用。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>对比：命令式 jQuery vs 声明式 React 的同一 todo list</h3>
+
+        <div class="code-block">
+          <span class="code-label">jQuery · 命令式</span>
+          <pre class="code"><code class="lang-js">$(document).ready(function () {
+  var todos = [];
+
+  $('#add-btn').on('click', function () {
+    var text = $('#input').val();
+    todos.push({ id: Date.now(), text, done: false });
+    renderList();
+    $('#input').val('');
+  });
+
+  function renderList() {
+    var html = '';
+    todos.forEach(function (todo) {
+      html += '&lt;li data-id="' + todo.id + '" class="' + (todo.done ? 'done' : '') + '"&gt;' +
+              '&lt;input type="checkbox" ' + (todo.done ? 'checked' : '') + '&gt;' +
+              todo.text +
+              '&lt;button class="delete"&gt;X&lt;/button&gt;&lt;/li&gt;';
+    });
+    $('#list').html(html);
+
+    // 重新绑定事件 —— 因为 innerHTML 替换了所有 DOM
+    $('#list .delete').on('click', function () {
+      var id = $(this).parent().data('id');
+      todos = todos.filter(t =&gt; t.id !== id);
+      renderList();
+    });
+    $('#list input[type="checkbox"]').on('change', function () {
+      var id = $(this).parent().data('id');
+      todos = todos.map(t =&gt; t.id === id ? {...t, done: this.checked} : t);
+      renderList();
+    });
+  }
+});
+// 问题：每次 renderList 都要重新绑定事件 / DOM 全部 innerHTML 重建</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">React · 声明式</span>
+          <pre class="code"><code class="lang-js">function TodoList() {
+  const [todos, setTodos] = useState([]);
+  const [input, setInput] = useState('');
+
+  const add = () =&gt; {
+    setTodos(prev =&gt; [...prev, { id: Date.now(), text: input, done: false }]);
+    setInput('');
+  };
+  const remove = (id) =&gt; setTodos(prev =&gt; prev.filter(t =&gt; t.id !== id));
+  const toggle = (id) =&gt; setTodos(prev =&gt;
+    prev.map(t =&gt; t.id === id ? { ...t, done: !t.done } : t)
+  );
+
+  return (
+    &lt;&gt;
+      &lt;input value={input} onChange={e =&gt; setInput(e.target.value)} /&gt;
+      &lt;button onClick={add}&gt;Add&lt;/button&gt;
+      &lt;ul&gt;
+        {todos.map(todo =&gt; (
+          &lt;li key={todo.id} className={todo.done ? 'done' : ''}&gt;
+            &lt;input type="checkbox" checked={todo.done} onChange={() =&gt; toggle(todo.id)} /&gt;
+            {todo.text}
+            &lt;button onClick={() =&gt; remove(todo.id)}&gt;X&lt;/button&gt;
+          &lt;/li&gt;
+        ))}
+      &lt;/ul&gt;
+    &lt;/&gt;
+  );
+}
+// 优势：UI 永远和 state 一致；不需要手动同步 DOM；事件绑定在元素上不会丢失</code></pre>
+        </div>
+
+        <p>
+          <strong>关键观察</strong>：jQuery 版本约 30 行，React 版本约 25 行——<strong>代码量差不多</strong>。但 jQuery 版本的<strong>所有 bug 风险</strong>都集中在"<em>renderList 重建 DOM 后必须重绑事件</em>" 这一行。React 版本根本没有这个问题——UI = f(state) + 单向数据流让"<em>状态同步 UI</em>" 成为框架的责任，开发者只关心状态本身。
+        </p>
+
+        <h3>引用比较 vs 结构比较的实测</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · React 的引用比较心智</span>
+          <pre class="code"><code class="lang-js">function Component() {
+  const [obj, setObj] = useState({ count: 0 });
+
+  const handleClick = () =&gt; {
+    // ❌ Mutate —— React 跳过更新
+    obj.count++;
+    setObj(obj);  // setObj(obj) 时 Object.is(obj, obj) === true，跳过
+
+    // ✅ 新引用
+    setObj({ ...obj, count: obj.count + 1 });
+
+    // 验证：
+    const a = { count: 0 };
+    const b = { count: 0 };
+    Object.is(a, b);             // false —— 不同引用
+    Object.is(a, a);             // true  —— 同一引用
+    Object.is(a, {...a});        // false —— 展开产生新引用 ✅
+
+    // React 内部就是用 Object.is 决定 state 是否变了
+    // 所以 mutate state 不会触发渲染
+  };
+
+  return &lt;button onClick={handleClick}&gt;{obj.count}&lt;/button&gt;;
+}
+
+// React.memo 的浅比较是逐个 props 用 Object.is
+// 所以传 inline 对象 / 函数会让 memo 失效：
+&lt;Child config={{ x: 1 }} /&gt;        // 每次渲染都是新对象 —— memo 失效
+&lt;Child onClick={() =&gt; foo()} /&gt;    // 每次渲染都是新函数 —— memo 失效
+
+// 解决：useMemo / useCallback 保证引用稳定
+const config = useMemo(() =&gt; ({ x: 1 }), []);
+const onClick = useCallback(() =&gt; foo(), []);</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：把 React 当"view 层"</div>
+          <p>
+            "<em>React 只是渲染层，状态管理用 Redux</em>"——这是 2015 年的旧观念。今天 React 19 已是<strong>完整的"<em>UI = f(state)</em>" 运行时</strong>，包含状态机制（useState / useReducer / Context）+ 副作用机制（useEffect）+ 异步机制（Suspense / Actions）。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：理解 React 自带"<em>整套状态机</em>"。Redux / MobX 是<strong>补充工具</strong>（应对全局 / 跨组件 / 复杂状态机场景），不是<strong>必需品</strong>。简单应用 useState + useReducer 就够。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：用 Vue 的反应式心智写 React</div>
+          <p>
+            Vue 工程师转 React 最常见错误：
+          </p>
+          <div class="code-block" style="margin-top: 12px">
+            <span class="code-label">javascript · Vue 心智的 React 代码</span>
+            <pre class="code"><code class="lang-js">// ❌ Vue 风格在 React 不工作
+const [user, setUser] = useState({ name: 'Alice', items: [] });
+
+// 直接 mutate（Vue 3 Proxy 能感知，React 不能）
+user.name = 'Bob';
+user.items.push('item1');
+
+// React 完全不知道 state 变了，UI 不更新
+
+// ✅ React 风格
+setUser(prev =&gt; ({
+  ...prev,
+  name: 'Bob',
+  items: [...prev.items, 'item1'],
+}));</code></pre>
+          </div>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：写 React 时<strong>把 state 当"<em>不可变快照</em>"</strong>，永远 <code>setState(prev =&gt; ({...prev, ...}))</code>。如果嵌套太深，引入 Immer。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：滥用 useMemo / useCallback</div>
+          <p>
+            "<em>缓存就是优化</em>" 是常见误区。useMemo / useCallback 本身有 cache 维护开销——对于<strong>简单计算 / 简单函数</strong>，cache 比直接重新计算还慢。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：useMemo / useCallback 只在以下场景有意义：① 传给 <code>React.memo</code> 子组件 ② 作为 useEffect / useMemo 依赖 ③ 真的昂贵的计算（&gt;1ms）。其他场景直接重新计算。<strong>React Compiler</strong>（19 实验性）是终极答案——自动加 memoization，未来减少手动管理。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：在渲染期间产生副作用</div>
+          <p>
+            UI = f(state) 要求组件函数是<strong>纯函数</strong>。常见违规：
+          </p>
+          <div class="code-block" style="margin-top: 12px">
+            <span class="code-label">javascript · 渲染期副作用</span>
+            <pre class="code"><code class="lang-js">function Component() {
+  const [count, setCount] = useState(0);
+
+  // ❌ 渲染期间修改 state（无限循环！）
+  if (count &lt; 10) setCount(count + 1);
+
+  // ❌ 渲染期间调 API
+  fetch('/api/log', { method: 'POST', body: JSON.stringify({ count }) });
+
+  // ❌ 渲染期间修改外部变量
+  externalCounter++;
+
+  return &lt;div&gt;{count}&lt;/div&gt;;
+}
+
+// ✅ 副作用必须放 useEffect
+useEffect(() =&gt; {
+  fetch('/api/log', { method: 'POST', body: JSON.stringify({ count }) });
+}, [count]);</code></pre>
+          </div>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：写组件时问自己"<em>这一行代码每次渲染跑都没问题吗</em>"。Strict Mode 双重渲染就是用来检测这种违规的。详见 <a href="../03-hooks/02-use-effect.html">P3.2 useEffect</a>（编写中）。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>权威来源</h3>
+        <ul>
+          <li>
+            <a href="https://react.dev/learn/thinking-in-react" target="_blank" rel="noopener">react.dev · Thinking in React</a> —— 官方"<em>怎么用 React 思考</em>"指南
+          </li>
+          <li>
+            <a href="https://react.dev/learn/keeping-components-pure" target="_blank" rel="noopener">react.dev · Keeping Components Pure</a> —— 纯函数渲染哲学
+          </li>
+          <li>
+            <a href="https://overreacted.io/react-as-a-ui-runtime/" target="_blank" rel="noopener">Dan Abramov · React as a UI Runtime (2019)</a> —— React 设计哲学最深度的解读
+          </li>
+          <li>
+            <a href="https://overreacted.io/the-two-reacts/" target="_blank" rel="noopener">Dan Abramov · The Two Reacts (2024)</a> —— Server Components 时代的 React 哲学演进
+          </li>
+        </ul>
+
+        <h3>横向对比</h3>
+        <ul>
+          <li>
+            <a href="https://vuejs.org/guide/extras/composition-api-faq.html" target="_blank" rel="noopener">Vue 3 · Composition API FAQ</a> —— Vue 团队对 React Hooks 的回应
+          </li>
+          <li>
+            <a href="https://svelte.dev/blog/runes" target="_blank" rel="noopener">Svelte 5 · Introducing Runes</a> —— Svelte 5 反应式机制（与 React signals 提案对比）
+          </li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="01-history.html">P1.1 起源与演化</a></li>
+          <li>下一步：<strong>P4.1 Fiber 架构</strong>（编写中）⭐ —— 把本章的 4 个决策<strong>翻译成运行时机器结构</strong></li>
+          <li>其他阶段：<a href="../02-mental-model/index.html">P2+P3+P6（官网精读）</a></li>
+        </ul>
+
+        <h3>跨主题参考</h3>
+        <ul>
+          <li><a href="../../javascript/01-fundamentals/01-types.html">JS · 数据类型系统</a> —— Object.is 与引用比较</li>
+          <li><a href="../../javascript/02-advanced/02-closures.html">JS · 闭包内存模型</a> —— 函数组件的闭包基础</li>
+          <li><a href="../../ecma/02-design/01-three-inspirations.html">ECMA · P1.2 设计原则</a> —— Self / Scheme / Java 三大灵感如何影响 JS（间接影响 React）</li>
+          <li><a href="../../ecma/05-abstract-ops/01-abstract-operations.html">ECMA · P2.3 抽象操作</a> —— SameValueZero / IsStrictlyEqual</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-history.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P1.1 · React 项目史 2013-2025</span>
+          </a>
+          <a class="next" href="../02-mental-model/01-rendering-model.html">
+            <span class="label">下一章 →</span>
+            <span class="title">P2.1 · 渲染模型与 React 元素</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

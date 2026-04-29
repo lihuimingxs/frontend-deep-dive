@@ -1,0 +1,849 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>P2.2 · JSX 编译与运行时 · React 深度学习</title>
+    <meta
+      name="description"
+      content="JSX 不是模板而是 JS 表达式。新 JSX runtime（React 17+ 不再 import React）vs classic runtime、jsxImportSource（Emotion / Theme UI）、Fragment 三种写法、JSX 在 TypeScript 里的集成、JSX 表达式插值规则、命名约定。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2361dafb'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23000000'%3EReact%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>React 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.13 220); color: #fff">R</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">React 首页</a>
+          <a href="index.html">阶段目录</a>
+          <a href="https://react.dev/learn/writing-markup-with-jsx" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · 渲染心智模型</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-rendering-model.html">01 · 渲染模型与 React 元素</a></li>
+          <li><a href="02-jsx.html" class="active">02 · JSX 编译与运行时</a></li>
+          <li><a href="03-components-props.html">03 · 组件与 Props</a></li>
+          <li><a href="04-state-basics.html">04 · State 基础</a></li>
+          <li><a href="05-conditional-list-event-form.html">05 · 条件 / 列表 / 事件 / 表单</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · React 是谁</a></li>
+          <li><a href="../03-hooks/index.html">P3 · Hooks 全谱</a></li>
+          <li><a href="../04-fiber/index.html">P4 · Fiber 内部机制</a></li>
+          <li><a href="../05-concurrent/index.html">P5 · Concurrent 并发</a></li>
+          <li><a href="../06-modern/index.html">P6 · Server Components 与 Actions</a></li>
+          <li><a href="../07-ecosystem/index.html">P7 · 生态与工程化</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">React</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · 渲染心智模型</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>02 · JSX 编译与运行时</span>
+        </nav>
+
+        <h1>P2.2 · JSX 编译与运行时</h1>
+        <p class="lead">
+          JSX 是 React 最有标志性、也是<strong>最被误解</strong>的特性。它<strong>不是模板语言</strong>（不像 Vue SFC / Svelte SFC），而是<strong>JavaScript 表达式的语法糖</strong>—— <code>&lt;div&gt;Hello&lt;/div&gt;</code> 在编译后就是一个普通函数调用。本章讲清 JSX 的<strong>编译机制</strong>（新 / 旧 runtime）、<strong>插值规则</strong>、<strong>命名约定</strong>，以及它在 TypeScript / Emotion / 自定义 runtime 中的集成方式。读完后你能解释"<em>为什么 JSX 不是 HTML</em>" 和"<em>为什么 React 17 之后不再需要 import React</em>"。
+        </p>
+
+        <div class="callout info" style="margin: 16px 0">
+          <div class="callout-title">📐 JSX 设计动机请回看 P1.1 / P1.2</div>
+          <p>
+            "<em>JSX 为什么存在</em>"已在 <a href="../01-overview/01-history.html">P1.1 起源与演化</a> 讲过——2013 JSConf 引发的争议 + Pete Hunt "<em>Rethinking Best Practices</em>" 论证。"<em>JSX 是 JS 表达式 vs 模板</em>" 的设计哲学差异在 <a href="../01-overview/02-design-philosophy.html">P1.2 设计哲学</a>。本章<strong>不重复</strong>，只讲编译细节。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> <a href="01-rendering-model.html">P2.1 渲染模型</a> + ES2015 语法</span>
+          <span><strong>对应 react.dev</strong>
+            <a href="https://react.dev/learn/writing-markup-with-jsx" target="_blank" rel="noopener">Writing Markup with JSX</a> ·
+            <a href="https://react.dev/blog/2020/09/22/introducing-the-new-jsx-transform" target="_blank" rel="noopener">New JSX Transform (2020)</a>
+          </span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>三句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>JSX 是 JS 的表达式语法糖，不是模板</strong>。<code>&lt;div /&gt;</code> 编译后是函数调用，结果是 React 元素对象。<strong>JSX 出现在任何 JS 表达式可以出现的位置</strong>—— 函数返回值 / 三元 / map 回调 / 变量赋值 / 函数参数。这是 React Composability 的<strong>语言层根基</strong>。
+          </li>
+          <li>
+            <strong>有两种编译 runtime</strong>：<strong>classic runtime</strong>（React 16 及之前的默认）编译为 <code>React.createElement(...)</code>，必须 <code>import React</code>；<strong>new JSX runtime</strong>（React 17+ 推荐）编译为 <code>jsx(...)</code> / <code>jsxs(...)</code>，<strong>不需要 import React</strong>，bundle 更小，性能更好。新项目都用新 runtime。
+          </li>
+          <li>
+            <strong>JSX 的"<em>奇怪</em>"都是 JS 限制 + React 选择的结果</strong>：① <code>className</code> 而非 <code>class</code>（class 是 JS 关键字）② <code>htmlFor</code> 而非 <code>for</code>（for 是 JS 关键字）③ <code>style</code> 是对象不是字符串（避免拼接 + 类型安全）④ 大小写区分（小写 → host 元素，大写 → 组件）⑤ 注释用 <code>{/* */}</code>（不能用 HTML 注释）。
+          </li>
+        </ol>
+
+        <p>看一段 JSX 编译前后对比：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · JSX vs 编译产物</span>
+          <pre class="code"><code class="lang-js">// 编写：
+function Greeting({ name }) {
+  return (
+    &lt;div className="card"&gt;
+      &lt;h1 onClick={() =&gt; alert('hi')}&gt;Hello {name}&lt;/h1&gt;
+      {name === 'admin' &amp;&amp; &lt;Badge /&gt;}
+    &lt;/div&gt;
+  );
+}
+
+// 新 JSX runtime 编译后（React 17+）：
+import { jsx as _jsx, jsxs as _jsxs } from 'react/jsx-runtime';
+function Greeting({ name }) {
+  return _jsxs('div', {
+    className: 'card',
+    children: [
+      _jsx('h1', { onClick: () =&gt; alert('hi'), children: ['Hello ', name] }),
+      name === 'admin' &amp;&amp; _jsx(Badge, {}),
+    ],
+  });
+}
+
+// 关键观察：
+// 1. JSX 完全消失，剩下的是普通函数调用
+// 2. children 在 props 对象里
+// 3. 组件名（Badge）变成函数引用
+// 4. 表达式（{...}) 变成普通 JS 值传入</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>JSX 编译两种 runtime</h3>
+
+        <h4>Classic Runtime（React 16 及之前默认）</h4>
+        <p>
+          每个 JSX 元素编译为 <code>React.createElement</code> 调用。<strong>需要在每个文件顶部 import React</strong>—— 即使你不直接用 React 变量。
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · classic runtime 编译</span>
+          <pre class="code"><code class="lang-js">// 编写
+import React from 'react';   // ← 必须 import React，否则编译报错
+
+function App() {
+  return (
+    &lt;div className="app"&gt;
+      &lt;h1&gt;Title&lt;/h1&gt;
+      &lt;p&gt;Body&lt;/p&gt;
+    &lt;/div&gt;
+  );
+}
+
+// classic runtime 编译后：
+const React = require('react');
+function App() {
+  return React.createElement(
+    'div',
+    { className: 'app' },
+    React.createElement('h1', null, 'Title'),
+    React.createElement('p', null, 'Body'),
+  );
+}
+
+// createElement 签名：
+// React.createElement(type, props, ...children)
+//   - children 作为可变参数，运行时拼成数组
+//   - 每次调用都创建一个 props 对象副本
+//   - 性能：每次 render 都跑这个 createElement 链</code></pre>
+        </div>
+
+        <p>
+          <strong>Classic runtime 的问题</strong>：① <strong>每个文件必须 import React</strong>—— 即使只用了 JSX 没直接用 React 变量。这是常见的"<em>已 import 但未使用</em>" 警告 ② <strong>tree-shaking 不彻底</strong>—— 整个 React 都被引用 ③ <strong>性能差</strong>—— children 用可变参数拼成数组每次都新建。
+        </p>
+
+        <h4>New JSX Runtime（React 17+ 推荐）</h4>
+        <p>
+          React 17 引入<strong>新 JSX runtime</strong>。编译器自动 import <code>jsx</code> / <code>jsxs</code> / <code>Fragment</code>，<strong>不再需要手动 import React</strong>：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · new JSX runtime 编译</span>
+          <pre class="code"><code class="lang-js">// 编写（注意：不需要 import React）
+function App() {
+  return (
+    &lt;div className="app"&gt;
+      &lt;h1&gt;Title&lt;/h1&gt;
+      &lt;p&gt;Body&lt;/p&gt;
+    &lt;/div&gt;
+  );
+}
+
+// new JSX runtime 编译后（React 17+）：
+import { jsx as _jsx, jsxs as _jsxs } from 'react/jsx-runtime';
+
+function App() {
+  return _jsxs('div', {
+    className: 'app',
+    children: [
+      _jsx('h1', { children: 'Title' }),
+      _jsx('p', { children: 'Body' }),
+    ],
+  });
+}
+
+// 区别：
+// - jsx：单个 child（或 0/1 child）
+// - jsxs：多个 children（s = static array）
+// - children 直接放进 props 对象，不再可变参数
+// - 编译器自动决定用 jsx 还是 jsxs（基于 children 数量）
+// - import 是编译器加的，用户代码不需要写</code></pre>
+        </div>
+
+        <p>
+          <strong>新 runtime 的优势</strong>：
+        </p>
+        <ul>
+          <li><strong>不需要 import React</strong>—— 文件更干净，新人不会问"<em>为什么必须 import React</em>"</li>
+          <li><strong>更小 bundle</strong>—— jsx 函数比 createElement 简单（不处理可变参数 / 不做 ref / key 警告）</li>
+          <li><strong>tree-shaking 友好</strong>—— 只 import 用到的函数，不引整个 React</li>
+          <li><strong>类型推导更精确</strong>—— 配合 TypeScript <code>jsx: "react-jsx"</code> 选项</li>
+          <li><strong>错误信息更好</strong>—— jsx-dev-runtime 在开发时给出更精确的位置信息</li>
+        </ul>
+
+        <p>
+          <strong>怎么启用新 runtime</strong>：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">配置 · 启用 new JSX runtime</span>
+          <pre class="code"><code class="lang-js">// tsconfig.json（TypeScript 项目）
+{
+  "compilerOptions": {
+    "jsx": "react-jsx",      // ← 新 runtime（"react" 是 classic）
+    "jsxImportSource": "react"  // ← 默认是 react，下文讲怎么自定义
+  }
+}
+
+// .babelrc（Babel 项目）
+{
+  "presets": [
+    ["@babel/preset-react", { "runtime": "automatic" }]  // ← automatic 是新 runtime
+  ]
+}
+
+// vite.config.ts（Vite 默认就是新 runtime，无需配置）
+
+// next.config.js（Next.js 默认就是新 runtime，无需配置）
+
+// 老项目升级：
+// 1. tsconfig.jsx 从 "react" 改 "react-jsx"
+// 2. 移除所有不必要的 import React from 'react'
+// 3. 用 codemod：npx react-codemod update-react-imports</code></pre>
+        </div>
+
+        <h3><code>jsxImportSource</code> —— 自定义 runtime 来源</h3>
+        <p>
+          新 JSX runtime 默认从 <code>react/jsx-runtime</code> import jsx 函数。但<strong>这个来源可以替换</strong>—— 让 JSX 编译为<strong>其他库的 jsx 函数</strong>。这就是 <code>jsxImportSource</code> 配置。
+        </p>
+
+        <p>
+          典型用例：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · jsxImportSource 用法</span>
+          <pre class="code"><code class="lang-js">// 1. Emotion CSS-in-JS
+// tsconfig.json
+{ "jsx": "react-jsx", "jsxImportSource": "@emotion/react" }
+//                       ↑ 编译后 import 来自 @emotion/react/jsx-runtime
+// 这个 jsx 函数支持额外的 css prop:
+&lt;div css={{ color: 'red' }}&gt;Hello&lt;/div&gt;
+// 编译后调用 emotion 的 jsx，处理 css prop 并生成 styled component
+
+// 2. Theme UI（已废弃但仍可见于老代码）
+{ "jsx": "react-jsx", "jsxImportSource": "theme-ui" }
+
+// 3. Preact（用 React API 但跑 Preact runtime）
+{ "jsx": "react-jsx", "jsxImportSource": "preact" }
+// import { jsx } from 'preact/jsx-runtime'
+// 让 React 代码直接跑 Preact（比 React 小 80%，几乎完全兼容 API）
+
+// 4. 文件级覆盖（pragma 注释）
+/** @jsxImportSource @emotion/react */
+function MyEmotionComponent() {
+  return &lt;div css={{ color: 'red' }}&gt;Hello&lt;/div&gt;;
+}
+// 这一文件用 emotion，其他文件用默认 react</code></pre>
+        </div>
+
+        <p>
+          <strong>jsxImportSource 的工程意义</strong>：让"<em>JSX 语法</em>" 和"<em>JSX 运行时</em>" 解耦。同一份 JSX 源码可以跑 React、Preact、Emotion 增强版、自家自定义渲染器—— 不需要改业务代码。
+        </p>
+
+        <h3>Fragment 的三种写法</h3>
+        <p>
+          组件必须返回单个根元素—— 但实际经常需要"<em>多个相邻元素无包装 div</em>"。<strong>Fragment</strong> 解决这个：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Fragment 三种写法</span>
+          <pre class="code"><code class="lang-js">// 写法 1：&lt;React.Fragment&gt;（最完整）
+import { Fragment } from 'react';
+function App() {
+  return (
+    &lt;Fragment&gt;
+      &lt;h1&gt;Title&lt;/h1&gt;
+      &lt;p&gt;Body&lt;/p&gt;
+    &lt;/Fragment&gt;
+  );
+}
+// 唯一支持 key prop 的写法（用在 list 中）
+&lt;Fragment key={item.id}&gt;...&lt;/Fragment&gt;
+
+// 写法 2：&lt;&gt;...&lt;/&gt;（短语法）
+function App() {
+  return (
+    &lt;&gt;
+      &lt;h1&gt;Title&lt;/h1&gt;
+      &lt;p&gt;Body&lt;/p&gt;
+    &lt;/&gt;
+  );
+}
+// 不支持 key —— 在 list 中需要 key 时退回到 &lt;Fragment key={...}&gt;
+
+// 写法 3：返回数组（不推荐）
+function App() {
+  return [
+    &lt;h1 key="title"&gt;Title&lt;/h1&gt;,
+    &lt;p key="body"&gt;Body&lt;/p&gt;,
+  ];
+}
+// 必须每个元素有 key
+// 可读性差，不推荐
+
+// 编译后（new runtime）：
+// &lt;Fragment&gt;X&lt;/Fragment&gt; → _jsx(Fragment, { children: X })
+// 其中 Fragment 是 Symbol(react.fragment)，特殊处理（不渲染包装节点）</code></pre>
+        </div>
+
+        <h3>JSX 表达式插值规则</h3>
+        <p>
+          <code>{}</code> 内可以放<strong>任何 JS 表达式</strong>—— 包括函数调用、三元、map / filter / reduce、对象 spread 等：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · JSX 插值能放什么</span>
+          <pre class="code"><code class="lang-js">function Demo({ items, user, isAdmin }) {
+  const greeting = `Hello, ${user.name}`;
+  return (
+    &lt;div&gt;
+      {/* 字符串 / 数字 / 表达式 */}
+      &lt;h1&gt;{greeting}&lt;/h1&gt;
+      &lt;p&gt;{user.age * 2}&lt;/p&gt;
+
+      {/* 三元 */}
+      {isAdmin ? &lt;AdminPanel /&gt; : &lt;UserPanel /&gt;}
+
+      {/* 短路 &amp;&amp;（注意陷阱：见下文）*/}
+      {isAdmin &amp;&amp; &lt;AdminBadge /&gt;}
+
+      {/* 数组（要 key） */}
+      &lt;ul&gt;
+        {items.map(item =&gt; &lt;li key={item.id}&gt;{item.text}&lt;/li&gt;)}
+      &lt;/ul&gt;
+
+      {/* IIFE（少用，不推荐 —— 倾向于提取子组件）*/}
+      {(() =&gt; {
+        if (cond1) return &lt;A /&gt;;
+        if (cond2) return &lt;B /&gt;;
+        return null;
+      })()}
+
+      {/* spread 属性 */}
+      &lt;Modal {...modalProps} /&gt;
+
+      {/* 多个表达式拼一起（要用空格 / template literal）*/}
+      &lt;div&gt;{user.firstName} {user.lastName}&lt;/div&gt;
+      &lt;div&gt;{`${user.firstName} ${user.lastName}`}&lt;/div&gt;
+
+      {/* 不能放：}
+      {/* if 语句（不是表达式）*/}
+      {/* for 循环（不是表达式）*/}
+      {/* 对象字面量（要双花括号）*/}
+      &lt;div style={{ color: 'red' }}&gt;...&lt;/div&gt;
+      {/*       ↑↑ 外层 {} 是 JSX 插值 */}
+      {/*          ↑ 内层 {} 是对象字面量 */}
+    &lt;/div&gt;
+  );
+}
+
+// 不会渲染的值（自动跳过）：
+// - false / null / undefined
+// - true（也会跳过！）
+// - 空数组 / 空字符串 ''
+// 例：{isLoading &amp;&amp; ...} 当 isLoading 是 false 时跳过，不渲染 'false' 文本
+
+// ⚠️ 会渲染但常出 bug 的值：
+// - 0（会渲染为 '0' 文本！）—— 这是 &amp;&amp; 短路陷阱的根因
+{items.length &amp;&amp; &lt;List items={items} /&gt;}
+// 当 items 是空数组（length===0），渲染 '0' 而非空 ⚠️
+// 修复：{items.length &gt; 0 &amp;&amp; ...} 或 {items.length ? ... : null}</code></pre>
+        </div>
+
+        <h3>JSX 在 TypeScript 中的集成</h3>
+        <p>
+          <strong>短重述</strong>：TS 通过 <code>tsconfig.jsx</code> + <code>JSX.IntrinsicElements</code> 类型集成 JSX。<code>jsx: "react-jsx"</code>（新 runtime）/ <code>"react-jsxdev"</code>（开发版，含 source 信息）/ <code>"preserve"</code>（不编译，留给后续 Babel）/ <code>"react"</code>（classic）/ <code>"react-native"</code>（RN 专用）。
+        </p>
+
+        <p>
+          <strong>详细机制请参考</strong> <a href="../../typescript/03-reference/16-iterators-jsx.html">TS · 16 Iterators / JSX</a>—— 那里详述了 <code>JSX.Element</code> / <code>JSX.IntrinsicElements</code> / <code>React.FC</code> 类型 / 事件类型推导。本章只点本质：
+        </p>
+
+        <div class="code-block">
+          <span class="code-label">typescript · JSX 类型集成最小例子</span>
+          <pre class="code"><code class="lang-ts">// React 自动扩展全局 JSX namespace
+declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      div: React.HTMLAttributes&lt;HTMLDivElement&gt;;
+      button: React.ButtonHTMLAttributes&lt;HTMLButtonElement&gt;;
+      // ... 所有 host 元素都在这里
+    }
+  }
+}
+
+// 这就是为什么 &lt;div onClick={fn} /&gt; 中 fn 类型是 (e: React.MouseEvent) =&gt; void
+// 由 IntrinsicElements 的 div 类型推导
+
+// 用户可以扩展（自定义 host 元素，如 Web Components）：
+declare module 'react' {
+  namespace JSX {
+    interface IntrinsicElements {
+      'my-custom-element': { customAttr?: string; children?: ReactNode };
+    }
+  }
+}
+// 之后就可以 &lt;my-custom-element customAttr="x" /&gt; 不报错</code></pre>
+        </div>
+
+        <h3>JSX 命名规则与限制</h3>
+        <p>
+          完整命名规则：
+        </p>
+        <ul>
+          <li><strong>小写开头</strong>（<code>&lt;div /&gt;</code>）→ host 元素，type 是字符串</li>
+          <li><strong>大写开头</strong>（<code>&lt;MyButton /&gt;</code>）→ 组件，type 是变量引用，必须在作用域内</li>
+          <li><strong>带连字符</strong>（<code>&lt;my-element /&gt;</code>）→ 视为 host 元素（Web Components）</li>
+          <li><strong>带点</strong>（<code>&lt;Form.Input /&gt;</code>）→ 属性访问，组件，等价 <code>Form.Input</code></li>
+          <li><strong>泛型</strong>（<code>&lt;Select&lt;string&gt; /&gt;</code>）→ TS 才支持，传类型参数</li>
+        </ul>
+
+        <p>
+          <strong>JSX 不能做的事</strong>：
+        </p>
+        <ul>
+          <li><strong>语句</strong>—— 不能直接放 if / for / while。要用三元 / map / 提取子组件</li>
+          <li><strong>注释</strong>—— 不能用 <code>&lt;!-- --&gt;</code>（HTML 注释）。用 <code>{/* ... */}</code></li>
+          <li><strong>关键字 prop</strong>—— class / for / catch 是 JS 关键字，不能直接用作 prop。改名 className / htmlFor / catchHandler 等</li>
+          <li><strong>style 字符串</strong>—— style 必须是对象 <code>{{ color: 'red' }}</code>，不能是字符串 <code>"color: red"</code></li>
+        </ul>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 老项目升级到 New JSX Runtime</h3>
+          <p>
+            React 16 项目，每个组件文件顶部都 <code>import React from 'react'</code>（即使只用了 JSX）。升级到 17+ 后想清理这些 import：
+          </p>
+          <div class="code-block">
+            <span class="code-label">bash · 自动化迁移</span>
+            <pre class="code"><code class="lang-js">// 1. 升级 React 到 17.0+ / 18.x / 19.x
+npm install react@latest react-dom@latest
+
+// 2. 改 tsconfig.json
+{ "compilerOptions": { "jsx": "react-jsx" } }
+
+// 3. 移除不必要的 import（codemod 自动处理）
+npx react-codemod update-react-imports
+
+// 处理结果：
+// - 仅有 &lt;JSX&gt; 没用 React 变量的文件 → 删除 import React
+// - 用了 React.useState 等 → 改为 import { useState } from 'react'
+// - 还在用 React.createElement 等 → 保留 import
+
+// 4. ESLint 规则更新
+{
+  "rules": {
+    "react/react-in-jsx-scope": "off",        // 不再要求 import React
+    "react/jsx-uses-react": "off"
+  }
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 用 Emotion CSS-in-JS（jsxImportSource）</h3>
+          <p>
+            团队选 Emotion 做 CSS-in-JS，想用它的 css prop（<code>&lt;div css={{...}} /&gt;</code>）：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · Emotion + jsxImportSource</span>
+            <pre class="code"><code class="lang-js">// 1. 安装
+npm install @emotion/react
+
+// 2. tsconfig.json（项目级）
+{
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "@emotion/react"
+  }
+}
+
+// 3. 用 css prop
+import { css } from '@emotion/react';
+
+const style = css`
+  color: red;
+  font-size: 18px;
+`;
+
+function MyComponent() {
+  return (
+    &lt;div css={style}&gt;        {/* css prop 现在合法 */}
+      Hello
+    &lt;/div&gt;
+  );
+}
+
+// 或文件级（不想全局改 tsconfig）：
+/** @jsxImportSource @emotion/react */
+import { css } from '@emotion/react';
+// 仅这个文件用 emotion runtime</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 用 Preact 替代 React（90% 兼容 + 80% 更小）</h3>
+          <p>
+            性能极致追求 / bundle 体积敏感的场景（如 SDK / 嵌入式 widget），用 Preact 替代 React：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript · Preact 替代 React</span>
+            <pre class="code"><code class="lang-js">// 1. 安装
+npm install preact
+npm uninstall react react-dom
+
+// 2. tsconfig.json
+{
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact"
+  }
+}
+
+// 3. vite.config.ts（用 alias 让 import 'react' 指向 preact）
+import { defineConfig } from 'vite';
+export default defineConfig({
+  resolve: {
+    alias: {
+      'react': 'preact/compat',
+      'react-dom': 'preact/compat',
+    },
+  },
+});
+
+// 4. 业务代码完全不变 —— 仍写 React 风格代码
+// 但 bundle 大小：React + react-dom ~120KB → Preact ~10KB
+
+// ⚠️ 局限：
+// - 部分高级 API（Concurrent / RSC）Preact 支持有限
+// - 第三方库的"react-only" hook 可能不工作
+// - 适合 SDK / 小 widget；大型应用建议用真 React</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>看 JSX 的"<em>编译过程</em>"</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · 复杂 JSX 编译实例</span>
+          <pre class="code"><code class="lang-js">// 编写
+function Form({ fields, onSubmit }) {
+  return (
+    &lt;form onSubmit={onSubmit}&gt;
+      {fields.map(field =&gt; (
+        &lt;label key={field.id}&gt;
+          {field.label}
+          &lt;input
+            type={field.type}
+            name={field.name}
+            required={field.required}
+            {...field.extraProps}
+          /&gt;
+        &lt;/label&gt;
+      ))}
+      &lt;button type="submit"&gt;Submit&lt;/button&gt;
+    &lt;/form&gt;
+  );
+}
+
+// 新 JSX runtime 编译后：
+import { jsx as _jsx, jsxs as _jsxs } from 'react/jsx-runtime';
+
+function Form({ fields, onSubmit }) {
+  return _jsxs('form', {
+    onSubmit,
+    children: [
+      fields.map(field =&gt; _jsxs('label', {
+        children: [
+          field.label,
+          _jsx('input', {
+            type: field.type,
+            name: field.name,
+            required: field.required,
+            ...field.extraProps,    // 编译为 spread
+          }),
+        ],
+      }, field.id)),                 // ← key 作为第三个参数（特殊位置）
+      _jsx('button', { type: 'submit', children: 'Submit' }),
+    ],
+  });
+}
+
+// 关键点：
+// 1. key 是 jsx 函数的第三个参数（特殊处理，不放进 props）
+//    这是为了让 React 在创建元素前就能拿到 key 做 reconciliation
+// 2. spread props（{...field.extraProps}）编译为 ES2018 spread
+// 3. children 是数组（jsxs）/ 单值（jsx）—— 编译器自动决定
+
+// 想看自己代码的编译结果：
+// https://babeljs.io/repl 或 https://swc.rs/playground
+// 选 React preset，把代码贴进去看输出</code></pre>
+        </div>
+
+        <h3>JSX 是表达式的威力 —— Composability 的语言根基</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript · JSX 在表达式位置的灵活组合</span>
+          <pre class="code"><code class="lang-js">// JSX 是表达式，可以放在任何 JS 表达式位置：
+
+// 1. 函数返回值（最常见）
+function Greeting() { return &lt;h1&gt;Hi&lt;/h1&gt;; }
+
+// 2. 变量赋值
+const heading = &lt;h1&gt;Hi&lt;/h1&gt;;
+const buttons = [&lt;button key="a"&gt;A&lt;/button&gt;, &lt;button key="b"&gt;B&lt;/button&gt;];
+
+// 3. 函数参数 / 返回值
+const wrap = (el) =&gt; &lt;div className="wrapper"&gt;{el}&lt;/div&gt;;
+wrap(&lt;Greeting /&gt;);
+
+// 4. 数组 map
+items.map(item =&gt; &lt;li key={item.id}&gt;{item.text}&lt;/li&gt;);
+
+// 5. 条件运算
+const view = isAdmin ? &lt;AdminView /&gt; : &lt;UserView /&gt;;
+
+// 6. 默认参数
+function Modal({ children, title = &lt;h2&gt;Default Title&lt;/h2&gt; }) {
+  return &lt;div&gt;{title}{children}&lt;/div&gt;;
+}
+
+// 7. 解构默认值
+const { content = &lt;p&gt;Empty&lt;/p&gt; } = props;
+
+// 8. 对象属性
+const config = {
+  header: &lt;Header /&gt;,
+  footer: &lt;Footer /&gt;,
+};
+
+// 9. switch 模拟（用对象映射）
+const components = {
+  text: &lt;TextField /&gt;,
+  number: &lt;NumberField /&gt;,
+  date: &lt;DateField /&gt;,
+};
+return components[type] ?? &lt;UnknownField /&gt;;
+
+// 这种"<em>处处可用 JSX</em>" 是 React Composability 的语言层根基。
+// Vue / Svelte 的 SFC 模板不能这样组合（templates 是字符串/编译时结构，不是 JS 值）</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 1：&amp;&amp; 短路渲染 0 文本</div>
+          <p>
+            <code>{items.length &amp;&amp; &lt;List items={items} /&gt;}</code> 当 <code>items.length</code> 是 0（空数组）时，<code>&amp;&amp;</code> 短路返回 0—— 而 0 是会被渲染为 '0' 文本的（不像 false / null / undefined 自动跳过）。结果页面上出现一个孤独的 '0'。
+          </p>
+          <div class="code-block" style="margin-top: 12px">
+            <span class="code-label">javascript · 修复方式</span>
+            <pre class="code"><code class="lang-js">// ❌ 出 bug
+{items.length &amp;&amp; &lt;List items={items} /&gt;}
+
+// ✅ 修复 1：明确比较
+{items.length &gt; 0 &amp;&amp; &lt;List items={items} /&gt;}
+
+// ✅ 修复 2：用三元
+{items.length ? &lt;List items={items} /&gt; : null}
+
+// ✅ 修复 3：Boolean 强转
+{Boolean(items.length) &amp;&amp; &lt;List items={items} /&gt;}
+
+// 同样陷阱：字符串 ''、NaN
+{user.name &amp;&amp; ...}        // ❌ 当 name === '' 时
+{user.name?.length &gt; 0 &amp;&amp; ...}  // ✅</code></pre>
+          </div>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：JSX 中的 <code>&amp;&amp;</code> 短路只在<strong>左侧明确是 boolean</strong> 时安全。其他时候用三元或显式比较。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 2：style 用字符串</div>
+          <p>
+            HTML 里 <code>style="color: red"</code> 是字符串。JSX 里 <strong>style 必须是对象</strong>—— <code>style={{ color: 'red' }}</code>。CSS 属性名要 camelCase（<code>backgroundColor</code> 而非 <code>background-color</code>）。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：① 现代项目用 Tailwind CSS / CSS Modules / Emotion 替代 inline style ② 必须 inline 时用对象语法 ③ Stylelint 配 <code>react/style-prop-object</code> 自动检测
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 3：忘记升级到 New JSX Runtime</div>
+          <p>
+            React 17+ 项目仍用 <code>"jsx": "react"</code>（classic runtime）—— 每个文件都要 import React，bundle 多 ~5KB，性能略差。常见原因是从 16 升级时只升 React 包没改 tsconfig。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：升级 React 17+ 时务必同时改 <code>tsconfig.jsx: "react-jsx"</code> + 跑 codemod。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 4：Fragment 短语法不能传 key</div>
+          <p>
+            <code>&lt;&gt;...&lt;/&gt;</code> 简洁但<strong>不支持 key 属性</strong>。在 list 里需要 key 时必须用完整形式 <code>&lt;Fragment key={item.id}&gt;...&lt;/Fragment&gt;</code>。
+          </p>
+          <div class="code-block" style="margin-top: 12px">
+            <span class="code-label">javascript · Fragment 在 list 中</span>
+            <pre class="code"><code class="lang-js">// ❌ 编译错：&lt;&gt; 不支持属性
+{items.map(item =&gt; (
+  &lt;&gt; key={item.id}        // ⚠️ 语法错
+    &lt;dt&gt;{item.title}&lt;/dt&gt;
+    &lt;dd&gt;{item.body}&lt;/dd&gt;
+  &lt;/&gt;
+))}
+
+// ✅ 用完整 Fragment
+import { Fragment } from 'react';
+{items.map(item =&gt; (
+  &lt;Fragment key={item.id}&gt;
+    &lt;dt&gt;{item.title}&lt;/dt&gt;
+    &lt;dd&gt;{item.body}&lt;/dd&gt;
+  &lt;/Fragment&gt;
+))}</code></pre>
+          </div>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">⚠️ 陷阱 5：组件首字母小写让 JSX 当 host 元素</div>
+          <p>
+            <code>function myButton() { ... }</code> + <code>&lt;myButton /&gt;</code> → 编译为 <code>type: 'mybutton'</code>（host 元素），React 当 HTML 元素处理。
+          </p>
+          <p style="margin-top: 8px">
+            <strong>规避</strong>：组件名永远首字母大写。ESLint <code>react/jsx-pascal-case</code>。或者用 <code>const MyButton = (props) =&gt; ...</code> 函数表达式赋给大写常量。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>权威来源</h3>
+        <ul>
+          <li>
+            <a href="https://react.dev/learn/writing-markup-with-jsx" target="_blank" rel="noopener">react.dev · Writing Markup with JSX</a>
+          </li>
+          <li>
+            <a href="https://react.dev/learn/javascript-in-jsx-with-curly-braces" target="_blank" rel="noopener">react.dev · JavaScript in JSX with Curly Braces</a>
+          </li>
+          <li>
+            <a href="https://react.dev/blog/2020/09/22/introducing-the-new-jsx-transform" target="_blank" rel="noopener">React Blog · Introducing the New JSX Transform (2020)</a>
+          </li>
+          <li>
+            <a href="https://github.com/reactjs/rfcs/blob/createlement-rfc/text/0000-create-element-changes.md" target="_blank" rel="noopener">RFC · createElement / new JSX runtime</a>
+          </li>
+        </ul>
+
+        <h3>编译器 / 工具链</h3>
+        <ul>
+          <li>
+            <a href="https://babeljs.io/docs/babel-preset-react" target="_blank" rel="noopener">@babel/preset-react</a> · <a href="https://babeljs.io/repl" target="_blank" rel="noopener">Babel REPL（看 JSX 编译结果）</a>
+          </li>
+          <li>
+            <a href="https://swc.rs/playground" target="_blank" rel="noopener">SWC Playground（同上，更快）</a>
+          </li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>上一章：<a href="01-rendering-model.html">P2.1 渲染模型</a></li>
+          <li>下一章：<a href="03-components-props.html">P2.3 组件与 Props</a>（编写中）</li>
+          <li>其他阶段：<a href="../01-overview/02-design-philosophy.html">P1.2 设计哲学</a> —— JSX 不是模板的设计动机</li>
+        </ul>
+
+        <h3>跨主题参考</h3>
+        <ul>
+          <li><a href="../../typescript/03-reference/16-iterators-jsx.html">TS · 16 Iterators / JSX</a> —— JSX.Element / IntrinsicElements / React.FC 类型</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-rendering-model.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P2.1 · 渲染模型与 React 元素</span>
+          </a>
+          <a class="next" href="03-components-props.html">
+            <span class="label">下一章 →</span>
+            <span class="title">P2.3 · 组件与 Props</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,739 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>P6.2 · Actions + useFormStatus + useOptimistic · React 深度学习</title>
+    <meta
+      name="description"
+      content="React 19 Actions 完整心智：form action prop、useActionState 取代 useState+try/catch+loading 三件套、useFormStatus 让子组件感知父 form pending、useOptimistic 乐观更新+自动 rollback、与 Server Actions 关系、React Hook Form 的取舍。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2361dafb'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23000000'%3EReact%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>React 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.13 220); color: #fff">R</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">React 首页</a>
+          <a href="index.html">阶段目录</a>
+          <a href="https://react.dev/reference/react/useActionState" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · Server Components 与 Actions</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-server-components.html">01 · Server Components</a></li>
+          <li><a href="02-actions.html" class="active">02 · Actions</a></li>
+          <li><a href="03-use-api.html">03 · use API</a></li>
+          <li><a href="04-misc.html">04 · 现代杂项</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · React 是谁</a></li>
+          <li><a href="../02-mental-model/index.html">P2 · 渲染心智模型</a></li>
+          <li><a href="../03-hooks/index.html">P3 · Hooks 全谱</a></li>
+          <li><a href="../04-fiber/index.html">P4 · Fiber 内部机制</a></li>
+          <li><a href="../05-concurrent/index.html">P5 · Concurrent 并发</a></li>
+          <li><a href="../07-ecosystem/index.html">P7 · 生态与工程化</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">React</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · Server Components 与 Actions</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>02 · Actions</span>
+        </nav>
+
+        <h1>P6.2 · Actions + useFormStatus + useOptimistic</h1>
+        <p class="lead">
+          React 19 引入的 <strong>Actions</strong> 是过去 12 年里 React 第一次<strong>把"<em>异步操作</em>" 设计成一等公民</strong>—— 之前所有"<em>提交表单 → 显示 loading → 处理错误 → 乐观更新</em>" 模式都得自己用 useState 拼。React 19 给出三件套：<code>useActionState</code>（替代 state + try/catch + loading 状态机）、<code>useFormStatus</code>（子组件感知父 form pending，不需要 prop 传递）、<code>useOptimistic</code>（乐观更新 + 失败自动 rollback）。本章讲清这三个 Hook 各自的边界、与 <a href="01-server-components.html">P6.1 Server Actions</a> 的关系、和 <a href="https://react-hook-form.com/" target="_blank" rel="noopener">React Hook Form</a> 这种"<em>老世界</em>" 库的取舍。
+        </p>
+
+        <div class="callout warn" style="margin: 16px 0">
+          <div class="callout-title">⚠️ Action ≠ Server Action</div>
+          <p>
+            <strong>Action</strong>（广义）：<strong>任何传给 form action prop 或 startTransition 的异步函数</strong>—— React 自动把它包成 transition（P5.3），自动管理 pending 状态。<strong>Server Action</strong>（狭义）：在 Server Component 或 <code>'use server'</code> 模块里声明的、客户端可调用的<strong>服务器端函数</strong>（P6.1）。Action 是机制，Server Action 是它在 RSC 场景下的特化。<strong>非 RSC 项目（CSR / 普通 SSR）也能用 Actions</strong>—— 把异步函数传给 form action 即可。
+          </p>
+        </div>
+
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> <a href="../05-concurrent/03-transition.html">P5.3 useTransition</a>（Action 内部就是 transition） + <a href="01-server-components.html">P6.1 Server Components</a>（Server Actions 来源）</span>
+          <span><strong>对应 react.dev</strong>
+            <a href="https://react.dev/reference/react/useActionState" target="_blank" rel="noopener">useActionState</a> ·
+            <a href="https://react.dev/reference/react-dom/hooks/useFormStatus" target="_blank" rel="noopener">useFormStatus</a> ·
+            <a href="https://react.dev/reference/react/useOptimistic" target="_blank" rel="noopener">useOptimistic</a>
+          </span>
+          <span><strong>RFC</strong> <a href="https://github.com/reactjs/rfcs/pull/229" target="_blank" rel="noopener">#229 First-class support for promises and async/await</a></span>
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>四句话定义本章：</p>
+        <ol>
+          <li>
+            <strong>Action 是任何 async 函数</strong>，传给 <code>&lt;form action={fn}&gt;</code> 或 <code>startTransition(async () =&gt; ...)</code>。<strong>React 自动把它包成 transition（P5.3）</strong>—— 即更新被标记为 TransitionLane（低优先级、可被打断、不阻塞 UI）。React 19 之前 form 提交要写 <code>onSubmit={e =&gt; { e.preventDefault(); ... }}</code>，19 之后直接 <code>action={fn}</code>，React 自动 preventDefault + 调用函数 + 处理 pending。
+          </li>
+          <li>
+            <strong><code>useActionState(action, initialState)</code></strong> = 老世界 <code>useState + try/catch + loading + setError</code> 的"<em>四合一</em>"。返回 <code>[state, formAction, isPending]</code>。<code>state</code> 是 action 上次返回值，<code>formAction</code> 传给 <code>&lt;form action&gt;</code>，<code>isPending</code> 自动管理。<strong>错误也是 state</strong>—— action 内 throw 会冒泡到最近 ErrorBoundary（P5.4），但通常用 return 错误对象更友好。
+          </li>
+          <li>
+            <strong><code>useFormStatus()</code></strong>（注意：从 <code>react-dom</code> 导入，不是 <code>react</code>）让<strong>子组件不通过 prop drilling 就能感知父 form 的 pending 状态</strong>。返回 <code>{ pending, data, method, action }</code>。典型用法：在 <code>&lt;SubmitButton /&gt;</code> 内 <code>const { pending } = useFormStatus()</code>，无需父组件传 disabled。
+          </li>
+          <li>
+            <strong><code>useOptimistic(state, updateFn)</code></strong> 是<strong>乐观更新原语</strong>：在 transition 期间显示<strong>预测的乐观值</strong>，transition 结束后自动回到真实 state。<strong>失败自动 rollback</strong>（不需要手动 catch + reset），因为乐观值只在 transition 内有效。常用于 like / vote / 评论等"<em>用户预期会成功</em>" 的场景。
+          </li>
+        </ol>
+
+        <!-- 02 底层逻辑 ================================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>1. 老世界的"<em>四件事</em>" 与 Action 的"<em>一件事</em>"</h3>
+        <p>
+          React 18 之前提交一个表单要管理 4 个独立状态：
+        </p>
+        <div class="code-block"><pre class="code"><code class="lang-js">// React 18 时代典型的"<em>四状态机</em>"
+function CreatePost() {
+  const [title, setTitle] = useState('');     // ① 表单值
+  const [loading, setLoading] = useState(false); // ② loading
+  const [error, setError] = useState(null);      // ③ error
+  const [data, setData] = useState(null);        // ④ result
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/posts', {
+        method: 'POST',
+        body: JSON.stringify({ title }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setData(await res.json());
+      setTitle(''); // reset
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    &lt;form onSubmit={handleSubmit}&gt;
+      &lt;input value={title} onChange={e =&gt; setTitle(e.target.value)} /&gt;
+      &lt;button disabled={loading}&gt;{loading ? 'Saving…' : 'Save'}&lt;/button&gt;
+      {error &amp;&amp; &lt;p style={{color:'red'}}&gt;{error}&lt;/p&gt;}
+    &lt;/form&gt;
+  );
+}
+// ❌ 4 个 useState / 必须 e.preventDefault / try/catch/finally / 手动管 loading</code></pre></div>
+
+        <p>React 19 重写后：</p>
+        <div class="code-block"><pre class="code"><code class="lang-js">// React 19 — useActionState 折叠四件事
+async function createPost(prevState, formData) {
+  const title = formData.get('title') as string;
+  if (!title?.trim()) return { error: 'Title required' };
+  const res = await fetch('/api/posts', {
+    method: 'POST',
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) return { error: await res.text() };
+  return { data: await res.json(), error: null };
+}
+
+function CreatePost() {
+  const [state, formAction, isPending] = useActionState(createPost, { error: null });
+  return (
+    &lt;form action={formAction}&gt;  {/* 自动 preventDefault */}
+      &lt;input name="title" /&gt;     {/* 不需要受控（FormData 自动取） */}
+      &lt;button disabled={isPending}&gt;{isPending ? 'Saving…' : 'Save'}&lt;/button&gt;
+      {state?.error &amp;&amp; &lt;p style={{color:'red'}}&gt;{state.error}&lt;/p&gt;}
+    &lt;/form&gt;
+  );
+}
+// ✅ 1 个 Hook 替代 4 个 / 不需要 onSubmit / 不需要受控 / pending 自动</code></pre></div>
+
+        <h3>2. form action prop：React 19 的"<em>新 onSubmit</em>"</h3>
+        <p>
+          原生 HTML <code>&lt;form action="/api/x" method="POST"&gt;</code> 提交时浏览器跳页 + 全页刷新。React 19 接管 <code>action</code> prop：
+        </p>
+        <ul>
+          <li>
+            <strong>action 是字符串 → 走原生 HTML form 行为</strong>（仍跳页）
+          </li>
+          <li>
+            <strong>action 是函数 → React 接管</strong>：① 自动 preventDefault ② 收集 FormData 传入 ③ 用 <code>startTransition</code> 包裹调用 ④ 提交期间该 form 的 pending 状态可被 <code>useFormStatus</code> 读到 ⑤ 提交完成后<strong>自动 reset 表单</strong>（uncontrolled 字段）
+          </li>
+          <li>
+            <strong>action 是 Server Reference</strong>（P6.1 <code>'use server'</code> 转出来的）→ 上面所有 + RPC 序列化 + 调用 + 反序列化结果
+          </li>
+        </ul>
+
+        <h3>3. useActionState 内部机制（关键不变量）</h3>
+        <p>
+          <code>const [state, formAction, isPending] = useActionState(action, initialState, permalink?)</code>
+        </p>
+        <ul>
+          <li>
+            <strong>action 签名固定为 <code>(prevState, formData) =&gt; nextState</code></strong>（如果配 form action）或 <code>(prevState, ...args) =&gt; nextState</code>（手动调用 formAction）。<strong>第一个参数是上次的返回值，不是表单数据</strong>—— 这是最容易写错的地方。
+          </li>
+          <li>
+            <strong>state 在每次 action 完成后更新为返回值</strong>—— 即"<em>action 是 state reducer</em>"。这让"<em>多次提交累积错误</em>" / "<em>记住上次提交内容</em>" 这类需求很自然。
+          </li>
+          <li>
+            <strong>action 抛错</strong>不被 <code>useActionState</code> 捕获，会冒泡到最近 ErrorBoundary（P5.4）。**生产中推荐 return 错误对象**而非 throw —— 错误是数据流的一部分，不是异常。
+          </li>
+          <li>
+            <strong>permalink</strong> 第三个参数（可选，String）—— RSC + 渐进增强场景下，JS 还没加载时表单提交跳转到的 URL。
+          </li>
+          <li>
+            <strong>isPending 自动管理</strong>—— action 调用期间为 true，结果到达后变 false。<strong>同一个 useActionState 同时只允许一个 action 执行</strong>（自动排队，避免竞态）。
+          </li>
+        </ul>
+
+        <h3>4. useFormStatus：感知最近父 form 的状态</h3>
+        <p>
+          <code>const { pending, data, method, action } = useFormStatus()</code>
+        </p>
+        <ul>
+          <li>
+            <strong>必须在 form 内部的子组件里调用</strong>—— 它读取的是<strong>祖先链上最近的 <code>&lt;form&gt;</code> 元素</strong>的提交状态。直接在 form 所在组件用是<strong>读不到的</strong>（只能读祖先 form，不能读自己渲染的 form）。
+          </li>
+          <li>
+            <strong>从 <code>react-dom</code> 导入</strong>，不是 <code>react</code>。原因：它依赖 DOM 概念（form 元素），<code>react</code> 包要保持 platform-agnostic。
+          </li>
+          <li>
+            <strong>替代 prop drilling</strong>—— 老世界要把 <code>loading</code> prop 一路传给 <code>&lt;SubmitButton&gt;</code> 才能 disable。新世界子组件自查询。
+          </li>
+          <li>
+            <strong>data 是 FormData 实例</strong>（pending 期间）—— 可读取正在提交的字段值，做"<em>提交中</em>" 预览。
+          </li>
+        </ul>
+
+        <h3>5. useOptimistic：乐观更新 + transition 边界</h3>
+        <p>
+          <code>const [optimisticValue, addOptimistic] = useOptimistic(realValue, updateFn?)</code>
+        </p>
+        <ul>
+          <li>
+            <strong>optimisticValue 在 transition 内 = 乐观值，transition 结束 = realValue</strong>。所以失败 rollback 是"<em>免费</em>" 的—— 没有真正存数据，只是 transition 期间显示预测。
+          </li>
+          <li>
+            <strong>updateFn 签名 <code>(currentState, optimisticArg) =&gt; nextOptimisticState</code></strong>—— 类似 reducer，描述"<em>给定当前状态和乐观参数，返回乐观状态</em>"。
+          </li>
+          <li>
+            <strong>必须在 transition 内调用 addOptimistic</strong>—— 通常配合 <code>startTransition</code> 或 <code>&lt;form action&gt;</code> 使用。在 transition 外调用 addOptimistic 会被忽略 / 报警告。
+          </li>
+          <li>
+            <strong>不替代 useState</strong>—— useOptimistic 持有的是"<em>视图层叠加</em>" 状态。真实状态仍在原 state（来自 props / context / Server Component）。
+          </li>
+          <li>
+            <strong>多个并发 optimistic 更新可叠加</strong>—— 用户连点 5 次 like，5 个乐观值合并显示。
+          </li>
+        </ul>
+
+        <h3>6. 三个 Hook 的协同关系</h3>
+        <div class="code-block"><pre class="code"><code class="lang-js">// 完整组合：useActionState + useFormStatus + useOptimistic
+'use client';
+import { useActionState, useOptimistic } from 'react';
+import { useFormStatus } from 'react-dom';
+import { addComment } from './actions';
+
+// SubmitButton 在 form 子树中读 form 的 pending
+function SubmitButton() {
+  const { pending } = useFormStatus();
+  return &lt;button disabled={pending}&gt;{pending ? 'Posting…' : 'Post'}&lt;/button&gt;;
+}
+
+export default function Comments({ initialComments }) {
+  // 真实评论列表（来自 Server Component props）
+  const [comments, formAction] = useActionState(
+    async (prev, formData) =&gt; {
+      const text = formData.get('text');
+      const newComment = await addComment(text);
+      return [...prev, newComment];
+    },
+    initialComments
+  );
+
+  // 乐观叠加层
+  const [optimisticComments, addOptimistic] = useOptimistic(
+    comments,
+    (state, text) =&gt; [...state, { id: 'pending', text, pending: true }]
+  );
+
+  return (
+    &lt;&gt;
+      &lt;ul&gt;
+        {optimisticComments.map(c =&gt;
+          &lt;li key={c.id} style={c.pending ? {opacity:0.5} : {}}&gt;{c.text}&lt;/li&gt;
+        )}
+      &lt;/ul&gt;
+      &lt;form
+        action={async (formData) =&gt; {
+          addOptimistic(formData.get('text'));  // 乐观叠加
+          await formAction(formData);            // 触发真正 action
+        }}
+      &gt;
+        &lt;input name="text" /&gt;
+        &lt;SubmitButton /&gt;  {/* 自动读 pending */}
+      &lt;/form&gt;
+    &lt;/&gt;
+  );
+}
+// ✅ 三件套清晰分工：useActionState 管真实 state + isPending + 错误
+//                   useFormStatus 让按钮自查 pending
+//                   useOptimistic 叠加乐观显示</code></pre></div>
+
+        <!-- 03 应用场景 ================================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3>场景 1：登录表单（最经典 useActionState）</h3>
+          <div class="code-block"><pre class="code"><code class="lang-js">'use client';
+import { useActionState } from 'react';
+
+async function loginAction(prevState, formData) {
+  const email = formData.get('email');
+  const password = formData.get('password');
+  const res = await fetch('/api/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    return {
+      error: '账号或密码错误',
+      lastEmail: email, // 保留输入，下次显示
+    };
+  }
+  window.location.href = '/dashboard';
+  return { error: null };
+}
+
+export default function LoginForm() {
+  const [state, formAction, isPending] = useActionState(loginAction, {
+    error: null,
+    lastEmail: '',
+  });
+  return (
+    &lt;form action={formAction}&gt;
+      &lt;input name="email" defaultValue={state?.lastEmail} required /&gt;
+      &lt;input name="password" type="password" required /&gt;
+      &lt;button disabled={isPending}&gt;{isPending ? '登录中…' : '登录'}&lt;/button&gt;
+      {state?.error &amp;&amp; &lt;p className="error"&gt;{state.error}&lt;/p&gt;}
+    &lt;/form&gt;
+  );
+}
+// 收益：① 失败时邮箱保留 ② 提交期间按钮自动 disabled ③ 不写 useState</code></pre></div>
+        </div>
+
+        <div class="scenario">
+          <h3>场景 2：评论列表（useOptimistic 立即响应）</h3>
+          <p>
+            提交评论瞬间显示在列表，不等服务器返回。失败自动消失（rollback）。
+          </p>
+          <div class="code-block"><pre class="code"><code class="lang-js">'use client';
+import { useOptimistic } from 'react';
+import { addComment as addCommentAction } from './actions';
+
+export default function Comments({ comments }) {
+  const [optimistic, addOptimistic] = useOptimistic(
+    comments,
+    (state, newText) =&gt; [
+      ...state,
+      { id: `temp-${Date.now()}`, text: newText, pending: true },
+    ]
+  );
+
+  async function submit(formData) {
+    const text = formData.get('text');
+    addOptimistic(text);  // 立即叠加
+    await addCommentAction(text);  // 真正提交
+    // transition 结束 → optimistic 自动回到 comments（已经被 revalidate 更新）
+  }
+
+  return (
+    &lt;&gt;
+      {optimistic.map(c =&gt; (
+        &lt;li key={c.id} className={c.pending ? 'opacity-50' : ''}&gt;{c.text}&lt;/li&gt;
+      ))}
+      &lt;form action={submit}&gt;
+        &lt;input name="text" /&gt;
+        &lt;button&gt;Post&lt;/button&gt;
+      &lt;/form&gt;
+    &lt;/&gt;
+  );
+}</code></pre></div>
+        </div>
+
+        <div class="scenario">
+          <h3>场景 3：复杂表单的提交按钮抽离（useFormStatus 替代 prop drilling）</h3>
+          <div class="code-block"><pre class="code"><code class="lang-js">// 老世界：必须传 loading prop
+function OldButton({ loading }) {
+  return &lt;button disabled={loading}&gt;{loading ? '...' : 'Save'}&lt;/button&gt;;
+}
+function OldForm() {
+  const [loading, setLoading] = useState(false);
+  return (
+    &lt;form onSubmit={...}&gt;
+      &lt;DeepFieldset&gt;
+        &lt;NestedRow&gt;
+          &lt;OldButton loading={loading} /&gt; {/* prop drilling 4 层 */}
+        &lt;/NestedRow&gt;
+      &lt;/DeepFieldset&gt;
+    &lt;/form&gt;
+  );
+}
+
+// 新世界：完全无需传 prop
+import { useFormStatus } from 'react-dom';
+function NewButton() {
+  const { pending } = useFormStatus();
+  return &lt;button disabled={pending}&gt;{pending ? '...' : 'Save'}&lt;/button&gt;;
+}
+function NewForm() {
+  return (
+    &lt;form action={save}&gt;
+      &lt;DeepFieldset&gt;
+        &lt;NestedRow&gt;
+          &lt;NewButton /&gt; {/* 自查 pending，0 prop */}
+        &lt;/NestedRow&gt;
+      &lt;/DeepFieldset&gt;
+    &lt;/form&gt;
+  );
+}</code></pre></div>
+        </div>
+
+        <div class="scenario">
+          <h3>场景 4：渐进增强（permalink 让无 JS 用户也能用）</h3>
+          <p>
+            useActionState 第三参数 <code>permalink</code> 让 RSC + JS 加载前的提交也能工作（HTML 原生提交跳到这个 URL）。Next.js App Router 自动处理。
+          </p>
+          <div class="code-block"><pre class="code"><code class="lang-js">// JS 加载前用户提交 → 浏览器跳转到 /search?q=xxx（HTML 原生行为）
+// JS 加载后用户提交 → React 接管 + 不跳页
+const [state, formAction] = useActionState(
+  searchAction,
+  null,
+  '/search'  // permalink
+);
+
+return (
+  &lt;form action={formAction}&gt;
+    &lt;input name="q" /&gt;
+    &lt;button&gt;Search&lt;/button&gt;
+  &lt;/form&gt;
+);
+// 这是 React 19 极少数对"<em>渐进增强</em>" 友好的设计</code></pre></div>
+        </div>
+
+        <!-- 04 典型代码 ================================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>例 1：startTransition 直接调用 action（不用 form）</h3>
+        <div class="code-block"><pre class="code"><code class="lang-js">// 不是所有 action 都通过 form 触发——按钮点击也行
+'use client';
+import { startTransition, useState } from 'react';
+import { deletePost } from './actions';
+
+function DeleteButton({ postId }) {
+  const [isPending, setPending] = useState(false);
+  return (
+    &lt;button
+      onClick={() =&gt; {
+        startTransition(async () =&gt; {
+          setPending(true);
+          await deletePost(postId);
+          setPending(false);
+        });
+      }}
+      disabled={isPending}
+    &gt;
+      {isPending ? 'Deleting…' : 'Delete'}
+    &lt;/button&gt;
+  );
+}
+
+// React 19 改进：startTransition 内可以 await（async transition）
+// 整个 await 期间被标为 pending transition</code></pre></div>
+
+        <h3>例 2：复杂的 form state（错误对象 / 字段级错误）</h3>
+        <div class="code-block"><pre class="code"><code class="lang-js">// state 是任意结构——可以包含字段级错误
+type FormState = {
+  errors?: { email?: string; password?: string; general?: string };
+  values?: { email?: string };  // 保留输入
+};
+
+async function signupAction(prev: FormState, formData: FormData): Promise&lt;FormState&gt; {
+  const email = formData.get('email') as string;
+  const password = formData.get('password') as string;
+
+  const errors: FormState['errors'] = {};
+  if (!email.includes('@')) errors.email = '请输入有效邮箱';
+  if (password.length &lt; 8) errors.password = '密码至少 8 位';
+  if (Object.keys(errors).length) {
+    return { errors, values: { email } };
+  }
+
+  try {
+    await api.signup(email, password);
+    return { errors: {} };
+  } catch (e) {
+    return {
+      errors: { general: e.message },
+      values: { email },
+    };
+  }
+}
+
+function Signup() {
+  const [state, formAction, isPending] = useActionState(signupAction, {});
+  return (
+    &lt;form action={formAction}&gt;
+      &lt;input name="email" defaultValue={state.values?.email} /&gt;
+      {state.errors?.email &amp;&amp; &lt;Error&gt;{state.errors.email}&lt;/Error&gt;}
+      &lt;input name="password" type="password" /&gt;
+      {state.errors?.password &amp;&amp; &lt;Error&gt;{state.errors.password}&lt;/Error&gt;}
+      &lt;button disabled={isPending}&gt;Sign up&lt;/button&gt;
+      {state.errors?.general &amp;&amp; &lt;Error&gt;{state.errors.general}&lt;/Error&gt;}
+    &lt;/form&gt;
+  );
+}</code></pre></div>
+
+        <h3>例 3：useOptimistic 多状态叠加（投票 like）</h3>
+        <div class="code-block"><pre class="code"><code class="lang-js">'use client';
+import { useOptimistic } from 'react';
+import { vote } from './actions';
+
+export default function VoteButton({ postId, initialCount, initialVoted }) {
+  // 同时管"<em>是否已投票</em>" 和"<em>票数</em>" 两个值
+  const [optimistic, addOptimistic] = useOptimistic(
+    { count: initialCount, voted: initialVoted },
+    (state, action: 'up' | 'down') =&gt; ({
+      count: state.count + (action === 'up' ? 1 : -1),
+      voted: action === 'up',
+    })
+  );
+
+  return (
+    &lt;form
+      action={async () =&gt; {
+        const action = optimistic.voted ? 'down' : 'up';
+        addOptimistic(action);
+        await vote(postId, action);
+      }}
+    &gt;
+      &lt;button&gt;
+        {optimistic.voted ? '👍' : '🤍'} {optimistic.count}
+      &lt;/button&gt;
+    &lt;/form&gt;
+  );
+}
+// 用户连点 5 次：5 个乐观更新依次叠加，每次点击都立即看到反馈
+// 服务器返回后真实 count 与 voted 替换，自然过渡</code></pre></div>
+
+        <!-- 05 常见陷阱 ================================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <h3>陷阱 1：以为 useActionState action 第一参数是 formData</h3>
+          <p>
+            <strong>现象</strong>：<code>action(formData)</code> 拿到的是上次的 state 对象 / null，而不是 FormData，console.log 的全是错的。
+          </p>
+          <p>
+            <strong>根因</strong>：useActionState 把 action 包装成 reducer 风格——<strong>第一个参数永远是 prevState</strong>，第二个才是 formData / 你传的参数。这是为了让"<em>action 累积返回值</em>" 模式自然。
+          </p>
+          <p>
+            <strong>规避</strong>：永远写 <code>async function action(prevState, formData) { ... }</code>。如果不需要 prevState，也要把第一参数留出来（用 <code>_</code> 占位）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <h3>陷阱 2：useFormStatus 在 form 自身组件里调用</h3>
+          <p>
+            <strong>现象</strong>：<code>useFormStatus()</code> 永远返回 <code>{ pending: false }</code>，不管 form 在不在提交。
+          </p>
+          <p>
+            <strong>根因</strong>：useFormStatus 读的是<strong>祖先链最近的 form</strong>。如果在 form 的<strong>同一组件</strong>里调用，自身 form 还没在 React tree 里出现 / 不在它的祖先链上。
+          </p>
+          <div class="code-block"><pre class="code"><code class="lang-js">// ❌ 错：在渲染 form 的同一组件读 useFormStatus
+function MyForm() {
+  const { pending } = useFormStatus(); // 永远 false
+  return (
+    &lt;form action={fn}&gt;
+      &lt;button disabled={pending}&gt;Save&lt;/button&gt;
+    &lt;/form&gt;
+  );
+}
+
+// ✅ 对：把按钮抽成 form 的子组件
+function SubmitButton() {
+  const { pending } = useFormStatus();  // OK，最近祖先 form 提交时为 true
+  return &lt;button disabled={pending}&gt;Save&lt;/button&gt;;
+}
+function MyForm() {
+  return (
+    &lt;form action={fn}&gt;
+      &lt;SubmitButton /&gt;
+    &lt;/form&gt;
+  );
+}</code></pre></div>
+        </div>
+
+        <div class="pitfall">
+          <h3>陷阱 3：useOptimistic 在 transition 外调用 addOptimistic</h3>
+          <p>
+            <strong>现象</strong>：addOptimistic 调用后视图没变化，控制台报警告 <code>An optimistic state update occurred outside a transition or action.</code>
+          </p>
+          <p>
+            <strong>根因</strong>：useOptimistic 的乐观值<strong>只在当前 transition 内有效</strong>—— 因为 transition 结束后 React 要"<em>放弃乐观值</em>"，不在 transition 内就找不到回退点。
+          </p>
+          <p>
+            <strong>规避</strong>：addOptimistic 必须在 <code>&lt;form action&gt;</code> 提交、<code>startTransition</code> 内、或 <code>useActionState</code> 的 action 函数内调用。最常见的写法：
+          </p>
+          <div class="code-block"><pre class="code"><code class="lang-js">// ❌ onClick 直接调
+&lt;button onClick={() =&gt; { addOptimistic(...); doApiCall(); }}&gt;
+  Like
+&lt;/button&gt;
+
+// ✅ 包在 startTransition 里
+&lt;button onClick={() =&gt; {
+  startTransition(async () =&gt; {
+    addOptimistic(...);
+    await doApiCall();
+  });
+}}&gt;Like&lt;/button&gt;
+
+// ✅ 或者用 form action（最干净）
+&lt;form action={async () =&gt; {
+  addOptimistic(...);
+  await doApiCall();
+}}&gt;
+  &lt;button&gt;Like&lt;/button&gt;
+&lt;/form&gt;</code></pre></div>
+        </div>
+
+        <div class="pitfall">
+          <h3>陷阱 4：把 controlled input 和 form action 混用</h3>
+          <p>
+            <strong>现象</strong>：用 <code>value + onChange</code> 受控的 input，提交后想 reset 但 input 不清空。
+          </p>
+          <p>
+            <strong>根因</strong>：<code>&lt;form action&gt;</code> 提交后<strong>仅自动 reset uncontrolled input</strong>（依赖原生 form.reset()）。受控 input 由 React state 控制，state 不变 → input 不变。
+          </p>
+          <p>
+            <strong>规避</strong>：① 优先<strong>非受控</strong>（用 <code>defaultValue</code> + <code>name</code>，FormData 取值）—— 这是 19 时代推荐写法 ② 必须受控时，在 action 返回成功后手动 setValue('') ③ 给 form 加 <code>key</code> 强制重建（比 state 重置成本低）
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <h3>陷阱 5：Action 抛错后 UI 没反应（被 ErrorBoundary 吞了）</h3>
+          <p>
+            <strong>现象</strong>：用户操作失败但页面没显示错误，或整个区块被 ErrorBoundary 替换为 fallback。
+          </p>
+          <p>
+            <strong>根因</strong>：useActionState 不捕获 action 抛出的错误—— 错误冒泡到最近 ErrorBoundary（P5.4）。如果你只想显示一个友好提示而不是 unmount 整个组件，<strong>不应该 throw</strong>，应该 <strong>return 一个错误对象</strong>。
+          </p>
+          <p>
+            <strong>规避</strong>：分层处理 —— ① 业务校验 / 网络错误 / 用户输入错 → return <code>{ error: msg }</code>，state 显示 ② 真正不可恢复错误（数据损坏 / 程序 bug）→ throw，让 ErrorBoundary 兜底
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <h3>陷阱 6：和 React Hook Form 重复造轮子</h3>
+          <p>
+            <strong>现象</strong>：项目里同时用了 useActionState 和 React Hook Form，两套逻辑混乱。
+          </p>
+          <p>
+            <strong>取舍建议</strong>：
+          </p>
+          <ul>
+            <li>
+              <strong>简单表单（提交 + loading + 错误展示）</strong>：useActionState 完全够，不引入 RHF
+            </li>
+            <li>
+              <strong>复杂表单（多字段联动 / 动态字段 / 实时校验 / array fields）</strong>：仍用 React Hook Form（提供 register / watch / fieldArray 等强大原语），但<strong>提交时调用 Action</strong>（<code>handleSubmit(action)</code>）
+            </li>
+            <li>
+              <strong>RSC 项目</strong>：useActionState + zod 校验是新最佳实践，比 RHF 更适合 Server Actions（type-safe + 渐进增强 + 零 client bundle）
+            </li>
+            <li>
+              <strong>Next.js App Router 大型项目</strong>：可以全 useActionState + Conform 库（<a href="https://conform.guide/" target="_blank" rel="noopener">conform.guide</a>）—— 服务器优先 + zod 校验 + 渐进增强
+            </li>
+          </ul>
+        </div>
+
+        <!-- 06 延伸阅读 ================================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>权威来源</h3>
+        <ul>
+          <li><a href="https://react.dev/reference/react/useActionState" target="_blank" rel="noopener">react.dev · useActionState</a></li>
+          <li><a href="https://react.dev/reference/react-dom/hooks/useFormStatus" target="_blank" rel="noopener">react.dev · useFormStatus</a></li>
+          <li><a href="https://react.dev/reference/react/useOptimistic" target="_blank" rel="noopener">react.dev · useOptimistic</a></li>
+          <li><a href="https://react.dev/reference/react-dom/components/form" target="_blank" rel="noopener">react.dev · form action prop</a></li>
+          <li><a href="https://github.com/reactjs/rfcs/pull/229" target="_blank" rel="noopener">RFC #229 First-class support for promises</a> —— Actions 设计原始来源</li>
+          <li><a href="https://react.dev/blog/2024/12/05/react-19" target="_blank" rel="noopener">React 19 Release Notes</a></li>
+        </ul>
+
+        <h3>本主题内部</h3>
+        <ul>
+          <li>引擎层：<a href="../05-concurrent/03-transition.html">P5.3 useTransition</a> —— Action 内部就是 transition</li>
+          <li>来源：<a href="01-server-components.html">P6.1 Server Components</a> —— Server Action 是 Action 在 RSC 下的特化</li>
+          <li>错误兜底：<a href="../05-concurrent/04-error-boundary.html">P5.4 Error Boundary</a> —— action throw 的兜底</li>
+          <li>下一章：<a href="03-use-api.html">P6.3 use API</a>（编写中）—— 读 Promise 的统一原语</li>
+        </ul>
+
+        <h3>替代 / 互补库</h3>
+        <ul>
+          <li><a href="https://react-hook-form.com/" target="_blank" rel="noopener">React Hook Form</a> —— 复杂表单的强大补充</li>
+          <li><a href="https://conform.guide/" target="_blank" rel="noopener">Conform</a> —— Server Actions + zod 的事实标准库</li>
+          <li><a href="https://zod.dev/" target="_blank" rel="noopener">Zod</a> —— Action 内服务器校验首选</li>
+        </ul>
+
+        <!-- 底部翻页 ================================================== -->
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-server-components.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P6.1 · Server Components</span>
+          </a>
+          <a class="next" href="03-use-api.html">
+            <span class="label">下一章 →</span>
+            <span class="title">P6.3 · use API</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
