@@ -56,11 +56,6 @@
           <span><strong>前置</strong> ECMA P6（Internal Methods）</span>
           <span><strong>主要来源</strong> v8.dev/docs/hidden-classes · slack-tracking 博客</span>
         </div>
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>骨架版本。对照大纲 <code>v8/outline.md § P3.1</code>。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>Hidden Class 是 V8 把"动态语言"伪造成"静态"的核心</strong>。所有 JS 对象的第一字段是一个 Map 指针，相同形状对象共享同一个 Map。</li>
@@ -70,13 +65,41 @@
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
 
-        <h3>三件套数据结构</h3>
-        <p><em>正文待写。</em></p>
+        <h3>从"哈希表很慢"说起</h3>
+        <p>
+          ECMAScript 规范把对象定义成"属性名 → 值的映射"——naive 实现就是 hash table。但 hash table 访问每次都要：算 hash、找 bucket、字符串比较、可能还要走链表。每次属性访问 ~50ns，一段 <code>obj.x.y.z</code> 要 150ns——对纯计算密集场景这个开销大得吓人。
+        </p>
+        <p>
+          而<strong>静态语言（C++、Java）</strong>的对象访问只需要"加一个偏移量"——一条 <code>mov rax, [rdi+16]</code> 指令几纳秒。差距是<strong>10 倍以上</strong>。
+        </p>
+        <p>
+          V8 的核心问题是：能不能让 JS 对象访问<strong>大多数情况下</strong>跟静态语言一样快？观察发现一个关键事实——<strong>真实代码里，对象的属性集合一旦构造完毕几乎不变</strong>。<code>{x: 1, y: 2}</code> 这样的 point 对象，构造时确定形状之后，运行时只是改 x 和 y 的<em>值</em>而不是<em>结构</em>。如果能识别出"这一群对象形状相同"，就能让它们共享同一份"形状描述"——属性访问退化为偏移量加载。
+        </p>
+        <p>
+          这就是 <strong>Hidden Class</strong>（V8 内部叫 <strong>Map</strong>）的本质：把"动态语言的形状信息"<strong>外置</strong>到一个共享对象里，让形状相同的对象访问起来跟静态语言一样快。这个 trick Lars Bak 在 Self / Strongtalk / HotSpot 已经做过三次（详见 P1.1），V8 是它在 JS 引擎里第四次出场。
+        </p>
+
+        <h3>三件套数据结构：Map + DescriptorArray + TransitionArray</h3>
+        <p>
+          一个 V8 object 在堆上的物理布局：第一个 4-byte slot（启用 Pointer Compression 时）是 <strong>Map 指针</strong>。Map 是 hidden class——所有形状相同的对象指向<strong>同一个 Map</strong>。
+        </p>
+        <p>
+          Map 又指向两个数据结构：
+        </p>
         <ul>
-          <li><strong>Map</strong>（即 hidden class）：每个 object 第一字段，标识"形状"</li>
-          <li><strong>DescriptorArray</strong>：Map 共享，记录每个属性的名字 + storage location（in-object slot 或 backing store index）+ attributes</li>
-          <li><strong>TransitionArray</strong>：Map 之间的边，记录"如果加属性 X 则转到 Map Y"</li>
+          <li><strong>DescriptorArray</strong>：属性目录。每个属性占一条 entry，记录<strong>属性名</strong>（字符串或 Symbol）+ <strong>存储位置</strong>（in-object slot 索引 / backing store 索引）+ <strong>attributes</strong>（writable / enumerable / configurable / const-ness）。所有形状相同的对象共享同一份 DescriptorArray——内存极省。</li>
+          <li><strong>TransitionArray</strong>：形状演化的"出边"。记录"如果给当前形状的对象加属性 X，转到哪个 Map Y"。例：<code>{x:1}</code> 形状的 Map_1 的 TransitionArray 里有条 <code>+y → Map_2</code>，意思是"在 {x} 上加 y 得到 {x,y} 形状"。</li>
         </ul>
+        <p>
+          可以这样理解：<strong>Map = 节点</strong>、<strong>TransitionArray = 出边</strong>——所有 Map 形成一个<strong>有向图</strong>（实际上是树，每个 Map 只有一个父亲），叫做 <strong>Transition Tree</strong>。从空对象 <code>{}</code> 的 root Map 出发，每加一个属性走一条边到达一个新 Map。
+        </p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 一个可视化技巧</div>
+          <p>
+            想象 Transition Tree 像 git commit 树——每条边是"在父形状基础上加一个属性"，每个 Map 是"形状的快照"。两个对象走相同序列的边到达<strong>同一个 Map</strong>——形状相同就共享。这就是 V8 内存效率高的根源：哪怕 100 万个 <code>{x, y, z}</code> 形状的对象，全都共享一个 Map_3 + 一个 DescriptorArray。
+          </p>
+        </div>
 
         <h3>Transition Tree 示意</h3>
         <div class="code-block">
@@ -96,29 +119,85 @@
 内存占用极低且 Map 比较 = 指针比较</code></pre>
         </div>
 
-        <h3>属性存储 3 档</h3>
-        <p><em>正文待写。</em></p>
+        <h3>属性存储 3 档：In-object → Fast → Dictionary</h3>
+        <p>
+          知道了 Map / DescriptorArray，下一个问题是<strong>属性的值实际存在哪</strong>？V8 用三档存储策略，按对象使用模式自动选择。
+        </p>
+
+        <h4>第一档 · In-object properties（前 3 个属性）</h4>
+        <p>
+          最快的存储位置：<strong>直接存在 object 自身的内存槽位里</strong>。V8 默认给每个 object 预留 3 个 in-object slots（实际数量受 Slack Tracking 调整，详见后文），新 object 的前 3 个属性按顺序填进去。访问时 DescriptorArray 给出 slot 索引（0/1/2），机器码就是<strong>一条 load 指令</strong>：<code>mov rax, [rdi + 16]</code>（rdi 是对象指针，16 是 slot 1 偏移）。
+        </p>
+        <p>
+          这一档跟 C++ struct field 访问开销几乎相同——这就是 V8 让 JS 跑出近静态语言性能的关键。绝大多数 JS 对象（Point、Vector、Color、ConfigObject）都属于"3-5 个属性"范围，能完全或大部分进 in-object 档。
+        </p>
+
+        <h4>第二档 · Fast properties（4+ 属性，仍是固定形状）</h4>
+        <p>
+          属性多于 in-object 容量后，V8 给对象额外分配一个数组叫 <strong>properties backing store</strong>，多余属性存这里。访问需要<strong>两次 load</strong>：先从 object 加载 properties 指针，再从 backing store 加偏移加载值。比 in-object 慢一倍，但仍是 <code>O(1)</code>——比 hash table 快得多。
+        </p>
+        <p>
+          DescriptorArray 仍记录每个属性"在 in-object 还是 backing store"以及具体索引——所以 V8 在编译时就能确定走单 load 还是双 load。这是 fast properties 与 dictionary mode 最大的区别。
+        </p>
+
+        <h4>第三档 · Dictionary mode（hash table 慢路径）</h4>
+        <p>
+          以下情况会让 V8 把对象<strong>降级</strong>到 dictionary mode：
+        </p>
         <ul>
-          <li><strong>In-object properties</strong>（前 3 个）：直接存在 object 字段里，访问 = 一次 load</li>
-          <li><strong>Fast properties</strong>（4+）：存在 backing store 数组，descriptor 给出 index</li>
-          <li><strong>Dictionary mode</strong>：当属性数量超过阈值 / 频繁 delete / 名字奇怪时降级成 hash table</li>
+          <li><strong>属性数量超过阈值</strong>（典型 1000+ 属性，少见但发生过）</li>
+          <li><strong>频繁 <code>delete</code></strong> ——transition tree 是单向的，删属性后 V8 走慢路径</li>
+          <li><strong>属性名奇怪</strong>——含空格、特殊字符、纯数字超大整数等</li>
+          <li><strong>原型链 dictionary 化</strong>—— Object.prototype 被改也会让访问走 dictionary</li>
         </ul>
+        <p>
+          dictionary mode 下 V8 把对象的属性表换成 <strong>SwissNameDictionary</strong>（V8 11+，之前是 NameDictionary）——一个开放寻址 hash table。访问开销跳到 ~10ns，比 fast 慢 5-10×。这就是为什么 <code>delete obj.foo</code> 是 V8 性能反模式——不只是单次删除慢，是把整个对象拖进 dictionary mode，之后所有属性访问都变慢。修正方式：<code>obj.foo = undefined</code> 替代 <code>delete</code>。
+        </p>
 
         <h3>从 ECMA Internal Method 到 V8 实现</h3>
-        <p><em>正文待写。</em>规范层与实现层的对应（详细规范定义见 <a href="../../ecma/06-internal-slots/01-internal-slots.html">ECMA P6.1</a>）：</p>
+        <p>
+          ECMAScript 规范用 <strong>Internal Methods</strong>（如 <code>[[Get]]</code> / <code>[[Set]]</code> / <code>[[OwnPropertyKeys]]</code>）抽象描述对象操作——每个方法都是一段抽象算法（详见 <a href="../../ecma/06-internal-slots/01-internal-slots.html">ECMA P6.1</a>）。规范不规定怎么实现，只规定语义。V8 用 Hidden Class 把这些抽象方法变成几条机器指令：
+        </p>
         <ul>
-          <li><code>[[Get]] (P, Receiver)</code> 规范步骤一堆 → V8 编译成"Map check + offset load"两条指令</li>
-          <li><code>[[Set]] (P, V, Receiver)</code> → "Map check + transition lookup + store"</li>
-          <li><code>[[OwnPropertyKeys]] ()</code> → 遍历 DescriptorArray</li>
+          <li><strong><code>[[Get]] (P, Receiver)</code></strong>：规范有 10+ 步骤（找属性、检查 getter、走 prototype 链等）。V8 在 monomorphic IC 下编译成<strong>两条机器指令</strong>：Map check + offset load。所有规范步骤都被 speculation 推到了<strong>编译时</strong>——只要 Map 没变，规范步骤的结果就是预先算好的常量。</li>
+          <li><strong><code>[[Set]] (P, V, Receiver)</code></strong>：编译成 Map check + transition lookup（如果是新属性）+ store。新增属性会触发 transition——V8 沿着 TransitionArray 走或创建新边。</li>
+          <li><strong><code>[[OwnPropertyKeys]] ()</code></strong>：直接遍历 DescriptorArray——属性顺序就是 DescriptorArray 顺序，这就是 ES2015 之后属性顺序稳定的实现根因。</li>
+          <li><strong><code>[[GetPrototypeOf]] ()</code></strong>：从 Map 上读 <code>prototype</code> 字段——一次 load。</li>
         </ul>
+        <p>
+          这种"规范定义抽象语义、引擎用具体数据结构加速"的对应关系，是 V8 主题与 ECMA 主题的核心边界。<strong>规范层学语义、引擎层学实现</strong>——对照着读两边能让"为什么这样写性能好"的根因彻底打通。
+        </p>
 
         <h3>'const' 标注与编译时内联</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li>如果一个属性从未被改（V8 跟踪），DescriptorArray 把它标 <code>const</code></li>
-          <li>TurboFan 看到 <code>const</code> 直接把值内联进机器码（如 <code>obj.foo</code> 编译成 <code>mov eax, 42</code>）</li>
-          <li>后来如果属性变了 → Map deprecated → 触发 deopt</li>
-        </ul>
+        <p>
+          DescriptorArray 的每个属性条目都有一个 <strong>const-ness 标记</strong>——记录"自从对象构造以来这个属性是否被改过"。V8 默认假设新属性是 const，写过一次后变 mutable。
+        </p>
+        <p>
+          这个标记看似不起眼，但对优化层意义巨大。TurboFan 看到某个属性是 const，<strong>直接把值内联进机器码</strong>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">const config = { TIMEOUT: 5000, DEBUG: false };
+
+function check(req) {
+  if (Date.now() - req.start &gt; config.TIMEOUT) {
+    throw new Error('timeout');
+  }
+}
+// hot loop 里调用 check(...)
+// TurboFan 编译时：config.TIMEOUT 标记 const，直接内联成机器码立即数 5000
+// 优化后机器码大致：
+//   mov rax, [Date_now]    ; ...
+//   sub rax, [rdi + 16]    ; req.start
+//   cmp rax, 5000          ; 直接立即数，不再读 config 对象
+//   ja throw_path</code></pre>
+        </div>
+        <p>
+          后来如果你写 <code>config.TIMEOUT = 10000</code>，会发生什么？V8 标记 Map 为 <strong>deprecated</strong>，触发<strong>所有依赖这个 const 标记的优化代码 deopt</strong>。代码本次执行完成后 lazy deopt 跳回 Ignition，重新积累 feedback——之后 Maglev/TurboFan 编译版本不再内联这个值。
+        </p>
+        <p>
+          这给一条 actionable 优化原则：<strong>真正不变的配置就用 const + 不再赋值</strong>，让 V8 直接把值烤进机器码。这比"语义上是 readonly 但运行时仍走属性读"快几纳秒——hot path 上累计可观。
+        </p>
 
         <h3>属性添加顺序的代价</h3>
         <div class="code-block">
@@ -133,34 +212,89 @@ const a = {x: 1, y: 2};
 const b = {x: 1, y: 2};</code></pre>
         </div>
 
-        <h3>数组也有 Map（"Elements Kind"）</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li><strong>PACKED_SMI</strong> → <strong>PACKED_DOUBLE</strong> → <strong>PACKED_ELEMENTS</strong>（一旦混入 string / object 就回不去）</li>
-          <li><strong>HOLEY_*</strong> vs <strong>PACKED_*</strong>：稀疏数组（如 <code>[,1,,3]</code>）走 holey 慢路径</li>
-        </ul>
+        <h3>数组也有 Map：Elements Kind</h3>
+        <p>
+          数组在 V8 里也是普通对象——所以也有 Map。但 V8 给数组做了特别优化：除了通用 Map 还有 <strong>Elements Kind</strong> 标记，记录"数组元素的类型集合"。这是 V8 让数值数组跑出近 C 性能的关键。
+        </p>
+        <p>
+          Elements Kind 是一条<strong>单向通用化链</strong>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">elements-kind-chain</span>
+<pre class="code"><code>PACKED_SMI_ELEMENTS         ← 全是 SMI（整数）
+       │ 加入 double（如 NaN / 1.5 / 2**31）
+       ▼
+PACKED_DOUBLE_ELEMENTS      ← SMI + double
+       │ 加入 string / object / undefined
+       ▼
+PACKED_ELEMENTS             ← 任意 JS 值
+       │ 出现空洞（如 arr[5] = x 跳过 0-4）
+       ▼
+HOLEY_ELEMENTS              ← 稀疏数组慢路径
+       │
+       ▼
+DICTIONARY_ELEMENTS         ← 极稀疏 hash table</code></pre>
+        </div>
+        <p>
+          关键点：<strong>转换是单向的</strong>——一旦 PACKED_SMI 数组里塞进了 double，整个数组从此是 PACKED_DOUBLE，<em>就算后来把 double 改回 SMI 也不会回退</em>。V8 不会"走回头路"——这就是 PACKED_SMI 数组性能可贵的原因，一旦丢了就回不去。
+        </p>
+        <p>
+          PACKED 系列对应"密集数组"——所有 index 0 到 length-1 都有值；HOLEY 系列对应"稀疏数组"——有空洞。HOLEY 数组每次访问都要检查"这个 slot 是真值还是空洞"，比 PACKED 慢 30-50%。常见制造 holey 的反模式：<code>const arr = new Array(1000)</code>（直接创建 1000 长度的稀疏数组）、<code>arr[1000] = x</code>（在远超当前 length 的位置赋值跳过中间）。优化方式：用 <code>const arr = []; for (...) arr.push(...)</code> 让 V8 看到每个位置都被赋值，保持 PACKED。
+        </p>
+        <p>
+          还有一条避坑线：<strong>不要在 SMI 数组里塞 NaN</strong>——NaN 是 double，会触发 PACKED_SMI → PACKED_DOUBLE 转换。如果你的数组本来是整数下标 / 数据，意外赋个 <code>0/0</code> 之类就把整个数组类型变了。这是为什么很多数学库用 <code>-1</code> 而非 <code>NaN</code> 作"无效值"标记——能保 PACKED_SMI。
+        </p>
 
-        <h3>Slack Tracking</h3>
-        <p><em>正文待写。</em>V8 处理"不知道最终多少属性"的工程式答案：</p>
-        <ul>
-          <li>构造对象时 V8 不知道用户最终会加多少属性 —— 给少了后期要走 backing store 慢路径，给多了浪费内存</li>
-          <li>初始 Map 上带一个 construction counter（默认 7），新对象多预留 8 个 in-object slot；每构造一次计数器递减</li>
-          <li>计数归零后 V8 认为构造模式稳定，<strong>填 filler 对象占住没用的 slot</strong>，下次 GC 时这些 filler 被回收，Map 收缩到实际用量</li>
-          <li>典型例子：<code>Peak</code> 对象初始 52 字节（10 slot），slack tracking 完成后缩到 20 字节（2 slot）</li>
-        </ul>
+        <h3>Slack Tracking：V8 处理"不知道最终多少属性"的工程式答案</h3>
+        <p>
+          上面讲 in-object slots 时说"前 3 个属性进 in-object"——这个 3 不是写死的常数。V8 实际有个动态机制叫 <strong>Slack Tracking</strong>，专门处理"构造时不知道最终多少属性"这个 JS 特有难题。
+        </p>
+        <p>
+          想想 <code>class Point { constructor(x, y) { this.x = x; this.y = y; } }</code>——构造函数明确是 2 个属性。但 V8 不能直接信任<strong>构造函数体</strong>——可能后面还有 <code>this.z = ...</code>，可能子类还要加属性，可能用户在外部 <code>p.color = ...</code>。给少了浪费 in-object 优势，给多了浪费内存。怎么办？
+        </p>
+        <p>
+          V8 的方案是<strong>初期乐观给多、运行时观察实际、最后回收多余</strong>：
+        </p>
+        <ol>
+          <li>初始 Map 上带一个 <strong>construction counter</strong>（默认 7）；新对象额外多预留 <strong>8 个 in-object slot</strong>（实际容量比构造函数明显使用的属性数大不少）</li>
+          <li>每次用这个构造函数创建对象，counter 递减一</li>
+          <li>counter 归零（即创建过 7 个对象后），V8 认为<strong>构造模式已稳定</strong>——观察到的 N 个属性就是真实需求</li>
+          <li>V8 用 <strong>filler 对象</strong>把没用的 slots 占住（防 GC 误读）；下次 GC 时这些 filler 被识别并回收，Map 收缩到实际用量</li>
+        </ol>
+        <p>
+          v8.dev 给的真实例子：<code>Peak</code> 对象（实际 2 个属性）初始 52 字节，slack tracking 完成后缩到 20 字节——<strong>内存 -60%</strong>。在大量同类对象的程序里（如 React 内部的 Fiber 节点、graph database 的 entity），这种自动收缩是巨大胜利。
+        </p>
+        <div class="callout info">
+          <div class="callout-title">💡 Slack Tracking 给了一条 actionable 建议</div>
+          <p>
+            <strong>所有属性都在 constructor 里赋值</strong>——这样 slack tracking 收敛后 in-object slots 数量就是真实属性数，所有访问都是单 load。如果有的属性"用到了再加"，slack tracking 收敛后这些属性会被推到 backing store（fast properties），多一次 load。这是为什么 V8 性能博客一直推"<strong>初始化所有字段</strong>"——不是规范要求，是引擎层最优实践。
+          </p>
+        </div>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A · 工厂模式让所有实例走同一 transition path</h3>
-          <p><em>正文待写。</em>类似 <code>class Point { constructor(x, y) { this.x = x; this.y = y; } }</code> 的模式。</p>
+          <h3 class="scenario-title">场景 A · 工厂模式：让所有实例共享同一 Map</h3>
+          <p>
+            如果你创建 100 万个 <code>{x, y}</code> 对象，希望它们全部共享 Map_2。做法很简单——<strong>用同一构造路径</strong>：要么都用 <code>{x: a, y: b}</code> 字面量（V8 会识别成同一字面量站点）、要么都用 <code>class Point { constructor(x, y) { this.x = x; this.y = y; } }</code>。<strong>不要</strong>有的对象 <code>{x, y}</code> 有的对象 <code>{y, x}</code>——属性顺序不同走不同 transition path，Map 不共享，IC 站点会 polymorphic。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B · 避免 delete 操作</h3>
-          <p><em>正文待写。</em>用 <code>obj.foo = undefined</code> 替代；delete 让对象走 dictionary mode。</p>
+          <h3 class="scenario-title">场景 B · 避免 delete 让对象 dictionary 化</h3>
+          <p>
+            <code>delete obj.foo</code> 是 V8 性能反模式——transition tree 是单向的，删属性不会回到旧 Map，反而触发 dictionary mode 降级。修正方式：<code>obj.foo = undefined</code> 或 <code>obj.foo = null</code>——保持 Map 不变，只是 slot 值变成空标记。这种区别在 hot path 上累积影响 5-10×（dictionary access vs in-object access）。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C · 数组优化</h3>
-          <p><em>正文待写。</em>避免空洞（不用 <code>arr[1000] = x</code> 跳过 999 个 slot）；不要在 SMI 数组里塞 NaN。</p>
+          <h3 class="scenario-title">场景 C · 数组优化：保 PACKED_SMI / 避免空洞</h3>
+          <p>
+            数值密集场景（图像处理、物理计算、ML）保 PACKED_SMI：用 <code>for (let i = 0; i &lt; n; i++) arr.push(value)</code>（让 V8 看到每个 slot 被赋值）、<strong>不</strong>用 <code>new Array(n)</code>（创建稀疏数组）、避免无效值用 NaN（用 <code>-1</code> 或 sentinel int）。极致性能需求用 <code>Int32Array</code> / <code>Float64Array</code> 等 TypedArray——根本绕开 Elements Kind 转换问题。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 真不变的配置用 const + 不再赋值</h3>
+          <p>
+            利用 V8 的 const 标注：<code>const config = { TIMEOUT: 5000, ... }</code> + 永不修改 → TurboFan 把值烤进机器码。常见反模式：<code>let config = {...defaults, ...options}</code>（运行时合并 → 非 const）、或事后 <code>config.foo = newVal</code> 改属性（触发 deopt）。修正：把动态参数和静态配置分开，静态部分独立成 frozen const。
+          </p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
