@@ -80,13 +80,6 @@
           <span><strong>主要来源</strong> <a href="https://v8.dev/blog/10-years" target="_blank" rel="noopener">v8.dev/blog/10-years</a> · Wikipedia</span>
         </div>
 
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>
-            本章为<strong>骨架版本</strong> —— 大纲已通过，正文待逐节细化撰写。各小节当前列出关键知识点与权威来源链接；阅读时可对照大纲文件 <code>v8/outline.md § P1.1</code>。
-          </p>
-        </div>
-
         <!-- 01 速览 ================================================== -->
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <p>三句话定义本章：</p>
@@ -107,46 +100,147 @@
 
         <h3>史前史（2006-2008）：丹麦农场里写出来的引擎</h3>
         <p>
-          <em>正文待写。</em>关键点：Lars Bak 在丹麦农场启动；Google 收购；命名取自肌肉车引擎；目标"让 web app 像桌面程序一样快"；2008-09 与 Chrome 同步开源。
+          要理解 V8 为什么从一开始就敢"直接 JIT 无解释器"、敢做激进的 hidden class + inline cache，得先看作者是谁。<strong>Lars Bak</strong>（V8 项目首席）不是横空出世的工程师，而是带着 15 年虚拟机经验加入 Google 的——他 1991 年在 Sun Microsystems 加入 Self 项目（动态语言 + JIT 的研究先驱），1994 年离开 Sun 与人共同创办 Animorphic Systems 做 Strongtalk（高性能 Smalltalk VM），1997 年 Animorphic 被 Sun 收购后他回到 Sun 主导 <strong>HotSpot JVM</strong> 团队——把 Self / Strongtalk 的优化技术带进了 Java。
         </p>
+        <p>
+          也就是说，2008 年 V8 发布时它内置的 hidden class、inline cache、speculative deoptimization 这些"聪明 trick"，对 Lars Bak 而言已经是<strong>第三次实现</strong>（Self → Strongtalk → HotSpot → V8）。不是 Google 凭空发明 JS 高性能引擎，是把 JVM 团队的成熟方法论搬到 JS。
+        </p>
+        <p>
+          2006 秋 Bak 加入 Google，团队一开始很小（4-5 人），办公地点不在山景城而是<strong>丹麦 Aarhus 郊区他自家农场附近的小办公室</strong>——这是 V8 至今仍有相当部分研发力量在丹麦的原因。项目目标用 Bak 自己的话讲是"让 web app 跑得像桌面程序一样快"——当时主流 JS 引擎（Firefox SpiderMonkey、IE 的 JScript）做属性访问要走 hash table，每次属性查找都是几十纳秒级的开销，让 Gmail / Google Maps 这种重 JS 应用举步维艰。
+        </p>
+        <p>
+          项目代号<strong>"V8"</strong>来自肌肉车（V8 engine 是 8 缸发动机，象征强劲动力）；2008 年 9 月 2 日和 Chrome 浏览器一起开源发布，当天 V8 性能在 SunSpider / V8 Benchmark 等基准上比 SpiderMonkey 快约 10 倍。这一发布直接引爆了后续 5 年的"JS 引擎性能竞赛"——Firefox 推出 TraceMonkey / JägerMonkey、Safari 推出 SquirrelFish / Nitro 反应。
+        </p>
+        <div class="callout info">
+          <div class="callout-title">💡 一个常被忽略的事实</div>
+          <p>
+            V8 初版<strong>没有解释器</strong>，所有 JS 代码直接 JIT 成机器码（这个组件叫 <code>Full-codegen</code>）。这在 2008 年是激进选择——同时代 SpiderMonkey 仍是解释器为主。"V8 一定有解释器"的印象是 2017 年 Ignition 投入生产之后才形成的，并不是 V8 的原始设计。
+          </p>
+        </div>
 
         <h3>第一阶段 · 2008-2014 · 单层 JIT 时代</h3>
-        <p><em>正文待写。</em>关键节点：</p>
-        <ul>
-          <li><strong>2008-09</strong>：V8 + Chrome 同步开源，初版仅 ia32 + ARM；<strong>直接 JIT 无解释器</strong>（Full-codegen）</li>
-          <li><strong>2009</strong>：x64 支持；Irregexp 正则引擎；<strong>Node.js 诞生并嵌入 V8</strong> —— V8 第一次走出浏览器</li>
-          <li><strong>2010-12</strong>：<strong>Crankshaft 优化编译器</strong>问世（机器码翻倍 / 体积 -30%）—— V8 正式有了"baseline + optimizer"双层</li>
-          <li><strong>2011</strong>：增量 GC、<strong>Isolates 概念引入</strong>（多线程隔离的基础）</li>
-          <li><strong>2013</strong>：Octane 2.0 基准；<strong>Handle API 重写</strong>（"Handlepocalypse"，破坏性 API 变更）</li>
-          <li><strong>2014</strong>：后台并发编译减少卡顿；<strong>TurboFan 初版落地</strong>（替代 Crankshaft 的下一代优化器）</li>
-        </ul>
+        <p>
+          这 6 年的故事核心是：<strong>初代 V8 用 Full-codegen 起步性能就远超对手，但很快撞上"动态语言 JIT 的天花板"——单纯的 JIT 不够，需要<u>分层</u> JIT 和 <u>优化</u>编译器</strong>。
+        </p>
+
+        <p>
+          <strong>2008 年 9 月</strong>：V8 + Chrome 同步开源，初版仅支持 ia32（Intel 32-bit）和 ARM。<strong>2009 年</strong>三件事改变了 V8 命运：x64 支持落地（让 Node 这种服务端用例成为可能）；自研正则引擎 <strong>Irregexp</strong> 替换 Boost.Regex（V8 历来最神秘的组件之一，至今仍是性能最强的 JS 正则实现）；最深远的是 5 月 <strong>Node.js</strong> 由 Ryan Dahl 发布——它把 V8 嵌入服务端，成为 V8 第一次"走出浏览器"。Node 的存在反过来塑造了 V8 后续所有设计——Isolates、Snapshot、N-API 都跟 Node 需求紧密相关。
+        </p>
+
+        <p>
+          <strong>2010 年 12 月 7 日</strong>：V8 团队发布 <strong>Crankshaft</strong>——V8 史上第一个"优化编译器"。Crankshaft 不替换 Full-codegen，而是<strong>叠在它上面</strong>形成两层：所有代码先走 Full-codegen（baseline JIT），运行时 profiler 跟踪热点，热函数被送进 Crankshaft 重新编译为<strong>带 type feedback 的优化机器码</strong>。这是 V8 第一次有了"baseline + optimizer"分层架构，官方数据是机器码速度翻倍、体积 -30%——这一组合让 V8 在 SunSpider / V8 Benchmark 上又拉开对手一个身位。
+        </p>
+
+        <p>
+          <strong>2011 年</strong>：增量 GC（incremental marking）落地，把以前会卡 100ms+ 的 Major GC 切成主线程不感知的小步增量——这是 Orinoco 项目的前奏。同年引入 <strong>Isolates</strong> 概念（一个 process 内多个完全隔离的 V8 实例）——这又是 Node Worker Threads、Cloudflare Workers、Chrome 多进程渲染的基石。<strong>2013 年</strong>是个分水岭：Octane 2.0 发布成为 JS 性能基准事实标准；同时 V8 的 Handle API 完成大重写（团队内称 "Handlepocalypse"），把所有 V8 嵌入器的 C++ 代码都打破了——是 V8 嵌入 API 史上最痛的一次破坏性变更，但也为后续 GC 移动对象、HandleScope 安全奠基。
+        </p>
+
+        <p>
+          <strong>2014 年</strong>：两件大事埋下 2017 大重构的种子。一是<strong>后台并发编译</strong>——把 Crankshaft 的优化工作搬到 helper thread，主线程不再因 JIT 编译卡顿；二是 <strong>TurboFan 初版</strong>落地——一个用 <strong>Sea of Nodes IR</strong>（Cliff Click 1995 论文）的下一代优化编译器，初衷是补 Crankshaft 在 ES6+ 新语法上的优化盲区（class、generator、let/const、try/catch）。当时 TurboFan 只跑 asm.js 这种受限 JS 子集，几乎没人意识到它会在 3 年后取代 Crankshaft。
+        </p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 Crankshaft 退役的种子在出生时已埋下</div>
+          <p>
+            Crankshaft 设计目标是 <strong>ES5 优化</strong>。它内部假设 JS 代码是"函数 + prototype + 简单循环"——没有 class、没有 generator、没有 let/const 的复杂作用域、没有动态属性 transition。当 ES2015 到来时，Crankshaft 给 class / let / generator 加优化几乎要重写——团队估算重写 Crankshaft 的工作量和"另起炉灶写 TurboFan"差不多。这就是 2014 年决定开始 TurboFan 的真正动机。
+          </p>
+        </div>
 
         <h3>第二阶段 · 2015-2017 · 重构为现代管道</h3>
-        <p><em>正文待写。</em>关键节点：</p>
-        <ul>
-          <li><strong>2015</strong>：代码缓存、脚本流式加载；<strong>Ignition 解释器启动开发</strong>（目标：减小 Android 内存）；strong mode（失败的实验）</li>
-          <li><strong>2016</strong>：ES2015/2016 全特性落地；<strong>Orinoco GC 启动</strong>（并行 + 并发 + 增量）；获 ACM SIGPLAN 软件奖</li>
-          <li><strong>2017 年 V8 5.9 · 大重构</strong>：Ignition + TurboFan 成为默认管道，<strong>移除 Crankshaft + Full-codegen</strong>；WebAssembly 正式启用 —— 这是 V8 史上最大的一次架构换骨</li>
-        </ul>
+        <p>
+          这 3 年是 V8 史上工作量最大、风险最高的阶段。<strong>三个独立项目</strong>同时进行——Ignition 解释器（解决内存与启动）、TurboFan 优化器（替代 Crankshaft）、Orinoco GC（解决 stop-the-world）——并最终在 2017 年汇合成完全不同的 V8。
+        </p>
+
+        <p>
+          <strong>2015 年</strong>：V8 引入了 <strong>Code Cache</strong>（首次执行的 bytecode 序列化到磁盘，下次同源脚本跳过 parse）和 <strong>Script Streaming</strong>（边下载 JS 边 parse）——两者直接让 Chrome 启动 Web 应用的耗时下降 20-30%。同年 <strong>Ignition 项目启动</strong>，初衷不是为了性能而是为了<strong>内存</strong>——当时低端 Android 设备 1GB 内存常见，Full-codegen 直接生成的机器码动辄占 RAM 100MB+，是浏览器卡顿主因。Ignition 的目标是用 bytecode（比机器码小 4-8 倍）替换 Full-codegen，把启动期内存压下来。同年还有个失败的实验 <strong>strong mode</strong>——试图给 JS 加更严格的语义子集，最终因生态接受度不够被放弃。
+        </p>
+
+        <p>
+          <strong>2016 年</strong>：ES2015 / ES2016 全特性在 V8 中落地（class、let/const、modules、Symbol、Proxy、Promise、async/await——后者从 2015 年的 stage 3 提案到 2016 年生产可用）。同年 <strong>Orinoco GC 项目</strong>启动——把以前一整套 stop-the-world mark-sweep 重构成<strong>并行 Scavenger（年轻代）+ 并发 Marking（老年代）+ 增量回退</strong>三件套。在 heavy WebGL 游戏上 GC 暂停时间下降 50%。同一年 V8 团队拿了 <strong>ACM SIGPLAN 软件奖</strong>——这是给"对软件领域有持久影响的系统"的最高荣誉，承认 V8 已经从"Google 内部产品"成为整个软件工程界的基础设施。
+        </p>
+
+        <p>
+          <strong>2017 年 5 月，V8 5.9 发布</strong>——这是 V8 史上最大的一次架构换骨。在这一版里 V8 团队同时完成了三件事：
+        </p>
+        <ol>
+          <li><strong>Ignition + TurboFan 成为默认管道</strong>——所有代码先变 bytecode 走解释器，热点函数被 TurboFan 优化为机器码</li>
+          <li><strong>Crankshaft 与 Full-codegen 被完全删除</strong>——成千上万行 C++ 代码、十年间积累的技巧、所有针对它们写的优化文档<strong>一次性废弃</strong></li>
+          <li><strong>WebAssembly 1.0 正式启用</strong>——V8 成为第一个生产级 Wasm 引擎</li>
+        </ol>
+
+        <p>
+          为什么愿意删掉那么多代码？V8 团队的解释相当直接：<strong>维持 Crankshaft + TurboFan 两套优化器的成本太高了</strong>。一个新特性（如某个 ES 提案）必须在两边都实现两遍；一个 bug 修复要校验两套；团队 30% 的精力花在"让两套维持等价"上。删掉 Crankshaft 让团队腾出来的精力被全部投进 TurboFan 的优化和 Ignition 的字节码改进。这是一次<strong>用工程债清算换未来速度</strong>的决断。
+        </p>
+
+        <div class="callout danger">
+          <div class="callout-title">⚠️ 史料阅读警告</div>
+          <p>
+            <strong>2018 年之后</strong>讲 V8 性能调优的博客里如果出现 <code>Crankshaft</code> / <code>Full-codegen</code> 这两个名字，基本可以判定是<strong>2017 年之前的过时资料</strong>。它们今天和 V8 已经没有任何关系。同样地，"V8 没有解释器"是 2015 年之前的事——Ignition 自 2017 起就是默认入口。
+          </p>
+        </div>
 
         <h3>第三阶段 · 2018-2025 · 多层管道精细化</h3>
-        <p><em>正文待写。</em>关键节点：</p>
+        <p>
+          2017 大重构后，V8 的架构骨架稳定下来——但<strong>新的细分需求</strong>开始不断浮现：Spectre 之后大家意识到引擎也是攻击面、Cloudflare Workers 把 Isolate 用法推到极限要更小内存、移动端要更快启动、Node 服务端要更可靠优化。这 8 年 V8 没再做"大重构"，而是<strong>给两层管道再分层、给堆再分区、给安全模型再加锁</strong>。
+        </p>
+
+        <p>
+          <strong>2018 年</strong>：1 月 Spectre / Meltdown 漏洞震动整个软件行业——CPU 推测执行的副作用让 JS 代码理论上能从同进程读 SAB 拿到任意内存。V8 团队紧急上线了一系列 mitigation（去掉精确 timer、屏蔽 SAB on threads 直到 COOP/COEP 就位）。同年另外两件大事：<strong>Liftoff</strong> 落地（Wasm 的 baseline 编译器，类似 JS 的 Sparkplug 但更早 3 年出现，wasm 启动期立刻能跑）；<strong>BigInt</strong> 原始类型 + <strong>async/await zero-cost</strong> ——后者把 async function 调用比手写 promise.then 快 11 倍、内存少 2.5 倍。
+        </p>
+
+        <p>
+          <strong>2020 年</strong>：<strong>Pointer Compression</strong> 默认开启——64-bit 系统下 V8 堆只用 4GB 虚拟地址 cage，对象内部指针字段从 8 字节压到 4 字节，<strong>堆 -43%</strong>。代价是 per-isolate 堆上限 4GB（之前可以无限），但绝大多数 JS 应用根本用不到 4GB 堆——这是个划算交易。重要的是 Pointer Compression 是后续 2024 V8 Sandbox 的<strong>必要前置</strong>——所有指针都是 cage 内 32-bit offset，攻击者腐蚀指针只能在 4GB 内乱窜。
+        </p>
+
+        <p>
+          <strong>2021 年</strong>：<strong>Sparkplug</strong> 落地——一个介于 Ignition 和 TurboFan 之间的 baseline JIT，<strong>没有 IR、没有 SSA、没有寄存器分配</strong>，核心代码就是 <code>for (each bytecode) switch (opcode) emit_machine_code()</code>。看似朴素，但消除了 Ignition 的 dispatch 开销，<strong>+5-15% 性能</strong>，且编译开销几乎为零。Sparkplug 出现的真正动机是：Speedometer 这种"页面加载基准"测的就是 0-3 秒内的性能，这段时间 TurboFan 来不及编译——Sparkplug 正好填这个空档。
+        </p>
+
+        <p>
+          <strong>2023 年</strong>是 V8 近年最忙的一年，三件事同时落地：
+        </p>
         <ul>
-          <li><strong>2018</strong>：Spectre 防护补丁；<strong>Liftoff</strong> —— Wasm baseline 编译器；BigInt 原始类型；async/await zero-cost</li>
-          <li><strong>2020</strong>：<strong>Pointer Compression</strong>（64-bit 系统堆 -43%）—— 从此 V8 堆上限受 4GB 区域限制</li>
-          <li><strong>2021</strong>：<strong>Sparkplug</strong> —— non-optimizing JIT，bytecode → 机器码 1:1，无 IR；填补 Ignition 与 TurboFan 之间空档（+5-15%）</li>
-          <li><strong>2023</strong>：<strong>Maglev</strong>（M117 全平台）—— 中层优化器，编译速度比 TurboFan 快 10x，性能 80%；<strong>Turboshaft</strong>（TurboFan 后端重写，编译速度 2x）；<strong>WasmGC</strong> 正式发布</li>
-          <li><strong>2024</strong>：<strong>V8 Sandbox</strong>（Chrome 123 默认开启）—— pointer cage + heap sandbox 阻断从 V8 漏洞升级到进程级 RCE</li>
-          <li><strong>2025</strong>：管道层级稳定为 4 层 <strong>Ignition → Sparkplug → Maglev → TurboFan</strong></li>
+          <li><strong>Maglev</strong>（Chrome M117 全平台）——一个中层优化器，用 SSA + CFG（不是 sea of nodes）。编译速度比 TurboFan 快 10×，性能达到 TurboFan 的 80%。它填补 Sparkplug（无优化）和 TurboFan（重优化）之间的空档，让"中频代码"也能享受优化收益。JetStream +8.2%、Speedometer +6%、能耗 -10%。</li>
+          <li><strong>Turboshaft</strong>——TurboFan 的<strong>后端</strong>重写。前端仍是 sea of nodes，但指令选择 / 调度 / 寄存器分配换成新的 CFG-based 框架。编译速度 2×。这是为了让"加新优化"成本更低——sea of nodes 做新优化需要懂太多内部机制。</li>
+          <li><strong>WasmGC</strong>正式发布——让 Java / Kotlin / Dart / Scala 编译到 wasm 时直接复用 V8 的 Orinoco GC，不再需要语言自带 GC。Kotlin / Dart 编译版性能约为之前编译到 JS 版的 2×。</li>
         </ul>
 
-        <h3>三个底层逻辑要点</h3>
-        <p><em>正文待写。</em>三条主线（每个写成一段）：</p>
-        <ul>
-          <li><strong>每次架构突变都有具体压力源</strong>：Crankshaft 退役不是因为"过时"，是因为"跟不上 ES2015+ 新语法的优化需求"；Sparkplug 的存在不是"还想再快一点"，是因为 Speedometer 衡量的是页面加载时段</li>
-          <li><strong>"删代码"和"加代码"一样重要</strong>：2017 删 Crankshaft + Full-codegen 让团队腾出 30% 工程精力投入 TurboFan；2024 V8 Sandbox 是把"修每一个内存安全 bug"换成"假设 bug 一定有，但限制其影响半径"</li>
-          <li><strong>嵌入式生态拉动 V8 设计</strong>：Isolates 由 Workers 驱动；Snapshot 由 Chrome 启动驱动；V8 Sandbox 由 Cloudflare Workers 驱动</li>
-        </ul>
+        <p>
+          <strong>2024 年</strong>：<strong>V8 Sandbox</strong> 在 Chrome 123 默认开启——这是 V8 安全模型史上最大的转变。威胁模型从"修每一个内存安全 bug"变成"<strong>假设 bug 一定有，但限制其影响半径</strong>"。具体机制：所有 V8 堆指针都在 4GB cage 内（基于 Pointer Compression）；指向外部内存的指针通过 External Pointer Table 间接访问（带 type tag 防 type confusion）；JIT 代码地址通过 Code Pointer Table 间接调用（防 ROP）。代价仅 ~1% 性能，但攻击者从 V8 漏洞升级到进程级 RCE 现在<strong>需要再绕过 Sandbox</strong>（额外漏洞）。
+        </p>
+
+        <p>
+          <strong>2025 年</strong>：4 层 JIT 管道（Ignition → Sparkplug → Maglev → TurboFan）成为稳定结构。这一年没有架构级别的新增，更多是各层内部优化和 wasm 提案的落地（Memory64、JSPI 等）。
+        </p>
+
+        <div class="callout success">
+          <div class="callout-title">📊 17 年的引擎演化主旋律</div>
+          <p>
+            从单 JIT（2008）→ baseline + optimizer 双层（2010 Crankshaft）→ 推倒重来：bytecode + Sea of Nodes 两层（2017）→ 4 层 JIT + 双层安全（2024）。每次<strong>加层</strong>都是为了精细化时间窗口的分工；每次<strong>删层</strong>都是为了清算工程债。V8 的演化不是线性叠加，是周期性的"加 → 整合 → 删 → 加"——这是任何长期演化系统都会经历的节奏。
+          </p>
+        </div>
+
+        <h3>三条底层逻辑要点</h3>
+
+        <h4>每次架构突变都有具体压力源（不是"过时"）</h4>
+        <p>
+          很多关于 V8 的科普都会说"Crankshaft 过时了所以换成 TurboFan"——这是<strong>错的</strong>，至少是简化得无意义。Crankshaft 退役的真实原因是：它的优化模式假设 ES5 语义，给 ES2015+ 的 class / generator / let-const / try/catch 加优化需要近乎重写。同样地 Sparkplug 不是"还想快一点"——它出现是因为 Speedometer 衡量的是"页面加载 0-3 秒"性能，那段时间 TurboFan 还没来得及编译热点。每一次架构变化都对应一个能命名的具体压力，而非泛泛的"想更快"。
+        </p>
+
+        <h4>"删代码"和"加代码"一样重要</h4>
+        <p>
+          V8 团队两次最重要的工程决策都是"删代码"——2017 删 Crankshaft + Full-codegen 让团队腾出 30% 工程精力投入 TurboFan；2024 V8 Sandbox 在哲学上把"修每一个内存安全 bug 直到没有"换成"<strong>假设 bug 一定存在，但限制其影响半径</strong>"。这是承认"全面正确"是不可能目标，转向"分层防御"。这个思路和 Chrome Renderer 进程沙箱、iOS App Sandbox 是一脉相承的——前线运维和长期架构理念在这个层面是一致的。
+        </p>
+
+        <h4>嵌入式生态拉动 V8 设计而不是反过来</h4>
+        <p>
+          一个反直觉的事实：V8 的核心 API 设计绝大多数都是被嵌入器需求驱动的，不是被 Chrome 自身需要驱动的。<strong>Isolates</strong> 概念在 2011 年稳定下来是为了 Node Workers；<strong>Snapshot</strong> 是 Chrome 启动时间需求；<strong>Code Cache</strong> 是 Chrome 跨页面共享 bytecode 的需求；<strong>V8 Sandbox</strong> 的强需求来自 Cloudflare Workers——单个进程跑成百上千个互不信任的 Isolate，单层进程沙箱不够，必须要 Isolate 内部的隔离层。这就是为什么 V8 长期有相当大比例研发力量花在 embedder API 上。
+        </p>
+
+        <h3>V8 史与 ECMAScript 标准史是平行线</h3>
+        <p>
+          2008 V8 推出 → 2009 ES5 救场（V8 抢先实现）；2015 ES2015 → V8 同年完成 90% 落地；今天 TC39 提案进 Stage 3 后通常 V8 是第一个引擎实现。这不是巧合——TC39 流程要求"≥ 2 个引擎独立实现"才能进 Stage 4，<strong>V8 一直是那个先实现的引擎</strong>。某种意义上，V8 不仅在跑 ECMAScript，还在<strong>定义</strong>哪些 ECMAScript 提案能成为标准。完整 ECMAScript 标准史详见 <a href="../../ecma/01-standards/01-history.html">ECMA P1.1 · 标准发展史</a>。
+        </p>
 
         <h3>V8 史与 ECMAScript 标准史是平行线</h3>
         <p>
@@ -157,11 +251,21 @@
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
           <h3 class="scenario-title">场景 A · 解释 Node 升级时的性能曲线突变</h3>
-          <p><em>正文待写。</em>例：Node 16 → 18 引入 Sparkplug，启动快但稳态相当；Node 20 → 22 引入 Maglev，中频代码加速明显。</p>
+          <p>
+            Node 升级常常遇到"启动快了但稳态相当"或"某段中频代码突然提升"的现象。例：<strong>Node 16 → 18 引入 Sparkplug</strong>——启动期 5-15% 提升明显但稳态没变（因为热点函数仍由 TurboFan 接管）；<strong>Node 20 → 22 引入 Maglev</strong>——中频代码（被调用上百次但还没热到 TurboFan 编译）速度突然变快。理解 V8 各 tier 的<strong>时间窗口</strong>分工，能直接回答 benchmark 上的诡异曲线。
+          </p>
         </div>
         <div class="scenario">
           <h3 class="scenario-title">场景 B · 评估 V8 漏洞 (CVE) 对生产环境的影响</h3>
-          <p><em>正文待写。</em>是否在 Sandbox 范围内、是否需要立即升级、攻击面是 Chrome 还是 Node。</p>
+          <p>
+            V8 每年大约公告 30+ 安全漏洞。判断生产环境影响要分两步：<strong>是否在 Sandbox 范围内</strong>（cage 内的指针腐蚀威胁更小，cage 外的逃逸更严重）、<strong>攻击面是 Chrome 还是 Node</strong>（Chrome 默认沙箱 + V8 Sandbox 双层；Node 没进程沙箱，V8 漏洞直接是进程级 RCE）。同一个 CVE 在 Chrome 可能"无须立即修"，在 Node 服务端却是 P0 紧急。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 给新人讲"为什么 V8 这样设计"</h3>
+          <p>
+            把 V8 当 17 年演化产物来讲，比当"现成黑盒"讲容易多了。"为什么有 4 层 JIT" → "因为不同时间窗口需要不同优化深度"；"为什么有 Hidden Class" → "Lars Bak 在 Self / Strongtalk / HotSpot 第三次实现这个 trick"；"为什么 V8 堆有 4GB 上限" → "Pointer Compression 用 32-bit offset 换内存 -43%"。每个"为什么"都对应一段历史。
+          </p>
         </div>
 
         <!-- 04 典型代码 ============================================== -->
