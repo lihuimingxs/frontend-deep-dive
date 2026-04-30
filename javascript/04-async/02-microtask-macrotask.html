@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>微任务 vs 宏任务 · P3 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="setTimeout/setInterval/setImmediate/MessageChannel/queueMicrotask/Promise/MutationObserver/rAF/rIC 的分类与时序决策表、各 task source 的优先级、微任务嵌套规则、浏览器 vs Node 的时序差异。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P4 目录</a>
+          <a href="https://javascript.info/event-loop" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · 异步 & 错误处理</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-event-loop.html">01 · Event Loop 模型</a></li>
+          <li><a href="02-microtask-macrotask.html">02 · 微任务 vs 宏任务</a></li>
+          <li><a href="03-promise.html">03 · Promise 状态机</a></li>
+          <li><a href="04-promise-combinators.html">04 · Promise 组合器</a></li>
+          <li><a href="05-async-await.html">05 · async / await</a></li>
+          <li><a href="06-abort-controller.html">06 · AbortController</a></li>
+          <li><a href="07-concurrency.html">07 · 并发控制</a></li>
+          <li><a href="08-node-eventloop-errors.html">08 · Node Event Loop + 错误收口</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../02-fundamentals/index.html">P2 · 语言基础</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · 异步 & 错误处理</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>微任务 vs 宏任务</span>
+        </nav>
+
+        <h1>微任务 vs 宏任务</h1>
+        <p class="lead">
+          "把异步 API 按队列分类"是面试高频题，但真正的工程价值是"<strong>选对异步 API</strong>"——
+          在正确的时序执行回调。本章给出 10+ 常用 API 的完整归类表，讲清楚"尽快异步"、"下帧执行"、"浏览器空闲时跑"
+          三种需求对应什么 API。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~18 分钟</span>
+          <span><strong>前置</strong> 01 Event Loop</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/event-loop" target="_blank" rel="noopener">Event loop</a></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <table>
+          <thead>
+            <tr>
+              <th>API</th>
+              <th>类型</th>
+              <th>最小延迟</th>
+              <th>典型用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>queueMicrotask(fn)</code></td>
+              <td><strong>microtask</strong></td>
+              <td>本轮末尾</td>
+              <td>尽快异步 + 不跨轮 event loop</td>
+            </tr>
+            <tr>
+              <td><code>Promise.then/catch/finally</code></td>
+              <td><strong>microtask</strong></td>
+              <td>本轮末尾</td>
+              <td>Promise 链</td>
+            </tr>
+            <tr>
+              <td><code>MutationObserver</code></td>
+              <td><strong>microtask</strong></td>
+              <td>DOM 变更后本轮</td>
+              <td>监听 DOM 变化</td>
+            </tr>
+            <tr>
+              <td><code>process.nextTick</code>（Node）</td>
+              <td><strong>microtask</strong>（优先级高于 Promise）</td>
+              <td>本轮末尾</td>
+              <td>Node 特有</td>
+            </tr>
+            <tr>
+              <td><code>setTimeout(fn, 0)</code></td>
+              <td>macrotask</td>
+              <td>至少 4ms（嵌套 5+）</td>
+              <td>延后到下一轮</td>
+            </tr>
+            <tr>
+              <td><code>setInterval</code></td>
+              <td>macrotask</td>
+              <td>至少 4ms</td>
+              <td>重复 timer（少用，用 rAF）</td>
+            </tr>
+            <tr>
+              <td><code>setImmediate</code>（Node）</td>
+              <td>macrotask（check phase）</td>
+              <td>本轮 poll 后</td>
+              <td>Node 特有</td>
+            </tr>
+            <tr>
+              <td><code>MessageChannel</code> + postMessage</td>
+              <td>macrotask</td>
+              <td>0ms（不受 4ms 限制）</td>
+              <td>"尽快下一轮"</td>
+            </tr>
+            <tr>
+              <td><code>requestAnimationFrame(fn)</code></td>
+              <td><em>rendering callback</em></td>
+              <td>下帧前</td>
+              <td>动画、DOM 批量写</td>
+            </tr>
+            <tr>
+              <td><code>requestIdleCallback(fn)</code></td>
+              <td>idle 阶段</td>
+              <td>浏览器空闲</td>
+              <td>非紧急后台任务</td>
+            </tr>
+            <tr>
+              <td><code>scheduler.postTask(fn, {priority})</code></td>
+              <td>macrotask（带优先级）</td>
+              <td>0ms</td>
+              <td>新 API，显式优先级</td>
+            </tr>
+            <tr>
+              <td><code>scheduler.yield()</code></td>
+              <td>macrotask</td>
+              <td>0ms</td>
+              <td>让行给更高优先级</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="queue-choice">怎么选："需要多快"</h3>
+        <ol>
+          <li>
+            <strong>尽快但不跨事件循环</strong> → <code>queueMicrotask</code> / Promise microtask。适合"合并
+            batch"、"确保回调异步"。
+          </li>
+          <li>
+            <strong>下一轮 task 但想绕过 4ms 最小延迟</strong> → <code>MessageChannel</code>。React/Scheduler
+            早期用它做调度。
+          </li>
+          <li><strong>下一帧渲染前</strong> → <code>requestAnimationFrame</code>。动画、批量写 DOM。</li>
+          <li><strong>有空闲再跑</strong> → <code>requestIdleCallback</code>。非关键后台（埋点上报、缓存清理）。</li>
+          <li>
+            <strong>按优先级调度</strong> →
+            <code>scheduler.postTask({ priority: "user-blocking" | "user-visible" | "background" })</code>。
+          </li>
+        </ol>
+
+        <h3 id="microtask-purpose">Microtask 的设计哲学</h3>
+        <p>
+          Promise 规范要求 <code>.then</code> 回调<strong>必须异步</strong>（避免 Zalgo）。但如果走和
+          <code>setTimeout</code> 同样的队列，会产生两个问题：
+        </p>
+        <ul>
+          <li>被其他 task（如用户点击）抢先 → Promise 链中断感觉不连贯。</li>
+          <li>多个 <code>.then</code> 之间穿插 UI 渲染 → "半成品"状态被用户看见。</li>
+        </ul>
+        <p>
+          Microtask 队列解决这两个问题：<strong>当前同步代码结束 → 清空 microtask → 渲染/下一轮 task</strong>。一个
+          Promise 链里的所有 <code>.then</code> 都在同一轮 event loop 里跑完，用户看不到中间态。
+        </p>
+
+        <h3 id="nextTick">Node <code>process.nextTick</code> 的特殊性</h3>
+        <p>
+          <code>process.nextTick</code> 在 Node 里是 "micro-microtask" —— 优先级<strong>高于</strong> Promise
+          microtask：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// Node.js
+Promise.resolve().then(() =&gt; console.log("promise"));
+process.nextTick(() =&gt; console.log("nextTick"));
+
+// 输出：nextTick, promise
+// nextTick 队列先被清空</code></pre>
+        </div>
+        <p>
+          历史原因：<code>process.nextTick</code> 在 Promise 规范前出现。现在 Node 文档推荐用
+          <code>queueMicrotask</code> 替代，除非真的需要"最高优先级"（极少）。
+        </p>
+
+        <h3 id="rAF-vs-rIC">rAF vs rIC 的时序窗口</h3>
+        <p>浏览器渲染周期里的关键时间点：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 每帧（~16.67ms @ 60Hz）：
+//
+// [前一帧结束] → 浏览器检查是否渲染
+//                  ├─ task（一个）
+//                  ├─ 清空 microtask
+//                  ├─ rAF 回调          ← requestAnimationFrame
+//                  ├─ resize / scroll observer
+//                  ├─ IntersectionObserver
+//                  ├─ style → layout → paint → composite
+//                  └─ 渲染完毕
+//               ↓
+// [空闲时间]    → requestIdleCallback 执行（最多到帧末）
+
+requestAnimationFrame(() =&gt; {
+  // 在样式计算前：可以读取布局值不会触发 reflow
+  // 可以安全写 style（会在本帧渲染）
+});
+
+requestIdleCallback((deadline) =&gt; {
+  while (deadline.timeRemaining() &gt; 0 &amp;&amp; queue.length) {
+    process(queue.shift());
+  }
+  if (queue.length) requestIdleCallback(...);
+}, { timeout: 1000 });   // 1s 后必调度</code></pre>
+        </div>
+
+        <h3 id="message-channel">MessageChannel 绕过 4ms 最小延迟</h3>
+        <p>
+          <code>setTimeout(fn, 0)</code> 在嵌套 5 层以上会被夹紧到 4ms。想要"纯 0ms 的下一轮 task"用 MessageChannel：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const channel = new MessageChannel();
+const port1 = channel.port1;
+const port2 = channel.port2;
+const queue = [];
+port1.onmessage = () =&gt; {
+  const fn = queue.shift();
+  fn?.();
+};
+function yieldToMain(fn) {
+  queue.push(fn);
+  port2.postMessage(null);    // 触发 onmessage（下一轮 macrotask）
+}
+
+// React 18 的 scheduler、FastDOM 早期版本都用这个技巧
+// Chrome 129+ 有原生 scheduler.yield() 替代</code></pre>
+        </div>
+
+        <h3 id="scheduler-api">新的 Scheduler API</h3>
+        <p>
+          <code>scheduler.postTask</code> 和 <code>scheduler.yield</code> 是 Chrome 129+ 支持的新 API（Firefox 尚未）：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 3 种优先级
+await scheduler.postTask(() =&gt; { /* ... */ }, { priority: "user-blocking" });
+// user-blocking &gt; user-visible &gt; background
+
+// yield 让行给更高优先级任务
+async function processAll(items) {
+  for (const item of items) {
+    process(item);
+    if (performance.now() % 50 &lt; 1) await scheduler.yield();  // 让浏览器响应用户
+  }
+}
+
+// 替代 setTimeout(fn, 0) 切片 —— 更智能、不受 4ms 限制</code></pre>
+        </div>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">批量订阅者通知（microtask 聚合）</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">class Store {
+  #state = {};
+  #subs = new Set();
+  #pending = false;
+  set(k, v) {
+    this.#state[k] = v;
+    if (!this.#pending) {
+      this.#pending = true;
+      queueMicrotask(() =&gt; {
+        this.#pending = false;
+        this.#subs.forEach(fn =&gt; fn(this.#state));
+      });
+    }
+  }
+}
+// 效果：同步连续 set 10 次 → 订阅者只被调用 1 次（本轮末尾）
+// Vue 3、MobX 的批量更新机制核心是这个 pattern</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">动画 + DOM 批量写</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 读写分离（FastDOM / fastdom 库思路）
+let reads = [], writes = [];
+let scheduled = false;
+function schedule() {
+  if (scheduled) return;
+  scheduled = true;
+  requestAnimationFrame(() =&gt; {
+    reads.forEach(fn =&gt; fn());   // 先读布局值
+    writes.forEach(fn =&gt; fn());  // 再写 DOM
+    reads = []; writes = []; scheduled = false;
+  });
+}
+const measure = (fn) =&gt; { reads.push(fn); schedule(); };
+const mutate  = (fn) =&gt; { writes.push(fn); schedule(); };
+
+// 使用
+measure(() =&gt; { const h = el.offsetHeight; mutate(() =&gt; el.style.height = h + 20 + "px"); });</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">后台非关键任务（埋点上报）</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">const analyticsQueue = [];
+function trackEvent(evt) {
+  analyticsQueue.push(evt);
+  if (typeof requestIdleCallback !== "undefined") {
+    requestIdleCallback(flush, { timeout: 5000 });
+  } else {
+    setTimeout(flush, 500);       // fallback（Safari）
+  }
+}
+function flush(deadline) {
+  while (analyticsQueue.length &amp;&amp; (!deadline || deadline.timeRemaining() &gt; 0)) {
+    send(analyticsQueue.shift());
+  }
+  if (analyticsQueue.length) requestIdleCallback(flush);
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">React Scheduler 的时间切片</h3>
+          <p>
+            React 18 的 concurrent mode 用自研 Scheduler（之前靠 MessageChannel，现在兼容新 scheduler API）。每 5ms
+            让行一次，保持主线程响应性。理解这一章能帮你读懂 React 源码里的 <code>shouldYield</code> 逻辑。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">替代 <code>setTimeout(fn, 0)</code> 做切片</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// ❌ 用 setTimeout 做切片：嵌套 5 层后变 4ms，累计时间过长
+async function process1(items) {
+  for (const item of items) {
+    work(item);
+    await new Promise(r =&gt; setTimeout(r, 0));
+  }
+}
+
+// ✓ 用 scheduler.yield 或 MessageChannel
+async function process2(items) {
+  for (const item of items) {
+    work(item);
+    if (globalThis.scheduler) await scheduler.yield();
+    else await new Promise(r =&gt; (new MessageChannel()).port1.onmessage = () =&gt; r(),
+                                 (ch = new MessageChannel(), ch.port2.postMessage(null)));
+  }
+}</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-timing">时序判断题集</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 题 1
+async function f() {
+  console.log("1");
+  await null;                 // await 等价 Promise.resolve(null).then
+  console.log("2");
+}
+f();
+console.log("3");
+// 输出：1, 3, 2
+// 解释：await 把后面的代码移到 microtask；console.log(3) 是同步
+
+// 题 2
+Promise.resolve().then(() =&gt; console.log(1));
+setTimeout(() =&gt; console.log(2));
+requestAnimationFrame(() =&gt; console.log(3));
+console.log(4);
+// 输出：4, 1, （下帧前：3）, 2
+// 解释：rAF 在下帧前、setTimeout 在下一轮 macrotask
+// 注：具体顺序可能因浏览器 rendering 时机而异
+
+// 题 3
+const p = Promise.resolve();
+p.then(() =&gt; console.log("A")).then(() =&gt; console.log("B"));
+p.then(() =&gt; console.log("C")).then(() =&gt; console.log("D"));
+// 输出：A, C, B, D
+// 解释：两个 .then 交替入队（规范的链式处理）</code></pre>
+        </div>
+
+        <h3 id="ex-nexttick">queueMicrotask 实现</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 老浏览器 polyfill
+const queueMicrotaskPoly = typeof queueMicrotask === "function"
+  ? queueMicrotask
+  : (fn) =&gt; Promise.resolve().then(fn).catch(e =&gt; setTimeout(() =&gt; { throw e; }));
+
+// ⚠ 错误处理差异：queueMicrotask 里抛错会变成 unhandled rejection
+// polyfill 的 .catch 在老浏览器可能差异，上面用 setTimeout 重抛同步异常</code></pre>
+        </div>
+
+        <h3 id="ex-rIC-polyfill">requestIdleCallback polyfill</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// Safari 无原生 rIC（2026 仍如此）
+const ric = globalThis.requestIdleCallback ?? ((fn) =&gt; setTimeout(() =&gt; {
+  const start = Date.now();
+  fn({
+    didTimeout: false,
+    timeRemaining: () =&gt; Math.max(0, 50 - (Date.now() - start)),
+  });
+}, 1));</code></pre>
+        </div>
+
+        <h3 id="ex-smart-yield">智能 yield</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 连续任务中每 N ms 让一次行
+async function processWithYield(items, fn) {
+  let lastYield = performance.now();
+  for (const item of items) {
+    fn(item);
+    if (performance.now() - lastYield &gt; 50) {
+      if (globalThis.scheduler?.yield) await scheduler.yield();
+      else await new Promise(r =&gt; setTimeout(r));
+      lastYield = performance.now();
+    }
+  }
+}</code></pre>
+        </div>
+
+        <!-- 05 陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>setTimeout(fn, 0)</code> 的最小 4ms</div>
+          <p>
+            HTML 规范：嵌套 ≥5 层 setTimeout / setInterval 的最小延迟被 clamp 到 4ms。某些浏览器甚至对后台 tab 用
+            1s。性能敏感场景用 <code>queueMicrotask</code>（本轮末尾）或 <code>MessageChannel</code>（下一轮但不限
+            4ms）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>queueMicrotask</code> 中抛错不会被 try/catch 捕获</div>
+          <p>
+            microtask 回调的错误成为全局 uncaught exception（浏览器会派发 <code>error</code> 事件，Node 里触发
+            <code>uncaughtException</code>）。自己 wrap try/catch 或用 Promise 链处理。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>rAF</code> 回调在后台 tab 完全不跑</div>
+          <p>
+            Chrome/Safari 后台 tab 的 rAF 停止。如果做"时间驱动"逻辑（倒计时、动画），要用
+            <code>performance.now()</code> 差值补帧，不要依赖 rAF 调用次数。<code>document.visibilityState</code>
+            检测可见性。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>requestIdleCallback</code> 的 deadline 不准</div>
+          <p>
+            <code>deadline.timeRemaining()</code> 是估计值，实际可能被低估 → 回调跑太早结束；或高估 →
+            回调超出空闲时间导致下一帧掉帧。总是设置 <code>timeout</code> 选项作为最迟保障。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Promise 链中混入 setTimeout 改变时序</div>
+          <p>
+            <code>p.then(() =&gt; setTimeout(fn)).then(next)</code> 中 <code>next</code> 不等 <code>fn</code>！<code
+              >setTimeout</code
+            >
+            返回 undefined，<code>.then</code> 立即继续。要等 timeout 结束：<code
+              >p.then(() =&gt; new Promise(r =&gt; setTimeout(r, 100))).then(next)</code
+            >。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Node <code>process.nextTick</code> "饿死" IO</div>
+          <p>
+            <code>process.nextTick</code> 队列会在<strong>当前 phase 结束前</strong>完全清空 —— 如果回调里又加
+            nextTick，无限循环下 IO/定时器永远不跑。Node 文档警告：优先用 <code>setImmediate</code> 或
+            <code>queueMicrotask</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">浏览器的 throttling（省电 / 后台）</div>
+          <p>
+            Chrome 对后台 tab / 省电模式做多种节流：<code>setTimeout</code> min 1s、<code>setInterval</code> 合并、<code
+              >rAF</code
+            >
+            停止、<code>fetch</code> 延迟。线上 RUM 数据可能受此影响；看 Performance panel 要过滤后台 tab 数据。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>setTimeout(fn, n)</code> 的 n 是"最早"而非"准确"</div>
+          <p>
+            setTimeout 承诺"至少 n ms 后执行"，不是"恰好 n ms"。主线程繁忙时会延迟。动画/时间驱动逻辑一律用
+            <code>performance.now()</code> 差值计算，不要累加 n。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a
+              href="https://html.spec.whatwg.org/multipage/webappapis.html#processing-model-9"
+              target="_blank"
+              rel="noopener"
+              >HTML 规范 · Event loop processing model</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://developer.mozilla.org/en-US/docs/Web/API/HTML_DOM_API/Microtask_guide"
+              target="_blank"
+              rel="noopener"
+              >MDN · Microtask guide</a
+            >
+          </li>
+          <li>
+            <a href="https://wicg.github.io/scheduling-apis/" target="_blank" rel="noopener"
+              >W3C · Prioritized Task Scheduling API</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://nodejs.org/en/learn/asynchronous-work/event-loop-timers-and-nexttick"
+              target="_blank"
+              rel="noopener"
+              >Node.js · Event Loop, Timers, and process.nextTick</a
+            >
+          </li>
+          <li>
+            <strong>下一步</strong> → <a href="03-promise.html">03 · Promise 状态机</a>，从队列走到最常用的 microtask
+            源。
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-event-loop.html"
+            ><span class="label">← 上一章</span><span class="title">01 · Event Loop 模型</span></a
+          >
+          <a class="next" href="03-promise.html"
+            ><span class="label">下一章 →</span><span class="title">03 · Promise 状态机</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

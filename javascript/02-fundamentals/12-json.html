@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>JSON · P1 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="JSON 规范子集、stringify 的 toJSON/replacer/space 三段流程、parse 的 reviver 从叶到根、丢失类型陷阱（undefined/Date/Map/BigInt/循环引用）、structuredClone 与 superjson/devalue 替代。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P2 目录</a>
+          <a href="https://javascript.info/json" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · 语言基础</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-types.html">01 · 数据类型系统</a></li>
+          <li><a href="02-operators.html">02 · 操作符与强制转换</a></li>
+          <li><a href="03-control-flow.html">03 · 控制流</a></li>
+          <li><a href="04-functions.html">04 · 函数基础</a></li>
+          <li><a href="05-objects.html">05 · 对象深入</a></li>
+          <li><a href="06-arrays.html">06 · 数组深入</a></li>
+          <li><a href="07-strings.html">07 · 字符串深入</a></li>
+          <li><a href="08-numbers.html">08 · 数字与 Math</a></li>
+          <li><a href="09-date-intl.html">09 · Date 与 Intl</a></li>
+          <li><a href="10-map-set.html">10 · Map / Set 家族</a></li>
+          <li><a href="11-symbol.html">11 · Symbol 全景</a></li>
+          <li><a href="12-json.html">12 · JSON</a></li>
+          <li><a href="13-iterators.html">13 · 迭代器与 Generator</a></li>
+          <li><a href="14-errors.html">14 · 错误处理</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · 语言基础</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>JSON</span>
+        </nav>
+
+        <h1>JSON</h1>
+        <p class="lead">
+          <code>JSON</code> 是 JS 对象字面量的一个严格子集（ECMA-404）。<code>JSON.parse</code> /
+          <code>stringify</code> 接口只有两行，但背后的行为细节能让你踩一下午坑：undefined 被吃掉、Date
+          变字符串回不去、BigInt 抛错、循环引用崩溃。本章把这些规则和应对模式集齐。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~18 分钟</span>
+          <span><strong>前置</strong> 05 对象 · 11 Symbol</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/json" target="_blank" rel="noopener">JSON methods</a></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================= -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// stringify 签名：(value, replacer?, space?)
+JSON.stringify({ a: 1, b: [2, 3] });
+// '{"a":1,"b":[2,3]}'
+
+JSON.stringify(obj, null, 2);              // 缩进 2 空格
+JSON.stringify(obj, null, "\t");           // 缩进 tab
+JSON.stringify(obj, ["a", "b"]);           // 白名单
+JSON.stringify(obj, (k, v) =&gt; ...);        // replacer 函数
+
+// parse 签名：(text, reviver?)
+JSON.parse('{"a":1}');                      // { a: 1 }
+JSON.parse(text, (k, v) =&gt; ...);            // reviver 函数</code></pre>
+        </div>
+
+        <h3>JSON 规范子集 — 支持的值</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>类型</th>
+              <th>JSON 支持</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Object（纯字段）</td>
+              <td>✓</td>
+            </tr>
+            <tr>
+              <td>Array</td>
+              <td>✓</td>
+            </tr>
+            <tr>
+              <td>String</td>
+              <td>✓（UTF-8）</td>
+            </tr>
+            <tr>
+              <td>Number（有限）</td>
+              <td>✓</td>
+            </tr>
+            <tr>
+              <td><code>true</code> / <code>false</code> / <code>null</code></td>
+              <td>✓</td>
+            </tr>
+            <tr>
+              <td><code>undefined</code></td>
+              <td>✗（序列化被吃，反序列化 undefined 不存在）</td>
+            </tr>
+            <tr>
+              <td>Function</td>
+              <td>✗</td>
+            </tr>
+            <tr>
+              <td>Symbol（键或值）</td>
+              <td>✗</td>
+            </tr>
+            <tr>
+              <td>BigInt</td>
+              <td>✗（stringify 抛错）</td>
+            </tr>
+            <tr>
+              <td><code>NaN</code> / <code>Infinity</code></td>
+              <td>✗（变 <code>null</code>）</td>
+            </tr>
+            <tr>
+              <td>Date</td>
+              <td>⚠ stringify 变 ISO 字符串，不可逆</td>
+            </tr>
+            <tr>
+              <td>Map / Set</td>
+              <td>⚠ 变 <code>{}</code> / <code>{}</code>（无内容）</td>
+            </tr>
+            <tr>
+              <td>RegExp</td>
+              <td>⚠ 变 <code>{}</code></td>
+            </tr>
+            <tr>
+              <td>循环引用</td>
+              <td>✗（抛 TypeError）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 =========================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="stringify-flow">stringify 的 3 层处理</h3>
+        <p><code>JSON.stringify</code> 处理每个值按三个阶段：</p>
+        <ol>
+          <li>
+            <strong>调用 <code>toJSON</code></strong
+            >（如果值上有）。<code>Date.prototype.toJSON</code> 内置，返回 <code>toISOString()</code>。
+          </li>
+          <li>
+            <strong>调用 replacer</strong>（如果传了）。参数 <code>(key, value)</code>，返回的值替换原值。<code
+              >key</code
+            >
+            是字符串（数组索引也是字符串）。
+          </li>
+          <li>
+            <strong>内置类型处理</strong>：
+            <ul>
+              <li>string → <code>"..."</code>（含必要转义）</li>
+              <li>number → 除 <code>NaN</code>/<code>±Infinity</code> 外照搬；后者变 <code>null</code></li>
+              <li>bool / null → 照搬</li>
+              <li>array → 遍历每个元素（<code>undefined</code> / function / Symbol 变 <code>null</code>）</li>
+              <li>
+                object → 遍历自有可枚举字符串键（Symbol 键忽略；<code>undefined</code>/function/Symbol
+                值<strong>整个键</strong>忽略）
+              </li>
+              <li>其他类型（BigInt）→ 抛 TypeError</li>
+            </ul>
+          </li>
+        </ol>
+
+        <h3 id="reviver-flow">parse 的 reviver 从叶到根</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre
+            class="code"
+          ><code class="lang-js">const data = JSON.parse('{"date":"2024-03-15","n":10}', (key, value) =&gt; {
+  // 调用顺序：深度优先，先叶子后根
+  // 1. key="date", value="2024-03-15"
+  // 2. key="n", value=10
+  // 3. key="", value={date:"2024-03-15", n:10}   ← 最后根对象
+  if (key === "date") return new Date(value);
+  return value;   // 其他照搬
+});
+// data = { date: Date, n: 10 }
+
+// 根对象的 key 是 ""</code></pre>
+        </div>
+
+        <h3 id="replacer-flow">stringify 的 replacer：两种形式</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 形式 1：数组白名单
+JSON.stringify({ a: 1, b: 2, c: 3 }, ["a", "b"]);
+// '{"a":1,"b":2}'
+
+// 形式 2：函数
+JSON.stringify(obj, (key, value) =&gt; {
+  // 调用顺序：从根开始，深度优先
+  // 1. key="", value=整个根对象
+  // 2. key="a", value=obj.a
+  // ...
+  if (key.startsWith("_")) return undefined;     // 返回 undefined 会<strong>删除</strong>该键
+  if (typeof value === "bigint") return value.toString();
+  return value;
+});
+
+// ⚠ this 在 replacer 里是当前的父对象（非箭头函数）
+// 箭头函数的 replacer 拿不到 this 上下文</code></pre>
+        </div>
+
+        <h3 id="toJSON-hook">对象可以自定义 <code>toJSON</code></h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">class Money {
+  constructor(cents, currency) { this.cents = cents; this.currency = currency; }
+  toJSON() { return `${this.cents / 100} ${this.currency}`; }
+}
+
+JSON.stringify({ price: new Money(12345, "CNY") });
+// '{"price":"123.45 CNY"}'
+
+// 内置的 Date.prototype.toJSON 就是返回 toISOString()
+new Date("2024-03-15").toJSON();    // "2024-03-15T00:00:00.000Z"</code></pre>
+        </div>
+
+        <h3 id="structured-clone"><code>structuredClone</code> vs <code>JSON</code> 深拷</h3>
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th><code>JSON.parse(JSON.stringify(x))</code></th>
+              <th><code>structuredClone(x)</code></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Date</td>
+              <td>变字符串</td>
+              <td>保留 Date 类型</td>
+            </tr>
+            <tr>
+              <td>Map / Set</td>
+              <td>丢失</td>
+              <td>保留</td>
+            </tr>
+            <tr>
+              <td>TypedArray / ArrayBuffer</td>
+              <td>变数组对象</td>
+              <td>保留</td>
+            </tr>
+            <tr>
+              <td>RegExp</td>
+              <td>变 <code>{}</code></td>
+              <td>保留</td>
+            </tr>
+            <tr>
+              <td>循环引用</td>
+              <td>抛 TypeError</td>
+              <td>支持</td>
+            </tr>
+            <tr>
+              <td>函数 / Symbol</td>
+              <td>丢失</td>
+              <td>抛 DataCloneError</td>
+            </tr>
+            <tr>
+              <td>BigInt</td>
+              <td>抛</td>
+              <td>保留</td>
+            </tr>
+            <tr>
+              <td>class 实例</td>
+              <td>退化为 POJO</td>
+              <td>退化为 POJO（丢原型）</td>
+            </tr>
+            <tr>
+              <td>性能</td>
+              <td>中等（需序列化 → 解析）</td>
+              <td>通常更快（直接结构遍历）</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          <strong>深拷贝首选 <code>structuredClone</code>。</strong>只在需要"保证 JSON 兼容"或要可传输字符串时用 JSON
+          法。
+        </p>
+
+        <!-- 03 应用场景 =========================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">自动还原 Date 字段</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+
+function parseWithDates(text) {
+  return JSON.parse(text, (key, value) =&gt; {
+    if (typeof value === "string" &amp;&amp; ISO_RE.test(value)) return new Date(value);
+    return value;
+  });
+}
+
+// API 层统一用这个解析，业务拿到的就是 Date 对象
+const user = parseWithDates(apiResponse);
+user.createdAt instanceof Date;    // true</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">敏感字段脱敏 / 白名单输出</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">const SENSITIVE = ["password", "token", "apiKey", "creditCard"];
+
+function safeStringify(obj) {
+  return JSON.stringify(obj, (key, value) =&gt; {
+    if (SENSITIVE.includes(key)) return "[REDACTED]";
+    if (typeof value === "bigint") return value.toString();
+    return value;
+  }, 2);
+}
+
+console.log(safeStringify({
+  name: "Alice",
+  password: "plain",
+  token: "abc123",
+}));
+// { name: "Alice", password: "[REDACTED]", token: "[REDACTED]" }</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">处理 BigInt ID</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 后端返回 int64 ID，用字符串传输
+const body = await fetch("/api/users").then(r =&gt; r.text());
+// body: '{"id":"18446744073709551615","name":"Alice"}'
+
+// 客户端保留为 BigInt
+const user = JSON.parse(body, (key, value) =&gt; {
+  if (key === "id" &amp;&amp; typeof value === "string") {
+    return BigInt(value);
+  }
+  return value;
+});
+
+// 发送请求时转字符串
+JSON.stringify(user, (k, v) =&gt; typeof v === "bigint" ? v.toString() : v);</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Map / Set 的 JSON 编解码</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 方案：用"标签对象"区分类型
+function encode(key, value) {
+  if (value instanceof Map) return { __type: "Map", data: [...value] };
+  if (value instanceof Set) return { __type: "Set", data: [...value] };
+  return value;
+}
+function decode(key, value) {
+  if (value &amp;&amp; value.__type === "Map") return new Map(value.data);
+  if (value &amp;&amp; value.__type === "Set") return new Set(value.data);
+  return value;
+}
+
+const m = new Map([["a", 1]]);
+const json = JSON.stringify(m, encode);
+// '{"__type":"Map","data":[["a",1]]}'
+const restored = JSON.parse(json, decode);
+restored instanceof Map;        // true
+
+// 生产用 <a href="https://github.com/blitz-js/superjson" target="_blank" rel="noopener">superjson</a> 或 <a href="https://github.com/rich-harris/devalue" target="_blank" rel="noopener">devalue</a>
+// 它们完整处理 Map/Set/Date/Regexp/BigInt/循环引用</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">循环引用安全序列化</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">function safeStringify(obj, space) {
+  const seen = new WeakSet();
+  return JSON.stringify(obj, (key, value) =&gt; {
+    if (typeof value === "object" &amp;&amp; value !== null) {
+      if (seen.has(value)) return "[Circular]";
+      seen.add(value);
+    }
+    return value;
+  }, space);
+}
+
+const obj = { x: 1 };
+obj.self = obj;
+safeStringify(obj);                      // '{"x":1,"self":"[Circular]"}'
+// JSON.stringify(obj)  抛 TypeError</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 =========================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-space">格式化输出（debug / config 文件）</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">JSON.stringify(obj, null, 2);         // 缩进 2 空格
+JSON.stringify(obj, null, "\t");      // 缩进 tab
+JSON.stringify(obj, null, 0);         // 紧凑（无缩进）
+JSON.stringify(obj);                  // 同 0
+
+// 固定排序键（方便 diff / hash）
+function sortedStringify(obj, space) {
+  return JSON.stringify(obj, (k, v) =&gt; {
+    if (v &amp;&amp; typeof v === "object" &amp;&amp; !Array.isArray(v)) {
+      return Object.fromEntries(Object.entries(v).sort(([a], [b]) =&gt; a.localeCompare(b)));
+    }
+    return v;
+  }, space);
+}</code></pre>
+        </div>
+
+        <h3 id="ex-validate">安全解析：<code>JSON.parse</code> + try/catch</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function tryParse(text, fallback = null) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return fallback;
+  }
+}
+
+// 或返回 Result
+function parseJSON(text) {
+  try {
+    return { ok: true, value: JSON.parse(text) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// 校验 schema 用 zod/valibot/yup 等库
+import { z } from "zod";
+const User = z.object({ name: z.string(), age: z.number() });
+const user = User.parse(JSON.parse(text));   // 双重保险</code></pre>
+        </div>
+
+        <h3 id="ex-clone">深拷贝决策</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 1. 仅 POJO，性能不敏感
+const copy = JSON.parse(JSON.stringify(obj));
+
+// 2. 现代浏览器 / Node 18+（推荐）
+const copy = structuredClone(obj);
+
+// 3. 含函数、class、Symbol —— 需要 Lodash
+import { cloneDeep } from "lodash-es";
+const copy = cloneDeep(obj);
+
+// ❌ 展开不是深拷
+const copy = { ...obj };     // 嵌套共享引用！</code></pre>
+        </div>
+
+        <h3 id="ex-pretty-error">友好的错误信息</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 默认错误：SyntaxError: Unexpected token } in JSON at position 42
+// 难定位。用库或自己实现带行列号的错误：
+function parseJSON(text, label) {
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    const pos = parseInt(err.message.match(/position (\d+)/)?.[1] ?? "0");
+    const line = text.slice(0, pos).split("\n").length;
+    const col = pos - text.lastIndexOf("\n", pos - 1);
+    throw new Error(`${err.message} (${label} line ${line}:${col})`);
+  }
+}</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 =========================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>undefined</code> / 函数 / Symbol 作为对象值被整个键删除</div>
+          <p>
+            <code>JSON.stringify({ a: 1, b: undefined, c: () =&gt; {} })</code> 是 <code>'{"a":1}'</code>。发送 POST
+            body 时注意：被"删除"的字段后端可能认为是"没传"而跳过校验。明确想传 null 用 <code>null</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>undefined</code> / 函数 / Symbol 在数组里变 <code>null</code></div>
+          <p>
+            <code>JSON.stringify([1, undefined, () =&gt; {}])</code> 是
+            <code>'[1,null,null]'</code>（数组不能有"空洞"）。稀疏数组也变 <code>null</code>：<code
+              >JSON.stringify([1, , 3])</code
+            >
+            → <code>'[1,null,3]'</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>NaN</code> / <code>Infinity</code> 变 <code>null</code></div>
+          <p>
+            不是抛错也不是保留，而是悄无声息变 <code>null</code>。<code>JSON.stringify({ n: NaN })</code> →
+            <code>'{"n":null}'</code>。解析回来也是 null。需要特殊值传输用 string 或自己规约。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>BigInt</code> 抛错</div>
+          <p>
+            <code>JSON.stringify({ id: 10n })</code> →
+            <code>TypeError: Do not know how to serialize a BigInt</code>。必须用 replacer
+            转字符串。规范<strong>故意</strong>不自动转，因为 "10" vs 10 的歧义会造成反序列化丢精度。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">循环引用抛错</div>
+          <p>
+            <code>obj.self = obj</code> 再 stringify → <code>TypeError: Converting circular structure to JSON</code>。用
+            WeakSet 追踪或改用 <code>structuredClone</code>（它支持循环）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>Date</code> 变字符串后回不去</div>
+          <p>
+            <code>JSON.parse(JSON.stringify(new Date()))</code> 是字符串，不是 Date。这是"默认丢失类型"的典型。手动
+            reviver 恢复或用 <code>structuredClone</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Map / Set 序列化为空 <code>{}</code></div>
+          <p>
+            <code>JSON.stringify(new Map([["a", 1]]))</code> → <code>'{}'</code>。因为 Map 自身没有可枚举属性。Set
+            同理。需要自定义 replacer 或用 <code>superjson</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">双引号 vs 单引号</div>
+          <p>
+            JSON 规范<strong>只接受双引号</strong>。<code>JSON.parse("{'a':1}")</code> 抛
+            <code>SyntaxError</code>。单引号、尾逗号、注释都不行。需要容忍这些用
+            <a href="https://json5.org" target="_blank" rel="noopener">JSON5</a>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>JSON.parse(number)</code> 不做数字精度保持</div>
+          <p>
+            <code>JSON.parse("18446744073709551615")</code> 返回
+            <code>18446744073709552000</code>（丢精度）。大数必须用字符串传输，反序列化时转 BigInt。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">reviver 返回 undefined 会删字段</div>
+          <p>
+            <code>JSON.parse(text, (k, v) =&gt; k === "x" ? undefined : v)</code> 会从结果对象删除 "x"
+            键。想要"保留但改值"必须返回非 undefined 的值。数组元素被返回 undefined 会变空位。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================ -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-json-object" target="_blank" rel="noopener"
+              >ECMA-262 · 25.5 The JSON Object</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://ecma-international.org/publications-and-standards/standards/ecma-404/"
+              target="_blank"
+              rel="noopener"
+              >ECMA-404 · JSON Data Interchange Format</a
+            >
+          </li>
+          <li>
+            <a href="https://github.com/blitz-js/superjson" target="_blank" rel="noopener">superjson</a> — 支持
+            Date/Map/Set/BigInt/RegExp/undefined 的扩展序列化（tRPC 默认）
+          </li>
+          <li>
+            <a href="https://github.com/rich-harris/devalue" target="_blank" rel="noopener">devalue</a> — SvelteKit
+            用的版本，支持循环引用
+          </li>
+          <li>
+            <a href="https://json5.org" target="_blank" rel="noopener">JSON5</a> — 允许单引号/注释/尾逗号的配置文件方言
+          </li>
+          <li><strong>下一步</strong> → <a href="13-iterators.html">13 · 迭代器与 Generator</a>。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="11-symbol.html"
+            ><span class="label">← 上一章</span><span class="title">11 · Symbol 全景</span></a
+          >
+          <a class="next" href="13-iterators.html"
+            ><span class="label">下一章 →</span><span class="title">13 · 迭代器与 Generator</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

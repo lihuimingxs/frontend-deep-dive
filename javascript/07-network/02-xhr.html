@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>XHR 残余场景 · P6 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="XMLHttpRequest 仍被需要的 3 个场景：上传进度、同步请求、responseType。axios 为什么还依赖 XHR、fetch 上传进度的新方案、XHR 的 readyState 与事件。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P7 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · 网络 & 存储</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-fetch.html">01 · Fetch API</a></li>
+          <li><a href="02-xhr.html">02 · XHR 残余场景</a></li>
+          <li><a href="03-websocket.html">03 · WebSocket</a></li>
+          <li><a href="04-sse.html">04 · Server-Sent Events</a></li>
+          <li><a href="05-cors-csp.html">05 · CORS 与 CSP</a></li>
+          <li><a href="06-cookie-storage.html">06 · Cookie / Storage</a></li>
+          <li><a href="07-indexeddb.html">07 · IndexedDB</a></li>
+          <li><a href="08-service-worker.html">08 · Service Worker + 跨标签</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../02-fundamentals/index.html">P2 · 语言基础</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · 网络 & 存储</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>XHR 残余场景</span>
+        </nav>
+
+        <h1>XHR 残余场景</h1>
+        <p class="lead">
+          XMLHttpRequest 是 fetch 之前唯一的 AJAX API。今天仍有三个场景 fetch 覆盖不好：<strong>上传进度</strong>（fetch
+          的 upload stream API 较新）、<strong>同步请求</strong>（极少用但仍必要）、<strong>带 XHR 注入的老库</strong
+          >。本章把 XHR 最少够用的知识点 + 何时选 fetch 讲清楚。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~15 分钟</span>
+          <span><strong>前置</strong> 01 Fetch</span>
+          <span
+            ><strong>MDN</strong>
+            <a href="https://developer.mozilla.org/en-US/docs/Web/API/XMLHttpRequest" target="_blank" rel="noopener"
+              >XMLHttpRequest</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 基本 API
+const xhr = new XMLHttpRequest();
+xhr.open("GET", "/api/data", true);       // true = async（false 是同步）
+xhr.setRequestHeader("X-Token", "abc");
+xhr.responseType = "json";                // "text" / "json" / "blob" / "arraybuffer" / "document"
+xhr.timeout = 10_000;
+
+xhr.onload = () =&gt; console.log(xhr.response);
+xhr.onerror = () =&gt; console.error("network error");
+xhr.ontimeout = () =&gt; console.error("timeout");
+xhr.upload.onprogress = (e) =&gt; {
+  if (e.lengthComputable) console.log(e.loaded / e.total);
+};
+xhr.send(JSON.stringify(data));
+
+// 取消
+xhr.abort();</code></pre>
+        </div>
+
+        <h3>XHR vs fetch 对比</h3>
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th>XHR</th>
+              <th>fetch</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>API 风格</td>
+              <td>事件 + 属性</td>
+              <td>Promise</td>
+            </tr>
+            <tr>
+              <td>上传进度</td>
+              <td><strong>✓</strong>（xhr.upload.onprogress）</td>
+              <td>✓（Chrome 105+，duplex: "half"）</td>
+            </tr>
+            <tr>
+              <td>下载进度</td>
+              <td>✓</td>
+              <td>✓（ReadableStream）</td>
+            </tr>
+            <tr>
+              <td>流式响应</td>
+              <td>△（responseType="moz-chunked-arraybuffer" 历史 hack）</td>
+              <td>✓（res.body）</td>
+            </tr>
+            <tr>
+              <td>取消</td>
+              <td>xhr.abort()</td>
+              <td>AbortController</td>
+            </tr>
+            <tr>
+              <td>默认 credentials</td>
+              <td>same-origin</td>
+              <td>same-origin</td>
+            </tr>
+            <tr>
+              <td>同步请求</td>
+              <td>✓（不推荐）</td>
+              <td>✗</td>
+            </tr>
+            <tr>
+              <td>CORS 精细控制</td>
+              <td>有限</td>
+              <td>更丰富</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="readystate">readyState 状态机</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>值</th>
+              <th>状态</th>
+              <th>含义</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>0</td>
+              <td>UNSENT</td>
+              <td>new 后未调 open</td>
+            </tr>
+            <tr>
+              <td>1</td>
+              <td>OPENED</td>
+              <td>调过 open，未 send</td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td>HEADERS_RECEIVED</td>
+              <td>响应头已到</td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>LOADING</td>
+              <td>response body 下载中</td>
+            </tr>
+            <tr>
+              <td>4</td>
+              <td>DONE</td>
+              <td>完成（成功或失败）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 id="events">XHR 事件全景</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 下载
+xhr.onloadstart = () =&gt; {};       // 开始
+xhr.onprogress = (e) =&gt; {         // 下载进度
+  if (e.lengthComputable) progress = e.loaded / e.total;
+};
+xhr.onload = () =&gt; {};             // 下载完成（含 HTTP 错误）
+xhr.onerror = () =&gt; {};            // 网络错误
+xhr.ontimeout = () =&gt; {};          // 超时
+xhr.onabort = () =&gt; {};            // 被 abort
+xhr.onloadend = () =&gt; {};          // 总是最后触发
+
+// 上传
+xhr.upload.onloadstart = () =&gt; {};
+xhr.upload.onprogress = (e) =&gt; {};  // ← 最重要的
+xhr.upload.onload = () =&gt; {};
+xhr.upload.onerror = () =&gt; {};
+xhr.upload.ontimeout = () =&gt; {};
+xhr.upload.onabort = () =&gt; {};
+xhr.upload.onloadend = () =&gt; {};
+
+// 老式：onreadystatechange
+xhr.onreadystatechange = () =&gt; {
+  if (xhr.readyState === 4) { /* DONE */ }
+};</code></pre>
+        </div>
+
+        <h3 id="response-types">responseType 和 response</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">xhr.responseType = "json";        // xhr.response 自动 JSON.parse
+xhr.responseType = "blob";        // 拿到 Blob（适合文件下载）
+xhr.responseType = "arraybuffer"; // 二进制数据
+xhr.responseType = "document";    // 解析 XML/HTML
+xhr.responseType = "text";        // 默认
+xhr.responseType = "";            // 同 "text"
+
+// ⚠ 必须在 send() 前设
+// 设后 xhr.responseText 和 xhr.responseXML 对非 text 类型会抛错
+// 用 xhr.response 统一访问</code></pre>
+        </div>
+
+        <h3 id="upload-progress">上传进度 —— XHR 仍最简单</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function upload(file, onProgress) {
+  return new Promise((resolve, reject) =&gt; {
+    const xhr = new XMLHttpRequest();
+    xhr.upload.addEventListener("progress", (e) =&gt; {
+      if (e.lengthComputable) onProgress(e.loaded / e.total);
+    });
+    xhr.addEventListener("load", () =&gt; {
+      if (xhr.status &gt;= 200 &amp;&amp; xhr.status &lt; 300) resolve(xhr.response);
+      else reject(new Error(`HTTP ${xhr.status}`));
+    });
+    xhr.addEventListener("error", () =&gt; reject(new Error("network error")));
+    xhr.addEventListener("abort", () =&gt; reject(new DOMException("aborted", "AbortError")));
+    xhr.responseType = "json";
+    xhr.open("POST", "/upload");
+    xhr.send(file);
+  });
+}
+
+// fetch 的等价方案要 ReadableStream + duplex: "half"，支持仅限 Chrome 105+
+// XHR 是全浏览器、全 Node 都支持的</code></pre>
+        </div>
+
+        <h3 id="sync-xhr">同步 XHR（极少场景）</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const xhr = new XMLHttpRequest();
+xhr.open("GET", url, false);       // false = sync
+xhr.send();
+// 整个主线程阻塞直到返回 —— 浏览器会警告
+console.log(xhr.responseText);
+
+// 唯一合理场景：unload 时上报（被 sendBeacon / fetch keepalive 替代）
+// 老代码可能仍有：XHR 同步加载小配置（启动期）
+
+// 规范 deprecation：
+// - 主线程同步 XHR 已经警告多年
+// - Chrome 可能未来禁用
+// - Worker 里同步 XHR 仍允许（Worker 本来就阻塞主线程安全）</code></pre>
+        </div>
+
+        <h3 id="abort-combined">用 AbortSignal 给 XHR 加现代取消（polyfill 思路）</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function xhrWithSignal(options, signal) {
+  const xhr = new XMLHttpRequest();
+  if (signal?.aborted) { xhr.abort(); throw signal.reason; }
+  signal?.addEventListener("abort", () =&gt; xhr.abort(), { once: true });
+  // ... 其余逻辑
+  return xhr;
+}
+
+// axios 1.x 已原生支持 signal 参数，底层是 XHR + 监听 abort 事件</code></pre>
+        </div>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">大文件上传 + 精确进度</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">const form = new FormData();
+form.append("file", bigFile);
+
+const xhr = new XMLHttpRequest();
+xhr.upload.addEventListener("progress", (e) =&gt; {
+  if (e.lengthComputable) {
+    bar.style.width = (e.loaded / e.total * 100) + "%";
+    speed.textContent = formatSpeed(e.loaded, startTime);
+  }
+});
+xhr.open("POST", "/upload");
+xhr.send(form);
+
+// 浏览器兼容性更广、进度 event 稳定
+// fetch 流式上传需要 Chrome 105+，且 axios 之类的库仍基于 XHR</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">分片上传 + 并发</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 大文件切片，并发上传，每片带进度
+async function uploadChunks(file, { chunkSize = 5 * 1024 * 1024, concurrency = 3 }) {
+  const chunks = [];
+  for (let i = 0; i &lt; file.size; i += chunkSize) {
+    chunks.push(file.slice(i, i + chunkSize));
+  }
+
+  const progress = new Array(chunks.length).fill(0);
+
+  async function uploadOne(chunk, index) {
+    return new Promise((resolve, reject) =&gt; {
+      const xhr = new XMLHttpRequest();
+      xhr.upload.onprogress = (e) =&gt; {
+        progress[index] = e.loaded;
+        updateTotal();
+      };
+      xhr.onload = () =&gt; resolve();
+      xhr.onerror = () =&gt; reject(new Error(`chunk ${index} failed`));
+      xhr.open("POST", `/upload/chunk?index=${index}`);
+      xhr.send(chunk);
+    });
+  }
+
+  // 限并发（见 P3-07）
+  await pLimit(concurrency)(chunks.map((chunk, i) =&gt; () =&gt; uploadOne(chunk, i)));
+  await fetch(`/upload/complete?total=${chunks.length}`, { method: "POST" });
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">兼容 XHR 代码的迁移</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// Promise 包装器 —— 从老代码迁移时保留 XHR 特性
+function request(method, url, { body, headers = {}, timeout, responseType, onUploadProgress, signal } = {}) {
+  return new Promise((resolve, reject) =&gt; {
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, url, true);
+    for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+    if (responseType) xhr.responseType = responseType;
+    if (timeout) xhr.timeout = timeout;
+    if (onUploadProgress) xhr.upload.addEventListener("progress", onUploadProgress);
+
+    xhr.onload = () =&gt; {
+      if (xhr.status &gt;= 200 &amp;&amp; xhr.status &lt; 300) resolve(xhr.response);
+      else reject(new HttpError(xhr.status, xhr.response, url));
+    };
+    xhr.onerror = () =&gt; reject(new Error("network"));
+    xhr.ontimeout = () =&gt; reject(new Error("timeout"));
+    xhr.onabort = () =&gt; reject(new DOMException("aborted", "AbortError"));
+
+    if (signal) {
+      if (signal.aborted) return reject(signal.reason);
+      signal.addEventListener("abort", () =&gt; xhr.abort(), { once: true });
+    }
+
+    xhr.send(body);
+  });
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">XHR 的 "progress" 事件可下载中读数据</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 旧式流式响应 hack（被 fetch stream 替代但老代码常见）
+xhr.addEventListener("progress", () =&gt; {
+  // xhr.responseText 在 LOADING 阶段就可访问，包含已下载的片段
+  parseNewDelta(xhr.responseText);
+});
+xhr.open("GET", "/stream");
+xhr.send();
+
+// 现代做法：fetch + ReadableStream（01 章讲过）</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-upload-ui">上传 UI + 断点续传</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">class FileUploader extends EventTarget {
+  constructor() {
+    super();
+    this.xhr = null;
+  }
+  upload(file, url) {
+    const xhr = this.xhr = new XMLHttpRequest();
+    xhr.upload.addEventListener("progress", (e) =&gt; {
+      if (e.lengthComputable) {
+        this.dispatchEvent(new CustomEvent("progress", {
+          detail: { loaded: e.loaded, total: e.total, ratio: e.loaded / e.total },
+        }));
+      }
+    });
+    xhr.addEventListener("load", () =&gt; {
+      this.dispatchEvent(new CustomEvent("complete", { detail: xhr.response }));
+    });
+    xhr.addEventListener("error", () =&gt; this.dispatchEvent(new Event("error")));
+    xhr.responseType = "json";
+    xhr.open("POST", url);
+    xhr.send(file);
+  }
+  pause() { this.xhr?.abort(); }   // 实际"断点续传"要配合后端 range
+}</code></pre>
+        </div>
+
+        <h3 id="ex-sync-warn">同步 XHR 的正确姿势（极少用）</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 仅在极端场景：Worker 启动时加载配置
+if (typeof importScripts !== "undefined") {
+  // Worker 环境 —— 同步 XHR 不阻塞主线程
+  const xhr = new XMLHttpRequest();
+  xhr.open("GET", "/config.json", false);
+  xhr.send();
+  self.config = JSON.parse(xhr.responseText);
+}
+
+// 主线程的同步 XHR：
+// 1. 浏览器警告："Synchronous XHR on the main thread is deprecated"
+// 2. 阻塞整个 tab
+// 3. Chrome 未来可能禁用
+// 避免。改用 fetch keepalive 或 sendBeacon</code></pre>
+        </div>
+
+        <h3 id="ex-response-types">各种 responseType 的用法</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 下载图片
+const xhr = new XMLHttpRequest();
+xhr.responseType = "blob";
+xhr.onload = () =&gt; {
+  const url = URL.createObjectURL(xhr.response);
+  img.src = url;
+};
+xhr.open("GET", "/avatar.jpg");
+xhr.send();
+
+// 下载二进制 Protobuf
+xhr.responseType = "arraybuffer";
+xhr.onload = () =&gt; {
+  const msg = MyProto.decode(new Uint8Array(xhr.response));
+};
+
+// 解析 XML
+xhr.responseType = "document";
+xhr.onload = () =&gt; {
+  const doc = xhr.responseXML;        // Document
+  doc.querySelectorAll("item");
+};</code></pre>
+        </div>
+
+        <h3 id="ex-fetch-upload-progress">fetch 的上传进度（新方案）</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// Chrome 105+ / Node 18+
+async function fetchUpload(url, file, onProgress) {
+  let loaded = 0;
+  const stream = new ReadableStream({
+    async start(controller) {
+      const reader = file.stream().getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        loaded += value.length;
+        onProgress(loaded / file.size);
+        controller.enqueue(value);
+      }
+      controller.close();
+    },
+  });
+  return fetch(url, {
+    method: "POST",
+    body: stream,
+    duplex: "half",
+    headers: { "Content-Type": "application/octet-stream" },
+  });
+}
+// 兼容性差：Safari 尚未支持。老项目仍用 XHR 更稳</code></pre>
+        </div>
+
+        <!-- 05 陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">主线程同步 XHR 已弃用</div>
+          <p>
+            <code>xhr.open(..., false)</code> 在浏览器 devtools 有警告，Chrome 宣布未来禁用。几乎所有老代码都应迁移到
+            fetch + keepalive 或 sendBeacon。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">忘记在 open 前设置 responseType</div>
+          <p>
+            <code>xhr.responseType = "json"</code> 必须在 <code>open()</code> 之后、<code>send()</code>
+            之前调用。调用顺序错会抛 InvalidStateError。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">4xx/5xx 不触发 onerror</div>
+          <p>
+            和 fetch 一样，<code>xhr.onerror</code> 只在<strong>网络</strong>失败（断网、CORS 拒绝、DNS
+            失败）时触发。HTTP 错误走 <code>onload</code>，要检查 <code>xhr.status</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Chunked response 的 responseText 增长</div>
+          <p>
+            流式响应期间 <code>xhr.responseText</code> 包含已下载的所有字节 —— 每次 progress 都解析整个字符串会
+            O(n²)。用指针记录 <code>lastIndex</code> 只处理新增。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">跨域同步 XHR 不能设某些 header</div>
+          <p>CORS 限制 + 同步 XHR 组合时某些行为更严格。现代代码不要依赖这个路径。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">timeout 只对异步 XHR 生效</div>
+          <p>同步 XHR 的 <code>xhr.timeout</code> 会抛 InvalidAccessError（规范禁止）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">事件 vs 属性赋值</div>
+          <p>
+            <code>xhr.onload = fn</code> 和 <code>xhr.addEventListener("load", fn)</code> 都支持，但属性赋值只能挂一个
+            —— 多次赋值后者覆盖前者。工程中推荐 addEventListener。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">XHR 的 progress 事件可能没有 lengthComputable</div>
+          <p>
+            服务器没发 <code>Content-Length</code> → <code>e.lengthComputable</code> 是 false，<code>e.total</code> 是
+            0。进度条要显示"已下载 X MB"而不是百分比。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://xhr.spec.whatwg.org/" target="_blank" rel="noopener">XMLHttpRequest Standard</a></li>
+          <li>
+            <a href="https://developer.mozilla.org/en-US/docs/Web/API/XMLHttpRequest" target="_blank" rel="noopener"
+              >MDN · XMLHttpRequest</a
+            >
+          </li>
+          <li>
+            <a href="https://github.com/axios/axios" target="_blank" rel="noopener">axios 源码</a> — 经典 XHR 封装参考
+          </li>
+          <li>
+            <a href="https://web.dev/articles/fetch-upload-streaming" target="_blank" rel="noopener"
+              >web.dev · Fetch upload streaming</a
+            >
+          </li>
+          <li><strong>下一步</strong> → <a href="03-websocket.html">03 · WebSocket</a>。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-fetch.html"
+            ><span class="label">← 上一章</span><span class="title">01 · Fetch API</span></a
+          >
+          <a class="next" href="03-websocket.html"
+            ><span class="label">下一章 →</span><span class="title">03 · WebSocket</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

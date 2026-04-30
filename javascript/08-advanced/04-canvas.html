@@ -1,0 +1,524 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Canvas / OffscreenCanvas · P7 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="Canvas 2D context 的状态栈、路径与变换、ImageData 像素操作、HiDPI 缩放（devicePixelRatio）、OffscreenCanvas + Worker 的渲染分离、与 WebGL/WebGPU 的关系。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P8 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P8 · 高级专题</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-binary.html">01 · ArrayBuffer / TypedArray</a></li>
+          <li><a href="02-blob-file.html">02 · Blob / File / FormData</a></li>
+          <li><a href="03-streams.html">03 · Streams API</a></li>
+          <li><a href="04-canvas.html">04 · Canvas / OffscreenCanvas</a></li>
+          <li><a href="05-animation.html">05 · Animation & RAF</a></li>
+          <li><a href="06-web-components.html">06 · Web Components</a></li>
+          <li><a href="07-regex.html">07 · 正则表达式引擎</a></li>
+          <li><a href="08-intl.html">08 · Intl 国际化</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../02-fundamentals/index.html">P2 · 语言基础</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P8 · 高级专题</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Canvas / OffscreenCanvas</span>
+        </nav>
+
+        <h1>Canvas / OffscreenCanvas</h1>
+        <p class="lead">
+          Canvas 2D 是浏览器里最成熟的像素绘制 API：图形编辑、数据可视化、图片处理、PDF 渲染都靠它。<strong
+            >OffscreenCanvas</strong
+          >
+          把渲染搬到 Worker，避免复杂绘制阻塞 UI。本章讲清状态栈机制、HiDPI 缩放、ImageData 的像素操作，以及何时该升级到
+          WebGL/WebGPU。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 01 Binary · P4 Workers</span>
+          <span
+            ><strong>规范</strong>
+            <a href="https://html.spec.whatwg.org/multipage/canvas.html" target="_blank" rel="noopener"
+              >HTML · Canvas</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ul>
+          <li>
+            Canvas 绘制 API <strong>立即生效</strong>：每次 <code>fill()</code> /
+            <code>stroke()</code> 都直接改像素，没有场景图（与 SVG 相反）。
+          </li>
+          <li>
+            Canvas
+            的<strong>状态栈</strong>（save/restore）管理变换、样式、裁剪区、alpha、compositeOperation；容易遗漏导致状态泄漏。
+          </li>
+          <li>
+            <strong>HiDPI 缩放</strong>：canvas 的 <code>width/height</code>（位图尺寸）要 ×
+            <code>devicePixelRatio</code>，CSS size 保持逻辑像素，<code>ctx.scale(dpr, dpr)</code> 放大绘制。
+          </li>
+          <li>
+            <strong>OffscreenCanvas</strong> 可在 Worker 中运行；主线程用
+            <code>transferControlToOffscreen()</code> 转交渲染权，UI 不会被卡。
+          </li>
+          <li>
+            <strong>ImageData</strong>：<code>Uint8ClampedArray</code> 按 RGBA 顺序排列，<code
+              >[R,G,B,A, R,G,B,A...]</code
+            >；<code>willReadFrequently: true</code> 让 <code>getImageData</code> 快 10 倍。
+          </li>
+          <li>Canvas 2D 不能做复杂的 3D / 海量粒子 → 升级 WebGL；WebGPU（2024 GA）是未来，更像 Vulkan/Metal。</li>
+        </ul>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+        <h3>获取 Context 与基本绘制</h3>
+        <pre><code class="language-javascript">const canvas = document.querySelector("canvas");
+const ctx = canvas.getContext("2d", {
+  alpha: false,              // 不需要透明 → 背景白，合成少一步
+  desynchronized: true,      // 允许 GPU 异步呈现（低延迟场景）
+  willReadFrequently: false, // 若会频繁 getImageData，设 true（CPU-backed）
+  colorSpace: "display-p3",  // 宽色域（iOS/macOS 可更鲜艳）
+});
+
+// 矩形快捷方法
+ctx.fillStyle = "#f00";
+ctx.fillRect(10, 10, 100, 50);
+ctx.strokeStyle = "blue";
+ctx.lineWidth = 2;
+ctx.strokeRect(10, 10, 100, 50);
+ctx.clearRect(0, 0, canvas.width, canvas.height); // 清空
+
+// 路径（Path）API
+ctx.beginPath();
+ctx.moveTo(50, 50);
+ctx.lineTo(200, 50);
+ctx.quadraticCurveTo(250, 100, 200, 150);
+ctx.closePath();
+ctx.fill();
+ctx.stroke();
+
+// 独立 Path2D 对象（可缓存复用，比每次 beginPath 快）
+const p = new Path2D("M10 10 h 80 v 80 h -80 Z"); // 支持 SVG path 字符串
+ctx.fill(p);</code></pre>
+
+        <h3>状态栈 save / restore</h3>
+        <pre><code class="language-javascript">ctx.save();
+ctx.translate(100, 100);
+ctx.rotate(Math.PI / 4);
+ctx.scale(2, 2);
+ctx.fillStyle = "red";
+ctx.clip(path);
+// ...绘制旋转+缩放+裁剪的内容
+ctx.restore(); // 恢复所有状态（变换、样式、裁剪、alpha...）
+
+// 栈深度建议 ≤ 数十层；过深影响性能
+// 每次 save 必须对应一次 restore，否则状态泄漏到后续绘制</code></pre>
+        <p>
+          受 save/restore 影响的状态：<code>fillStyle</code> / <code>strokeStyle</code> / <code>globalAlpha</code> /
+          <code>lineWidth</code> / <code>font</code> / <code>textAlign</code> / 变换矩阵 / 裁剪区 /
+          <code>globalCompositeOperation</code
+          >。<strong>不受影响</strong>：当前路径、像素内容、<code>canvas.width/height</code>。
+        </p>
+
+        <h3>HiDPI（Retina）正确缩放</h3>
+        <pre><code class="language-javascript">function setupCanvas(canvas, cssWidth, cssHeight) {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.style.width = cssWidth + "px";
+  canvas.style.height = cssHeight + "px";
+  canvas.width = Math.round(cssWidth * dpr);
+  canvas.height = Math.round(cssHeight * dpr);
+
+  const ctx = canvas.getContext("2d");
+  // 之后所有坐标都用 CSS 像素（dpr 自动放大）
+  ctx.scale(dpr, dpr);
+  return ctx;
+}
+
+// Retina 屏 dpr=2，200×100 CSS 像素 → 400×200 位图，字体和线条都清晰</code></pre>
+        <p>
+          不做这步：Retina 屏上文字/线条模糊；做了 <code>canvas.width = cssWidth * dpr</code> 但忘
+          <code>ctx.scale(dpr, dpr)</code>：内容绘制成原尺寸，显示只占 1/4。
+        </p>
+
+        <h3>ImageData 像素操作</h3>
+        <pre><code class="language-javascript">// 读像素
+const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+// img.data: Uint8ClampedArray, length = w * h * 4
+// [R₀, G₀, B₀, A₀, R₁, G₁, B₁, A₁, ...]
+
+// 灰度
+for (let i = 0; i &lt; img.data.length; i += 4) {
+  const gray = 0.299 * img.data[i] + 0.587 * img.data[i + 1] + 0.114 * img.data[i + 2];
+  img.data[i] = img.data[i + 1] = img.data[i + 2] = gray;
+  // img.data[i+3] 是 alpha
+}
+
+// 写回
+ctx.putImageData(img, 0, 0);
+
+// 新建 ImageData
+const blank = new ImageData(100, 100); // 全 0
+const colored = new ImageData(new Uint8ClampedArray([255,0,0,255]), 1, 1);</code></pre>
+        <p>
+          <strong>性能</strong>：<code>getImageData</code> 触发 GPU→CPU 同步，默认慢；<code
+            >willReadFrequently: true</code
+          >
+          让 canvas 用 CPU-backed 存储，getImageData 零开销但绘制稍慢。只读模式下建议开。
+        </p>
+
+        <h3>OffscreenCanvas</h3>
+        <pre><code class="language-javascript">// 方式 1：直接在 Worker 新建
+// worker.js
+const canvas = new OffscreenCanvas(400, 300);
+const ctx = canvas.getContext("2d");
+ctx.fillRect(0, 0, 100, 100);
+const bitmap = canvas.transferToImageBitmap(); // 产生帧
+postMessage({ bitmap }, [bitmap]);
+
+// 方式 2：主线程把 HTMLCanvasElement 的渲染权转给 Worker
+// main.js
+const main = document.querySelector("canvas");
+const offscreen = main.transferControlToOffscreen();
+// main 这时不能再 getContext，所有绘制在 Worker 里
+worker.postMessage({ canvas: offscreen }, [offscreen]);
+
+// worker.js
+self.onmessage = (e) =&gt; {
+  const ctx = e.data.canvas.getContext("2d");
+  // Worker 里绘制不阻塞主线程；绘制结果直接出现在页面
+};</code></pre>
+
+        <h3>ImageBitmap：已解码图像</h3>
+        <pre><code class="language-javascript">// 从 Blob / File / &lt;img&gt; / &lt;canvas&gt; 创建
+const bitmap = await createImageBitmap(blob, {
+  resizeWidth: 800,
+  resizeHeight: 600,
+  resizeQuality: "high",
+});
+
+// ImageBitmap 是 Transferable → 可零拷贝发到 Worker
+worker.postMessage({ bitmap }, [bitmap]);
+// Worker 里直接 ctx.drawImage(bitmap, 0, 0)；不需重新解码
+
+bitmap.close(); // 释放 GPU 内存，不 close 会泄漏</code></pre>
+
+        <h3>导出 Canvas 为图片</h3>
+        <pre><code class="language-javascript">// 同步（base64）：大图慢
+const dataUrl = canvas.toDataURL("image/png");
+const webp = canvas.toDataURL("image/webp", 0.85);
+
+// 异步（Blob）：推荐
+canvas.toBlob((blob) =&gt; {
+  downloadBlob(blob, "export.png");
+}, "image/png");
+
+// OffscreenCanvas 版本
+const blob = await offscreen.convertToBlob({ type: "image/png" });</code></pre>
+
+        <h3>CompositeOperation（混合模式）</h3>
+        <pre><code class="language-javascript">ctx.globalCompositeOperation = "source-over";   // 默认
+// destination-out: 现有内容减去新绘制形状（擦除）
+// multiply / screen / overlay / lighten: Photoshop 混合模式
+// difference / hue / saturation / color / luminosity (Canvas 2D Level 2)
+
+// 擦除效果
+ctx.globalCompositeOperation = "destination-out";
+ctx.beginPath();
+ctx.arc(x, y, r, 0, 2 * Math.PI);
+ctx.fill();</code></pre>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <h3>图片压缩 + 格式转换</h3>
+        <pre><code class="language-typescript">async function compress(file: File, maxW: number, quality = 0.8, format: "image/webp" | "image/jpeg" = "image/webp") {
+  const bitmap = await createImageBitmap(file);
+  const ratio = Math.min(1, maxW / bitmap.width);
+  const w = Math.round(bitmap.width * ratio);
+  const h = Math.round(bitmap.height * ratio);
+
+  const canvas = new OffscreenCanvas(w, h);
+  const ctx = canvas.getContext("2d")!;
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  bitmap.close();
+
+  return canvas.convertToBlob({ type: format, quality });
+}</code></pre>
+
+        <h3>简易画板</h3>
+        <pre><code class="language-typescript">const ctx = setupCanvas(canvas, 800, 600);
+ctx.lineCap = "round";
+ctx.lineJoin = "round";
+ctx.lineWidth = 3;
+
+let drawing = false;
+canvas.addEventListener("pointerdown", (e) =&gt; {
+  drawing = true;
+  canvas.setPointerCapture(e.pointerId);
+  ctx.beginPath();
+  ctx.moveTo(e.offsetX, e.offsetY);
+});
+canvas.addEventListener("pointermove", (e) =&gt; {
+  if (!drawing) return;
+  // PointerEvent 支持压感
+  ctx.lineWidth = 3 + e.pressure * 8;
+  ctx.lineTo(e.offsetX, e.offsetY);
+  ctx.stroke();
+});
+canvas.addEventListener("pointerup", () =&gt; { drawing = false; });</code></pre>
+
+        <h3>Worker 里做复杂 rendering（不阻塞 UI）</h3>
+        <pre><code class="language-typescript">// main.ts
+const offscreen = canvas.transferControlToOffscreen();
+const worker = new Worker(new URL("./render-worker.ts", import.meta.url), { type: "module" });
+worker.postMessage({ type: "init", canvas: offscreen }, [offscreen]);
+worker.postMessage({ type: "draw", data: largeDataset });
+
+// render-worker.ts
+let ctx: OffscreenCanvasRenderingContext2D;
+self.onmessage = (e) =&gt; {
+  if (e.data.type === "init") {
+    ctx = e.data.canvas.getContext("2d")!;
+  } else if (e.data.type === "draw") {
+    for (const point of e.data.data) {
+      ctx.fillRect(point.x, point.y, 1, 1); // 主线程 0 开销
+    }
+  }
+};</code></pre>
+
+        <h3>屏幕截图（html2canvas 替代）</h3>
+        <p>
+          Canvas 不能直接截图 DOM 元素（安全隔离）。<code>SVG &lt;foreignObject&gt;</code> +
+          <code>drawImage(svgBlob)</code> 是一个技巧，但跨源资源会污染
+          canvas。生产库：<code>html2canvas</code>、<code>modern-screenshot</code>。截图包含视频 → 用
+          <code>navigator.mediaDevices.getDisplayMedia()</code>。
+        </p>
+
+        <h3>可视化大数据（分块绘制）</h3>
+        <pre><code class="language-typescript">// 百万数据点：一次性循环会卡住主线程
+function drawLargeDataset(data: Point[]) {
+  const CHUNK = 5_000;
+  let i = 0;
+  function tick() {
+    const end = Math.min(i + CHUNK, data.length);
+    for (; i &lt; end; i++) ctx.fillRect(data[i].x, data[i].y, 1, 1);
+    if (i &lt; data.length) requestAnimationFrame(tick); // 下一帧继续
+  }
+  requestAnimationFrame(tick);
+}</code></pre>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <h3>useCanvas Hook</h3>
+        <pre><code class="language-typescript">import { useEffect, useRef } from "react";
+
+export function useCanvas(
+  draw: (ctx: CanvasRenderingContext2D, size: { w: number; h: number }) =&gt; void,
+) {
+  const ref = useRef&lt;HTMLCanvasElement | null&gt;(null);
+
+  useEffect(() =&gt; {
+    const canvas = ref.current;
+    if (!canvas) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const resize = () =&gt; {
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = Math.round(rect.width * dpr);
+      canvas.height = Math.round(rect.height * dpr);
+      const ctx = canvas.getContext("2d")!;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      draw(ctx, { w: rect.width, h: rect.height });
+    };
+
+    const ro = new ResizeObserver(resize);
+    ro.observe(canvas);
+    return () =&gt; ro.disconnect();
+  }, [draw]);
+
+  return ref;
+}</code></pre>
+
+        <h3>EMA 平滑笔触</h3>
+        <pre><code class="language-typescript">// 直接 lineTo 每个鼠标点会产生锯齿
+// 二次曲线用"当前点和上一点的中点"做控制点，线条更平滑
+
+let prev: { x: number; y: number } | null = null;
+function drawSmooth(ctx: CanvasRenderingContext2D, pt: { x: number; y: number }) {
+  if (!prev) { ctx.beginPath(); ctx.moveTo(pt.x, pt.y); prev = pt; return; }
+  const mid = { x: (prev.x + pt.x) / 2, y: (prev.y + pt.y) / 2 };
+  ctx.quadraticCurveTo(prev.x, prev.y, mid.x, mid.y);
+  ctx.stroke();
+  prev = pt;
+}</code></pre>
+
+        <h3>像素采样（取颜色）</h3>
+        <pre><code class="language-typescript">function getPixel(ctx: CanvasRenderingContext2D, x: number, y: number) {
+  // 只取 1×1，避免全画布扫描
+  const { data } = ctx.getImageData(x, y, 1, 1);
+  return { r: data[0], g: data[1], b: data[2], a: data[3] };
+}
+
+// 颜色选择器场景：每次移动光标都 getImageData，注意 willReadFrequently</code></pre>
+
+        <!-- 05 常见陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="callout callout-warn">
+          <strong>陷阱 1：CSS 拉伸 vs 位图尺寸</strong>
+          <p>
+            忘了设 <code>canvas.width / height</code>，只用 CSS 拉大 → 绘制内容被拉伸模糊。<strong
+              >width/height 是位图尺寸，style.width/height 是显示尺寸</strong
+            >，两套不相关。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 2：save 没对应 restore</strong>
+          <p>
+            循环里 <code>save() → translate → 绘制</code>，但某条件分支忘 restore，栈越涨越深，状态也跑飞。严格
+            save/restore 配对，用 try/finally 包裹。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 3：修改 canvas.width 清空全部内容</strong>
+          <p>
+            <code>canvas.width = newW</code> 即使新值等于旧值也会清空画布 + 重置所有状态到默认。resize
+            要先读出当前状态再恢复，或用离屏 canvas 缓存。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 4：跨源图片污染 canvas</strong>
+          <p>
+            <code>drawImage</code> 跨源图片后，canvas 被标记
+            "tainted"：<code>getImageData</code>、<code>toBlob</code>、<code>toDataURL</code> 全抛 SecurityError。需要
+            <code>img.crossOrigin = "anonymous"</code> + 服务端返回 <code>Access-Control-Allow-Origin</code>。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 5：fillText 的基线对不齐</strong>
+          <p>
+            默认 <code>textBaseline = "alphabetic"</code>（字母底线，不含下沿）；想 Y 坐标就是字符框顶部设
+            <code>textBaseline = "top"</code>；居中设 <code>"middle"</code>。不同字体不一致，需实测。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 6：globalAlpha 叠加 ≠ CSS opacity</strong>
+          <p>
+            多个半透明形状叠加会变深（累加不透明度）。想要 CSS 的 opacity 效果，先把内容画到离屏 canvas，再以
+            globalAlpha 一次性 drawImage 过来。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 7：OffscreenCanvas 的浏览器支持</strong>
+          <p>Safari 16.4+ 才支持 OffscreenCanvas。老 Safari 需检测降级到主线程 canvas。</p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 8：ImageBitmap 不 close 泄漏 GPU 内存</strong>
+          <p>
+            每次 <code>createImageBitmap</code> 占用 GPU 纹理；频繁创建不 close，Chrome 会 OOM 重载页面。用完
+            <code>bitmap.close()</code>。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 9：toDataURL 卡主线程</strong>
+          <p>
+            几 MB canvas 的 toDataURL 同步执行，主线程几十到几百 ms 卡死。改用 <code>toBlob</code>（内部 async）或
+            OffscreenCanvas + <code>convertToBlob</code>。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 10：Canvas 的最大尺寸限制</strong>
+          <p>
+            不同浏览器有不同限制：Safari iOS 约 4096×4096 或 16M 像素；Chrome 约
+            32k×32k。超过会静默变黑/失败。超大图像要切片渲染。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://html.spec.whatwg.org/multipage/canvas.html" target="_blank" rel="noopener"
+              >HTML · Canvas 规范</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API/Tutorial"
+              target="_blank"
+              rel="noopener"
+              >MDN · Canvas tutorial</a
+            >
+          </li>
+          <li>
+            <a href="https://developer.chrome.com/blog/offscreen-canvas" target="_blank" rel="noopener"
+              >Chrome · OffscreenCanvas</a
+            >
+          </li>
+          <li>
+            <a href="https://gpuweb.github.io/gpuweb/" target="_blank" rel="noopener">W3C · WebGPU</a>（Canvas 2D
+            的未来替代）
+          </li>
+          <li><strong>下一步</strong> → <a href="05-animation.html">05 · Animation & requestAnimationFrame</a>。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="03-streams.html"
+            ><span class="label">← 上一章</span><span class="title">03 · Streams API</span></a
+          >
+          <a class="next" href="05-animation.html"
+            ><span class="label">下一章 →</span><span class="title">05 · Animation & RAF</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

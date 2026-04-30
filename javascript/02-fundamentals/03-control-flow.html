@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>控制流 · P1 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="if/else/switch/三元/for/for-of/for-in/while 的规范行为、迭代协议、break/continue 与 label、forEach 不可 break、switch 的严格相等匹配、for 循环中 let/const 的每迭代绑定。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P2 目录</a>
+          <a href="https://javascript.info/ifelse" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · 语言基础</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-types.html">01 · 数据类型系统</a></li>
+          <li><a href="02-operators.html">02 · 操作符与强制转换</a></li>
+          <li><a href="03-control-flow.html">03 · 控制流</a></li>
+          <li><a href="04-functions.html">04 · 函数基础</a></li>
+          <li><a href="05-objects.html">05 · 对象深入</a></li>
+          <li><a href="06-arrays.html">06 · 数组深入</a></li>
+          <li><a href="07-strings.html">07 · 字符串深入</a></li>
+          <li><a href="08-numbers.html">08 · 数字与 Math</a></li>
+          <li><a href="09-date-intl.html">09 · Date 与 Intl</a></li>
+          <li><a href="10-map-set.html">10 · Map / Set 家族</a></li>
+          <li><a href="11-symbol.html">11 · Symbol 全景</a></li>
+          <li><a href="12-json.html">12 · JSON</a></li>
+          <li><a href="13-iterators.html">13 · 迭代器与 Generator</a></li>
+          <li><a href="14-errors.html">14 · 错误处理</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · 语言基础</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>控制流</span>
+        </nav>
+
+        <h1>控制流</h1>
+        <p class="lead">
+          控制流是把表达式组织成程序的骨架。JS 的分支/循环表面上像 C，但有几个关键差异：<code>switch</code> 用
+          <code>===</code> 匹配、<code>for-of</code> 依赖迭代协议、<code>for-in</code> 会爬原型链、<code>forEach</code>
+          不能 break、<code>for (let i ...)</code>
+          每次迭代都生成新绑定。这些细节决定了你的循环是正确的还是<em>看起来正确</em>的。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~20 分钟</span>
+          <span><strong>前置</strong> 01 · 类型 ; 02 · 操作符</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/ifelse" target="_blank" rel="noopener"
+              >Conditional branching; Loops</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================= -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <table>
+          <thead>
+            <tr>
+              <th>语句</th>
+              <th>关键行为</th>
+              <th>典型用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>if / else / else if</code></td>
+              <td>条件走 <code>ToBoolean</code></td>
+              <td>分支</td>
+            </tr>
+            <tr>
+              <td><code>? :</code> 三元</td>
+              <td>唯一<em>表达式</em>形式的条件</td>
+              <td>赋值、JSX</td>
+            </tr>
+            <tr>
+              <td><code>switch</code></td>
+              <td><code>===</code> 匹配，需要 <code>break</code> 防 fall-through</td>
+              <td>枚举、状态机</td>
+            </tr>
+            <tr>
+              <td><code>for (init; cond; step)</code></td>
+              <td>C 风三段式，<code>let</code> 每次迭代新绑定</td>
+              <td>索引可控的计数循环</td>
+            </tr>
+            <tr>
+              <td><code>for...of</code></td>
+              <td>走 <code>Symbol.iterator</code> 协议，可 <code>break</code></td>
+              <td>数组/Map/Set/字符串/自定义 iterable</td>
+            </tr>
+            <tr>
+              <td><code>for...in</code></td>
+              <td>遍历可枚举<strong>字符串键</strong>（含原型链）</td>
+              <td>仅用于纯对象且你真需要原型链键</td>
+            </tr>
+            <tr>
+              <td><code>while</code> / <code>do...while</code></td>
+              <td>条件循环；<code>do-while</code> 保证至少执行一次</td>
+              <td>未知次数的条件循环</td>
+            </tr>
+            <tr>
+              <td><code>break</code> / <code>continue</code></td>
+              <td>支持 label 跨层跳转</td>
+              <td>嵌套循环早退</td>
+            </tr>
+            <tr>
+              <td><code>.forEach</code> / <code>.map</code> ...</td>
+              <td>函数式；<strong>不能 break</strong></td>
+              <td>数据映射/聚合</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 ============================================ -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="truthiness"><code>if</code> 条件的 ToBoolean 表</h3>
+        <p>条件语句对非 boolean 值触发 <code>ToBoolean</code>。8 个 <strong>falsy</strong> 值（其余全 truthy）：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">false · 0 · -0 · 0n · "" · null · undefined · NaN
+// 一切对象都 truthy，包括 [] / {} / new Boolean(false) / new Number(0)</code></pre>
+        </div>
+
+        <h3 id="switch-semantics"><code>switch</code> 的严格相等匹配</h3>
+        <p>
+          <code>switch (x)</code> 的每个 <code>case v:</code> 分支实际上等价于 <code>if (x === v)</code>。<strong
+            >不是 <code>==</code></strong
+          >。因此：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const x = "5";
+switch (x) {
+  case 5: console.log("number"); break;   // 不会匹配（"5" !== 5）
+  case "5": console.log("string"); break; // ✓ 命中
+}</code></pre>
+        </div>
+        <p>
+          JS 没有模式匹配（TC39 stage 1 提案 Pattern Matching 尚未落地），但可以用
+          <code>switch (true)</code> 技巧做范围匹配：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">switch (true) {
+  case score &gt;= 90: grade = "A"; break;
+  case score &gt;= 80: grade = "B"; break;
+  case score &gt;= 60: grade = "C"; break;
+  default: grade = "F";
+}</code></pre>
+        </div>
+
+        <h3 id="fall-through">Fall-through 不是 bug，是特性</h3>
+        <p>
+          <code>case</code> 之后没有 <code>break</code> / <code>return</code> 会继续执行下一个
+          <code>case</code>。用于合并多个分支：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">switch (day) {
+  case "Sat":
+  case "Sun":
+    type = "weekend"; break;
+  default:
+    type = "weekday";
+}</code></pre>
+        </div>
+        <p>
+          但意外遗漏 <code>break</code> 是经典 bug 源。ESLint <code>no-fallthrough</code> 规则会要求显式
+          <code>// falls through</code> 注释 —— 强烈建议开启。
+        </p>
+
+        <h3 id="iteration-protocol">迭代协议：<code>for-of</code> 的规范依据</h3>
+        <p>
+          <code>for-of</code> 不是"遍历数组"，而是"遍历<em>可迭代对象</em>"。可迭代对象必须实现
+          <code>Symbol.iterator</code>，返回一个<em>迭代器</em>（有 <code>next()</code> 方法，返回
+          <code>{ value, done }</code>）。
+        </p>
+        <p>
+          内置可迭代：<code>Array</code>、<code>String</code>、<code>Map</code>、<code>Set</code>、<code>NodeList</code>、<code>arguments</code>、<code>TypedArray</code>、generator
+          函数返回值。<strong>普通 Object 不可迭代</strong> —— <code>for (const x of {a: 1})</code> 抛
+          TypeError。遍历对象用
+          <code>Object.entries(obj)</code>、<code>Object.keys(obj)</code>、<code>Object.values(obj)</code>。
+        </p>
+
+        <h3 id="for-in-vs-of"><code>for-in</code> vs <code>for-of</code> 的根本区别</h3>
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th><code>for-in</code></th>
+              <th><code>for-of</code></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>遍历什么</td>
+              <td>可枚举<strong>字符串属性名</strong></td>
+              <td>迭代器产生的<strong>值</strong></td>
+            </tr>
+            <tr>
+              <td>是否走原型链</td>
+              <td><strong>是</strong>（包含继承的可枚举属性）</td>
+              <td>否</td>
+            </tr>
+            <tr>
+              <td>顺序</td>
+              <td>规范保证：整数键按升序 → 其他字符串键按插入序</td>
+              <td>迭代器决定</td>
+            </tr>
+            <tr>
+              <td>Symbol 键</td>
+              <td>不包括</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td>稀疏数组</td>
+              <td>跳过空位</td>
+              <td>空位产出 <code>undefined</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 id="let-per-iteration"><code>for (let i ...)</code> 的每次迭代新绑定</h3>
+        <p>
+          这是 ES6 特意修复 <code>var</code> 时代闭包 bug 的机制。规范规定：<code>for</code> 循环初始化里用
+          <code>let</code>/<code>const</code> 时，<strong>每次迭代都创建一个全新的词法环境</strong>，<code>i</code>
+          的副本被克隆。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// var 时代的经典面试题
+const fs = [];
+for (var i = 0; i &lt; 3; i++) fs.push(() =&gt; i);
+fs.map(f =&gt; f());            // [3, 3, 3]  ← 共享同一个 i
+
+// let 自动修复
+const gs = [];
+for (let i = 0; i &lt; 3; i++) gs.push(() =&gt; i);
+gs.map(g =&gt; g());            // [0, 1, 2]  ← 每次迭代新 i</code></pre>
+        </div>
+
+        <h3 id="break-label"><code>break</code> / <code>continue</code> 的 label 跨层</h3>
+        <p>
+          JS 没有 <code>goto</code>，但支持给循环/块打 label，<code>break label</code> 能跨越多层循环退出 —— 比用 flag
+          变量清晰：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">outer:
+for (let y = 0; y &lt; rows; y++) {
+  for (let x = 0; x &lt; cols; x++) {
+    if (grid[y][x] === target) {
+      found = [y, x];
+      break outer;          // 一次跳出两层
+    }
+  }
+}</code></pre>
+        </div>
+
+        <!-- 03 应用场景 =========================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">用 lookup 表替代长 if/switch</h3>
+          <p>3+ 分支开始考虑把 <code>if/switch</code> 重构成 <code>Record&lt;string, fn&gt;</code>：</p>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 难维护
+function route(action) {
+  if (action === "CREATE") return handleCreate();
+  if (action === "UPDATE") return handleUpdate();
+  if (action === "DELETE") return handleDelete();
+  throw new Error(`unknown: ${action}`);
+}
+
+// 数据驱动
+const handlers = {
+  CREATE: handleCreate,
+  UPDATE: handleUpdate,
+  DELETE: handleDelete,
+};
+function route(action) {
+  const fn = handlers[action];
+  if (!fn) throw new Error(`unknown: ${action}`);
+  return fn();
+}</code></pre>
+          </div>
+          <p style="margin-top: 8px">优势：新增分支不改控制流、可以动态注入、方便做单测 mock。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Generator + for-of 实现 lazy 计算</h3>
+          <p>
+            Generator 函数实现迭代协议 —— 用 <code>for-of</code> 消费时才按需生成值。适合"逻辑上无穷但实际只取前 N
+            个"的场景（分页、树遍历、ID 生成）。
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">function* range(start, end, step = 1) {
+  for (let i = start; i &lt; end; i += step) yield i;
+}
+for (const n of range(0, 10, 2)) console.log(n);  // 0 2 4 6 8
+
+// 惰性、可 break、可组合
+function* take(iter, n) {
+  for (const v of iter) { if (n-- &lt;= 0) return; yield v; }
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">状态机：<code>switch</code> + 独立 reducer</h3>
+          <p>
+            Redux-style reducer 本质是状态机；<code>switch</code> 的分支匹配 action type 是天然适配。React 的
+            <code>useReducer</code> 也沿用这个模式。详细见 P2 装饰器与 class 一章。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">循环中的异步：<code>for-of</code> + <code>await</code></h3>
+          <p>
+            <code>for-of</code> 能正确配合 <code>await</code> 顺序执行；<code>forEach</code> + async
+            回调只会并发发射所有请求但不等它们完成。并发用 <code>Promise.all(items.map(asyncFn))</code>。详细语义见 P3
+            异步章。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 =========================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-iteration">遍历各种集合</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 数组 —— for-of 拿值，entries 同时拿索引
+for (const v of arr) ...
+for (const [i, v] of arr.entries()) ...
+
+// 对象 —— 用 Object.* 转 iterable
+for (const [k, v] of Object.entries(obj)) ...
+for (const k of Object.keys(obj)) ...
+
+// Map / Set 原生可迭代
+for (const [k, v] of map) ...
+for (const v of set) ...
+
+// 字符串按 code point 遍历（处理 emoji 正确）
+for (const ch of "Hi👋") ...
+
+// NodeList / HTMLCollection（浏览器）
+for (const el of document.querySelectorAll("li")) ...
+// getElementsByTagName 返回的 HTMLCollection 在 for-of 中也能用
+// 但 for-in 在 DOM 集合上会返回意外的数字索引之外的键</code></pre>
+        </div>
+
+        <h3 id="ex-break-pattern">break / return 的选择</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 找到就退出：两种写法
+function find1(arr, pred) {
+  for (const item of arr) if (pred(item)) return item;
+  return undefined;
+}
+// 内置等价写法
+function find2(arr, pred) { return arr.find(pred); }
+
+// 早退有副作用时，return 更清晰（不需要 label）
+// break 仅用于"不能改成函数提前 return"的场景</code></pre>
+        </div>
+
+        <h3 id="ex-forEach-pitfall">forEach 不能 break</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// ❌ 无效：throw/return 不会终止 forEach
+[1,2,3,4].forEach(n =&gt; {
+  if (n &gt; 2) return;         // 只跳过当前迭代，循环继续
+  console.log(n);
+});
+
+// ✅ 需要提前退出用 for-of / some / every
+[1,2,3,4].some(n =&gt; {
+  if (n &gt; 2) return true;    // 返回 true 停止遍历
+  console.log(n);
+});
+
+// ✅ 或者用 find 取代（如果目的是"找到即停"）
+const found = arr.find(pred);</code></pre>
+        </div>
+
+        <h3 id="ex-while">循环边界的典型写法</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 处理队列直到空
+while (queue.length) {
+  const task = queue.shift();
+  process(task);
+}
+
+// 轮询直到条件满足（带最大次数防死循环）
+let attempts = 0;
+while (!ready() &amp;&amp; attempts++ &lt; 10) {
+  await sleep(1000);
+}
+
+// 至少执行一次 —— do-while 的少数正当场景
+let input;
+do {
+  input = prompt("输入一个数");
+} while (Number.isNaN(+input));</code></pre>
+        </div>
+
+        <h3 id="ex-ternary-chain">三元 vs if/else 赋值</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// ✅ 简单二选一：三元
+const label = isAdmin ? "管理员" : "用户";
+
+// ❌ 嵌套三元（可读性差）
+const grade = score &gt;= 90 ? "A" : score &gt;= 80 ? "B" : score &gt;= 60 ? "C" : "F";
+
+// ✅ 改成 lookup 或函数
+function getGrade(s) {
+  if (s &gt;= 90) return "A";
+  if (s &gt;= 80) return "B";
+  if (s &gt;= 60) return "C";
+  return "F";
+}</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 =========================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>for-in</code> 遍历数组的坑</div>
+          <p>
+            <code>for (const i in arr)</code> 返回<strong>字符串</strong>索引（"0", "1",
+            ...），还可能包含原型链上的可枚举属性（老代码如果给 <code>Array.prototype</code> 加方法就会漏出来）。<strong
+              >永远不要用 <code>for-in</code> 遍历数组</strong
+            >，用 <code>for-of</code>、<code>.forEach</code> 或 <code>for (let i = 0; ...)</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>switch</code> 忘写 <code>break</code> 导致串 case</div>
+          <p>
+            TypeScript 的 <code>noFallthroughCasesInSwitch</code> 和 ESLint 的
+            <code>no-fallthrough</code> 都能拦截。刻意 fall-through 时加显式注释 <code>// falls through</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>switch</code> 匹配用 <code>===</code>，字符串/数字必须一致</div>
+          <p>
+            从 URL params 拿的永远是字符串；<code>switch (Number(pageParam))</code> 或
+            <code>switch (pageParam)</code> 要提前决定。混用会导致无分支命中，悄悄走到 <code>default</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>case</code> 里声明变量的作用域问题</div>
+          <p>
+            <code>case "A": let x = 1; break; case "B": let x = 2; ...</code> 会报 <em>already declared</em>，因为
+            <code>case</code> 块没有自己的作用域。用 <code>{ }</code> 包一下：<code
+              >case "A": { let x = 1; break; }</code
+            >。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>continue</code> 会跳过 <code>for</code> 的 <code>step</code> 吗？</div>
+          <p>
+            不会。<code>for (init; cond; step)</code> 的 <code>continue</code> 会先执行 <code>step</code> 再回到
+            <code>cond</code>。但在 <code>while</code> 中 <code>continue</code> <strong>不</strong>执行任何递增 ——
+            如果你用 while 做计数循环，要在 <code>continue</code> 之前手动 <code>i++</code>，否则死循环。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>for...in</code> 顺序 = 整数键升序 → 其他插入序</div>
+          <p>
+            ES2020 标准化了这个顺序。副作用：<code>const obj = { 2: "a", 1: "b", x: "c" }</code> 的
+            <code>Object.keys</code> 是 <code>["1", "2", "x"]</code>（数字键提前了）。需要保序用 <code>Map</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>forEach</code> 的 <code>this</code> 与箭头函数</div>
+          <p>
+            <code>arr.forEach(cb, thisArg)</code> 第二参数设 <code>this</code>。但用箭头函数时 thisArg
+            被忽略（箭头函数的 <code>this</code> 是词法的）。这是常见面试题。详细见 P2 <code>this</code> 章节。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>do-while</code> 后的分号</div>
+          <p>
+            <code>do { ... } while (cond)</code> 后面<strong>必须</strong>加分号，否则 ASI 可能把下一行识别成调用。这是
+            JS 语法规则，不是风格偏好。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================ -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-iteration-statements" target="_blank" rel="noopener"
+              >ECMA-262 · 14.7 Iteration Statements</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://tc39.es/ecma262/#sec-for-in-and-for-of-statements-runtime-semantics-labelledevaluation"
+              target="_blank"
+              rel="noopener"
+              >ECMA-262 · for-in / for-of 运行语义</a
+            >
+          </li>
+          <li>
+            <a href="https://github.com/tc39/proposal-pattern-matching" target="_blank" rel="noopener"
+              >TC39 · Pattern Matching 提案</a
+            >
+            —— 未来的模式匹配语法
+          </li>
+          <li><strong>下一步</strong> → <a href="04-functions.html">04 · 函数基础</a>，把控制流组织成可复用的单元。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="02-operators.html">
+            <span class="label">← 上一章</span>
+            <span class="title">02 · 操作符与强制转换</span>
+          </a>
+          <a class="next" href="04-functions.html">
+            <span class="label">下一章 →</span>
+            <span class="title">04 · 函数基础</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

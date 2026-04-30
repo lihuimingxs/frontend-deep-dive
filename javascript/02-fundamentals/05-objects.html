@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>对象深入 · P1 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="对象字面量高级语法、属性描述符、getter/setter、浅/深拷贝（structuredClone）、freeze/seal/preventExtensions、属性顺序规则、对象查询 API 全景、V8 hidden class 性能启示。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P2 目录</a>
+          <a href="https://javascript.info/object" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · 语言基础</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-types.html">01 · 数据类型系统</a></li>
+          <li><a href="02-operators.html">02 · 操作符与强制转换</a></li>
+          <li><a href="03-control-flow.html">03 · 控制流</a></li>
+          <li><a href="04-functions.html">04 · 函数基础</a></li>
+          <li><a href="05-objects.html">05 · 对象深入</a></li>
+          <li><a href="06-arrays.html">06 · 数组深入</a></li>
+          <li><a href="07-strings.html">07 · 字符串深入</a></li>
+          <li><a href="08-numbers.html">08 · 数字与 Math</a></li>
+          <li><a href="09-date-intl.html">09 · Date 与 Intl</a></li>
+          <li><a href="10-map-set.html">10 · Map / Set 家族</a></li>
+          <li><a href="11-symbol.html">11 · Symbol 全景</a></li>
+          <li><a href="12-json.html">12 · JSON</a></li>
+          <li><a href="13-iterators.html">13 · 迭代器与 Generator</a></li>
+          <li><a href="14-errors.html">14 · 错误处理</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · 语言基础</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>对象深入</span>
+        </nav>
+
+        <h1>对象深入</h1>
+        <p class="lead">
+          JS 的对象 = 一个"键（字符串 / Symbol） → 属性描述符"的字典，加上一条
+          <code>[[Prototype]]</code>
+          链。本章把这个结构的所有操作面梳清楚：字面量语法糖、属性描述符、浅/深拷贝、冻结策略、查询 API。原型链和 class
+          留到 P2。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> 01 - 04</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/object" target="_blank" rel="noopener">Objects</a></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================= -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 对象字面量的全部语法糖
+const key = "dynamic";
+const x = 1;
+const obj = {
+  // 1. 常规
+  name: "Alice",
+
+  // 2. 属性简写：变量名同键名
+  x,                         // 等价 x: x
+
+  // 3. 计算键：方括号里是任意表达式
+  [key]: true,               // { dynamic: true }
+  [`${key}-2`]: true,
+
+  // 4. 方法简写
+  greet() { return "hi"; },
+
+  // 5. getter / setter
+  get upper() { return this.name.toUpperCase(); },
+  set upper(v) { this.name = v.toLowerCase(); },
+
+  // 6. 展开：深浅复制/合并
+  ...other,
+};</code></pre>
+        </div>
+        <p>对象查询 API 全景：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>API</th>
+              <th>自有？</th>
+              <th>可枚举？</th>
+              <th>包含 Symbol？</th>
+              <th>走原型链？</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>Object.keys(o)</code></td>
+              <td>是</td>
+              <td>是</td>
+              <td>否</td>
+              <td>否</td>
+            </tr>
+            <tr>
+              <td><code>Object.values / entries</code></td>
+              <td>是</td>
+              <td>是</td>
+              <td>否</td>
+              <td>否</td>
+            </tr>
+            <tr>
+              <td><code>Object.getOwnPropertyNames(o)</code></td>
+              <td>是</td>
+              <td>全部</td>
+              <td>否</td>
+              <td>否</td>
+            </tr>
+            <tr>
+              <td><code>Object.getOwnPropertySymbols(o)</code></td>
+              <td>是</td>
+              <td>全部</td>
+              <td>是</td>
+              <td>否</td>
+            </tr>
+            <tr>
+              <td><code>Reflect.ownKeys(o)</code></td>
+              <td>是</td>
+              <td>全部</td>
+              <td>是</td>
+              <td>否</td>
+            </tr>
+            <tr>
+              <td><code>for...in</code></td>
+              <td>否</td>
+              <td>是</td>
+              <td>否</td>
+              <td><strong>是</strong></td>
+            </tr>
+            <tr>
+              <td><code>in</code></td>
+              <td>否</td>
+              <td>—</td>
+              <td>是</td>
+              <td><strong>是</strong></td>
+            </tr>
+            <tr>
+              <td><code>Object.hasOwn(o, k)</code></td>
+              <td>是</td>
+              <td>—</td>
+              <td>是</td>
+              <td>否</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 =========================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="descriptor">属性描述符：每个属性的 4 + 2 个开关</h3>
+        <p><strong>数据属性</strong>的 4 个描述符：</p>
+        <ul>
+          <li><code>value</code> — 属性的值</li>
+          <li><code>writable</code> — 能否被赋值修改</li>
+          <li>
+            <code>enumerable</code> — 是否出现在 <code>for-in</code>/<code>Object.keys</code>/<code
+              >JSON.stringify</code
+            >
+          </li>
+          <li><code>configurable</code> — 能否被 <code>delete</code>、能否改描述符</li>
+        </ul>
+        <p><strong>访问器属性</strong>的 4 个描述符（前两个与数据属性互斥）：</p>
+        <ul>
+          <li><code>get</code> / <code>set</code> — 读取/赋值时触发的函数</li>
+          <li><code>enumerable</code>、<code>configurable</code> — 同上</li>
+        </ul>
+        <p>
+          <code>obj.foo = 1</code> 这种赋值默认创建的属性：<code
+            >writable: true, enumerable: true, configurable: true</code
+          >。<code>Object.defineProperty</code> 默认所有开关都是 <code>false</code> —— 这不对称，容易踩。建议显式写齐。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const o = {};
+Object.defineProperty(o, "hidden", {
+  value: 42,
+  writable: true,
+  enumerable: false,       // 不出现在遍历里
+  configurable: true,
+});
+Object.keys(o);            // []
+o.hidden;                  // 42
+o.hidden = 100;            // 可写
+
+// class 的方法、Array.prototype.push 等都是 enumerable: false
+// 这是为什么 for-in 数组不会拿到方法名</code></pre>
+        </div>
+
+        <h3 id="getter-setter">Getter / Setter：声明式计算属性</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const user = {
+  firstName: "Alice",
+  lastName: "Wong",
+  get fullName() { return `${this.firstName} ${this.lastName}`; },
+  set fullName(v) { [this.firstName, this.lastName] = v.split(" "); },
+};
+user.fullName;                // "Alice Wong"   —— 像属性一样访问
+user.fullName = "Bob Li";
+user.firstName;               // "Bob"
+
+// 性能注意：getter 在 V8 里比数据属性慢约 2-5 倍
+// 热点路径上频繁访问同一 getter 结果要手动缓存</code></pre>
+        </div>
+
+        <h3 id="shallow-deep">浅拷贝与深拷贝：5 种工具的边界</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>方式</th>
+              <th>深度</th>
+              <th>支持的类型</th>
+              <th>性能</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>{ ...obj }</code></td>
+              <td>浅</td>
+              <td>只拷自有可枚举 + 字符串键（不含 Symbol 取决于 TC39 规则，现在已拷 Symbol）</td>
+              <td>快</td>
+            </tr>
+            <tr>
+              <td><code>Object.assign({}, obj)</code></td>
+              <td>浅</td>
+              <td>同上</td>
+              <td>快</td>
+            </tr>
+            <tr>
+              <td><code>JSON.parse(JSON.stringify(obj))</code></td>
+              <td>深</td>
+              <td>仅 JSON 兼容（丢失 Date/Map/Set/BigInt/函数/undefined/Symbol/循环引用）</td>
+              <td>慢</td>
+            </tr>
+            <tr>
+              <td><code>structuredClone(obj)</code></td>
+              <td>深</td>
+              <td><strong>原生</strong>；支持 Date/Map/Set/TypedArray/循环引用；不支持函数/Symbol/DOM</td>
+              <td>中等</td>
+            </tr>
+            <tr>
+              <td><code>_.cloneDeep(obj)</code> (Lodash)</td>
+              <td>深</td>
+              <td>最全；含函数引用浅拷、原型链保留</td>
+              <td>中等偏慢</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          <strong>选择建议</strong>：现代浏览器/Node 18+ 用
+          <code>structuredClone</code>（原生、无依赖、正确）。需要深拷函数或有特殊 class 实例用 Lodash。简单 POJO 用
+          <code>JSON.parse(JSON.stringify)</code>（性能不敏感时也能用）。
+        </p>
+
+        <h3 id="immutable">不可变性：三个层级的冻结</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>API</th>
+              <th>新增属性</th>
+              <th>删除属性</th>
+              <th>修改值</th>
+              <th>改描述符</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>preventExtensions</code></td>
+              <td>✗</td>
+              <td>✓</td>
+              <td>✓</td>
+              <td>✓</td>
+            </tr>
+            <tr>
+              <td><code>seal</code></td>
+              <td>✗</td>
+              <td>✗</td>
+              <td>✓</td>
+              <td>✗</td>
+            </tr>
+            <tr>
+              <td><code>freeze</code></td>
+              <td>✗</td>
+              <td>✗</td>
+              <td>✗</td>
+              <td>✗</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          三者都是<strong>浅层</strong>的。<code>Object.freeze({ nested: { x: 1 } })</code> 能改
+          <code>obj.nested.x</code>。真正的深冻结需要手写递归（<code
+            >Object.values(o).forEach(v =&gt; typeof v === "object" &amp;&amp; deepFreeze(v)); return
+            Object.freeze(o);</code
+          >）。
+        </p>
+
+        <h3 id="property-order">属性顺序的规范规则</h3>
+        <p>
+          ES2020 起标准化了枚举顺序（<code>Object.keys</code>、<code>for-in</code>、<code>JSON.stringify</code>
+          等都遵循）：
+        </p>
+        <ol>
+          <li><strong>整数字符串键</strong>（"0", "1", "42"）按数值升序</li>
+          <li><strong>其他字符串键</strong>按插入顺序</li>
+          <li><strong>Symbol 键</strong>按插入顺序（仅 <code>Reflect.ownKeys</code> 可见）</li>
+        </ol>
+        <p>
+          副作用：<code>{ "2": "a", "1": "b", "x": "c" }</code> 的 <code>Object.keys</code> 是
+          <code>["1", "2", "x"]</code>（数字被重排）。需要保序插入 → 用 <code>Map</code>。
+        </p>
+
+        <h3 id="hidden-class">V8 的 Hidden Class（引擎视角）</h3>
+        <p>
+          V8 把每个对象关联到一个 "hidden class"（类似 C++ 的 vtable），描述属性的内存布局。<strong
+            >相同形状的对象共享同一 hidden class</strong
+          >
+          —— 属性访问通过 offset 直接读内存，速度接近静态语言。
+        </p>
+        <p>工程意义：<strong>让对象的"形状"保持一致</strong>。</p>
+        <ul>
+          <li>在构造函数里<strong>统一初始化所有字段</strong>（哪怕设为 <code>null</code>），避免后续动态加属性。</li>
+          <li>避免 <code>delete obj.key</code>（触发 hidden class 去优化）；改成 <code>obj.key = undefined</code>。</li>
+          <li>同一数组别混存 Number 和 Object —— V8 对纯数字数组有特殊优化（Packed SMI 数组）。</li>
+        </ul>
+
+        <!-- 03 应用场景 =========================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Record / Dictionary：用 null 原型避免污染</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// ❌ 普通对象作 map，"toString" / "hasOwnProperty" 会撞上原型
+const counts = {};
+counts["toString"] = 1;      // 覆盖了 Object.prototype.toString
+"hasOwnProperty" in counts;  // true 但不是你插入的
+
+// ✅ 无原型的"纯字典"
+const counts2 = Object.create(null);
+counts2["toString"] = 1;     // 安全
+"hasOwnProperty" in counts2; // false
+// 代价：丢失 .toString / .hasOwnProperty 等方法</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">不可变状态管理</h3>
+          <p>Redux / Zustand / Jotai 等库要求每次更新返回新对象（便于浅比较触发重渲染）。典型更新模式：</p>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 顶层字段
+{ ...state, count: state.count + 1 }
+
+// 嵌套字段（要逐层展开）
+{ ...state, user: { ...state.user, name: "Alice" } }
+
+// 深层嵌套用 Immer 的 produce（原地写法 + 底下不可变更新）
+import { produce } from "immer";
+const next = produce(state, draft =&gt; {
+  draft.user.profile.avatar.url = "...";
+});</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Getter 做延迟/计算属性</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 配置的"最终"值从多个源派生
+const config = {
+  baseUrl: "https://api.example.com",
+  version: "v2",
+  get apiUrl() { return `${this.baseUrl}/${this.version}`; },
+};
+config.apiUrl;            // 每次重新计算
+config.version = "v3";
+config.apiUrl;            // "https://api.example.com/v3"  ← 自动反映</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Object.freeze 做常量表</h3>
+          <p>
+            TypeScript 里常写
+            <code>const COLORS = { RED: "#f00", BLUE: "#00f" } as const;</code> 得到类型层面不可变。运行时防止被改就加
+            <code>Object.freeze(COLORS)</code>。React 19 的 <code>cache</code>、路由配置等全局数据都这么做。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Property descriptor 做 console.log 秘境</h3>
+          <p>
+            在自己的 class 上定义 <code>enumerable: false</code> 的内部字段，能让
+            <code>JSON.stringify(instance)</code> 只序列化业务字段、不泄漏内部状态。ORM、validator 等库常用。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 =========================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-query">查对象结构的 6 个 API</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const o = { a: 1 };
+Object.defineProperty(o, "hidden", { value: 2, enumerable: false });
+const s = Symbol("key");
+o[s] = 3;
+
+Object.keys(o);                        // ["a"]                仅自有 enumerable 字符串
+Object.getOwnPropertyNames(o);         // ["a", "hidden"]      所有自有字符串（含不可枚举）
+Object.getOwnPropertySymbols(o);       // [Symbol(key)]        所有自有 Symbol
+Reflect.ownKeys(o);                    // ["a", "hidden", Symbol(key)]   所有自有
+Object.getOwnPropertyDescriptor(o, "hidden"); // { value:2, writable:false,... }
+Object.getPrototypeOf(o);              // Object.prototype</code></pre>
+        </div>
+
+        <h3 id="ex-copy">浅拷贝与深拷贝对比</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const src = { a: 1, nested: { x: 10 }, d: new Date(), arr: [1,2,3] };
+
+// 浅拷贝
+const a = { ...src };
+a.nested.x = 99;              // ⚠ src.nested.x 也变了
+a.d === src.d;                // true （同一 Date 引用）
+
+// 深拷贝（推荐）
+const b = structuredClone(src);
+b.nested.x = 99;              // ✓ src.nested.x 仍是 10
+b.d instanceof Date;          // true （正确保留类型）
+b.d === src.d;                // false
+
+// JSON 法（丢类型）
+const c = JSON.parse(JSON.stringify(src));
+c.d instanceof Date;          // false ⚠ 变成字符串了
+
+// 循环引用：structuredClone 支持，JSON 不支持
+const circular = { self: null }; circular.self = circular;
+structuredClone(circular);     // ✓
+JSON.stringify(circular);      // TypeError</code></pre>
+        </div>
+
+        <h3 id="ex-hasown"><code>in</code> vs <code>hasOwn</code> vs <code>?.</code></h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const o = { a: undefined };
+
+"a" in o;                       // true  （有这个键，即使值是 undefined）
+o.a === undefined;              // true  （无法区分"未定义"和"没这个键"）
+Object.hasOwn(o, "a");          // true  （ES2022 推荐；替代 hasOwnProperty.call）
+
+"toString" in o;                // true   ← 继承自 Object.prototype
+Object.hasOwn(o, "toString");   // false  ← 只查自有属性
+
+// 老写法（在某些 null-prototype 对象上会崩）
+o.hasOwnProperty("a");          // 可能 throw 如果 o 是 Object.create(null)
+// 总是更安全的写法
+Object.hasOwn(o, "a");</code></pre>
+        </div>
+
+        <h3 id="ex-defprop">用 defineProperty 实现只读常量</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const api = {};
+Object.defineProperty(api, "VERSION", {
+  value: "1.0.0",
+  writable: false,
+  enumerable: true,
+  configurable: false,
+});
+api.VERSION = "2.0";          // 严格模式抛错；非严格静默失败
+api.VERSION;                  // 仍为 "1.0.0"
+
+// 批量定义
+Object.defineProperties(api, {
+  NAME: { value: "Mira", enumerable: true },
+  SECRET: { value: "xxx", enumerable: false },   // 不出现在 JSON.stringify
+});</code></pre>
+        </div>
+
+        <h3 id="ex-freeze">深冻结工具函数</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function deepFreeze(obj) {
+  if (obj === null || typeof obj !== "object") return obj;
+  // 先递归冻结属性，再冻结 obj 本身
+  for (const key of Reflect.ownKeys(obj)) {
+    deepFreeze(obj[key]);
+  }
+  return Object.freeze(obj);
+}
+
+const cfg = deepFreeze({
+  endpoints: { api: "/api", ws: "/ws" },
+  features: { darkMode: true },
+});
+cfg.endpoints.api = "/v2";     // 严格模式抛错</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 =========================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>Object.freeze</code> 是<strong>浅</strong>冻结</div>
+          <p>
+            第一层不可变，嵌套对象不受影响。TypeScript 的 <code>Readonly&lt;T&gt;</code> 也只是一层。Record 类型不可变用
+            <code>Readonly&lt;T&gt;</code> + runtime <code>deepFreeze</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">展开语法不拷贝 getter/setter，只拷值</div>
+          <p>
+            <code>{ ...obj }</code> 会触发 getter 取值后复制，新对象里是数据属性。如果需要保留描述符用
+            <code>Object.defineProperties(target, Object.getOwnPropertyDescriptors(source))</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">对象键都是字符串（或 Symbol）</div>
+          <p>
+            <code>obj[1] === obj["1"]</code>，因为 key 会被 <code>ToString</code>。<code>obj[{a:1}]</code> 的 key 是
+            <code>"[object Object]"</code>，不同对象作 key 会冲突。<strong>需要对象作 key 用 <code>Map</code></strong
+            >。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>Object.keys</code> 不包含 Symbol 键</div>
+          <p><code>JSON.stringify</code> 也不会序列化 Symbol 键。需要完整遍历用 <code>Reflect.ownKeys</code>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">整数键的"神秘重排"</div>
+          <p>
+            <code>{ "2": "x", "1": "y", "a": "z" }</code> 的 <code>Object.keys</code> 顺序是
+            <code>["1", "2", "a"]</code>。ES2020 前非标准，现在是规范行为。需要保序用 Map。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>delete</code> 对 non-configurable 属性静默失败（非严格）</div>
+          <p>
+            严格模式下抛 TypeError；非严格模式下返回 <code>false</code>。ESM 默认严格 —— 对
+            <code>const</code> 变量、<code>Object.freeze</code> 过的属性执行 <code>delete</code> 会报错。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">对象展开不继承原型</div>
+          <p>
+            <code>{ ...instance }</code> 丢掉 class 的原型链，得到的是纯对象。克隆 class 实例应用
+            <code>structuredClone</code>（保留类型）或 <code>Object.assign(Object.create(Proto), instance)</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>JSON.stringify</code> 按 getter 值序列化</div>
+          <p>
+            <code>{ get x() { return Math.random(); } }</code> 每次 <code>JSON.stringify</code> 得到的 x
+            值都不同。大多数场景是好事，但在 hash 值、签名等场景需要注意"同一对象序列化两次不等"的可能性。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================ -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-property-descriptor-specification-type" target="_blank" rel="noopener"
+              >ECMA-262 · 6.2.6 Property Descriptor</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://html.spec.whatwg.org/multipage/structured-data.html#structuredserialize"
+              target="_blank"
+              rel="noopener"
+              >HTML · Structured Clone Algorithm</a
+            >
+          </li>
+          <li>
+            <a href="https://v8.dev/blog/fast-properties" target="_blank" rel="noopener"
+              >V8 blog · Fast properties in V8</a
+            >
+            —— hidden class 与属性存储内部实现
+          </li>
+          <li>
+            <a href="https://immerjs.github.io/immer/" target="_blank" rel="noopener">Immer</a> —— 在 React
+            生态里替代手写不可变更新的标准工具
+          </li>
+          <li>
+            <strong>下一步</strong> → <a href="06-arrays.html">06 · 数组深入</a>，专注在"特殊对象"——数组——的方法全景。
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="04-functions.html">
+            <span class="label">← 上一章</span>
+            <span class="title">04 · 函数基础</span>
+          </a>
+          <a class="next" href="06-arrays.html">
+            <span class="label">下一章 →</span>
+            <span class="title">06 · 数组深入</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>作用域与 TDZ · P2 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="var/let/const 三种声明的作用域规则、Lexical Environment 规范结构、变量提升（hoisting）的本质、TDZ（Temporal Dead Zone）的机制、块作用域与函数作用域、for(let) 的每迭代新绑定。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P3 目录</a>
+          <a href="https://javascript.info/var" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · 高阶语言</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-scope-tdz.html">01 · 作用域与 TDZ</a></li>
+          <li><a href="02-closures.html">02 · 闭包内存模型</a></li>
+          <li><a href="03-this.html">03 · this 四规则</a></li>
+          <li><a href="04-bind-call-apply.html">04 · bind / call / apply</a></li>
+          <li><a href="05-prototype.html">05 · 原型链</a></li>
+          <li><a href="06-class.html">06 · class 与继承</a></li>
+          <li><a href="07-private-decorators.html">07 · 私有字段与装饰器</a></li>
+          <li><a href="08-proxy-reflect.html">08 · Proxy 与 Reflect</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../02-fundamentals/index.html">P2 · 语言基础</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · 高阶语言</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>作用域与 TDZ</span>
+        </nav>
+
+        <h1>作用域与 TDZ</h1>
+        <p class="lead">
+          作用域（scope）决定了"一个变量名能在哪里被访问"。JS 的三个声明关键字 <code>var</code>、<code>let</code>、<code
+            >const</code
+          >
+          对应三种不同的作用域策略，ES6 引入的 <strong>TDZ</strong>（Temporal Dead
+          Zone）是一个很多人知其然不知其所以然的机制 —— 本章把它放回<em>规范术语</em>里讲清楚。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~18 分钟</span>
+          <span><strong>前置</strong> P1 全部</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/var" target="_blank" rel="noopener">The old "var"; Variable scope</a></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================= -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th><code>var</code></th>
+              <th><code>let</code></th>
+              <th><code>const</code></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>作用域单位</td>
+              <td>函数 / 全局</td>
+              <td>块 <code>{ }</code></td>
+              <td>块 <code>{ }</code></td>
+            </tr>
+            <tr>
+              <td>提升</td>
+              <td>整体提升，初值 <code>undefined</code></td>
+              <td>绑定提升，进入 <strong>TDZ</strong></td>
+              <td>同 let</td>
+            </tr>
+            <tr>
+              <td>重复声明</td>
+              <td>允许</td>
+              <td>报 SyntaxError</td>
+              <td>报 SyntaxError</td>
+            </tr>
+            <tr>
+              <td>重新赋值</td>
+              <td>允许</td>
+              <td>允许</td>
+              <td><strong>不允许</strong>（值/引用本身）</td>
+            </tr>
+            <tr>
+              <td>全局声明挂 <code>window</code></td>
+              <td>✓</td>
+              <td>✗</td>
+              <td>✗</td>
+            </tr>
+            <tr>
+              <td>for 循环每迭代新绑定</td>
+              <td>✗（共享）</td>
+              <td>✓</td>
+              <td>✓（<code>for-of</code>/<code>for-in</code>）</td>
+            </tr>
+            <tr>
+              <td>必须初始化</td>
+              <td>✗</td>
+              <td>✗</td>
+              <td>✓</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout info">
+          <div class="callout-title">💡 默认约定</div>
+          <p>
+            <strong>默认 <code>const</code></strong
+            >；只在需要重新赋值时用 <code>let</code>；<strong>永远不要用 <code>var</code></strong
+            >（除非维护古老代码）。Lint 规则 <code>prefer-const</code> + <code>no-var</code> 能自动强制。
+          </p>
+        </div>
+
+        <!-- 02 底层逻辑 ============================================ -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="lexical-env">Lexical Environment 规范结构</h3>
+        <p>ECMAScript 规范把"作用域"建模为 <strong>Lexical Environment</strong>（词法环境），一个链式结构：</p>
+        <ul>
+          <li><strong>Environment Record</strong> —— 存变量绑定的哈希表（key 是变量名、value 是 binding）</li>
+          <li><strong>outer</strong> —— 指向外层 Lexical Environment 的引用（形成作用域链）</li>
+        </ul>
+        <p>
+          变量查找（<code>ResolveBinding(name)</code>）在当前环境找不到就沿 <code>outer</code> 往上走，走到 global
+          还没有就抛 ReferenceError。
+        </p>
+        <p>Environment Record 有两种：</p>
+        <ul>
+          <li>
+            <strong>Declarative Environment Record</strong> ——
+            函数/块/try/模块作用域。<code>let</code>/<code>const</code>/<code>function</code>/<code>class</code>
+            的绑定放这里。
+          </li>
+          <li>
+            <strong>Object Environment Record</strong> —— 全局作用域、<code>with</code> 语句。绑定挂在一个对象上（全局是
+            <code>globalThis</code>），所以 <code>var x</code> 在全局等同于
+            <code>window.x = ...</code>。<code>let</code>/<code>const</code> 在全局是 Declarative，<strong>不</strong>挂
+            <code>window</code>。
+          </li>
+        </ul>
+
+        <h3 id="hoisting">提升（Hoisting）的真实机制</h3>
+        <p>
+          "提升"不是"代码物理上被搬到顶部"，而是：<strong
+            >进入一个作用域时，引擎先扫描该作用域里的所有声明，创建 binding；然后才执行代码</strong
+          >。差异在"binding 的初始状态"：
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>声明形式</th>
+              <th>binding 初始状态</th>
+              <th>访问时</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>var x</code></td>
+              <td>已初始化为 <code>undefined</code></td>
+              <td>得到 <code>undefined</code></td>
+            </tr>
+            <tr>
+              <td><code>function f() {}</code></td>
+              <td>已初始化为函数</td>
+              <td>可调用</td>
+            </tr>
+            <tr>
+              <td><code>let x</code> / <code>const x</code></td>
+              <td><strong>未初始化</strong></td>
+              <td>抛 ReferenceError（TDZ）</td>
+            </tr>
+            <tr>
+              <td><code>class X {}</code></td>
+              <td>未初始化</td>
+              <td>TDZ</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">console.log(a);      // undefined   ← var 提升且已初始化
+console.log(b);      // ReferenceError ← let TDZ
+console.log(c);      // ReferenceError
+f();                 // "hi"         ← function 整体提升
+
+var a = 1;
+let b = 2;
+const c = 3;
+function f() { console.log("hi"); }</code></pre>
+        </div>
+
+        <h3 id="tdz">TDZ 的精确定义</h3>
+        <p>
+          TDZ = <strong>从"进入作用域"到"执行到声明语句"之间的区域</strong>。在这段时间内，<code>let</code>/<code
+            >const</code
+          >
+          的 binding 存在但未初始化，任何读写都抛 ReferenceError。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function f() {
+  // 从这里开始 x 的 TDZ
+  console.log(x);       // ReferenceError
+  typeof x;             // ReferenceError  ← 注意！typeof 也不安全
+  let x = 1;            // TDZ 结束
+  console.log(x);       // 1
+}</code></pre>
+        </div>
+        <p>
+          设计意图：让"变量声明前不能使用"成为硬规则，避免 <code>var</code> 时代的意外使用。<strong
+            >是特性不是 bug</strong
+          >。
+        </p>
+
+        <h3 id="block-scope">块作用域的 4 种触发点</h3>
+        <p>
+          <code>{ }</code>、<code>if/else/for/while</code> 的 body（含 <code>for</code> 的 init 部分）、<code
+            >try/catch</code
+          >
+          的 catch 参数、<code>switch</code> 的 case block（需手动用 <code>{ }</code>）。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">if (true) {
+  let x = 1;
+}
+console.log(x);        // ReferenceError  ← 块外看不到
+
+for (let i = 0; i &lt; 3; i++) { }
+console.log(i);        // ReferenceError
+
+// ⚠ var 会逃逸
+if (true) { var y = 1; }
+console.log(y);        // 1  ← var 不管块作用域
+
+// switch case 默认共享作用域
+switch (x) {
+  case "A": let a = 1; break;
+  case "B": let a = 2; break;   // ❌ SyntaxError: already declared
+}
+// 修法：显式 { } 包裹
+switch (x) {
+  case "A": { let a = 1; break; }
+  case "B": { let a = 2; break; }
+}</code></pre>
+        </div>
+
+        <h3 id="for-let">for(let) 每次迭代的新绑定</h3>
+        <p>
+          P1-03 已讲过。规范上每次迭代创建一个<strong>全新的 Lexical Environment</strong
+          >，旧值被复制进来。这就是为什么：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const fs = [];
+for (let i = 0; i &lt; 3; i++) fs.push(() =&gt; i);
+fs.map(f =&gt; f());            // [0, 1, 2]   ← 每次迭代 i 是独立 binding
+
+const gs = [];
+for (var j = 0; j &lt; 3; j++) gs.push(() =&gt; j);
+gs.map(g =&gt; g());            // [3, 3, 3]   ← var 全程共享一个 j</code></pre>
+        </div>
+
+        <h3 id="global-var">全局 <code>var</code> 的特殊行为</h3>
+        <p>
+          在全局作用域：<code>var x = 1</code> 同时在 <code>globalThis</code>（浏览器是 <code>window</code>）上挂了
+          <code>x</code> 属性。<code>let</code>/<code>const</code> 不会。这是历史遗留 + ES6 的兼容设计。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// &lt;script&gt; 里
+var a = 1;
+let b = 2;
+window.a;              // 1    ← var 挂了
+window.b;              // undefined
+
+// ESM 里（type="module" 或 .mjs）
+// 顶层的 var/let/const 都不挂 window —— ESM 有独立模块作用域</code></pre>
+        </div>
+
+        <!-- 03 应用场景 =========================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">默认 <code>const</code> + 工具强制</h3>
+          <p>
+            约定：先用 <code>const</code> 写出来，lint 报"never reassigned"就留 <code>const</code>，lint 不报就改
+            <code>let</code>。ESLint <code>prefer-const</code> 自动检测。好处：
+          </p>
+          <ul>
+            <li>阅读者不用怀疑变量是否被修改</li>
+            <li>重构时减少意外 mutation</li>
+            <li>引擎可做额外优化（V8 对 const 有专门优化）</li>
+          </ul>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">块作用域做"局部工作"</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 无需 IIFE，直接块作用域隔离
+function setup() {
+  // ... 主逻辑
+
+  {
+    const temp = computeExpensive();
+    cache.set("key", temp);
+    // temp 在块结束后可被 GC，不占外层作用域
+  }
+
+  // ...
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">const 对复合值只冻结绑定</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">const arr = [1, 2, 3];
+arr.push(4);         // ✓ 修改内容
+arr[0] = 99;         // ✓ 修改元素
+// arr = [5, 6];     // ✗ TypeError: 不能重新赋值
+
+const user = { name: "Alice" };
+user.age = 30;       // ✓
+// user = {};        // ✗
+
+// 想要<em>内容也不可变</em>：Object.freeze（浅）或 deepFreeze（见 P1-05）</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">循环里创建回调的 let 写法</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// ❌ var：所有 button 共享一个 i，打印的都是 buttons.length
+for (var i = 0; i &lt; buttons.length; i++) {
+  buttons[i].onclick = () =&gt; console.log(i);
+}
+
+// ✓ let：每次迭代 i 是新的
+for (let i = 0; i &lt; buttons.length; i++) {
+  buttons[i].onclick = () =&gt; console.log(i);
+}
+
+// ES6 前的常见 workaround：IIFE 捕获
+for (var i = 0; i &lt; buttons.length; i++) {
+  ((i) =&gt; buttons[i].onclick = () =&gt; console.log(i))(i);
+}
+// 现在已不需要</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 =========================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-tdz-patterns">TDZ 的典型表现</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 1. 自引用初始化
+const x = x;                       // ReferenceError
+// 原因：右侧 x 读取时还在 TDZ
+
+// 2. 默认参数里的 TDZ
+function f(a = b, b = 1) { }
+f();                               // ReferenceError （b 在 a 初始化时还在 TDZ）
+function g(b = 1, a = b) { }
+g();                               // ✓
+
+// 3. 参数作用域 vs 函数体作用域
+let x = "outer";
+function h(y = x) {                // x 这里指外层
+  let x = "inner";
+  return y;
+}
+h();                               // "outer"</code></pre>
+        </div>
+
+        <h3 id="ex-hoist">函数声明 vs 表达式的提升</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">foo();   // "declaration"
+bar();   // TypeError: bar is not a function
+baz();   // ReferenceError: Cannot access 'baz' before initialization
+
+function foo() { console.log("declaration"); }
+var bar = function () { console.log("var expression"); };
+const baz = function () { console.log("const expression"); };
+
+// 结论：
+// - 函数声明：整体提升（可前调用）
+// - var 表达式：只提升绑定，函数还未赋值（TypeError）
+// - const/let 表达式：TDZ（ReferenceError）</code></pre>
+        </div>
+
+        <h3 id="ex-scope-chain">作用域链的查找顺序</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const a = "global";
+function outer() {
+  const a = "outer";
+  function inner() {
+    const a = "inner";
+    console.log(a);                // "inner"
+  }
+  inner();
+  console.log(a);                  // "outer"
+}
+outer();
+console.log(a);                    // "global"
+
+// 查找：inner 作用域 → outer 作用域 → global 作用域
+// 找到第一个匹配就停</code></pre>
+        </div>
+
+        <h3 id="ex-const-reassign">const 的"引用不可变"</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const a = 1;
+// a++;        // TypeError
+// a = 2;      // TypeError
+
+const arr = [];
+arr.push(1);   // ✓
+// arr = [2];  // TypeError
+
+const fn = () =&gt; 1;
+// fn = () =&gt; 2;   // TypeError
+// 但可以挂属性（函数是对象）
+fn.version = "1";  // ✓</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 =========================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>typeof</code> 在 TDZ 中也抛错</div>
+          <p>
+            <code>typeof undeclaredVar</code> 返回 <code>"undefined"</code>（P1-02 讲过）。但
+            <code>typeof letVarInTDZ</code> 抛 ReferenceError —— 因为 binding
+            <strong>存在</strong>但未初始化，不是"未声明"。细节陷阱。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">命名冲突：<code>let</code> 同名参数</div>
+          <p>
+            <code>function f(x) { let x = 1; }</code> 抛 SyntaxError —— 块作用域里 <code>x</code> 已经是形参，<code
+              >let x</code
+            >
+            视为重复声明。用不同名字或改赋值 <code>x = 1</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">全局 <code>var</code> 污染</div>
+          <p>
+            脚本里 <code>var x = 1</code> 等于 <code>window.x = 1</code>，容易和浏览器 API 撞名（<code
+              >var name = "Alice"</code
+            >
+            会改 <code>window.name</code> 这个全局 string）。ESM 模块作用域避免此问题 —— 这也是"用 ESM"的核心理由之一。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">严格模式下未声明赋值抛错</div>
+          <p>
+            非严格模式：<code>x = 1</code>（没有 <code>var</code>/<code>let</code>）悄悄创建全局变量。严格模式（ESM
+            默认）：ReferenceError。这是严格模式最有价值的改变之一 —— 拦住"拼错变量名"的低级 bug。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>var</code> 在 <code>try/catch</code> 中的逃逸</div>
+          <p>
+            <code>try { throw 1; } catch (e) { var x = e; } console.log(x);</code> —— <code>x</code> 在外面可见（var
+            不受块作用域限制），但 <code>e</code> 不可见（catch 参数是 lexical scope）。令人困惑的组合。用
+            <code>let</code> 避免。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">class 和 let 一样有 TDZ</div>
+          <p>
+            <code>new Foo(); class Foo {}</code> 抛 ReferenceError，不是"声明提升"。这防止了 class-before-declaration
+            的引用。<code>function</code> 是唯一"整体提升"的声明形式。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">浏览器 <code>&lt;script&gt;</code> 和 ESM 的作用域差别</div>
+          <p>
+            传统 <code>&lt;script&gt;</code>：共享一个全局作用域，<code>var</code> 跨文件可见。<code
+              >&lt;script type="module"&gt;</code
+            >：每个模块独立作用域，顶层声明不互通。混用（传统脚本 + ESM）是调试噩梦的源头。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">循环中的 <code>const</code> 语义</div>
+          <p>
+            <code>for (const x of arr) { }</code> 合法 —— 每次迭代是<strong>新绑定</strong>，所以不算"重新赋值"。但
+            <code>for (const i = 0; i &lt; 3; i++)</code> 抛 TypeError —— 因为 <code>i++</code> 确实是重新赋值。C 风格
+            for 用 <code>let</code>，<code>for-of</code>/<code>for-in</code> 用 <code>const</code>。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================ -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-lexical-environments" target="_blank" rel="noopener"
+              >ECMA-262 · 9.1 Lexical Environments</a
+            >
+          </li>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-environment-records" target="_blank" rel="noopener"
+              >ECMA-262 · 9.1.1 Environment Records</a
+            >
+          </li>
+          <li>
+            <a href="https://2ality.com/2015/10/why-tdz.html" target="_blank" rel="noopener"
+              >Dr. Axel Rauschmayer · Why is there a "temporal dead zone" in ES6?</a
+            >
+          </li>
+          <li>
+            <strong>下一步</strong> → <a href="02-closures.html">02 · 闭包内存模型</a> —
+            把作用域链"凝固"在函数里的能力。
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../02-fundamentals/14-errors.html"
+            ><span class="label">← 上一章</span><span class="title">P1-14 · 错误处理</span></a
+          >
+          <a class="next" href="02-closures.html"
+            ><span class="label">下一章 →</span><span class="title">02 · 闭包内存模型</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

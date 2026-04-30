@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Event Loop 模型 · P3 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="Event Loop 的 HTML 规范定义、执行栈与任务队列、task source 分类、rendering 周期与 requestAnimationFrame、为什么 JS 单线程仍能做 IO 并发、长任务阻塞主线程的原因。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P4 目录</a>
+          <a href="https://javascript.info/event-loop" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · 异步 & 错误处理</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-event-loop.html">01 · Event Loop 模型</a></li>
+          <li><a href="02-microtask-macrotask.html">02 · 微任务 vs 宏任务</a></li>
+          <li><a href="03-promise.html">03 · Promise 状态机</a></li>
+          <li><a href="04-promise-combinators.html">04 · Promise 组合器</a></li>
+          <li><a href="05-async-await.html">05 · async / await</a></li>
+          <li><a href="06-abort-controller.html">06 · AbortController</a></li>
+          <li><a href="07-concurrency.html">07 · 并发控制</a></li>
+          <li><a href="08-node-eventloop-errors.html">08 · Node Event Loop + 错误收口</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../02-fundamentals/index.html">P2 · 语言基础</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · 异步 & 错误处理</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Event Loop 模型</span>
+        </nav>
+
+        <h1>Event Loop 模型</h1>
+        <p class="lead">
+          "JS 单线程但不阻塞"的根基是 <strong>Event Loop</strong>。它不是 ECMAScript 规范内容 —— ECMAScript 只定义了
+          Jobs 队列（微任务）；<strong
+            >真正的宿主环境循环（task queue / rendering / raf）由 HTML 规范（浏览器）和 libuv（Node.js）定义</strong
+          >。本章聚焦浏览器的 HTML Event Loop，Node.js 的差异留到 P3-08。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~20 分钟</span>
+          <span><strong>前置</strong> P1-13 迭代器 · P2-02 闭包</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/event-loop" target="_blank" rel="noopener"
+              >Event loop: microtasks and macrotasks</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>
+          最小心智模型：<strong
+            >主线程 = 一个无限循环 { 执行栈 → 清空 microtask → 渲染（如果有） → 取下一个宏任务 }</strong
+          >。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 简化的浏览器 event loop 伪代码
+while (true) {
+  // 1. 取一个宏任务（oldest task）
+  const task = taskQueues.mostUrgent().shift();
+  execute(task);                         // 跑到同步代码结束
+
+  // 2. 清空所有 microtask（包括 microtask 过程中新增的）
+  while (microtaskQueue.length) {
+    execute(microtaskQueue.shift());
+  }
+
+  // 3. 渲染（如果需要）
+  if (shouldRender()) {
+    runAnimationFrameCallbacks();        // rAF 回调
+    runResizeObservers();
+    runIntersectionObservers();
+    updateRenderingPipeline();           // style/layout/paint/composite
+  }
+
+  // 4. 如果 task queue 空，等待（browser 挂起）
+}</code></pre>
+        </div>
+
+        <h3>三种队列同时存在</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>队列</th>
+              <th>来源</th>
+              <th>何时清空</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Task queue</strong>（宏任务）</td>
+              <td>setTimeout / setInterval / I/O / DOM event / postMessage</td>
+              <td>每轮循环取<strong>一个</strong>执行</td>
+            </tr>
+            <tr>
+              <td><strong>Microtask queue</strong></td>
+              <td>Promise then/catch/finally、queueMicrotask、MutationObserver、ES2022 Finalization</td>
+              <td>宏任务结束后<strong>完全清空</strong>（包括过程中新增的）</td>
+            </tr>
+            <tr>
+              <td><strong>Animation frame callbacks</strong></td>
+              <td>requestAnimationFrame</td>
+              <td>渲染阶段调用</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="call-stack">执行栈（Call Stack）</h3>
+        <p>
+          JS 引擎用栈来跟踪函数调用。每调用一个函数，压入 "execution context"；函数返回就弹出。栈空 = 一次"运行"结束。
+        </p>
+        <p>
+          异步函数（<code>setTimeout</code>、<code>fetch</code>）不会让 JS 等待 ——
+          它们把<strong>回调注册到浏览器内部</strong>，立即返回。等条件满足（定时器到期、网络返回）时，浏览器把回调<strong>入队</strong>，等主线程栈空再执行。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">console.log("A");
+setTimeout(() =&gt; console.log("B"), 0);   // 浏览器注册，0ms 后入宏任务队列
+Promise.resolve().then(() =&gt; console.log("C"));  // 入微任务队列
+console.log("D");
+
+// 输出顺序：A, D, C, B
+// 1. 同步完成 "A" "D"
+// 2. 栈空 → 清空 microtask → "C"
+// 3. 下一轮宏任务 → "B"</code></pre>
+        </div>
+
+        <h3 id="task-sources">HTML 规范的 Task Source</h3>
+        <p>规范给每种来源分配一个 "task source"，引擎可以给不同 source 不同优先级：</p>
+        <ul>
+          <li><strong>DOM manipulation task source</strong> —— DOM 操作触发</li>
+          <li><strong>User interaction task source</strong> —— 鼠标/键盘/触摸事件（浏览器可优先）</li>
+          <li><strong>Networking task source</strong> —— XHR/Fetch 完成</li>
+          <li><strong>History traversal task source</strong> —— popstate 等</li>
+          <li><strong>Timer task source</strong> —— setTimeout/setInterval</li>
+          <li><strong>Postmessage task source</strong> —— postMessage</li>
+          <li><strong>File reading task source</strong> —— FileReader</li>
+          <li><strong>Idle task source</strong> —— requestIdleCallback</li>
+        </ul>
+        <p>
+          每轮循环，浏览器<strong>选一个 task source</strong>（一般按 FIFO，但用户交互常被提前），从中取最早的 task
+          执行。所以 <code>setTimeout</code> 和 <code>click</code> 即使都在队列里，<code>click</code> 可能先跑。
+        </p>
+
+        <h3 id="microtask-queue">为什么要有 microtask 队列</h3>
+        <p>
+          Promise 的 <code>.then</code> 回调<strong>必须异步</strong>（规范强制），否则
+          <code>Promise.resolve().then(fn)</code> 和 <code>fn()</code> 会同步执行 —— 破坏"Promise 总是异步"的保证（Zalgo
+          问题）。但如果 <code>.then</code> 走普通 <code>setTimeout(fn, 0)</code>，回调会排在其他宏任务后面（包括 UI
+          事件），可能产生视觉"跳帧"。
+        </p>
+        <p>
+          Microtask 队列介于"同步"和"下一轮 task"之间：<strong
+            >当前同步代码结束后立即清空，不参与 task source 调度</strong
+          >。Promise、<code>queueMicrotask</code>、<code>MutationObserver</code> 用它保证"尽早异步但不跨越一轮 event
+          loop"。
+        </p>
+
+        <h3 id="microtask-drain">Microtask 清空的关键规则</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 规则：microtask 清空过程中新增的 microtask，也在本轮清完
+Promise.resolve().then(() =&gt; {
+  console.log(1);
+  Promise.resolve().then(() =&gt; console.log(2));
+  Promise.resolve().then(() =&gt; console.log(3));
+});
+// 输出：1, 2, 3（全部在同一轮 event loop）
+
+// ⚠ 陷阱：无限增加 microtask 会死锁渲染
+function spin() {
+  Promise.resolve().then(spin);
+}
+spin();    // 页面永远卡住 —— microtask 队列永远非空，渲染永远轮不到</code></pre>
+        </div>
+
+        <h3 id="rendering-cycle">渲染周期与 requestAnimationFrame</h3>
+        <p>
+          浏览器渲染不是每轮都发生 —— 目标帧率 60fps ≈ 16.67ms/frame。规范建议每帧渲染一次；宏任务执行过快（如 10 个
+          setTimeout 连续到期），浏览器可以跳过中间轮的渲染。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 渲染时序：
+// [task] → [microtasks] → [rAF callbacks] → [style/layout/paint] → [下一轮]
+//                              ↑ 这一步每帧最多一次
+
+requestAnimationFrame(t =&gt; {
+  // 在下次渲染前调用，t 是 DOMHighResTimeStamp（sub-ms 精度）
+  animate(t);
+});
+
+// rAF 在 microtask 之后、渲染之前 —— 读取 DOM 布局时稳定
+// setTimeout(fn, 16) 近似但不精确，会抖动</code></pre>
+        </div>
+
+        <h3 id="long-task">长任务阻塞主线程</h3>
+        <p>
+          主线程一次 task 执行<strong>不能被中断</strong>。一个 <code>while</code> 循环跑 500ms，浏览器在这 500ms
+          内不能处理任何 UI 事件、渲染、网络回调。Chrome 定义 "long task" = 超 50ms 的 task，PerformanceObserver
+          能观测：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">new PerformanceObserver((list) =&gt; {
+  for (const entry of list.getEntries()) {
+    console.warn("long task:", entry.duration, "ms", entry.attribution);
+  }
+}).observe({ entryTypes: ["longtask"] });
+
+// 避免长任务的 3 种手段：
+// 1. 切片：chunked execution + setTimeout(next, 0)
+// 2. Web Worker：CPU 密集型挪到后台线程
+// 3. scheduler.yield() / scheduler.postTask()（新 API，Chrome 129+）</code></pre>
+        </div>
+
+        <h3 id="js-single-thread">"单线程但不阻塞 IO"的真实含义</h3>
+        <p>JS 主线程只有一条执行栈。但浏览器/Node 内部用<strong>多线程</strong>处理 IO：</p>
+        <ul>
+          <li><strong>浏览器</strong>：网络、定时器、IO、渲染线程独立。JS 主线程是 UI 线程。</li>
+          <li>
+            <strong>Node.js</strong>：libuv 线程池（默认 4 线程）做 DNS、文件 IO、CPU 密集型。网络 IO 多用 epoll/kqueue
+            非阻塞 IO，不占线程。
+          </li>
+        </ul>
+        <p>
+          所以"fetch 10 个 URL"的并发<strong>真实发生在浏览器内部</strong>；JS 只是"注册 10
+          个回调，等回调被派发回主线程"。
+        </p>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">避免长任务：切片执行</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 处理 100k 条数据，不卡 UI
+async function processLarge(items, handler, chunkSize = 1000) {
+  for (let i = 0; i &lt; items.length; i += chunkSize) {
+    const chunk = items.slice(i, i + chunkSize);
+    for (const item of chunk) handler(item);
+    // 让渲染有机会：等下一轮 task
+    await new Promise(r =&gt; setTimeout(r, 0));
+  }
+}
+
+// ES2024+ 的 scheduler API（更智能）
+async function processLarge2(items, handler) {
+  for (const item of items) {
+    handler(item);
+    if (performance.now() % 50 &lt; 1) await scheduler.yield();
+  }
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">rAF 做 60fps 动画</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">let startTime;
+function animate(t) {
+  if (!startTime) startTime = t;
+  const elapsed = t - startTime;
+  const progress = Math.min(elapsed / 1000, 1);
+  el.style.transform = `translateX(${progress * 300}px)`;
+  if (progress &lt; 1) requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
+// 比 setInterval(fn, 16) 好的三点：
+// 1. 和显示器刷新同步，无撕裂
+// 2. 标签页不可见时暂停（省电）
+// 3. 在渲染前，DOM 读写在同一帧稳定</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">queueMicrotask 延迟到栈顶</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">class EventEmitter {
+  emit(event, ...args) {
+    // 确保订阅者异步调用，防止抛错影响 emit 调用方
+    queueMicrotask(() =&gt; {
+      this.listeners[event]?.forEach(fn =&gt; fn(...args));
+    });
+  }
+}
+// 优势：
+// - 比 setTimeout(fn, 0) 快得多（同一轮 event loop）
+// - 比同步调用安全（订阅者错误不影响 emit）
+// ⚠ 缺点：不能在里面放无限递归（死循环）</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">MutationObserver 等效的异步钩子</h3>
+          <p>
+            MutationObserver 的回调走 microtask queue —— 一批 DOM 变更后，回调在 microtask 阶段统一触发。Vue 3 的
+            nextTick 就是基于这个机制：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// Vue 3 nextTick 的简化版
+let resolved = Promise.resolve();
+function nextTick(fn) {
+  return resolved.then(fn);          // 微任务，在 DOM 更新之后触发
+}
+
+state.count++;
+await nextTick();
+// DOM 已更新
+read(domValue);</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-order">时序面试题</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">console.log("script start");
+
+setTimeout(() =&gt; console.log("timeout"), 0);
+
+Promise.resolve()
+  .then(() =&gt; console.log("p1"))
+  .then(() =&gt; console.log("p2"));
+
+queueMicrotask(() =&gt; console.log("microtask"));
+
+console.log("script end");
+
+// 输出：
+// script start
+// script end
+// p1
+// microtask       ← queueMicrotask 排在 p1 的第二个 then 之前
+// p2
+// timeout</code></pre>
+        </div>
+
+        <h3 id="ex-nested-microtask">嵌套 microtask</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">Promise.resolve().then(() =&gt; {
+  console.log(1);
+  Promise.resolve().then(() =&gt; console.log(2));
+  // ↑ 新加的 microtask 会在本轮清空前执行
+  setTimeout(() =&gt; console.log(3), 0);
+  // ↑ 下一轮 macrotask
+});
+Promise.resolve().then(() =&gt; console.log(4));
+
+// 输出：1, 4, 2, 3</code></pre>
+        </div>
+
+        <h3 id="ex-measure">测量长任务</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 开发环境插入 long task 监控
+if (typeof PerformanceObserver !== "undefined") {
+  try {
+    new PerformanceObserver((list) =&gt; {
+      for (const e of list.getEntries()) {
+        if (e.duration &gt; 100) {
+          console.warn(`Blocked ${e.duration.toFixed(0)}ms:`, e);
+          // 上报到 RUM / Sentry
+        }
+      }
+    }).observe({ entryTypes: ["longtask"] });
+  } catch { /* 不支持 */ }
+}</code></pre>
+        </div>
+
+        <h3 id="ex-raf-batch">rAF 批量写 DOM</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// ❌ 每次写都可能触发 reflow
+for (const item of data) {
+  item.el.style.height = `${compute(item)}px`;
+}
+
+// ✓ 把写操作集中到下一帧 rAF
+requestAnimationFrame(() =&gt; {
+  for (const item of data) {
+    item.el.style.height = `${compute(item)}px`;
+  }
+});
+
+// 读写分离模式（fastdom 思路）：
+// - rAF 前读（measure）
+// - rAF 里写（mutate）</code></pre>
+        </div>
+
+        <!-- 05 陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>setTimeout(fn, 0)</code> 最少也有 4ms</div>
+          <p>
+            HTML 规范规定嵌套 5 层以上的 setTimeout，浏览器<strong>强制 4ms 最小延迟</strong>（防止 CPU 占满）。Chrome
+            还会对 background tab 做 1s 节流。想"尽快异步"用 <code>queueMicrotask</code> 或
+            <code>MessageChannel</code>（绕过 4ms 限制）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">无限 microtask 卡死页面</div>
+          <p>
+            <code>Promise.resolve().then(loop)</code> 递归会让 microtask 队列永远非空 → 渲染永远不发生 →
+            页面冻结。排查时看 DevTools Performance 火焰图，看不到渲染帧就是这个问题。用 setTimeout 插入 macrotask
+            "让行"。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">长同步代码冻结 UI</div>
+          <p>
+            <code>JSON.parse</code> 一个 10MB JSON、<code>sort</code> 10 万条数据、大 regex 匹配都可能几百 ms
+            阻塞。Chrome Lighthouse 的 TBT（Total Blocking Time）指标就是统计这个。切片或 Worker 处理。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">rAF 在后台标签页暂停</div>
+          <p>
+            后台标签的 <code>requestAnimationFrame</code> 回调会被大幅降频（Chrome 1
+            次/秒）或完全不跑。做时间驱动的逻辑（游戏 tick、倒计时）要用 <code>performance.now()</code> 差值 +
+            <code>setTimeout</code> 兜底。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">规范讲 "task" 不是 "macrotask"</div>
+          <p>
+            HTML 规范里只有 <strong>task</strong>（= 很多文章说的"宏任务"）和 <strong>microtask</strong>。"macrotask"
+            是社区术语。规范里还有 "job"（ECMAScript 层对 microtask 的叫法）。阅读规范时要理解这些术语映射。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>event.stopPropagation()</code> 不阻止 microtask</div>
+          <p>
+            事件处理器里 <code>event.stopPropagation()</code> 阻止事件冒泡到外层，但已经入队的 microtask（比如之前
+            <code>Promise.then</code> 注册的）不会被取消。事件处理只管自己的监听器链。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">浏览器和 Node Event Loop 不同</div>
+          <p>
+            Node 的 <code>process.nextTick</code> 优先级比 Promise microtask 更高；libuv 把宏任务分 6 个 phase；<code
+              >setImmediate</code
+            >
+            和 <code>setTimeout(0)</code> 顺序不确定。细节见 P3-08。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://html.spec.whatwg.org/multipage/webappapis.html#event-loops" target="_blank" rel="noopener"
+              >HTML Living Standard · Event loops</a
+            >
+          </li>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-jobs" target="_blank" rel="noopener"
+              >ECMA-262 · 9.5 Jobs and Host Operations</a
+            >
+          </li>
+          <li>
+            <a href="https://www.youtube.com/watch?v=cCOL7MC4Pl0" target="_blank" rel="noopener"
+              >Jake Archibald · In The Loop（演讲，必看）</a
+            >
+          </li>
+          <li>
+            <a href="https://web.dev/articles/long-tasks-devtools" target="_blank" rel="noopener"
+              >web.dev · Long tasks</a
+            >
+          </li>
+          <li>
+            <strong>下一步</strong> → <a href="02-microtask-macrotask.html">02 · 微任务 vs 宏任务</a>，把队列类型讲透。
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../03-advanced/08-proxy-reflect.html"
+            ><span class="label">← 上一章</span><span class="title">P2-08 · Proxy 与 Reflect</span></a
+          >
+          <a class="next" href="02-microtask-macrotask.html"
+            ><span class="label">下一章 →</span><span class="title">02 · 微任务 vs 宏任务</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

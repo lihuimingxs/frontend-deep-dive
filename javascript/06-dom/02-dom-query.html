@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DOM 查询与遍历 · P5 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="querySelector/querySelectorAll/getElementById 的性能差异、NodeList vs HTMLCollection（live vs static）、closest/matches、Range/TreeWalker、CSS 选择器性能 hint。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · DOM & 事件</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-dom-tree.html">01 · DOM 树与 Node 接口</a></li>
+          <li><a href="02-dom-query.html">02 · DOM 查询与遍历</a></li>
+          <li><a href="03-dom-mutation.html">03 · DOM 修改与安全</a></li>
+          <li><a href="04-event-propagation.html">04 · 事件传播三阶段</a></li>
+          <li><a href="05-delegation-custom.html">05 · 事件委托与自定义事件</a></li>
+          <li><a href="06-observers.html">06 · 各种 Observer</a></li>
+          <li><a href="07-forms.html">07 · Form 控件与验证</a></li>
+          <li><a href="08-loading.html">08 · 资源加载时机</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../02-fundamentals/index.html">P2 · 语言基础</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · DOM & 事件</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>DOM 查询与遍历</span>
+        </nav>
+
+        <h1>DOM 查询与遍历</h1>
+        <p class="lead">
+          现代 DOM 查询有两大家族：<strong>旧 API</strong>（<code>getElementById / ByClassName / ByTagName</code>）和
+          <strong>选择器 API</strong>（<code>querySelector / All</code>）。返回值的<strong>live vs static</strong
+          >特性决定了性能与陷阱。本章讲每个 API 的判定、NodeList 的迭代特性、Range/TreeWalker 的进阶用法。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~18 分钟</span>
+          <span><strong>前置</strong> 01 DOM 树</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/searching-elements-dom" target="_blank" rel="noopener"
+              >Searching: getElement*, querySelector*</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <table>
+          <thead>
+            <tr>
+              <th>方法</th>
+              <th>返回</th>
+              <th>特性</th>
+              <th>支持</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>getElementById(id)</code></td>
+              <td>Element / null</td>
+              <td>只在 document；全局唯一 id</td>
+              <td>最快</td>
+            </tr>
+            <tr>
+              <td><code>getElementsByClassName(cls)</code></td>
+              <td>HTMLCollection</td>
+              <td><strong>live</strong></td>
+              <td>所有 Element</td>
+            </tr>
+            <tr>
+              <td><code>getElementsByTagName(tag)</code></td>
+              <td>HTMLCollection</td>
+              <td><strong>live</strong></td>
+              <td>所有 Element</td>
+            </tr>
+            <tr>
+              <td><code>getElementsByName(name)</code></td>
+              <td>NodeList</td>
+              <td><strong>live</strong>；仅 document</td>
+              <td>form 控件常用</td>
+            </tr>
+            <tr>
+              <td><code>querySelector(selector)</code></td>
+              <td>Element / null</td>
+              <td>CSS 选择器</td>
+              <td>所有 Element</td>
+            </tr>
+            <tr>
+              <td><code>querySelectorAll(selector)</code></td>
+              <td>NodeList</td>
+              <td><strong>static</strong>（快照）</td>
+              <td>所有 Element</td>
+            </tr>
+            <tr>
+              <td><code>closest(selector)</code></td>
+              <td>Element / null</td>
+              <td>向上找祖先（含自身）</td>
+              <td>所有 Element</td>
+            </tr>
+            <tr>
+              <td><code>matches(selector)</code></td>
+              <td>boolean</td>
+              <td>是否匹配选择器</td>
+              <td>所有 Element</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="live-vs-static">Live vs Static 集合</h3>
+        <p>
+          <strong>Live collection</strong>：反映 DOM 实时状态，<strong>访问时才查</strong>。HTMLCollection（大多旧 API
+          返回）是 live。<br />
+          <strong>Static</strong>：调用时的快照，后续 DOM 变化不反映。<code>querySelectorAll</code> 返回的 NodeList 是
+          static。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const liveList = document.getElementsByClassName("item");
+const staticList = document.querySelectorAll(".item");
+
+console.log(liveList.length);    // 3
+console.log(staticList.length);  // 3
+
+// 添加一个 .item
+document.body.append(Object.assign(document.createElement("div"), { className: "item" }));
+
+liveList.length;                 // 4 ← 自动更新
+staticList.length;               // 3 ← 快照不变</code></pre>
+        </div>
+        <p>
+          <strong>陷阱</strong>：for 循环里修改 live 集合（<code>getElementsByTagName("li")</code> +
+          <code>appendChild(li)</code>）会死循环。解决方法：转成数组 <code>[...coll]</code> 或用 querySelectorAll。
+        </p>
+
+        <h3 id="nodelist-vs-htmlcollection">NodeList vs HTMLCollection</h3>
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th>NodeList</th>
+              <th>HTMLCollection</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>内容</td>
+              <td>任意 Node（含 Text）</td>
+              <td>仅 Element</td>
+            </tr>
+            <tr>
+              <td>live 行为</td>
+              <td>querySelectorAll 返回的是 static；childNodes 是 live</td>
+              <td>始终 live</td>
+            </tr>
+            <tr>
+              <td>按索引</td>
+              <td><code>list[i]</code> / <code>list.item(i)</code></td>
+              <td>同上 + <code>list.namedItem("id")</code></td>
+            </tr>
+            <tr>
+              <td>forEach</td>
+              <td>✓</td>
+              <td>✗（需要 <code>[...coll].forEach</code>）</td>
+            </tr>
+            <tr>
+              <td>for-of</td>
+              <td>✓（ES2015+）</td>
+              <td>✓</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 id="selector-perf">CSS 选择器性能</h3>
+        <p>浏览器 <strong>从右向左</strong>匹配选择器：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">document.querySelectorAll("div.container &gt; ul &gt; li.active");
+// 浏览器：
+// 1. 找所有 .active
+// 2. 对每个 .active 往上查：parent 是 ul？parent 的 parent 是 .container？
+// 3. 满足所有条件的才收入
+
+// 性能 tips：
+// - 右端选择器越具体越快（.active &gt; [id=x] 差别大）
+// - 避免通用选择器 * 和深选择器 a b c d
+// - ID 查找是 hash 表，最快
+
+// 简单基准：
+// getElementById         O(1)
+// getElementsBy*         O(1) ~ O(n)（Live 集合缓存）
+// querySelector(#x)      接近 getElementById
+// querySelector(复杂)    需要遍历</code></pre>
+        </div>
+
+        <h3 id="closest-matches"><code>closest</code> 与 <code>matches</code></h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// closest：从当前元素向上（含自身）找最近匹配 selector 的祖先
+el.closest("form");                      // 找所在的表单
+e.target.closest("[data-action]");       // 事件委托核心（见 05 章）
+
+// matches：当前元素是否匹配 selector
+el.matches(".active");                   // boolean
+// 等价旧 API: el.webkitMatchesSelector（已废弃）
+
+// 组合：查找最近的 "某种" 祖先
+function findAncestor(el, predicate) {
+  while (el &amp;&amp; el !== document) {
+    if (predicate(el)) return el;
+    el = el.parentElement;
+  }
+  return null;
+}
+// 现代替代：el.closest(selectorThatEncodesPredicate)</code></pre>
+        </div>
+
+        <h3 id="range-treewalker">Range 与 TreeWalker</h3>
+        <p>精细的文本/节点选择 API：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// Range：选中文档的一段（选区）
+const range = document.createRange();
+range.setStart(el.firstChild, 2);        // 从第几个字符开始
+range.setEnd(el.firstChild, 8);
+range.extractContents();                  // 删除并返回 DocumentFragment
+range.getBoundingClientRect();            // 选区的视口坐标
+
+// Selection：用户选中的文本
+window.getSelection().toString();
+window.getSelection().getRangeAt(0);
+
+// TreeWalker：带过滤器的遍历器
+const walker = document.createTreeWalker(
+  root,
+  NodeFilter.SHOW_TEXT,                    // 只看文本节点
+  { acceptNode(node) {
+      return node.textContent.trim()
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_REJECT;
+  }},
+);
+while (walker.nextNode()) { /* ... */ }</code></pre>
+        </div>
+
+        <h3 id="scope-root">:scope 伪类</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre
+            class="code"
+          ><code class="lang-js">// querySelector 默认以 document 为匹配上下文 —— 即使你调用 el.querySelector
+el.querySelectorAll("&gt; li");          // ❌ 错误：&gt; 必须有左侧元素
+el.querySelectorAll(":scope &gt; li");   // ✓ :scope 指代 el
+
+// 用于"我的直接子元素"等场景
+const directChildren = el.querySelectorAll(":scope &gt; [data-item]");
+
+// 注意 :scope 在整个 document.querySelector 里相当于 :root</code></pre>
+        </div>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">事件委托用 closest</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">list.addEventListener("click", (e) =&gt; {
+  const btn = e.target.closest("[data-action]");
+  if (!btn || !list.contains(btn)) return;
+  // 确保点击的是我们关心的 action 按钮
+  handle(btn.dataset.action);
+});
+// 即使点击在 button 内的 &lt;svg&gt; 上，closest 也能找到 action 按钮</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">live 集合避免轮询</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 动态列表，只拿 live HTMLCollection 引用一次
+const items = document.getElementsByClassName("item");
+// 插入新 item 后不需要重新查
+setTimeout(() =&gt; {
+  for (let i = 0; i &lt; items.length; i++) {  // 总是拿到最新数量
+    items[i].classList.add("loaded");
+  }
+}, 100);
+
+// ⚠ 如果 "加 class" 不会让元素脱离 .item，就没问题
+// 但如果 for 循环内 removeChild —— 死循环危险</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">全局快照 + 批量操作</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// querySelectorAll 返回 static，方便批处理而不担心 live 变化
+const allLinks = document.querySelectorAll("a[href^='http']");
+allLinks.forEach(link =&gt; {
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+});
+
+// 或数组方法
+[...document.querySelectorAll(".card")].filter(c =&gt; c.offsetTop &lt; 500);</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">跨 shadow DOM 查询</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// querySelector<strong>不能</strong>穿透 shadow root
+const shadowHost = document.querySelector("my-widget");
+shadowHost.querySelector("button");           // null（内部在 shadow 里）
+
+// 正确姿势
+shadowHost.shadowRoot.querySelector("button"); // ✓
+
+// ⚠ closed 模式的 shadow root 外部访问不到
+// Web Components 封装的强度由 mode 决定（详见 P7）</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">性能敏感：缓存查询结果</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// ❌ 每次 handler 都查一次
+button.addEventListener("click", () =&gt; {
+  document.querySelector(".modal").classList.remove("hidden");
+});
+
+// ✓ 查一次用多次
+const modal = document.querySelector(".modal");
+button.addEventListener("click", () =&gt; modal.classList.remove("hidden"));
+
+// DOM 查询即使是 querySelector 也不是零成本（~10-50μs）
+// 紧密循环 / 高频事件 handler 里要缓存</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-scoped-query">作用域查询工具</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 封装常见查询
+const $ = (sel, root = document) =&gt; root.querySelector(sel);
+const $$ = (sel, root = document) =&gt; [...root.querySelectorAll(sel)];
+
+// 用法
+const form = $("form");
+$$("input", form).forEach(i =&gt; i.disabled = true);
+
+// TS 带类型
+function $&lt;K extends keyof HTMLElementTagNameMap&gt;(tag: K): HTMLElementTagNameMap[K] | null;
+function $&lt;E extends Element = Element&gt;(sel: string, root?: ParentNode): E | null;</code></pre>
+        </div>
+
+        <h3 id="ex-ancestor-chain">向上找祖先</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 1. closest 直接满足
+el.closest("form");
+el.closest("[data-component]");
+
+// 2. 定制条件用 parentElement 循环
+function ancestorsWhile(el, predicate) {
+  const out = [];
+  while (el &amp;&amp; predicate(el)) {
+    out.push(el);
+    el = el.parentElement;
+  }
+  return out;
+}
+
+// 3. 找所有祖先到 root
+function ancestors(el) {
+  const out = [];
+  while (el &amp;&amp; el !== document.body) { out.push(el); el = el.parentElement; }
+  return out;
+}</code></pre>
+        </div>
+
+        <h3 id="ex-siblings">兄弟筛选</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 当前元素的所有兄弟（除自己）
+function siblings(el) {
+  return [...el.parentElement.children].filter(c =&gt; c !== el);
+}
+
+// 前面的兄弟
+function prevSiblings(el) {
+  const out = [];
+  while ((el = el.previousElementSibling)) out.push(el);
+  return out.reverse();
+}
+
+// 配合 CSS 选择器
+el.parentElement.querySelectorAll(":scope &gt; :not(.active)");</code></pre>
+        </div>
+
+        <h3 id="ex-range">Range 实现高亮</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 用 CSS Custom Highlight API（ES2024 / CSS Highlight）
+if (CSS.highlights) {
+  const ranges = [];
+  // 在文档里找 keyword 的所有位置（简化）
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    const idx = node.textContent.indexOf("重点");
+    if (idx &gt;= 0) {
+      const range = new Range();
+      range.setStart(node, idx);
+      range.setEnd(node, idx + "重点".length);
+      ranges.push(range);
+    }
+  }
+  const highlight = new Highlight(...ranges);
+  CSS.highlights.set("keyword-highlight", highlight);
+  // CSS: ::highlight(keyword-highlight) { background: yellow; }
+}
+// 不用修改 DOM，纯 CSS 层高亮！</code></pre>
+        </div>
+
+        <!-- 05 陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">live 集合在循环中修改 → 死循环</div>
+          <p>
+            <code
+              >const as = document.getElementsByTagName("a"); for (let i=0; i&lt;as.length; i++)
+              as[i].cloneNode().appendTo(...)</code
+            >
+            —— 克隆的 a 也会被 collection 包含 → 死循环。解决：<code>[...as]</code> 或用 querySelectorAll。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>el.querySelectorAll("&gt;div")</code> 不工作</div>
+          <p>子元素选择器 <code>&gt;</code> 必须有左操作数。用 <code>:scope &gt; div</code>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">HTMLCollection 不能 forEach</div>
+          <p>
+            <code>document.getElementsByTagName("div").forEach</code> → TypeError。只能 for-of 或
+            <code>[...coll].forEach</code>。要方法链用 querySelectorAll（NodeList 有 forEach）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>querySelectorAll</code> 结果是 static snapshot</div>
+          <p>
+            调用时生成快照，后续 DOM 变化不反映。优点是可预测、可排序；缺点是要手动重新查。vs
+            <code>getElementsByClassName</code> 的 live 行为。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">ID 含特殊字符</div>
+          <p>
+            <code>getElementById("x:y")</code> 没问题；<code>querySelector("#x:y")</code> 失败（: 是伪类）。要
+            <code>querySelector("#x\\:y")</code> 转义。用 <code>CSS.escape(id)</code> 通用转义。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>el.children</code> vs <code>el.childNodes</code></div>
+          <p>children 仅 Element，childNodes 含文本/注释。写 DOM walker 时很容易用错。见 01 章对比表。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>closest</code> 返回自身</div>
+          <p>
+            <code>el.closest(".active")</code> 若 el 本身就 match，返回 el 自己（不是祖先）。想跳过自己用
+            <code>el.parentElement?.closest(...)</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">跨 Shadow DOM 查询失败</div>
+          <p>
+            <code>document.querySelector("my-widget button")</code> 找不到 shadow 里的 button。需要通过
+            <code>host.shadowRoot.querySelector("button")</code>。用 <code>::part</code> CSS 或显式暴露 API。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://dom.spec.whatwg.org/#parentnode" target="_blank" rel="noopener">DOM · ParentNode mixin</a>
+          </li>
+          <li>
+            <a
+              href="https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_selectors/Selectors_and_combinators"
+              target="_blank"
+              rel="noopener"
+              >MDN · CSS selectors</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://developer.mozilla.org/en-US/docs/Web/API/CSS_Custom_Highlight_API"
+              target="_blank"
+              rel="noopener"
+              >MDN · CSS Custom Highlight API</a
+            >
+          </li>
+          <li><strong>下一步</strong> → <a href="03-dom-mutation.html">03 · DOM 修改与安全</a>。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-dom-tree.html"
+            ><span class="label">← 上一章</span><span class="title">01 · DOM 树与 Node 接口</span></a
+          >
+          <a class="next" href="03-dom-mutation.html"
+            ><span class="label">下一章 →</span><span class="title">03 · DOM 修改与安全</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

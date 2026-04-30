@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>bind / call / apply · P2 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="Function.prototype.call/apply/bind 的规范行为、bound function exotic object、bind 在 new 调用下 this 被忽略的机制、柯里化与 partial application、手写 polyfill、Reflect.apply 替代方案。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P3 目录</a>
+          <a href="https://javascript.info/call-apply-decorators" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · 高阶语言</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-scope-tdz.html">01 · 作用域与 TDZ</a></li>
+          <li><a href="02-closures.html">02 · 闭包内存模型</a></li>
+          <li><a href="03-this.html">03 · this 四规则</a></li>
+          <li><a href="04-bind-call-apply.html">04 · bind / call / apply</a></li>
+          <li><a href="05-prototype.html">05 · 原型链</a></li>
+          <li><a href="06-class.html">06 · class 与继承</a></li>
+          <li><a href="07-private-decorators.html">07 · 私有字段与装饰器</a></li>
+          <li><a href="08-proxy-reflect.html">08 · Proxy 与 Reflect</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../02-fundamentals/index.html">P2 · 语言基础</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · 高阶语言</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>bind / call / apply</span>
+        </nav>
+
+        <h1>bind / call / apply</h1>
+        <p class="lead">
+          三个方法都住在 <code>Function.prototype</code> 上，都用于显式绑定 <code>this</code>。区别在 "<strong
+            >立即调用 vs 返回新函数</strong
+          >"、"<strong>参数列表 vs 参数数组</strong>"。本章给出判定表、手写 polyfill（帮你精确理解规范），以及箭头函数和
+          class field 下的边界情况。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~15 分钟</span>
+          <span><strong>前置</strong> 03 this 四规则</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/call-apply-decorators" target="_blank" rel="noopener"
+              >Decorators and forwarding, call/apply</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================= -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <table>
+          <thead>
+            <tr>
+              <th>方法</th>
+              <th>签名</th>
+              <th>行为</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>fn.call(thisArg, a, b, c)</code></td>
+              <td>this + 参数列表</td>
+              <td><strong>立即</strong>以 thisArg 为 this 调用</td>
+            </tr>
+            <tr>
+              <td><code>fn.apply(thisArg, [a, b, c])</code></td>
+              <td>this + 参数数组</td>
+              <td><strong>立即</strong>调用（同上）</td>
+            </tr>
+            <tr>
+              <td><code>fn.bind(thisArg, a, b)</code></td>
+              <td>this + 预设参数</td>
+              <td>返回<strong>新函数</strong>，调用时 this 永固定</td>
+            </tr>
+            <tr>
+              <td><code>Reflect.apply(fn, thisArg, args)</code></td>
+              <td>明确三要素</td>
+              <td>推荐替代 <code>fn.apply</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function greet(greeting, punctuation) {
+  return `${greeting}, ${this.name}${punctuation}`;
+}
+
+const user = { name: "Alice" };
+
+greet.call(user, "Hi", "!");      // "Hi, Alice!"  立即调用
+greet.apply(user, ["Hi", "!"]);   // "Hi, Alice!"  立即调用，参数数组
+const bound = greet.bind(user, "Hi");    // 返回新函数；this 和首参已冻结
+bound("!");                       // "Hi, Alice!"  之后补余下参数</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ============================================ -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="call-spec"><code>call</code> 与 <code>apply</code> 的规范流程</h3>
+        <ol>
+          <li>如果 <code>fn</code> 不是可调用对象 → TypeError。</li>
+          <li>
+            按规则设置执行上下文的 <code>this</code>（严格模式直接用 <code>thisArg</code>；非严格会把 null/undefined 变
+            globalThis，原始值装箱）。
+          </li>
+          <li>以参数列表 / 参数数组调用 <code>fn</code>。</li>
+          <li>返回 <code>fn</code> 的返回值。</li>
+        </ol>
+
+        <h3 id="bind-spec"><code>bind</code> 返回 bound function exotic object</h3>
+        <p><code>bind</code> 不是普通闭包，而是规范定义的特殊对象，有 3 个内部槽：</p>
+        <ul>
+          <li><code>[[BoundTargetFunction]]</code> —— 原始函数</li>
+          <li><code>[[BoundThis]]</code> —— 预设 this</li>
+          <li><code>[[BoundArguments]]</code> —— 预设参数数组</li>
+        </ul>
+        <p>被调用时：</p>
+        <ul>
+          <li>
+            普通调用 → 以 <code>[[BoundThis]]</code> 为 this，<code>[[BoundArguments]]</code> + 新参数一起传给 target。
+          </li>
+          <li>
+            <code>new</code> 调用 → <strong>忽略 <code>[[BoundThis]]</code></strong
+            >，以新对象为 this，参数仍拼接。
+          </li>
+        </ul>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function User(name) { this.name = name; }
+const BoundUser = User.bind({ x: 1 }, "Alice");
+
+BoundUser();                    // undefined（返回 undefined）；this 是 {x:1}, name = "Alice"
+new BoundUser();                // { name: "Alice" }  ← bind 的 this 被 new 忽略
+
+BoundUser.prototype;            // undefined ← bound function 无 prototype
+new BoundUser() instanceof User;// true       ← 但 instanceof 正确
+                                // （因为 new 时用的还是 User.prototype）</code></pre>
+        </div>
+
+        <h3 id="bind-is-one-way">多次 bind 无效</h3>
+        <p>
+          <code>f1 = fn.bind(A); f2 = f1.bind(B); f2()</code> 时 this 仍是 <code>A</code>。规范原因：bound function
+          调用时以自己的 <code>[[BoundThis]]</code> 为 this —— 所以二次 bind 时 <code>[[BoundThis]]</code> 确实被设为
+          B，但内部调用 target（是 f1）时又以 f1 的 <code>[[BoundThis]]</code>（A）覆盖。
+        </p>
+        <p>设计哲学：<strong>bind 是单向冻结</strong>。需要不同 this 就从原始函数重新 bind。</p>
+
+        <h3 id="arrow-resist">箭头函数不受 call/apply/bind 影响</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const arrow = () =&gt; this;
+arrow.call({ x: 1 });           // 外层 this
+arrow.bind({ x: 1 })();         // 外层 this
+
+// 因为箭头函数的 [[ThisMode]] 是 "lexical"，不会设置自己的 this
+// call/apply/bind 试图设置的 this 被无视</code></pre>
+        </div>
+
+        <h3 id="reflect-apply"><code>Reflect.apply</code> 的优势</h3>
+        <p>
+          <code>fn.apply(thisArg, args)</code> 有个历史问题：如果 <code>fn</code> 自身有个叫
+          <code>apply</code> 的属性被覆盖（罕见但可能），就乱套了。<code>Reflect.apply(fn, thisArg, args)</code>
+          直接调用规范算法，不依赖 <code>fn.apply</code> 属性：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 恶意对象可能遮蔽 apply
+const evil = function () {};
+evil.apply = () =&gt; "hacked";
+evil.apply(null, []);           // "hacked"
+Reflect.apply(evil, null, []);  // 仍按 Function.prototype.apply 调用</code></pre>
+        </div>
+
+        <!-- 03 应用场景 =========================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">借用方法：把 Array 方法用在 Array-like 上</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 把 arguments 转数组（ES6 前的标准做法）
+function fn() {
+  const args = Array.prototype.slice.call(arguments);
+  return args.map(x =&gt; x * 2);
+}
+// 现在应该用 rest 参数：function fn(...args) { ... }
+
+// 精确类型检查
+Object.prototype.toString.call(new Date());   // "[object Date]"
+Object.prototype.toString.call([]);           // "[object Array]"
+Object.prototype.toString.call(new Map());    // "[object Map]"</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">partial application（部分应用）</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">function request(method, url, body) { /* ... */ }
+
+// 用 bind 预设方法
+const get  = request.bind(null, "GET");
+const post = request.bind(null, "POST");
+const put  = request.bind(null, "PUT");
+
+get("/api/users");               // request("GET", "/api/users")
+post("/api/users", { name });
+
+// 如果不用 this，null 作为 thisArg；现代替代用箭头函数
+const get2 = (url, body) =&gt; request("GET", url, body);
+// 闭包版本避免了 bound function 的特殊性，且性能相似</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">事件处理器稳定 this（传统 class 组件）</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">class Toggle extends Component {
+  constructor(props) {
+    super(props);
+    this.handleClick = this.handleClick.bind(this);   // 构造器里一次 bind
+  }
+  handleClick() { /* this 安全 */ }
+  render() {
+    return &lt;button onClick={this.handleClick}&gt;...&lt;/button&gt;;
+    // ❌ onClick={this.handleClick.bind(this)}  每次渲染创建新函数 → 子组件不必要重渲染
+  }
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">最大/最小值的 apply 技巧（已过时）</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// ES6 前
+Math.max.apply(null, [1, 2, 3]);       // 3
+
+// ES6+ 用 spread，语义更清
+Math.max(...[1, 2, 3]);                // 3
+
+// ⚠ 两者都有"参数过多（&gt; ~64k）栈溢出"的引擎限制
+// 大数组求最值用 reduce
+arr.reduce((m, v) =&gt; v &gt; m ? v : m, -Infinity);</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 =========================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-mycall">手写 myCall / myApply</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">Function.prototype.myCall = function (thisArg, ...args) {
+  thisArg = thisArg ?? globalThis;
+  // 利用"对象方法调用的 this 是对象"这一规则
+  const key = Symbol("fn");
+  thisArg[key] = this;
+  const result = thisArg[key](...args);
+  delete thisArg[key];
+  return result;
+};
+
+Function.prototype.myApply = function (thisArg, args = []) {
+  return this.myCall(thisArg, ...args);
+};
+
+function greet(g) { return `${g}, ${this.name}`; }
+greet.myCall({ name: "A" }, "Hi");         // "Hi, A"</code></pre>
+        </div>
+
+        <h3 id="ex-mybind">手写 myBind（考虑 new 场景）</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">Function.prototype.myBind = function (thisArg, ...preset) {
+  const target = this;
+  function BoundFn(...later) {
+    // new 调用时：new.target 不为空 → this 不应被 thisArg 覆盖
+    const actualThis = new.target ? this : thisArg;
+    return target.apply(actualThis, [...preset, ...later]);
+  }
+  // 保持原型链，让 new BoundFn() instanceof target 成立
+  if (target.prototype) {
+    BoundFn.prototype = Object.create(target.prototype);
+  }
+  return BoundFn;
+};
+
+function User(name) { this.name = name; }
+const F = User.myBind(null, "Alice");
+new F() instanceof User;                    // true
+new F().name;                               // "Alice"</code></pre>
+        </div>
+
+        <h3 id="ex-curry">基于 bind 的柯里化</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function curry(fn) {
+  return function curried(...args) {
+    return args.length &gt;= fn.length
+      ? fn(...args)
+      : curried.bind(null, ...args);
+  };
+}
+
+const add = (a, b, c) =&gt; a + b + c;
+const addCurried = curry(add);
+addCurried(1)(2)(3);          // 6
+addCurried(1, 2)(3);          // 6
+addCurried(1)(2, 3);          // 6
+addCurried(1, 2, 3);          // 6</code></pre>
+        </div>
+
+        <h3 id="ex-throttle-call">带参数的 decorator</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function withRetry(fn, maxAttempts = 3) {
+  return async function (...args) {
+    let lastErr;
+    for (let i = 0; i &lt; maxAttempts; i++) {
+      try {
+        return await fn.apply(this, args);    // ← 用 apply 保留 this
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr;
+  };
+}
+
+class API {
+  async fetchUser(id) { /* ... */ }
+}
+API.prototype.fetchUser = withRetry(API.prototype.fetchUser);</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 =========================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>bind</code> 只固化一次 this</div>
+          <p>
+            <code>fn.bind(A).bind(B)()</code> 的 this 是 A，不是 B。设计如此。真的需要改，用"解包"：存原函数引用 + 重新
+            bind。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>bind</code> 不能改变箭头函数的 this</div>
+          <p>
+            箭头函数无 <code>[[ThisMode]] = "strict"/"global"</code>，<code>call/apply/bind</code> 的 thisArg
+            传进去不生效。箭头函数<strong>永远</strong>用定义时的词法 this。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>apply</code> 参数数组过长触发 RangeError</div>
+          <p>
+            老引擎 <code>Math.max.apply(null, bigArr)</code> 在几万元素时会抛 "too many arguments"。ES2015
+            修复了规范，现代引擎单调用可接收 ~65536+ 个参数。但仍不推荐。大数组用 <code>reduce</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">每次 <code>bind</code> 都返回<strong>新函数</strong></div>
+          <p>
+            <code>onClick={this.fn.bind(this)}</code> 在 render 里写，每次 render 都是新引用 → 子组件浅比较不过 →
+            不必要重渲染。React 里用 class field 箭头 / useCallback / 构造器里绑一次。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>new bound()</code> 忽略 bind 的 this，保留参数</div>
+          <p>上文讲过。工程代码里"bind + new"组合少见，但用"工厂 + 预设参数"的写法会遇到。知道规则就行。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>call(null, ...)</code> 在非严格模式变 globalThis</div>
+          <p>
+            非严格模式下 <code>fn.call(null, args)</code> 的 this 被"转换"为 globalThis（规范规定）。严格模式保留
+            null。ESM 自动严格 → 现代代码不用担心，但混严格/非严格场景要小心。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>fn.call(0)</code> 的装箱</div>
+          <p>
+            非严格模式下 <code>thisArg</code> 是原始值会被装箱成 wrapper 对象。<code>fn.call(1, ...)</code> 里的 this 是
+            <code>new Number(1)</code>，<code>typeof this === "object"</code>。严格模式保留原始值。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">bound function 的 <code>.length</code> / <code>.name</code></div>
+          <p>
+            <code>bound.length</code> 是"原函数长度 - 预设参数数"（下限 0）。<code>bound.name</code> 是
+            <code>"bound " + original.name</code>。调试时别惊讶。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================ -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-function.prototype.bind" target="_blank" rel="noopener"
+              >ECMA-262 · Function.prototype.bind</a
+            >
+          </li>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-bound-function-exotic-objects" target="_blank" rel="noopener"
+              >ECMA-262 · 10.4.1 Bound Function Exotic Objects</a
+            >
+          </li>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-reflect.apply" target="_blank" rel="noopener"
+              >ECMA-262 · Reflect.apply</a
+            >
+          </li>
+          <li>
+            <strong>下一步</strong> → <a href="05-prototype.html">05 · 原型链</a>。上面多次提到的
+            <code>prototype</code>、<code>instanceof</code>、<code>Object.create</code> 的完整故事。
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="03-this.html"
+            ><span class="label">← 上一章</span><span class="title">03 · this 四规则</span></a
+          >
+          <a class="next" href="05-prototype.html"
+            ><span class="label">下一章 →</span><span class="title">05 · 原型链</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

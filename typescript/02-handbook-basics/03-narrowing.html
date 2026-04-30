@@ -1,0 +1,893 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>03 · Narrowing 与控制流分析 · Part 1 · TypeScript 深度学习</title>
+    <meta
+      name="description"
+      content="TypeScript 在每一行代码维护一份「当前类型环境」。本章拆解七大 narrowing 手段、type predicate / assertion function 的承诺机制、discriminated union 与 never 兜底实现 exhaustive check、TS 5.5 推断式 type predicate。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%233178c6'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETS%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>TypeScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.62 0.13 245); color: #fff">TS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">TS 首页</a>
+          <a href="index.html">Part 2 目录</a>
+          <a href="https://www.typescriptlang.org/docs/handbook/2/narrowing.html" target="_blank" rel="noopener"
+            >原站</a
+          >
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Part 2 · Handbook 基础</h3>
+        <ul>
+          <li><a href="index.html">Part 概览</a></li>
+          <li><a href="01-basics.html">01 · The Basics 与类型系统本质</a></li>
+          <li><a href="02-everyday-types.html">02 · Everyday Types</a></li>
+          <li><a href="03-narrowing.html">03 · Narrowing 与控制流分析</a></li>
+          <li><a href="04-functions.html">04 · Functions</a></li>
+          <li><a href="05-objects.html">05 · Object Types</a></li>
+          <li><a href="06-classes.html">06 · Classes</a></li>
+        </ul>
+        <h3>其他 Part</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">Part 1 · TypeScript 是谁</a></li>
+          <li><a href="../03-type-manipulation/index.html">Part 3 · 类型操作</a></li>
+          <li><a href="../04-reference/index.html">Part 4 · Reference</a></li>
+          <li><a href="../05-project/index.html">Part 5 · 工程化</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TypeScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Part 2 · Handbook 基础</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>03 · Narrowing 与控制流分析</span>
+        </nav>
+
+        <h1>03 · Narrowing 与控制流分析</h1>
+        <p class="lead">
+          Narrowing 是 TS 比 JS 多出来的<strong>最大智能</strong> —— 在每一行代码上，TS 都根据前面的判断<strong>自动收窄</strong>变量类型。<code>if (x === null) return; x.foo()</code> 中第二行的 <code>x</code> 已经是非空类型，无需再判空。这一章拆解 7 种 narrowing 手段、自定义 type guard 的承诺机制、discriminated union 与 <code>never</code> 兜底如何实现"漏一个 case 编译期就报错"，以及 TS 5.5 引入的推断式 type predicate。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~35 分钟</span>
+          <span><strong>前置</strong> <a href="02-everyday-types.html">02 Everyday Types</a></span>
+          <span
+            ><strong>对应 typescriptlang.org</strong>
+            <a href="https://www.typescriptlang.org/docs/handbook/2/narrowing.html" target="_blank" rel="noopener"
+              >Handbook · Narrowing</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>
+          一句话定义 narrowing：<strong>TS 在 AST 的每个节点位置都维护一份「当前类型快照」</strong>。当你写 <code>if</code> / <code>typeof</code> / <code>instanceof</code> / <code>x !== null</code> 等判断时，TS 在 then 分支和 else 分支分别推出更窄的类型。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript · 最小例子</span>
+          <pre class="code"><code class="lang-ts">function print(value: string | number | null) {
+  // 此处 value: string | number | null
+
+  if (value === null) {
+    return;        // 触发 narrowing：return 后 value 不再是 null
+  }
+  // 此处 value: string | number
+
+  if (typeof value === "string") {
+    value.toUpperCase();    // value: string
+  } else {
+    value.toFixed(2);       // value: number（自动排除 string）
+  }
+}</code></pre>
+        </div>
+        <p>
+          没有 narrowing，你每次访问属性都得手写 type guard 或 <code>!</code> 断言。Narrowing 是让 TS 能写得「像 JS 一样自然」的关键技术。
+        </p>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+        <p class="lead-sub">
+          要写出"TS 自动给力"的代码，必须理解它在每个判断点做了什么、信任什么、在哪里会失效。
+        </p>
+
+        <h3>七大 narrowing 手段</h3>
+        <table>
+          <thead>
+            <tr><th>手段</th><th>例子</th><th>触发条件</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>typeof</code></td>
+              <td><code>typeof x === "string"</code></td>
+              <td>判断原始类型（含 <code>"undefined"</code> / <code>"object"</code> / <code>"function"</code>）</td>
+            </tr>
+            <tr>
+              <td>truthiness</td>
+              <td><code>if (x)</code> / <code>if (!x)</code></td>
+              <td>排除 falsy 值（<code>0</code> / <code>""</code> / <code>null</code> / <code>undefined</code> / <code>NaN</code>）</td>
+            </tr>
+            <tr>
+              <td>equality</td>
+              <td><code>x === y</code> / <code>x == null</code></td>
+              <td>比较缩窄两侧；<code>== null</code> 同时排 null/undefined</td>
+            </tr>
+            <tr>
+              <td><code>in</code></td>
+              <td><code>"foo" in x</code></td>
+              <td>对象有特定属性时进入分支</td>
+            </tr>
+            <tr>
+              <td><code>instanceof</code></td>
+              <td><code>x instanceof Date</code></td>
+              <td>类的实例判断（依赖运行时构造器）</td>
+            </tr>
+            <tr>
+              <td>assignment</td>
+              <td><code>x = "abc"</code></td>
+              <td>赋值后 x 类型收窄到赋的值类型</td>
+            </tr>
+            <tr>
+              <td>control flow</td>
+              <td><code>if (...) return; ... </code></td>
+              <td>提前返回 / throw 后续代码自动 narrow</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          这 7 个不是孤立机制，是同一套 control flow analysis 的不同入口：每个判断都把变量类型分成"满足"和"不满足"两支。
+        </p>
+
+        <h3>control flow analysis：每个语句位置一张类型快照</h3>
+        <p>
+          TS 在 AST 上对每个变量维护一个<strong>类型快照表</strong>。每经过一个会改变快照的节点，TS 更新它。这不是"代码分析"，而是"在每个 AST 节点都有一份类型环境"。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript · 类型快照演示</span>
+          <pre class="code"><code class="lang-ts">function process(input: string | number | null) {
+  // 行 1：input: string | number | null
+  if (input == null) return;
+  // 行 2：input: string | number（== null 同时排 null/undefined）
+
+  if (typeof input === "string") {
+    // 行 3：input: string
+    input = input.length;
+    // 行 4：input: number（赋值改变类型）
+  }
+  // 行 5：input: number
+  return input.toFixed(2);
+}</code></pre>
+        </div>
+        <p>
+          注意第 4 行：赋值<strong>改变了变量类型</strong>。从此处往后，<code>input</code> 在 TS 看来就是 <code>number</code>，即使变量声明是 <code>string | number | null</code>。这就是 narrowing 的"流"性质。
+        </p>
+
+        <h3>truthiness 的 5 个 falsy 值</h3>
+        <p>
+          <code>if (x)</code> 排除 JS 所有 falsy 值：<code>0</code> / <code>""</code> / <code>null</code> / <code>undefined</code> / <code>NaN</code>（外加 <code>0n</code> / <code>document.all</code>）。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">function getLength(s: string | null | undefined): number {
+  if (!s) return 0;       // 同时排 null/undefined/""
+  return s.length;        // s: string（注意：仍可能是 ""，但 .length 没问题）
+}</code></pre>
+        </div>
+        <p>
+          但 truthiness narrow 有个常被忽略的陷阱：<code>0</code> 是 falsy。<code>if (count)</code> 当 count 为 0 时进 false 分支，可能不是你想要的：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">function showBadge(count: number | undefined) {
+  // ❌ count = 0 时也走默认 → 不显示 0 的徽章
+  if (count) return &lt;Badge&gt;{count}&lt;/Badge&gt;;
+  return null;
+}
+
+// ✅ 显式判 undefined
+if (count !== undefined) return &lt;Badge&gt;{count}&lt;/Badge&gt;;</code></pre>
+        </div>
+
+        <h3><code>== null</code> 是少数推荐使用 <code>==</code> 的场景</h3>
+        <p>
+          一般规则是 <code>===</code>，但 <code>== null</code> / <code>!= null</code> 同时排 <code>null</code> 和 <code>undefined</code>，这是它的特殊价值。TS 也理解这种 narrowing：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">function f(x: string | null | undefined) {
+  if (x == null) return;
+  x.toUpperCase();  // x: string</code></pre>
+        </div>
+
+        <h3>discriminated union：把"运行时分支"和"类型分支"合一</h3>
+        <p>
+          这是 TS 类型系统设计的<strong>核心模式</strong>。其想法：给 union 的每个成员加一个<strong>共享名字、不同字面量值</strong>的字段（"鉴别器" / discriminant），让一次 <code>switch</code> 既做运行时分支判断、又做类型 narrow。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; size: number }
+  | { kind: "triangle"; base: number; height: number };
+
+function area(s: Shape): number {
+  switch (s.kind) {
+    case "circle":
+      return Math.PI * s.radius ** 2;       // s: { kind: "circle"; radius: number }
+    case "square":
+      return s.size ** 2;                   // s: { kind: "square"; size: number }
+    case "triangle":
+      return (s.base * s.height) / 2;
+  }
+}</code></pre>
+        </div>
+        <p>
+          没有 discriminant 的 union 也能工作（在分支里用 <code>"radius" in s</code> narrow），但<strong>有 discriminant 的版本表达力更强、性能更好、IDE 跳转更准</strong>。
+        </p>
+        <p>
+          应用范围比想象的广：
+        </p>
+        <ul>
+          <li>Redux / useReducer 的 action：<code>{ type: "INCREMENT" } | { type: "SET", payload: number }</code></li>
+          <li>Result / Either：<code>{ ok: true, value: T } | { ok: false, error: E }</code></li>
+          <li>异步数据 4 态：<code>{ status: "idle" } | { status: "loading" } | { status: "success", data: T } | { status: "error", error: E }</code></li>
+          <li>AST 节点：<code>{ kind: "BinaryOp", left, right, op } | { kind: "Number", value } | ...</code></li>
+        </ul>
+
+        <h3><code>never</code> 是兜底哨兵：让"漏一个 case"编译期就报错</h3>
+        <p>
+          <code>never</code> 是一个奇怪的类型：<strong>没有任何值属于 never</strong>。它在 narrowing 中的用法叫 <strong>exhaustiveness checking</strong>（穷尽检查）：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; size: number };
+
+function area(s: Shape): number {
+  switch (s.kind) {
+    case "circle": return Math.PI * s.radius ** 2;
+    case "square": return s.size ** 2;
+    default:
+      // 此处 s 已经被排除了所有已知 case，类型是 never
+      const _exhaustive: never = s;
+      throw new Error(`Unhandled shape: ${JSON.stringify(s)}`);
+  }
+}
+
+// 后来加了一个 case
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; size: number }
+  | { kind: "triangle"; base: number; height: number };  // 新增
+
+// 立刻在 area() 的 default 分支报错：
+//   Type '{ kind: "triangle"; base: number; height: number }' is not assignable to type 'never'
+// → 编译期就提醒你忘了处理新 case</code></pre>
+        </div>
+        <p>
+          <strong>这是 TS 静态保障最强的一招</strong>。没有 never 兜底，新增 union 成员时，所有处理 union 的代码都需要手动找一遍 —— 必漏。有 never 兜底，编译就帮你抓出所有遗漏点。
+        </p>
+
+        <h3>type predicate：把运行时检查"承诺"给类型系统</h3>
+        <p>
+          内置 narrow 不够用时，可以写自定义函数告诉 TS"这个值确实是某个类型"：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">interface Cat { meow(): void }
+interface Dog { bark(): void }
+
+function isCat(pet: Cat | Dog): pet is Cat {
+  return "meow" in pet;
+}
+
+function play(pet: Cat | Dog) {
+  if (isCat(pet)) {
+    pet.meow();   // pet: Cat
+  } else {
+    pet.bark();   // pet: Dog
+  }
+}</code></pre>
+        </div>
+        <p>
+          关键是返回类型 <code>pet is Cat</code>（type predicate）。它告诉 TS：当此函数返回 <code>true</code> 时，参数 <code>pet</code> 一定是 <code>Cat</code>。
+        </p>
+        <p>
+          但<strong>这是开发者的承诺</strong> —— TS 不验证函数体内逻辑是否真的对应。撒谎就是埋雷：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript · 危险</span>
+          <pre class="code"><code class="lang-ts">function isCat(pet: Cat | Dog): pet is Cat {
+  return true;   // 永远返回 true 也通过编译
+}
+
+function play(pet: Cat | Dog) {
+  if (isCat(pet)) {
+    pet.meow();   // pet: Cat（TS 信任）→ 但 pet 真有可能是 Dog
+  }                //                       → 运行时 TypeError
+}</code></pre>
+        </div>
+        <p>
+          <strong>规则</strong>：写 type predicate 时，<strong>函数体的实际逻辑必须真的能保证返回 true 时确实是该类型</strong>。这是契约，不是 hint。
+        </p>
+
+        <h3>TS 5.5：推断式 type predicate</h3>
+        <p>
+          很常见的痛点：<code>arr.filter(x =&gt; x != null)</code> 后类型还是 <code>(T | null)[]</code>，因为 <code>filter</code> 的回调返回 <code>boolean</code> 不是 type predicate。
+        </p>
+        <p>
+          TS 5.5 起，<strong>编译器会从函数体推断 type predicate</strong>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">const xs: (string | null)[] = ["a", null, "b"];
+
+// TS &lt; 5.5
+const ys = xs.filter(x =&gt; x !== null);
+//    ^? (string | null)[]   仍带 null
+
+// TS 5.5+
+const ys = xs.filter(x =&gt; x !== null);
+//    ^? string[]             自动推 type predicate
+
+// 不需要的话仍可手写
+const ys = xs.filter((x): x is string =&gt; x !== null);</code></pre>
+        </div>
+        <p>
+          推断生效的条件：函数体只有一个 return，且 return 表达式是简单的 narrowing 谓词（<code>x !== null</code> / <code>typeof x === "string"</code> 等）。复杂逻辑仍需手写 <code>x is T</code>。
+        </p>
+
+        <h3>assertion function：抛错版本的 type predicate</h3>
+        <p>
+          有时不想分支 if/else，而是"如果不是预期类型就抛错"。这时用 <code>asserts x is T</code>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">function assertIsString(x: unknown): asserts x is string {
+  if (typeof x !== "string") {
+    throw new Error(`Expected string, got ${typeof x}`);
+  }
+}
+
+function process(input: unknown) {
+  assertIsString(input);
+  // 此处 input: string（如果 assert 没 throw，TS 信任收窄）
+  return input.toUpperCase();
+}</code></pre>
+        </div>
+        <p>
+          签名 <code>asserts x is T</code> 告诉 TS："如果此函数<strong>没有 throw</strong>，那么调用之后 x 一定是 T"。同样是开发者承诺，函数体必须真的在不匹配时 throw。
+        </p>
+        <p>
+          组合用法：assertion function + 通用 helper：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">function assertExists&lt;T&gt;(value: T | undefined | null, msg: string): asserts value is T {
+  if (value == null) throw new Error(msg);
+}
+
+const env = process.env.DATABASE_URL;  // string | undefined
+assertExists(env, "DATABASE_URL is required");
+// env 此处类型是 string</code></pre>
+        </div>
+
+        <h3>narrowing 的失效边界</h3>
+        <p>
+          narrowing 不是无条件的。三个常见失效点：
+        </p>
+        <ol>
+          <li>
+            <strong>异步回调中的闭包</strong>：narrow 后的变量被异步函数捕获时，TS 假设它在等待期间可能被改变，回到原 union 类型
+            <div class="code-block">
+              <span class="code-label">typescript</span>
+              <pre class="code"><code class="lang-ts">let value: string | null = "abc";
+if (value !== null) {
+  setTimeout(() =&gt; {
+    value.toUpperCase();   // ❌ 'value' is possibly 'null'
+    //  TS：你的 narrow 不延伸进异步闭包
+  }, 100);
+}</code></pre>
+            </div>
+          </li>
+          <li>
+            <strong>函数调用打破 narrow</strong>：调用任何函数（包括方法）后，TS 假设它可能改了变量，回到原类型
+            <div class="code-block">
+              <span class="code-label">typescript</span>
+              <pre class="code"><code class="lang-ts">class Container {
+  value: string | null = null;
+  process() {
+    if (this.value !== null) {
+      doSomething();
+      // 此处 this.value 又变回 string | null（doSomething 可能改了它）
+    }
+  }
+}</code></pre>
+            </div>
+          </li>
+          <li>
+            <strong>解构后无法 narrow</strong>：discriminated union 字段被解构出来后，narrow 链断裂
+            <div class="code-block">
+              <span class="code-label">typescript</span>
+              <pre class="code"><code class="lang-ts">type R = { ok: true; value: number } | { ok: false; error: string };
+
+function f(r: R) {
+  const { ok, value, error } = r;   // ❌ 解构破坏了 ok 和 value/error 的关联
+
+  if (ok) {
+    return value;    // value: number | undefined（不再精确）
+  }
+}</code></pre>
+            </div>
+          </li>
+        </ol>
+        <p>
+          规避：长 narrow 的代码块用临时 const、不解构 discriminated union、对异步闭包提前用 const 锁定快照值。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · Result 模式（替代 throw）</h3>
+          <p>
+            把可能失败的操作返回 Result 而不抛错：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">type Result&lt;T, E = Error&gt; =
+  | { ok: true; value: T }
+  | { ok: false; error: E };
+
+async function fetchUser(id: string): Promise&lt;Result&lt;User, "not_found" | "network"&gt;&gt; {
+  try {
+    const res = await fetch(`/api/users/${id}`);
+    if (res.status === 404) return { ok: false, error: "not_found" };
+    if (!res.ok) return { ok: false, error: "network" };
+    return { ok: true, value: await res.json() };
+  } catch {
+    return { ok: false, error: "network" };
+  }
+}
+
+// 调用方
+const r = await fetchUser("u_1");
+if (!r.ok) {
+  if (r.error === "not_found") return &lt;NotFound /&gt;;
+  return &lt;NetworkError /&gt;;
+}
+return &lt;Profile user={r.value} /&gt;;</code></pre>
+          </div>
+          <p>
+            优点：错误显式出现在类型里，调用方必须处理；error union 也是 literal，可以精确分支。比 try/catch 更可控。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · Redux / useReducer action</h3>
+          <p>
+            discriminated union 是 reducer 的标配：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">type State = { count: number };
+
+type Action =
+  | { type: "increment" }
+  | { type: "decrement" }
+  | { type: "set"; payload: number }
+  | { type: "reset" };
+
+function reducer(state: State, action: Action): State {
+  switch (action.type) {
+    case "increment": return { count: state.count + 1 };
+    case "decrement": return { count: state.count - 1 };
+    case "set":       return { count: action.payload };  // payload 自动收窄
+    case "reset":     return { count: 0 };
+    default:
+      const _: never = action;   // 哨兵
+      return state;
+  }
+}</code></pre>
+          </div>
+          <p>
+            将来加新 action type，TS 会在 reducer 的 default 分支立刻报错，提醒你处理。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · Array.filter 过滤掉 null/undefined</h3>
+          <p>
+            前端常见需求：从可能含 null 的列表里筛出有效元素。TS 5.5 之前需要显式 type predicate：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">const ids: (string | null)[] = ["1", null, "3"];
+
+// TS &lt; 5.5：手写 predicate
+const valid: string[] = ids.filter((x): x is string =&gt; x !== null);
+
+// TS 5.5+：自动推断
+const valid: string[] = ids.filter(x =&gt; x !== null);
+
+// 也可以用 Array.prototype.flatMap 替代
+const valid: string[] = ids.flatMap(x =&gt; (x !== null ? [x] : []));</code></pre>
+          </div>
+          <p>
+            <code>flatMap</code> 配合 <code>x ? [x] : []</code> 是不少团队的"安全 filter" 写法 —— 不依赖 type predicate 推断，在所有 TS 版本下都正确。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>typeof 全谱</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// typeof 返回的字符串是这 8 个之一
+type Typeof =
+  | "string"
+  | "number"
+  | "bigint"
+  | "boolean"
+  | "symbol"
+  | "undefined"
+  | "function"
+  | "object";  // 注意：null 也是 "object"！
+
+function describe(x: unknown) {
+  switch (typeof x) {
+    case "string":   return `str of length ${x.length}`;
+    case "number":   return `num ${x.toFixed(2)}`;
+    case "function": return `fn with ${x.length} params`;
+    case "object":
+      // 注意：x 此处可能是 null
+      if (x === null) return "null";
+      if (Array.isArray(x)) return `array of ${x.length}`;
+      return "object";
+    default:
+      return typeof x;
+  }
+}</code></pre>
+        </div>
+
+        <h3>in 操作符 narrow</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">type Bird = { fly(): void; sing(): void };
+type Fish = { swim(): void; layEggs(): void };
+
+function move(animal: Bird | Fish) {
+  if ("fly" in animal) {
+    animal.fly();    // animal: Bird
+  } else {
+    animal.swim();   // animal: Fish
+  }
+}</code></pre>
+        </div>
+
+        <h3>instanceof narrow</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">function getDate(value: Date | string): number {
+  if (value instanceof Date) {
+    return value.getTime();   // value: Date
+  }
+  return Date.parse(value);   // value: string
+}
+
+// instanceof 也用于自定义类
+class HttpError extends Error {
+  constructor(public status: number, message: string) { super(message); }
+}
+
+function handleError(e: unknown) {
+  if (e instanceof HttpError) {
+    console.log(e.status);
+  } else if (e instanceof Error) {
+    console.log(e.message);
+  } else {
+    console.log("unknown error", e);
+  }
+}</code></pre>
+        </div>
+
+        <h3>discriminated union + exhaustive check 完整模板</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">type AsyncState&lt;T, E = Error&gt; =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "success"; data: T }
+  | { status: "error"; error: E };
+
+function unreachable(x: never): never {
+  throw new Error(`Unreachable: ${JSON.stringify(x)}`);
+}
+
+function render&lt;T&gt;(state: AsyncState&lt;T&gt;) {
+  switch (state.status) {
+    case "idle":    return null;
+    case "loading": return &lt;Spinner /&gt;;
+    case "success": return &lt;Data data={state.data} /&gt;;
+    case "error":   return &lt;ErrorMsg error={state.error} /&gt;;
+    default:        return unreachable(state);  // 类型层兜底
+  }
+}</code></pre>
+        </div>
+
+        <h3>type predicate 实用模板</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 通用 non-null
+function isNonNullable&lt;T&gt;(x: T): x is NonNullable&lt;T&gt; {
+  return x != null;
+}
+
+// 数组用法
+const valid = items.filter(isNonNullable);  // 自动收窄
+
+// 类型谓词配合 Object.entries
+function isStringEntry(entry: [string, unknown]): entry is [string, string] {
+  return typeof entry[1] === "string";
+}
+
+const stringFields = Object.entries(obj).filter(isStringEntry);
+// stringFields: [string, string][]</code></pre>
+        </div>
+
+        <h3>assertion function vs throw 风格对比</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// ❌ 不带 asserts 标注：调用后类型未变窄
+function check(x: unknown) {
+  if (typeof x !== "string") throw new Error("not a string");
+}
+const s: unknown = "abc";
+check(s);
+s.toUpperCase();   // ❌ Object is of type 'unknown'
+
+// ✅ 带 asserts：调用后类型自动收窄
+function check(x: unknown): asserts x is string {
+  if (typeof x !== "string") throw new Error("not a string");
+}
+const s: unknown = "abc";
+check(s);
+s.toUpperCase();   // ✓ s: string</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · typeof null === "object"</div>
+          <p>
+            JS 的历史包袱：<code>typeof null</code> 不是 <code>"null"</code> 而是 <code>"object"</code>。TS 不会替你修复：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">function f(x: object | string) {
+  if (typeof x === "object") {
+    // x: object — 但运行时可能是 null（如果 x 类型也允许 null 的话）
+    x.toString();
+  }
+}
+
+// 推荐写法
+if (typeof x === "object" &amp;&amp; x !== null) {
+  // 真的非空对象
+}</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：处理 <code>object | null</code> 时务必显式判 null。或开 <code>strictNullChecks</code> 让 TS 把 null 单列出来强制处理。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · narrowing 不延伸进异步闭包</div>
+          <p>
+            最大的 narrow 失效场景。TS 假设异步回调执行时，外层变量可能已经被其他代码改了：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">class Search {
+  query: string | null = null;
+
+  async run() {
+    if (this.query !== null) {
+      const result = await fetch(`/api/q?s=${this.query}`);
+      this.query.toUpperCase();   // ❌ 'this.query' is possibly 'null'
+      //                          await 之间 query 可能被另一次调用改成 null
+    }
+  }
+}</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：narrow 后立刻把值复制到本地 const：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">async run() {
+  const q = this.query;
+  if (q !== null) {
+    const result = await fetch(`/api/q?s=${q}`);
+    q.toUpperCase();   // ✓ q 是本地 const，不会被改
+  }
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · type predicate 撒谎</div>
+          <p>
+            写错 predicate 函数体，TS 不会发现：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">interface User { name: string; email: string }
+
+// ❌ 撒谎：忘了检查 email
+function isUser(x: unknown): x is User {
+  return typeof x === "object" &amp;&amp; x !== null &amp;&amp; "name" in x;
+  //  没有检查 email — 但承诺了 x 是 User
+}
+
+const data = { name: "Alice" };
+if (isUser(data)) {
+  data.email.toLowerCase();   // 编译过 → 运行时炸（email 是 undefined）
+}</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：写 type guard 时<strong>逐字段验证</strong>；或干脆用 zod 等 schema 库自动生成 type guard。复杂对象别手写 predicate。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · strictNullChecks 关闭让所有 narrow 几乎失效</div>
+          <p>
+            <code>strictNullChecks: false</code> 时，所有类型隐式包含 <code>null | undefined</code>，TS 不会强制你处理它们：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// strictNullChecks: false 下
+function f(s: string) {
+  s.toUpperCase();  // 编译过 — 但 s 可能是 null
+}
+f(null);  // 也通过 — 运行时炸
+
+// strictNullChecks: true 下
+function f(s: string) {
+  s.toUpperCase();  // ✓
+}
+f(null);  // ❌ Argument of type 'null' is not assignable to 'string'</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：永远开启 <code>strictNullChecks</code>（<code>strict: true</code> 包含它）。这是 TS 真正区别于"带类型 JS"的 90% 价值所在。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · in 检查不等于"属性存在"</div>
+          <p>
+            <code>"foo" in obj</code> 检查的是<strong>原型链上是否有 foo 属性</strong>，包括从 <code>Object.prototype</code> 继承的：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">const obj: Record&lt;string, unknown&gt; = {};
+"toString" in obj;  // true — 来自 Object.prototype
+"hasOwnProperty" in obj;  // true — 同上</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：<code>in</code> 只用于 discriminated union narrow（场景明确）；想检查 own property 用 <code>Object.hasOwn(obj, "foo")</code>（ES2022）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · 解构 discriminated union 后 narrow 失效</div>
+          <p>
+            TS 不能在解构后维持鉴别字段和其他字段的关联：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">type Result&lt;T&gt; = { ok: true; value: T } | { ok: false; error: string };
+
+function bad&lt;T&gt;(r: Result&lt;T&gt;) {
+  const { ok, value, error } = r;
+  if (ok) {
+    return value;   // ❌ value: T | undefined（不再精确）
+  }
+}
+
+function good&lt;T&gt;(r: Result&lt;T&gt;) {
+  if (r.ok) {
+    return r.value;  // ✓ value: T
+  }
+  return r.error;
+}</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：处理 discriminated union 时<strong>不要解构</strong>，保持通过 <code>r.field</code> 访问。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://www.typescriptlang.org/docs/handbook/2/narrowing.html" target="_blank" rel="noopener"
+              >TypeScript Handbook · Narrowing</a
+            > —— 官方对应章节
+          </li>
+          <li>
+            <a href="https://devblogs.microsoft.com/typescript/announcing-typescript-5-5/" target="_blank" rel="noopener"
+              >TS 5.5 Release Notes · Inferred Type Predicates</a
+            > —— 推断式 type predicate 完整说明
+          </li>
+          <li>
+            <a href="https://www.typescriptlang.org/docs/handbook/release-notes/typescript-3-7.html" target="_blank" rel="noopener"
+              >TS 3.7 Release Notes · Assertion Functions</a
+            > —— asserts 语法引入背景
+          </li>
+          <li>
+            下一章 →
+            <a href="04-functions.html">04 Functions</a>：函数类型 / 重载 / 泛型函数 / this 参数 / void vs never
+          </li>
+          <li>
+            JS 衔接 →
+            <a href="../../javascript/04-async/05-async-await.html">JS · async/await</a> 配合理解异步闭包 narrow 失效
+          </li>
+          <li>
+            JS 衔接 →
+            <a href="../../javascript/02-fundamentals/01-types.html">JS · 数据类型系统</a> 配合理解 typeof null
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="02-everyday-types.html">
+            <span class="label">← 上一章</span>
+            <span class="title">02 · Everyday Types</span>
+          </a>
+          <a class="next" href="04-functions.html">
+            <span class="label">下一章 →</span>
+            <span class="title">04 · Functions</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

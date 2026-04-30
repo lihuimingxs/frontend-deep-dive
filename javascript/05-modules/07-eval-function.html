@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>eval 与 new Function · P4 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="直接 eval vs 间接 eval 的作用域差异、new Function 隔离到全局作用域、CSP unsafe-eval 的防御、Trusted Types、生产替代方案（JSON.parse、AST-based 沙箱、Worker 隔离）。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · 模块 & 元编程</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-esm.html">01 · ESM 规范与模块图</a></li>
+          <li><a href="02-cjs-interop.html">02 · CJS 与 ESM 互操作</a></li>
+          <li><a href="03-dynamic-import.html">03 · 动态 import</a></li>
+          <li><a href="04-tree-shaking.html">04 · Tree-shaking 原理</a></li>
+          <li><a href="05-import-maps.html">05 · import maps 与模块解析</a></li>
+          <li><a href="06-polyfills.html">06 · Polyfill 策略</a></li>
+          <li><a href="07-eval-function.html">07 · eval 与 new Function</a></li>
+          <li><a href="08-workers.html">08 · Web Workers</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../02-fundamentals/index.html">P2 · 语言基础</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · 模块 & 元编程</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>eval 与 new Function</span>
+        </nav>
+
+        <h1>eval 与 new Function</h1>
+        <p class="lead">
+          <code>eval</code> 是 JS 的"后门"—— 能在运行时把字符串变成代码。这既是它的能力，也是它的罪 ——
+          破坏静态分析、被用于 XSS、影响 V8 优化。本章讲<strong>直接 eval vs 间接 eval</strong> 的作用域差异、<code
+            >new Function</code
+          >
+          为什么"比 eval 安全"、CSP 如何封堵、以及生产环境的替代方案。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~15 分钟</span>
+          <span><strong>前置</strong> P2 作用域 · P4 模块</span>
+          <span
+            ><strong>MDN</strong>
+            <a
+              href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/eval"
+              target="_blank"
+              rel="noopener"
+              >eval</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// eval：当场执行字符串
+eval("2 + 2");                        // 4
+eval("const x = 1; x");               // 1（但 x 不泄漏到外部）
+
+// new Function：编译字符串为函数，在<strong>全局作用域</strong>执行
+const fn = new Function("a", "b", "return a + b");
+fn(2, 3);                              // 5
+
+// Function 构造器等价 new Function
+const fn2 = Function("a", "return a * 2");
+fn2(5);                                // 10
+
+// 间接 eval（指针/别名）—— 在全局作用域执行
+const indirectEval = eval;
+indirectEval("const x = 1;");          // x 变全局变量</code></pre>
+        </div>
+
+        <h3>三种执行字符串代码的方式对比</h3>
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th>直接 eval</th>
+              <th>间接 eval</th>
+              <th>new Function</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>作用域</td>
+              <td>当前作用域</td>
+              <td><strong>全局</strong></td>
+              <td><strong>全局</strong></td>
+            </tr>
+            <tr>
+              <td>能访问外层局部变量</td>
+              <td>✓</td>
+              <td>✗</td>
+              <td>✗</td>
+            </tr>
+            <tr>
+              <td>严格模式行为</td>
+              <td>创建独立作用域</td>
+              <td>同上</td>
+              <td>独立函数</td>
+            </tr>
+            <tr>
+              <td>V8 优化受损</td>
+              <td>严重（整个作用域 de-opt）</td>
+              <td>轻微</td>
+              <td>轻微</td>
+            </tr>
+            <tr>
+              <td>CSP 拦截</td>
+              <td><code>unsafe-eval</code> 禁止</td>
+              <td>同上</td>
+              <td>同上</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="direct-vs-indirect">直接 vs 间接 eval</h3>
+        <p>规范对"<code>eval(...)</code> 这个调用形式"有特殊判定：</p>
+        <ul>
+          <li>
+            <strong>直接 eval</strong>：字面量 <code>eval(code)</code>（被调用名字是 eval 且能解析到全局 eval
+            函数）。代码在<em>调用者作用域</em>执行，能读写外层的 <code>let</code>/<code>const</code>。
+          </li>
+          <li>
+            <strong>间接 eval</strong>：除此以外的所有调用形式（<code>(0, eval)(code)</code>、<code
+              >const e = eval; e(code)</code
+            >、<code>globalThis.eval(code)</code>）。代码在<em>全局作用域</em>执行。
+          </li>
+        </ul>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function test() {
+  const x = 42;
+
+  eval("console.log(x)");              // 42  ← 直接 eval，能看到 x
+
+  (0, eval)("try { console.log(x) } catch (e) { console.log('x not found') }");
+  // "x not found"  ← 间接 eval，x 不可见
+
+  eval("var y = 1");
+  console.log(y);                      // 1  ← 非严格下泄漏到函数作用域
+
+  "use strict";
+  eval("var z = 2");
+  console.log(z);                      // ReferenceError  ← 严格模式 eval 有独立作用域
+}</code></pre>
+        </div>
+
+        <h3 id="optimization">V8 对 eval 的悲观</h3>
+        <p>
+          编译器优化依赖"静态分析外层作用域的变量"。一旦函数里出现直接 eval，编译器就不知道 eval 会不会创建/修改外层变量
+          → <strong>放弃优化整个作用域</strong>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// V8 能内联 / 寄存器分配 / escape analysis
+function hot() {
+  let counter = 0;
+  for (let i = 0; i &lt; 1e7; i++) counter++;
+  return counter;
+}
+
+// 有直接 eval → V8 保守，counter 必须在堆上分配（防 eval 读写）
+function hotWithEval(code) {
+  let counter = 0;
+  eval(code);                          // ← 即使不调用，也让整个函数变慢
+  for (let i = 0; i &lt; 1e7; i++) counter++;
+  return counter;
+}
+// hotWithEval 比 hot 慢 3-10 倍</code></pre>
+        </div>
+
+        <h3 id="function-ctor">Function 构造器的隔离</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function test() {
+  const x = 42;
+  const fn = new Function("return x");
+  fn();                                // ReferenceError（x 不在全局）
+  // 因为 new Function 在<strong>全局作用域</strong>编译函数体
+}
+
+// 好处：比直接 eval 安全 —— 不会意外读写调用方变量
+// 坏处：仍然是"字符串变代码"，仍被 CSP 的 unsafe-eval 拦
+
+// Function 构造器的形参列表可以多个字符串
+const sum = new Function("a", "b, c", "return a + b + c");
+sum(1, 2, 3);                         // 6</code></pre>
+        </div>
+
+        <h3 id="csp">CSP 的 <code>unsafe-eval</code> 与 <code>strict-dynamic</code></h3>
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code class="lang-js">// Response header
+Content-Security-Policy: script-src 'self';
+// eval / new Function → EvalError: Refused to evaluate a string as JavaScript because 'unsafe-eval' is not an allowed source of script
+
+// 允许 eval（不推荐）
+Content-Security-Policy: script-src 'self' 'unsafe-eval';
+
+// 但有例外：WebAssembly.instantiate 默认被 unsafe-eval 拦（有独立的 wasm-eval）
+// 某些框架（Vue 3、Svelte 5）有模板编译依赖 new Function，生产应该预编译</code></pre>
+        </div>
+
+        <h3 id="trusted-types">Trusted Types（新 API）</h3>
+        <p>Chrome 83+ / Edge 83+ 支持。强制"把字符串转成代码"必须通过 policy，从根源防 XSS：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// CSP: trusted-types default require-trusted-types-for 'script';
+
+// 现在传字符串给 innerHTML / eval 都被拒
+el.innerHTML = "user input";         // TypeError
+
+// 必须走 policy
+const policy = trustedTypes.createPolicy("my-policy", {
+  createHTML: (s) =&gt; DOMPurify.sanitize(s),
+  createScript: (s) =&gt; /* 白名单检查 */ s,
+});
+el.innerHTML = policy.createHTML(userInput);
+
+// Google 内部防 DOM XSS 的核心手段，推荐生产启用</code></pre>
+        </div>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">用 <code>JSON.parse</code> 代替 eval JSON</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// ❌ 远古写法（ES5 前）
+const data = eval("(" + jsonText + ")");
+
+// ✓ JSON.parse 从 ES5 起可用，且不会执行代码
+const data = JSON.parse(jsonText);
+
+// JSON.parse 严格子集：
+// - 字符串必须双引号
+// - 不能有注释
+// - 不支持 undefined / 函数 / NaN / Infinity
+
+// 想要稍松的 JSON5：解析器库（无 eval）</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">模板引擎的沙箱化</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre
+              class="code"
+            ><code class="lang-js">// Vue 模板 / Handlebars 等<strong>运行时</strong>编译模板用 new Function
+// 生产环境应 precompile 到 render 函数，避免 runtime eval
+
+// Vue 3
+// - vue.runtime.esm-bundler.js  ← 推荐，模板在构建时编译
+// - vue.esm-bundler.js           ← 包含 compiler，运行时编译（需 unsafe-eval）
+
+// 如果必须 runtime：
+// 1. 限制模板来源（不让用户输入模板）
+// 2. 模板解析完转 AST 而非字符串拼接
+// 3. 考虑 lit-html / preact 的 tagged template（不用 new Function）</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">动态表达式求值的替代方案</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 场景：用户提供表达式字符串（spreadsheet、条件规则）
+// ❌ 直接 eval 用户输入 —— 严重 RCE 漏洞
+const result = eval(userExpression);
+
+// ✓ 用表达式解析器（AST-based，可白名单）
+// 例：@jsep/core、mathjs.evaluate
+import { evaluate } from "mathjs";
+const result = evaluate("a + b * 2", { a: 3, b: 4 });
+// mathjs 只允许数学运算 + 白名单函数，不能调用任意 JS
+
+// 或用更严的 JSONata / expr-eval
+// 根本方案：限定 DSL + 自己写解析器</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">在 Worker 里隔离执行</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre
+              class="code"
+            ><code class="lang-js">// 用户代码在 Worker 里跑 —— 和主线程完全隔离（无 DOM 访问、超时可杀）
+const code = `
+  onmessage = (e) =&gt; {
+    const result = (${userFunction})(e.data);
+    postMessage(result);
+  };
+`;
+const blob = new Blob([code], { type: "application/javascript" });
+const worker = new Worker(URL.createObjectURL(blob));
+
+// 设置超时
+const timer = setTimeout(() =&gt; worker.terminate(), 5000);
+worker.onmessage = (e) =&gt; { clearTimeout(timer); /* ... */ };
+
+// 更安全：用 iframe + sandbox="allow-scripts"（无 allow-same-origin）
+// 用户代码在独立 realm 里，无法读取 parent document</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">配置驱动 vs 代码驱动</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// ❌ 代码驱动（让配置变成 JS 执行）
+const rule = eval(config.rule);
+if (rule(user)) doAction();
+
+// ✓ 配置驱动（JSON 描述规则）
+const rule = { age: { "&gt;=": 18 }, country: "CN" };
+if (matchRule(user, rule)) doAction();
+// matchRule 按规则 DSL 求值，不 eval</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-csp-detect">检测 eval 是否被 CSP 禁用</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function canUseEval() {
+  try {
+    // eslint-disable-next-line no-new-func
+    new Function("return 1")();
+    return true;
+  } catch (err) {
+    if (err instanceof EvalError) return false;
+    throw err;
+  }
+}
+
+if (!canUseEval()) {
+  // 加载不依赖 eval 的 fallback
+  await import("./vue-runtime-precompiled.mjs");
+}</code></pre>
+        </div>
+
+        <h3 id="ex-safe-eval">白名单的"安全 eval"（示意）</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 只允许简单的数学表达式
+function safeCalc(expr) {
+  if (!/^[\d+\-*/(). ]+$/.test(expr)) throw new Error("invalid");
+  // 经过正则白名单，可以 Function
+  return new Function("return " + expr)();
+}
+
+safeCalc("1 + 2 * 3");              // 7
+safeCalc("alert(1)");                // throws
+
+// ⚠ 仍有注入风险（如 "1/0" 合法但结果 Infinity）
+// 生产用 AST-based 解析器更安全</code></pre>
+        </div>
+
+        <h3 id="ex-dyn-import-alternative">用 dynamic import 替代 eval 加载模块</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// ❌ 老式动态加载代码
+const code = await fetch(url).then(r =&gt; r.text());
+eval(code);
+
+// ✓ 动态 import（ESM）
+const mod = await import(url);       // 走浏览器的 script 加载机制
+// CSP 友好，走 script-src 而不是 unsafe-eval
+
+// ⚠ 注意跨源和 CORS</code></pre>
+        </div>
+
+        <h3 id="ex-function-clone">用 Function.toString 克隆函数</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre
+            class="code"
+          ><code class="lang-js">// 少数合理用 Function 的场景：跨 worker 传函数（Worker 不能直接传函数）
+function cloneFunction(fn) {
+  return new Function("return " + fn.toString())();
+}
+
+// ⚠ 丢失：闭包变量、原型链、name
+// 更好：传数据 + 工厂 id，worker 里用 id 查预定义函数</code></pre>
+        </div>
+
+        <!-- 05 陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">eval 永远是 last resort</div>
+          <p>
+            99% 的 eval 用法有更好替代：JSON.parse、动态 import、AST 解析器、Function 构造器 + 白名单。工程中出现 eval
+            就应该被 code review 质疑。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">直接 eval 破坏所在函数的 V8 优化</div>
+          <p>
+            即使 eval 路径不触发，V8 仍保守。性能敏感代码绝不该有直接 eval。用
+            <code>(0, eval)(...)</code> 间接版本好一点，但仍不理想。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">CSP 一旦严格，很多框架需要配置</div>
+          <p>
+            Vue / Svelte / AngularJS 运行时模板编译需要 <code>unsafe-eval</code>。生产应该预编译。测 CSP
+            严格策略时注意框架行为。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">new Function 也被 CSP 拦</div>
+          <p>
+            "new Function 不是 eval 吧？" ——CSP 视角它和 eval 一样都是
+            <em>unsafe-eval</em>。被同一条指令拦截。WebAssembly.instantiate 也被 <code>wasm-eval</code> 控制。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">eval 的返回值</div>
+          <p>
+            <code>eval</code> 返回最后一个表达式的值。多行时只有最后一个：<code>eval("1; 2; 3")</code> 是 3。语句（<code
+              >var x = 1</code
+            >）返回 undefined。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">eval 在严格模式下的作用域变化</div>
+          <p>
+            严格模式下 <code>eval("var x = 1")</code> 的 x 不泄漏。这是规范有意修正的非严格 bug 行为。ESM 默认严格，所以
+            ESM 里用 eval 更可控（但仍不推荐）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Function toString 在某些环境不返回源码</div>
+          <p>
+            V8 正常返回 source。但某些 minifier 或 <code>Function.prototype.toString</code> 被改写的环境返回 "[native
+            code]" 或占位。不要依赖 toString 做序列化。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">setTimeout / setInterval 接受字符串</div>
+          <p>
+            <code>setTimeout("alert(1)", 100)</code> 历史遗留，相当于 eval 字符串。<strong>绝不使用</strong>，传函数
+            <code>setTimeout(() =&gt; alert(1), 100)</code>。CSP 也会拦截字符串形式。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-performeval" target="_blank" rel="noopener">ECMA-262 · PerformEval</a>
+          </li>
+          <li>
+            <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP" target="_blank" rel="noopener"
+              >MDN · Content Security Policy</a
+            >
+          </li>
+          <li>
+            <a href="https://w3c.github.io/webappsec-trusted-types/dist/spec/" target="_blank" rel="noopener"
+              >W3C · Trusted Types 规范</a
+            >
+          </li>
+          <li>
+            <a href="https://github.com/endojs/endo/tree/master/packages/ses" target="_blank" rel="noopener"
+              >SES（Secure ECMAScript）</a
+            >
+            — 沙箱化 JS 执行的先进方案
+          </li>
+          <li><strong>下一步</strong> → <a href="08-workers.html">08 · Web Workers</a>。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="06-polyfills.html"
+            ><span class="label">← 上一章</span><span class="title">06 · Polyfill 策略</span></a
+          >
+          <a class="next" href="08-workers.html"
+            ><span class="label">下一章 →</span><span class="title">08 · Web Workers</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

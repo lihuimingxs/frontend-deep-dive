@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Promise 状态机 · P3 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="Promise 的 PromiseState/PromiseResult 内部槽、三态单向转换、Resolve 的 thenable 吸收递归、.then/catch/finally 的规范语义、错误沿链传播、unhandled rejection 的触发时机。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P4 目录</a>
+          <a href="https://javascript.info/promise-basics" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · 异步 & 错误处理</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-event-loop.html">01 · Event Loop 模型</a></li>
+          <li><a href="02-microtask-macrotask.html">02 · 微任务 vs 宏任务</a></li>
+          <li><a href="03-promise.html">03 · Promise 状态机</a></li>
+          <li><a href="04-promise-combinators.html">04 · Promise 组合器</a></li>
+          <li><a href="05-async-await.html">05 · async / await</a></li>
+          <li><a href="06-abort-controller.html">06 · AbortController</a></li>
+          <li><a href="07-concurrency.html">07 · 并发控制</a></li>
+          <li><a href="08-node-eventloop-errors.html">08 · Node Event Loop + 错误收口</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../02-fundamentals/index.html">P2 · 语言基础</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · 异步 & 错误处理</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Promise 状态机</span>
+        </nav>
+
+        <h1>Promise 状态机</h1>
+        <p class="lead">
+          Promise 是一个<strong>状态机</strong>：三个状态、单向转换、不可逆。理解它的规范算法（尤其是
+          <em>resolve procedure</em> 的 thenable 吸收）能让 Promise 链的一切行为都可预测 —— 包括
+          <code>return Promise</code>、<code>.catch</code> 位置、unhandled rejection 等高频坑点。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 01 Event Loop · P1-14 错误处理</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/promise-basics" target="_blank" rel="noopener"
+              >Promises; Promise chaining</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const p = new Promise((resolve, reject) =&gt; {
+  // 执行器函数：同步执行
+  if (ok) resolve(value);             // → fulfilled
+  else reject(new Error("fail"));     // → rejected
+});
+
+p
+  .then(v =&gt; v.upper)                 // 转换值
+  .then(v =&gt; fetchMore(v))            // 返回 Promise，链自动等待
+  .catch(err =&gt; fallback(err))        // 接住上游任意位置的 reject
+  .finally(() =&gt; cleanup());          // 无论成败都执行；不改变值
+
+// 快捷构造
+Promise.resolve(value);               // 已 fulfilled 的 Promise
+Promise.reject(error);                // 已 rejected 的 Promise（⚠ 立即形成 unhandled rejection）
+Promise.withResolvers();              // ES2024：返回 { promise, resolve, reject }</code></pre>
+        </div>
+
+        <h3>三种状态</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>状态</th>
+              <th>含义</th>
+              <th>可转换到</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>pending</strong></td>
+              <td>初始，未决</td>
+              <td>fulfilled / rejected</td>
+            </tr>
+            <tr>
+              <td><strong>fulfilled</strong></td>
+              <td>成功，有值</td>
+              <td><em>无</em>（终态）</td>
+            </tr>
+            <tr>
+              <td><strong>rejected</strong></td>
+              <td>失败，有原因</td>
+              <td><em>无</em>（终态）</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>状态一旦转换，不可逆转 —— 再调 resolve/reject 被静默忽略。这是 Promise "一次性"语义的由来。</p>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="internal-slots">规范定义的内部槽</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>slot</th>
+              <th>存什么</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>[[PromiseState]]</code></td>
+              <td>"pending" / "fulfilled" / "rejected"</td>
+            </tr>
+            <tr>
+              <td><code>[[PromiseResult]]</code></td>
+              <td>fulfilled 的 value / rejected 的 reason</td>
+            </tr>
+            <tr>
+              <td><code>[[PromiseFulfillReactions]]</code></td>
+              <td>fulfilled 时要触发的 .then 回调列表</td>
+            </tr>
+            <tr>
+              <td><code>[[PromiseRejectReactions]]</code></td>
+              <td>rejected 时要触发的回调列表</td>
+            </tr>
+            <tr>
+              <td><code>[[PromiseIsHandled]]</code></td>
+              <td>是否已被 catch（决定 unhandled rejection）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 id="resolve-procedure">Resolve Procedure：thenable 吸收</h3>
+        <p><code>resolve(x)</code> 不是简单地设 <code>[[PromiseResult]] = x</code>。规范流程：</p>
+        <ol>
+          <li>如果 <code>x</code> 是 <strong>Promise 本身</strong>（自引用）→ 抛 TypeError。</li>
+          <li>
+            如果 <code>x</code> 是一个 <strong>thenable</strong>（有 <code>.then</code> 方法的对象）→ 递归"跟随"它：等
+            <code>x</code> 决议后再决议当前 Promise。
+          </li>
+          <li>否则 → 当作普通值，设 state = fulfilled, result = x。</li>
+        </ol>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const inner = Promise.resolve(42);
+const outer = new Promise(r =&gt; r(inner));    // resolve 了一个 Promise
+
+outer === inner;                // false（是新对象）
+outer.then(v =&gt; v);             // 42   ← 自动 unwrap
+
+// thenable（不一定是 Promise）也被吸收
+const fakeThenable = {
+  then(onFul) { onFul("hello"); }
+};
+Promise.resolve(fakeThenable).then(v =&gt; v);   // "hello"
+
+// 递归深度无限（层层剥到非 thenable）
+Promise.resolve(Promise.resolve(Promise.resolve(5)))
+  .then(v =&gt; v);                // 5  ← 自动扒三层</code></pre>
+        </div>
+        <p>
+          <strong>工程意义</strong>：<code>.then</code> 回调里 <code>return anyValue</code> 或
+          <code>return somePromise</code> 都会被上游正确处理，不需要手动区分。这是 Promise 链"自动扁平化"的根基。
+        </p>
+
+        <h3 id="then-semantics"><code>.then</code> 的规范语义</h3>
+        <p>
+          <code>promise.then(onFulfilled, onRejected)</code> 返回<strong>一个新 Promise</strong>，它的结果由回调决定：
+        </p>
+        <ul>
+          <li>
+            如果 promise fulfilled 且 <code>onFulfilled</code> 是函数 → 以 <code>onFulfilled(value)</code> 的返回值
+            resolve 新 Promise。
+          </li>
+          <li>
+            如果 promise rejected 且 <code>onRejected</code> 是函数 → 以 <code>onRejected(reason)</code> 的返回值
+            resolve 新 Promise（<strong>注意不是 reject！</strong>）。
+          </li>
+          <li>如果回调抛错 → 新 Promise rejected。</li>
+          <li>如果对应的回调不是函数 → 状态和值"透传"给新 Promise。</li>
+        </ul>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 透传
+Promise.reject("e")
+  .then(v =&gt; v.upper)       // onFulfilled 不调用（当前是 rejected）
+  .then(v =&gt; v.upper)       // 仍 rejected
+  .catch(e =&gt; "caught");    // → fulfilled("caught")
+
+// onRejected 返回值 → fulfilled（而不是继续 rejected）
+Promise.reject("e")
+  .catch(e =&gt; "recovered")
+  .then(v =&gt; v);            // "recovered"  ← 成功链继续
+
+// onRejected 里再抛 → 继续 rejected
+Promise.reject("e")
+  .catch(e =&gt; { throw new Error("wrap"); })
+  .then(v =&gt; "ok", err =&gt; err.message);  // "wrap"</code></pre>
+        </div>
+
+        <h3 id="catch-finally"><code>.catch</code> 和 <code>.finally</code> 是语法糖</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>写法</th>
+              <th>等价</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>p.catch(fn)</code></td>
+              <td><code>p.then(undefined, fn)</code></td>
+            </tr>
+            <tr>
+              <td><code>p.finally(fn)</code></td>
+              <td><code>p.then(v =&gt; (fn(), v), e =&gt; (fn(), Promise.reject(e)))</code> 的近似（规范更严谨）</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          <code>.finally</code> 的关键特性：<strong>不改变值和状态</strong>。抛错时才会影响下游（以抛出的错误 reject）。
+        </p>
+
+        <h3 id="microtask-scheduling">回调调度到 microtask</h3>
+        <p>规范强制：<code>.then</code> 的回调<strong>永远异步执行</strong>，进入 microtask 队列。这是 Zalgo 防御：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">console.log("A");
+Promise.resolve().then(() =&gt; console.log("B"));
+console.log("C");
+// 输出：A, C, B
+
+// 即使 Promise 已经 resolved，.then 回调也是异步的</code></pre>
+        </div>
+
+        <h3 id="error-propagation">错误沿链传播</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">fetch(url)
+  .then(r =&gt; r.json())
+  .then(data =&gt; process(data))
+  .then(result =&gt; render(result))
+  .catch(err =&gt; showError(err));   // ← 上面任一 .then 出错都到这里
+
+// 这是 Promise 相比 callback 最大的优势：错误不会被"漏掉"
+// 但要小心：.catch 之后的 .then 仍会执行（catch 恢复了成功态）</code></pre>
+        </div>
+
+        <h3 id="unhandled-rejection">Unhandled Rejection 的触发</h3>
+        <p>
+          一个 rejected Promise 如果<strong>在本轮 microtask 清空时还没有 .catch</strong>（或等价的 .then
+          第二参），就会被标记为 unhandled：
+        </p>
+        <ul>
+          <li><strong>浏览器</strong>：派发 <code>window.onunhandledrejection</code> 事件。</li>
+          <li><strong>Node.js</strong>：触发 <code>process.on("unhandledRejection")</code>，Node 15+ 默认崩溃进程。</li>
+          <li>
+            如果后来 <code>.catch</code> 了 → 触发 <code>rejectionhandled</code> / <code>"rejectionHandled"</code>。
+          </li>
+        </ul>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">Promise.reject("boom");           // 本轮末尾 → unhandledrejection
+// vs
+Promise.reject("boom").catch(() =&gt; {});   // 本轮就 handle 了，不触发
+
+// "延迟挂 catch" 仍然会先触发 unhandledrejection
+const p = Promise.reject("x");
+setTimeout(() =&gt; p.catch(() =&gt; {}), 100);
+// 浏览器：触发 unhandledrejection → 100ms 后触发 rejectionhandled</code></pre>
+        </div>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">包装回调 API</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 老式回调 API
+function readFile(path, cb) { /* cb(err, data) */ }
+
+// promisify
+function readFileP(path) {
+  return new Promise((resolve, reject) =&gt; {
+    readFile(path, (err, data) =&gt; err ? reject(err) : resolve(data));
+  });
+}
+// Node 原生 util.promisify(readFile)
+// ES2024 的 Promise.withResolvers 更干净：
+function readFileP2(path) {
+  const { promise, resolve, reject } = Promise.withResolvers();
+  readFile(path, (err, data) =&gt; err ? reject(err) : resolve(data));
+  return promise;
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">链式扁平化（避免回调地狱）</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// ❌ 嵌套
+fetchUser(id).then(user =&gt; {
+  fetchOrders(user.id).then(orders =&gt; {
+    fetchItems(orders[0].id).then(items =&gt; {
+      render(user, orders, items);
+    });
+  });
+});
+
+// ✓ 扁平：return Promise → 链自动等待
+fetchUser(id)
+  .then(user =&gt; Promise.all([user, fetchOrders(user.id)]))
+  .then(([user, orders]) =&gt; Promise.all([user, orders, fetchItems(orders[0].id)]))
+  .then(([user, orders, items]) =&gt; render(user, orders, items));
+
+// ✓ 最佳：async/await 可读性最好（下一章讲）</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">延迟器（deferred）模式</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// ES2024 Promise.withResolvers —— 外部控制 resolve/reject
+function deferred() {
+  return Promise.withResolvers();
+  // 手写等价：
+  // let resolve, reject;
+  // const promise = new Promise((res, rej) =&gt; { resolve = res; reject = rej; });
+  // return { promise, resolve, reject };
+}
+
+// 典型用法：事件触发时 resolve
+const { promise, resolve } = Promise.withResolvers();
+el.addEventListener("click", () =&gt; resolve("clicked"), { once: true });
+await promise;     // 等待点击</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">finally 做资源清理</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">showLoader();
+fetch(url)
+  .then(r =&gt; r.json())
+  .then(renderData)
+  .catch(showError)
+  .finally(hideLoader);    // 成功/失败都 hide
+// ⚠ finally 里抛错会把整个链变成 rejected</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">缓存 Promise（请求去重）</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">const cache = new Map();
+function fetchCached(url) {
+  if (!cache.has(url)) cache.set(url, fetch(url).then(r =&gt; r.json()));
+  return cache.get(url);
+  // 同时触发多次 fetchCached(url)，后来的都等同一个 Promise
+  // SWR/React Query 这类库的核心机制之一
+}
+
+// ⚠ 缓存失败 Promise 要清掉：
+function fetchCached2(url) {
+  if (!cache.has(url)) {
+    const p = fetch(url).then(r =&gt; r.json())
+      .catch(err =&gt; { cache.delete(url); throw err; });
+    cache.set(url, p);
+  }
+  return cache.get(url);
+}</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-min-impl">最小 Promise 实现（A+ 规范子集）</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">class MyPromise {
+  #state = "pending";
+  #value;
+  #reactions = [];
+
+  constructor(executor) {
+    const resolve = (v) =&gt; this.#settle("fulfilled", v);
+    const reject = (r) =&gt; this.#settle("rejected", r);
+    try { executor(resolve, reject); }
+    catch (e) { reject(e); }
+  }
+
+  #settle(state, value) {
+    if (this.#state !== "pending") return;   // 一次性
+    // thenable 吸收
+    if (state === "fulfilled" &amp;&amp; value &amp;&amp; typeof value.then === "function") {
+      value.then((v) =&gt; this.#settle("fulfilled", v),
+                 (r) =&gt; this.#settle("rejected", r));
+      return;
+    }
+    this.#state = state;
+    this.#value = value;
+    queueMicrotask(() =&gt; this.#reactions.forEach((r) =&gt; r()));
+  }
+
+  then(onFul, onRej) {
+    return new MyPromise((resolve, reject) =&gt; {
+      const run = () =&gt; {
+        try {
+          if (this.#state === "fulfilled") {
+            resolve(typeof onFul === "function" ? onFul(this.#value) : this.#value);
+          } else {
+            if (typeof onRej === "function") resolve(onRej(this.#value));
+            else reject(this.#value);
+          }
+        } catch (e) { reject(e); }
+      };
+      if (this.#state === "pending") this.#reactions.push(run);
+      else queueMicrotask(run);
+    });
+  }
+
+  catch(fn) { return this.then(undefined, fn); }
+}</code></pre>
+        </div>
+
+        <h3 id="ex-chain-patterns">链式返回的几种情况</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">Promise.resolve(1)
+  .then(v =&gt; v + 1)                          // 返回值 → 新 Promise fulfilled(2)
+  .then(v =&gt; Promise.resolve(v + 1))         // 返回 Promise → 等待它 fulfilled(3)
+  .then(v =&gt; { throw new Error(v); })        // 抛错 → 新 Promise rejected(Error(3))
+  .then(v =&gt; "not called",
+        e =&gt; e.message)                       // onRejected 处理 → fulfilled("3")
+  .then(v =&gt; console.log(v));                 // "3"</code></pre>
+        </div>
+
+        <h3 id="ex-async-queue">串行执行数组</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 顺序执行 Promise-returning 函数
+function sequence(tasks) {
+  return tasks.reduce(
+    (p, task) =&gt; p.then(results =&gt; task().then(r =&gt; [...results, r])),
+    Promise.resolve([]),
+  );
+}
+
+sequence([() =&gt; fetch(a), () =&gt; fetch(b), () =&gt; fetch(c)])
+  .then(results =&gt; /* ... */);
+
+// 或 for-of + await（下一章）—— 可读性更好</code></pre>
+        </div>
+
+        <h3 id="ex-timeout">给 Promise 加超时</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function withTimeout(promise, ms, err = new Error("timeout")) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =&gt; setTimeout(() =&gt; reject(err), ms)),
+  ]);
+}
+
+await withTimeout(fetch(url), 5000);    // 5s 未响应就 reject
+// ⚠ 这只是让 Promise 链 reject，原 fetch 仍在后台继续 —— 要真取消用 AbortSignal</code></pre>
+        </div>
+
+        <!-- 05 陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Promise 执行器同步运行</div>
+          <p>
+            <code>new Promise(fn)</code> 的 <code>fn</code> <strong>同步</strong>执行。<code
+              >new Promise(() =&gt; console.log(1))</code
+            >
+            立即打印。常见误解："Promise 里的代码都是异步的" —— 不是，只有 <code>.then</code> 回调是。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>.catch</code> 后的 <code>.then</code> 仍会执行</div>
+          <p>
+            <code>.catch(fn)</code> 如果不再抛错，返回 fulfilled Promise → 下游
+            <code>.then</code> 照常跑。想真正"终止链"就在 catch 里再 throw 或 return
+            <code>new Promise(() =&gt; {})</code>（永远 pending）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">忘记 <code>return</code> 导致链失去追踪</div>
+          <p>
+            <code>.then(v =&gt; { doAsync(v); })</code> —— 没 return 导致 <code>doAsync</code> 返回的 Promise
+            脱离链。下游 <code>.then</code> 不等它，错误也不会进 <code>.catch</code>。规则：<strong
+              >.then 回调里所有异步操作都要 return</strong
+            >。ESLint 有 <code>promise/always-return</code> 规则。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Unhandled rejection（"floating" Promise）</div>
+          <p>
+            忘写 <code>.catch</code> 的 rejected Promise → 本轮末尾 <code>unhandledrejection</code>。Node 15+
+            默认崩溃进程。工程约定：要么 await，要么 .catch，要么 .then(null, errHandler)。ESLint
+            <code>no-floating-promises</code> 能拦。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Promise 不是可取消的</div>
+          <p>
+            <code>race([promise, timeout])</code> 让链 reject，但原 Promise 仍在运行（网络请求不中断、定时器不
+            clear）。真正取消要用 <code>AbortController</code>（下一章详讲）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>async</code> 函数里 throw 变 rejection</div>
+          <p>
+            <code>async function f() { throw new Error(); }</code> 返回 rejected Promise，不是同步抛错。调用方用
+            <code>try/await</code> 或 <code>.catch</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">构造器里的 resolve/reject 多次调用被忽略</div>
+          <p>
+            <code>new Promise((res) =&gt; { res(1); res(2); })</code> —— 只记 1。规范规定。有时候看到代码里
+            <code>if (ok) res(x); else rej(e);</code> 不是 else 的作者加了防御性分支，其实"先 resolve 再
+            reject"是静默忽略。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">循环 Promise 自引用</div>
+          <p>
+            <code>const p = new Promise((r) =&gt; r(p));</code> 抛 TypeError。规范明确禁止。同样 <code>.then</code> 里
+            <code>return p</code> 本身（当前的 thenable）也是 TypeError。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">"Thenable"不是 Promise</div>
+          <p>
+            任何有 <code>.then</code> 方法的对象都是 thenable，会被 resolve procedure
+            吸收。<strong>危险</strong>：某些库的对象不经意有 <code>.then</code> 方法会被当 Promise
+            处理，丢失原值。<code>Promise.resolve(obj) === obj</code> 的判断也只对"真" Promise 成立。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-promise-objects" target="_blank" rel="noopener"
+              >ECMA-262 · 27.2 Promise Objects</a
+            >
+          </li>
+          <li>
+            <a href="https://promisesaplus.com/" target="_blank" rel="noopener">Promises/A+ 规范</a> —— 最早的社区规范
+          </li>
+          <li>
+            <a href="https://github.com/tc39/proposal-promise-with-resolvers" target="_blank" rel="noopener"
+              >TC39 · Promise.withResolvers 提案</a
+            >
+          </li>
+          <li>
+            <a href="https://blog.izs.me/2013/08/designing-apis-for-asynchrony/" target="_blank" rel="noopener"
+              >Isaac Schlueter · Designing APIs for Asynchrony（Zalgo）</a
+            >
+          </li>
+          <li>
+            <strong>下一步</strong> → <a href="04-promise-combinators.html">04 · Promise 组合器</a>，all / allSettled /
+            race / any。
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="02-microtask-macrotask.html"
+            ><span class="label">← 上一章</span><span class="title">02 · 微任务 vs 宏任务</span></a
+          >
+          <a class="next" href="04-promise-combinators.html"
+            ><span class="label">下一章 →</span><span class="title">04 · Promise 组合器</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

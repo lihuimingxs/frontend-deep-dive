@@ -1,0 +1,678 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>数组深入 · P1 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="数组方法全景（mutating vs non-mutating）、V8 Packed/Holey 数组优化、稀疏数组陷阱、排序稳定性、findLast/at 新 API、TypedArray 简介、Array-like 转换。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P2 目录</a>
+          <a href="https://javascript.info/array-methods" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · 语言基础</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-types.html">01 · 数据类型系统</a></li>
+          <li><a href="02-operators.html">02 · 操作符与强制转换</a></li>
+          <li><a href="03-control-flow.html">03 · 控制流</a></li>
+          <li><a href="04-functions.html">04 · 函数基础</a></li>
+          <li><a href="05-objects.html">05 · 对象深入</a></li>
+          <li><a href="06-arrays.html">06 · 数组深入</a></li>
+          <li><a href="07-strings.html">07 · 字符串深入</a></li>
+          <li><a href="08-numbers.html">08 · 数字与 Math</a></li>
+          <li><a href="09-date-intl.html">09 · Date 与 Intl</a></li>
+          <li><a href="10-map-set.html">10 · Map / Set 家族</a></li>
+          <li><a href="11-symbol.html">11 · Symbol 全景</a></li>
+          <li><a href="12-json.html">12 · JSON</a></li>
+          <li><a href="13-iterators.html">13 · 迭代器与 Generator</a></li>
+          <li><a href="14-errors.html">14 · 错误处理</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · 语言基础</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>数组深入</span>
+        </nav>
+
+        <h1>数组深入</h1>
+        <p class="lead">
+          JS
+          数组是"键为数字字符串"的特殊对象。方法多到令人发怵，但按"是否修改原数组"和"返回什么"两个维度分组后，规律清晰。本章把全部方法放进决策表，再讲三个工程师最易踩的点：稀疏数组、<code
+            >sort</code
+          >
+          默认比较、<code>length</code> 可写。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> 01 - 05</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/array-methods" target="_blank" rel="noopener"
+              >Arrays; Array methods</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================= -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>按"是否修改原数组"和"返回值类型"分组的<strong>完整</strong>方法表：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>分类</th>
+              <th>方法</th>
+              <th>修改原数组？</th>
+              <th>返回值</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td rowspan="4"><strong>增删</strong></td>
+              <td><code>push / pop</code></td>
+              <td>✓（尾端）</td>
+              <td>新长度 / 被弹元素</td>
+            </tr>
+            <tr>
+              <td><code>unshift / shift</code></td>
+              <td>✓（头端，慢 O(n)）</td>
+              <td>新长度 / 被弹元素</td>
+            </tr>
+            <tr>
+              <td><code>splice(start, delCount, ...add)</code></td>
+              <td>✓（任意位置）</td>
+              <td>被删除的元素数组</td>
+            </tr>
+            <tr>
+              <td><code>fill(value, start?, end?)</code></td>
+              <td>✓</td>
+              <td>原数组</td>
+            </tr>
+            <tr>
+              <td rowspan="3"><strong>排序/反转</strong></td>
+              <td><code>sort(cmp?)</code></td>
+              <td>✓</td>
+              <td>原数组</td>
+            </tr>
+            <tr>
+              <td><code>reverse()</code></td>
+              <td>✓</td>
+              <td>原数组</td>
+            </tr>
+            <tr>
+              <td><code>toSorted / toReversed / toSpliced / with</code></td>
+              <td>✗（ES2023 新，非破坏版）</td>
+              <td>新数组</td>
+            </tr>
+            <tr>
+              <td rowspan="3"><strong>切片/拼接</strong></td>
+              <td><code>slice(start?, end?)</code></td>
+              <td>✗</td>
+              <td>新数组（浅拷）</td>
+            </tr>
+            <tr>
+              <td><code>concat(...)</code></td>
+              <td>✗</td>
+              <td>新数组</td>
+            </tr>
+            <tr>
+              <td><code>flat(depth?) / flatMap(fn)</code></td>
+              <td>✗</td>
+              <td>新数组</td>
+            </tr>
+            <tr>
+              <td rowspan="5"><strong>查询</strong></td>
+              <td><code>indexOf / lastIndexOf</code></td>
+              <td>✗</td>
+              <td>索引（<code>===</code> 比较）</td>
+            </tr>
+            <tr>
+              <td><code>includes</code></td>
+              <td>✗</td>
+              <td>boolean（<code>SameValueZero</code>，能找 NaN）</td>
+            </tr>
+            <tr>
+              <td><code>find / findIndex</code></td>
+              <td>✗</td>
+              <td>元素 / 索引</td>
+            </tr>
+            <tr>
+              <td><code>findLast / findLastIndex</code></td>
+              <td>✗（ES2023）</td>
+              <td>从尾查找</td>
+            </tr>
+            <tr>
+              <td><code>at(index)</code></td>
+              <td>✗（ES2022）</td>
+              <td>元素（支持负索引 <code>-1</code>）</td>
+            </tr>
+            <tr>
+              <td rowspan="6"><strong>迭代</strong></td>
+              <td><code>forEach</code></td>
+              <td>✗</td>
+              <td>undefined（不可 break）</td>
+            </tr>
+            <tr>
+              <td><code>map(fn)</code></td>
+              <td>✗</td>
+              <td>新数组（等长）</td>
+            </tr>
+            <tr>
+              <td><code>filter(pred)</code></td>
+              <td>✗</td>
+              <td>新数组（等长或更短）</td>
+            </tr>
+            <tr>
+              <td><code>reduce / reduceRight</code></td>
+              <td>✗</td>
+              <td>累积值</td>
+            </tr>
+            <tr>
+              <td><code>some / every</code></td>
+              <td>✗</td>
+              <td>boolean（短路）</td>
+            </tr>
+            <tr>
+              <td><code>entries / keys / values</code></td>
+              <td>✗</td>
+              <td>迭代器</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 =========================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="array-is-object">数组是特殊对象</h3>
+        <p>
+          规范上数组是 <code>exotic object</code>：键都是 <em>字符串化的非负整数</em>（<code>"0"</code>,
+          <code>"1"</code>, ...），但引擎对小整数键有专门的快路径存储。<code>length</code> 是个特殊属性 —— 设置
+          <code>length = 3</code> 会截断数组；<code>arr[100] = 1</code> 会把 <code>length</code> 自动变 101（中间 99
+          个空位）。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const a = [1, 2, 3];
+a.length = 1;                  // a 变成 [1]（尾部被截）
+a.length = 5;                  // a 变成 [1, &lt;4 empty&gt;]（填充空位）
+a[100] = "x";                  // length 变 101, 稀疏数组
+a.length;                      // 101
+
+// 用 Object 方法能看出是字典
+Object.keys(a);                // ["0", "100"]  ← 空位不在 keys 里</code></pre>
+        </div>
+
+        <h3 id="v8-elements">V8 的 3 种 elements kind</h3>
+        <p>V8 对数组元素存储分 6 种类型，简化后三档：</p>
+        <ul>
+          <li><strong>PACKED_SMI_ELEMENTS</strong> —— 纯 Small Integer，无空位。最快。</li>
+          <li><strong>PACKED_DOUBLE_ELEMENTS</strong> —— 有浮点数但无空位。</li>
+          <li><strong>PACKED_ELEMENTS</strong> —— 混合类型，无空位。</li>
+          <li>
+            <strong>HOLEY_*</strong> —— 同上三档，但有空位。<em>慢一个数量级</em>，因为每次访问要查 prototype chain。
+          </li>
+        </ul>
+        <p>
+          elements kind 只能"降级"（PACKED → HOLEY、SMI → DOUBLE → 任意），不能升回。一旦引入空位就永远是
+          HOLEY，即使你后来填上了值。
+        </p>
+        <div class="callout warn">
+          <div class="callout-title">⚠ 工程启示</div>
+          <p>
+            <strong>避免</strong> <code>new Array(1000)</code>（造出 1000 个 hole）、<code>arr[999] = x</code>（让
+            <code>arr</code> 变稀疏）、<code>delete arr[i]</code>（留下空位）。热点数组循环里，<strong
+              >用 <code>arr.length = 0</code> 清空</strong
+            >（保持 PACKED），<strong>用 <code>arr.push(null)</code> 占位</strong>（避免空位）。
+          </p>
+        </div>
+
+        <h3 id="sort-default"><code>sort</code> 的默认比较器</h3>
+        <p>
+          <code>arr.sort()</code> 不传比较器时，<strong>所有元素被转成字符串后按 Unicode code unit 排序</strong
+          >。这就是为什么 <code>[10, 2, 1].sort() === [1, 10, 2]</code>（"10" &lt; "2"）。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">[10, 2, 1].sort();                     // [1, 10, 2]  ⚠ 按字符串
+[10, 2, 1].sort((a, b) =&gt; a - b);      // [1, 2, 10]  ✓
+[10, 2, 1].sort((a, b) =&gt; b - a);      // [10, 2, 1]  降序
+
+// 字符串排序 —— 中文/欧洲语言需要 Intl.Collator
+const cn = ["张三", "李四", "王五"];
+cn.sort();                                       // Unicode 顺序（不自然）
+cn.sort(new Intl.Collator("zh").compare);        // 拼音顺序（自然）
+
+// 多级排序
+users.sort((a, b) =&gt;
+  a.lastName.localeCompare(b.lastName) ||
+  a.firstName.localeCompare(b.firstName) ||
+  a.age - b.age
+);</code></pre>
+        </div>
+        <p>
+          <strong>稳定性</strong>：V8 / SpiderMonkey / JavaScriptCore 从 2019 起都保证稳定排序（ES2019
+          规范要求）。可以依赖：相等元素保持原顺序。
+        </p>
+
+        <h3 id="sparse-vs-empty">稀疏数组 vs <code>undefined</code> 的区别</h3>
+        <p><code>[1, , 3]</code> 的中间是"空位"（empty slot），不同于 <code>[1, undefined, 3]</code>：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>操作</th>
+              <th><code>[1, , 3]</code></th>
+              <th><code>[1, undefined, 3]</code></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>.length</code></td>
+              <td>3</td>
+              <td>3</td>
+            </tr>
+            <tr>
+              <td><code>arr[1]</code></td>
+              <td><code>undefined</code>（读取时）</td>
+              <td><code>undefined</code></td>
+            </tr>
+            <tr>
+              <td><code>1 in arr</code></td>
+              <td><code>false</code></td>
+              <td><code>true</code></td>
+            </tr>
+            <tr>
+              <td><code>.forEach / .map / .filter</code></td>
+              <td>跳过空位</td>
+              <td>处理 <code>undefined</code></td>
+            </tr>
+            <tr>
+              <td><code>.for-of / .spread [...]</code></td>
+              <td>产出 <code>undefined</code></td>
+              <td>产出 <code>undefined</code></td>
+            </tr>
+            <tr>
+              <td><code>Array.from(arr)</code></td>
+              <td>填充 <code>undefined</code>（去稀疏化）</td>
+              <td>原样</td>
+            </tr>
+            <tr>
+              <td><code>JSON.stringify</code></td>
+              <td><code>"[1,null,3]"</code></td>
+              <td><code>"[1,null,3]"</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 id="array-like">Array-like vs Iterable</h3>
+        <p>
+          <strong>Array-like</strong>：有 <code>length</code> + 数字键。例：<code>arguments</code>,
+          <code>NodeList</code>, <code>HTMLCollection</code>,
+          <code>{ 0: "a", length: 1 }</code>。<strong>Iterable</strong>：实现
+          <code>Symbol.iterator</code>。例：<code>Set</code>, <code>Map</code>, generator 返回值，字符串。
+        </p>
+        <p>
+          <code>Array.from</code> 兼容两者：<code>Array.from(nodeList)</code>、<code>Array.from(set)</code>、<code
+            >Array.from({length: 3}, (_, i) =&gt; i * 2)</code
+          >
+          → <code>[0, 2, 4]</code>。<code>[...x]</code> <strong>只</strong>支持 Iterable。
+        </p>
+
+        <h3 id="typed-arrays">TypedArray：二进制数据视图</h3>
+        <p>
+          <code
+            >Int8Array / Uint8Array / Uint8ClampedArray / Int16Array / Uint16Array / Int32Array / Uint32Array /
+            Float32Array / Float64Array / BigInt64Array / BigUint64Array</code
+          >
+          共 11 种，都是 <code>ArrayBuffer</code> 上的视图：
+        </p>
+        <ul>
+          <li>元素类型固定，赋值会做截断 / 饱和。</li>
+          <li>长度不可变（创建时确定）。</li>
+          <li>
+            支持数组方法（<code>map</code>/<code>filter</code>/<code>forEach</code>...），但 <code>.map</code> 返回同类
+            TypedArray，不是 Array。
+          </li>
+          <li>能和 ArrayBuffer 共享底层内存（WebGL、Audio、Wasm、二进制协议）。</li>
+        </ul>
+        <p>详细在 P7 二进制数据章节。</p>
+
+        <!-- 03 应用场景 =========================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Map / Filter / Reduce 链：数据处理的主力</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 订单 → 按用户聚合总金额，只保留前 10 大客户
+const top10 = orders
+  .filter(o =&gt; o.status === "paid")
+  .reduce((acc, o) =&gt; {
+    acc[o.userId] = (acc[o.userId] ?? 0) + o.amount;
+    return acc;
+  }, {});
+const sorted = Object.entries(top10)
+  .sort(([, a], [, b]) =&gt; b - a)
+  .slice(0, 10);</code></pre>
+          </div>
+          <p style="margin-top: 8px">
+            链式可读性好但有性能开销：每步产生中间数组。大规模数据（10万+）用单次 <code>for-of</code> /
+            <code>reduce</code> 合并逻辑。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">分组：Object.groupBy（ES2024）</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">const byCategory = Object.groupBy(products, p =&gt; p.category);
+// { electronics: [...], books: [...], ... }
+
+// 用 Map 保留插入顺序和非字符串 key
+const byMonth = Map.groupBy(orders, o =&gt; o.date.getMonth());
+
+// Baseline：需要 Node 21+ / 现代浏览器，polyfill 简单</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">去重：三种工具</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 1. 原始值去重（最快、最短）
+[...new Set([1, 2, 2, 3])];                  // [1, 2, 3]
+
+// 2. 对象按字段去重
+const seen = new Set();
+users.filter(u =&gt; !seen.has(u.id) &amp;&amp; seen.add(u.id));
+
+// 3. 保留最后出现的（reduce + Map）
+const byId = new Map(items.map(i =&gt; [i.id, i]));
+const deduped = [...byId.values()];</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">非破坏更新：ES2023 的新 API</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 旧：展开 + 方法
+const sorted = [...arr].sort();                      // 需要先拷贝
+const replaced = arr.map((v, i) =&gt; i === idx ? x : v);
+
+// 新：toXxx 方法天然非破坏
+const sorted = arr.toSorted();                       // 不改 arr
+const replaced = arr.with(idx, x);                   // 不改 arr
+const reversed = arr.toReversed();
+const spliced = arr.toSpliced(1, 2, "a", "b");
+
+// Redux reducer 写起来更干净</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">TypedArray：WebGL / 二进制协议</h3>
+          <p>
+            WebGL buffer、Canvas ImageData、Web Audio 的 PCM 数据、WebSocket 二进制帧、<code>fetch</code> 的
+            <code>arrayBuffer()</code> —— 都是 TypedArray。Uint8Array 做图像像素的按位运算比 Array 快 20-50 倍。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 =========================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-create">构造数组的 7 种方式</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">[1, 2, 3]                                     // 字面量
+new Array(3)                                  // [empty × 3]  ⚠ 稀疏
+Array.of(1, 2, 3)                             // [1, 2, 3]    明确值列表
+Array.from({ length: 3 })                     // [undefined × 3]
+Array.from({ length: 3 }, (_, i) =&gt; i * 2)    // [0, 2, 4]   with mapper
+Array(3).fill(0)                              // [0, 0, 0]   先 hole 再填
+[...Array(3).keys()]                          // [0, 1, 2]   序列
+
+// 推荐：Array.from 最通用、最易读
+Array.from({ length: 10 }, (_, i) =&gt; i);</code></pre>
+        </div>
+
+        <h3 id="ex-reduce-patterns">reduce 的典型模式</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 求和
+[1, 2, 3].reduce((s, x) =&gt; s + x, 0);               // 6
+
+// 转成 lookup 对象
+items.reduce((acc, item) =&gt; ({ ...acc, [item.id]: item }), {});
+// ⚠ 每次 spread 是 O(n)，整体 O(n²)！大数据用 Map 或 mutable 更新
+items.reduce((acc, item) =&gt; { acc[item.id] = item; return acc; }, {});
+
+// 分组
+orders.reduce((acc, o) =&gt; {
+  (acc[o.userId] ??= []).push(o);
+  return acc;
+}, {});
+
+// 并行累积多个
+const { sum, max, count } = nums.reduce(
+  (s, n) =&gt; ({ sum: s.sum + n, max: Math.max(s.max, n), count: s.count + 1 }),
+  { sum: 0, max: -Infinity, count: 0 },
+);</code></pre>
+        </div>
+
+        <h3 id="ex-flat-flatmap">flat 与 flatMap 的关系</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">[[1, 2], [3, 4]].flat();                     // [1, 2, 3, 4]
+[[1, [2, [3]]]].flat(2);                     // [1, 2, [3]]
+[[1, 2]].flat(Infinity);                     // 无限深度
+
+// flatMap = map + flat(1)，常用于一对多映射
+sentences.flatMap(s =&gt; s.split(" "));        // 把每句拆成词再合并
+
+// 返回空数组来删除元素
+users.flatMap(u =&gt; u.active ? [u.name] : []); // 过滤 + 映射一步完成</code></pre>
+        </div>
+
+        <h3 id="ex-at"><code>at</code> 替代 <code>arr[arr.length - 1]</code></h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const arr = [10, 20, 30];
+arr[arr.length - 1];        // 30  老写法
+arr.at(-1);                 // 30  新写法（ES2022）
+arr.at(-2);                 // 20
+arr.at(0);                  // 10
+arr.at(99);                 // undefined（不是抛错）
+arr.at(-99);                // undefined
+
+// 字符串、TypedArray 也有 .at
+"hello".at(-1);             // "o"</code></pre>
+        </div>
+
+        <h3 id="ex-array-like">Array-like → Array</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// DOM NodeList 转数组（可 map/filter）
+const items = Array.from(document.querySelectorAll("li"));
+const items2 = [...document.querySelectorAll("li")];    // NodeList 是 iterable，也行
+
+// arguments（非箭头函数内）
+function sum() { return Array.from(arguments).reduce((s, x) =&gt; s + x, 0); }
+
+// 用 rest 参数代替 arguments（更干净）
+function sum(...nums) { return nums.reduce((s, x) =&gt; s + x, 0); }
+
+// Set / Map 转数组
+[...new Set([1, 2, 3])];
+[...new Map([["a", 1]])];                          // [["a", 1]]
+[...new Map().keys()];                             // 仅 keys</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 =========================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>sort</code> 默认按字符串</div>
+          <p>
+            <code>[10, 2, 1].sort()</code> → <code>[1, 10, 2]</code>。数字排序必须传
+            <code>(a, b) =&gt; a - b</code>。中文用 <code>Intl.Collator</code>，否则是 Unicode 顺序。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>sort</code> / <code>reverse</code> / <code>splice</code> 是原地修改</div>
+          <p>
+            React 里直接 <code>state.sort()</code> 不会触发重渲染（引用未变），且污染了状态。用 <code>toSorted</code> 或
+            <code>[...state].sort()</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>new Array(3)</code> 造稀疏数组</div>
+          <p>
+            <code>new Array(3)</code> 产生 <code>[empty × 3]</code>，<code>.map</code> 跳过空位（返回
+            <code>[empty × 3]</code>）。要填充用 <code>new Array(3).fill(null).map(...)</code> 或
+            <code>Array.from({length: 3}, mapper)</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>fill</code> 同一引用的共享问题</div>
+          <p>
+            <code>new Array(3).fill([])</code> 得到 3 个指向<strong>同一</strong>数组的引用。<code>arr[0].push(1)</code>
+            会让 <code>arr[1] === arr[2] === [1]</code>。需要独立用 <code>Array.from({length:3}, () =&gt; [])</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>indexOf</code> 找不到 NaN</div>
+          <p>
+            <code>[NaN].indexOf(NaN)</code> 返回 <code>-1</code>（<code>NaN === NaN</code> false）。<code
+              >[NaN].includes(NaN)</code
+            >
+            返回 <code>true</code>（SameValueZero 算法）。判空查询用 <code>includes</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>length</code> 可写能截断 / 扩长</div>
+          <p>
+            <code>arr.length = 0</code> 是清空数组的地道写法（比 <code>arr.splice(0)</code> 快，比重新赋值
+            <code>arr = []</code> 能保持引用共享）。<code>arr.length = 100</code> 造出 100 个空位。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>for-in</code> 数组是灾难</div>
+          <p>
+            <code>for-in</code>
+            返回<strong>字符串</strong>索引、可能包含原型链上的属性、顺序不保证（现在是保证了但仍然不自然）。数组遍历一律用
+            <code>for-of</code>、<code>.forEach</code>、或经典 <code>for (let i = 0; i &lt; arr.length; i++)</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">数组相等比较就是 <code>===</code></div>
+          <p>
+            <code>[1,2,3] === [1,2,3]</code> 是 <code>false</code>（不同引用）。结构相等用
+            <code>JSON.stringify</code> 比较（限 POJO）、<code>fast-deep-equal</code> 或 Node.js 的
+            <code>util.isDeepStrictEqual</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>splice</code> 的参数顺序</div>
+          <p>
+            <code>splice(start, deleteCount, ...insert)</code> —— <strong>第二参是删除数量</strong>不是结束位置。跟
+            <code>slice(start, end)</code> 的语义不一样，极容易混。记忆口诀：<em
+              >slice 切块不伤身，splice 操刀是动手术</em
+            >。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================ -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-array-objects" target="_blank" rel="noopener"
+              >ECMA-262 · 23.1 Array Objects</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array"
+              target="_blank"
+              rel="noopener"
+              >MDN · Array 方法速查</a
+            >
+          </li>
+          <li>
+            <a href="https://v8.dev/blog/elements-kinds" target="_blank" rel="noopener"
+              >V8 blog · Elements kinds in V8</a
+            >
+            —— PACKED vs HOLEY 性能差异
+          </li>
+          <li>
+            <strong>下一步</strong> → <a href="07-strings.html">07 · 字符串深入</a>，从数字键数组转到字符键字符串。
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="05-objects.html">
+            <span class="label">← 上一章</span>
+            <span class="title">05 · 对象深入</span>
+          </a>
+          <a class="next" href="07-strings.html">
+            <span class="label">下一章 →</span>
+            <span class="title">07 · 字符串深入</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

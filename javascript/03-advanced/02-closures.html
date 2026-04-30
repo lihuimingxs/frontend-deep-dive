@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>闭包内存模型 · P2 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="闭包的规范定义、函数的 [[Environment]] 内部槽、按引用捕获变量、V8 的 context 分配优化、debounce/throttle/memoize 实战实现、常见内存泄漏模式与规避。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P3 目录</a>
+          <a href="https://javascript.info/closure" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · 高阶语言</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-scope-tdz.html">01 · 作用域与 TDZ</a></li>
+          <li><a href="02-closures.html">02 · 闭包内存模型</a></li>
+          <li><a href="03-this.html">03 · this 四规则</a></li>
+          <li><a href="04-bind-call-apply.html">04 · bind / call / apply</a></li>
+          <li><a href="05-prototype.html">05 · 原型链</a></li>
+          <li><a href="06-class.html">06 · class 与继承</a></li>
+          <li><a href="07-private-decorators.html">07 · 私有字段与装饰器</a></li>
+          <li><a href="08-proxy-reflect.html">08 · Proxy 与 Reflect</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../02-fundamentals/index.html">P2 · 语言基础</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · 高阶语言</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>闭包内存模型</span>
+        </nav>
+
+        <h1>闭包内存模型</h1>
+        <p class="lead">
+          闭包是 JS 最强大也最容易被误解的机制。一个实用的定义："<strong>函数 + 它创建时的词法环境</strong
+          >"。本章用规范术语（<code>[[Environment]]</code> slot）拆解闭包的内存行为，讲 V8 的 context 分配优化，给出
+          debounce/throttle/memoize 的手写实现以及三种典型泄漏。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 01 作用域与 TDZ</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/closure" target="_blank" rel="noopener">Variable scope, closure</a></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================= -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function makeCounter() {
+  let count = 0;                       // 外部局部变量
+  return {
+    inc:  () =&gt; ++count,
+    get:  () =&gt; count,
+    reset: () =&gt; { count = 0; },
+  };
+}
+
+const c = makeCounter();
+c.inc(); c.inc();
+c.get();           // 2
+// count 在 makeCounter 返回后仍"活着" —— 三个内部函数都闭住了它
+// 外部无法直接访问 count，只能通过返回的方法</code></pre>
+        </div>
+
+        <p>这一个例子展示了闭包的 3 个核心特性：</p>
+        <ol>
+          <li><strong>函数可以"记住"定义时的作用域</strong>，即使外层函数已经返回。</li>
+          <li>
+            <strong>捕获的是<em>变量</em>不是<em>值</em></strong
+            >：内部每次调用看到的都是 count 最新的状态。
+          </li>
+          <li><strong>天然的信息隐藏</strong>：外部拿不到 count，除非通过暴露的接口。</li>
+        </ol>
+
+        <!-- 02 底层逻辑 ============================================ -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="env-slot"><code>[[Environment]]</code> 内部槽</h3>
+        <p>
+          规范规定：<strong
+            >每个函数对象都有一个内部槽 <code>[[Environment]]</code>，指向它被创建时所在的 Lexical Environment</strong
+          >。函数调用时，新建的执行上下文的 outer 指针就是这个 <code>[[Environment]]</code> —— 作用域链由此延伸。
+        </p>
+        <p>
+          "闭包"不是一个特殊特性，而是"函数在被调用时能沿
+          <code>[[Environment]]</code> 访问外部作用域"的<em>必然结果</em>。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function outer() {
+  const x = 10;
+  function inner() { return x; }    // inner.[[Environment]] 指向 outer 的 Lexical Environment
+  return inner;
+}
+
+const f = outer();                   // outer 返回，调用栈弹出
+// 但 outer 的 Lexical Environment 仍存活 —— 因为 f.[[Environment]] 指向它
+f();                                 // 10</code></pre>
+        </div>
+
+        <h3 id="reference-not-value">捕获的是"引用"不是"值"</h3>
+        <p>
+          关键结论：<strong>闭包保存的是对变量 binding 的引用</strong
+          >。所以内部函数每次读取时看到的是变量的<em>当前值</em>。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function make() {
+  let x = 1;
+  const read = () =&gt; x;
+  const write = (v) =&gt; { x = v; };
+  return { read, write };
+}
+
+const { read, write } = make();
+read();                // 1
+write(42);
+read();                // 42  ← 看到了新值</code></pre>
+        </div>
+
+        <h3 id="gc-rules">垃圾回收的"能否释放"</h3>
+        <p>闭包会"延长"外层作用域里被引用变量的生命周期。GC 的判断规则：</p>
+        <ul>
+          <li>
+            只要闭包函数<strong>自身</strong>还被引用（变量持有、事件监听、Promise 链等），它的
+            <code>[[Environment]]</code> 就活着。
+          </li>
+          <li><code>[[Environment]]</code> 活着 → 外层作用域的 Environment Record 活着 → 里面的所有变量活着。</li>
+          <li>一旦闭包函数不再被引用（null 赋值、事件 removeEventListener、Promise 终结），整条链才能被 GC。</li>
+        </ul>
+        <p>
+          这就是为什么<strong>事件监听器忘记 remove</strong>、<strong>setInterval 忘记 clear</strong>
+          会是经典内存泄漏模式。
+        </p>
+
+        <h3 id="v8-optimization">V8 的 Context 分配优化</h3>
+        <p>朴素实现会把整个外层作用域都保留。V8 做了优化：</p>
+        <ol>
+          <li>
+            <strong>只分配被捕获的变量</strong> —— 编译期分析函数体引用了哪些外层变量，只这些进 "Context"（堆上的
+            Environment Record）。
+          </li>
+          <li><strong>未被捕获的变量</strong>进"栈"（函数返回就回收）。</li>
+          <li>
+            <strong>同一外层产生多个闭包</strong>共享一个 Context（但每个闭包 <code>[[Environment]]</code> 指向它）。
+          </li>
+        </ol>
+        <p>工程启示：<strong>在闭包里访问大对象会让那个大对象被保留</strong>。即使你只用了其中一个小字段：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function big() {
+  const hugeData = await fetch("/api/dump").then(r =&gt; r.json()); // 100MB
+  const userName = hugeData.user.name;
+
+  return () =&gt; userName;    // ⚠ 看起来只用了 userName
+  // 实际 V8 分析后只捕获 userName，hugeData 可以释放
+  // 但某些复杂引用（eval、with、函数内部引用整个对象）会阻止此优化
+}
+
+// 保险做法：显式提取 + nullify
+function big2() {
+  let hugeData = fetchData();
+  const userName = hugeData.user.name;
+  hugeData = null;          // 显式释放引用，防止悲观捕获
+  return () =&gt; userName;
+}</code></pre>
+        </div>
+
+        <h3 id="closure-vs-object">闭包 ≈ 对象（另一种视角）</h3>
+        <p>函数式编程名言："<strong>闭包是穷人的对象，对象是穷人的闭包</strong>"。两者在表达力上等价：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 闭包风格
+function makeCounter() {
+  let c = 0;
+  return { inc: () =&gt; ++c, get: () =&gt; c };
+}
+
+// 类风格
+class Counter {
+  #c = 0;
+  inc() { return ++this.#c; }
+  get() { return this.#c; }
+}
+
+// 两者在大多数场景等价。闭包更轻量（无 prototype），
+// class 更适合"多实例共享方法"（方法只一份，在 prototype 上）。</code></pre>
+        </div>
+
+        <!-- 03 应用场景 =========================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Debounce（防抖）</h3>
+          <p>连续触发时只在"停下来"后执行一次。输入搜索、窗口 resize、form 校验都用。</p>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">function debounce(fn, ms = 300) {
+  let timer = null;                       // ← 闭包捕获
+  return function (...args) {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() =&gt; {
+      fn.apply(this, args);
+      timer = null;
+    }, ms);
+  };
+}
+
+const onSearch = debounce((q) =&gt; fetch(`/api/search?q=${q}`), 500);
+input.addEventListener("input", (e) =&gt; onSearch(e.target.value));</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Throttle（节流）</h3>
+          <p>固定时间间隔最多执行一次。scroll 监听、mousemove、实时预览。</p>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">function throttle(fn, ms = 100) {
+  let last = 0;
+  let timer = null;
+  return function (...args) {
+    const now = Date.now();
+    const remaining = ms - (now - last);
+    if (remaining &lt;= 0) {
+      if (timer) { clearTimeout(timer); timer = null; }
+      last = now;
+      fn.apply(this, args);
+    } else if (!timer) {
+      timer = setTimeout(() =&gt; {
+        last = Date.now();
+        timer = null;
+        fn.apply(this, args);
+      }, remaining);
+    }
+  };
+}
+
+const onScroll = throttle(() =&gt; updateHeader(), 100);
+window.addEventListener("scroll", onScroll);</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Memoize（记忆化）</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre
+              class="code"
+            ><code class="lang-js">function memoize(fn, getKey = (...args) =&gt; JSON.stringify(args)) {
+  const cache = new Map();
+  return function (...args) {
+    const key = getKey(...args);
+    if (cache.has(key)) return cache.get(key);
+    const result = fn.apply(this, args);
+    cache.set(key, result);
+    return result;
+  };
+}
+
+const fib = memoize((n) =&gt; n &lt; 2 ? n : fib(n - 1) + fib(n - 2));
+fib(50);                                // 瞬时返回
+
+// 注意：Map 永远增长 → 长期运行的进程要有 LRU 策略</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">模块私有状态（ESM 之前的经典模式）</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">const Store = (function () {
+  const state = new Map();         // 私有，外部无法访问
+  const listeners = new Set();
+  return {
+    get(key) { return state.get(key); },
+    set(key, v) { state.set(key, v); listeners.forEach(l =&gt; l(key, v)); },
+    subscribe(fn) { listeners.add(fn); return () =&gt; listeners.delete(fn); },
+  };
+})();
+
+Store.set("user", { name: "Alice" });
+// Store.state;   // undefined   ← 拿不到内部</code></pre>
+          </div>
+          <p style="margin-top: 8px">
+            ESM 有"模块作用域"后，这个模式被简化为普通的模块变量 + 命名导出。但闭包模式在单文件脚本、UMD 包里仍常见。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">工厂函数 / Currying</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 柯里化：把多参函数变成链
+const add = (a) =&gt; (b) =&gt; (c) =&gt; a + b + c;
+add(1)(2)(3);        // 6
+
+// 特化版本
+const addTen = add(10);
+addTen(5)(3);        // 18
+
+// 工厂：返回预配置的函数
+const makeLogger = (tag) =&gt; (msg) =&gt; console.log(`[${tag}] ${msg}`);
+const logInfo = makeLogger("INFO");
+logInfo("hello");    // [INFO] hello</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 =========================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-once">只执行一次</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function once(fn) {
+  let called = false;
+  let result;
+  return function (...args) {
+    if (!called) {
+      called = true;
+      result = fn.apply(this, args);
+    }
+    return result;
+  };
+}
+
+const init = once(() =&gt; expensiveInit());
+init(); init(); init();    // expensiveInit 只跑一次</code></pre>
+        </div>
+
+        <h3 id="ex-state-machine">有状态的生成器</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function idGenerator(prefix = "id") {
+  let seq = 0;
+  return () =&gt; `${prefix}-${++seq}`;
+}
+
+const nextId = idGenerator("user");
+nextId();     // "user-1"
+nextId();     // "user-2"
+
+// 也适合做"限量消费"等状态容器
+function takeN(arr, n) {
+  let i = 0;
+  return () =&gt; i &lt; n ? arr[i++] : undefined;
+}</code></pre>
+        </div>
+
+        <h3 id="ex-observer">简易 observer</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function createSignal(initial) {
+  let value = initial;
+  const subs = new Set();
+  return {
+    get: () =&gt; value,
+    set: (v) =&gt; { value = v; subs.forEach(fn =&gt; fn(v)); },
+    subscribe: (fn) =&gt; { subs.add(fn); return () =&gt; subs.delete(fn); },
+  };
+}
+
+const count = createSignal(0);
+const unsub = count.subscribe(v =&gt; console.log("changed:", v));
+count.set(1);       // changed: 1
+count.set(2);       // changed: 2
+unsub();
+count.set(3);       // 不再触发</code></pre>
+        </div>
+
+        <h3 id="ex-partial">Partial application</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function partial(fn, ...presetArgs) {
+  return function (...laterArgs) {
+    return fn.apply(this, [...presetArgs, ...laterArgs]);
+  };
+}
+
+const greet = (greeting, name) =&gt; `${greeting}, ${name}!`;
+const hello = partial(greet, "Hello");
+hello("Alice");                // "Hello, Alice!"
+
+// 原生等价：fn.bind(null, ...presetArgs)（见下一章 04）</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 =========================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">循环里用 <code>var</code> + 闭包共享变量</div>
+          <p>
+            经典面试题 <code>for (var i; ...) setTimeout(() =&gt; i)</code> 全部打印同值。规避：用
+            <code>let</code>（每迭代新绑定）。详见 P1-03 和 P2-01。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">DOM 节点的闭包泄漏</div>
+          <p>
+            <code>const el = document.getElementById("x"); el.onclick = () =&gt; el.foo;</code> —— 回调通过闭包持有
+            <code>el</code>。即使 <code>el</code> 从 DOM 移除，只要事件回调还在挂着，<code>el</code> 就不会被 GC。经典
+            React 组件卸载时忘 removeEventListener 的根因。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">setInterval 忘记 clear</div>
+          <p>
+            <code>const timer = setInterval(() =&gt; { /* 用 state */ }, 1000);</code> —— 即使组件卸载 /
+            页面切换，定时器仍持有 state 引用。React/Vue 的 <code>useEffect</code> 的 cleanup /
+            <code>onUnmounted</code> 必须 clear。Node.js 里 server 重启间的大对象保留同理。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">console.log 的"延迟求值"</div>
+          <p>
+            <code>console.log(obj); obj.x = 1;</code> 在某些 DevTools 里展开时显示的是<strong>展开时的值</strong>（因为
+            log 保留引用）。排查 async 状态要 <code>console.log({...obj})</code> 或
+            <code>structuredClone(obj)</code> 固定快照。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">过多闭包造成性能压力</div>
+          <p>
+            每个闭包都有 <code>[[Environment]]</code> 分配 + 可能的 context 堆对象。在高频循环（如 60 fps 的 animation
+            loop）里创建大量短生命周期的闭包会增加 GC 压力。解决：提到循环外创建一次复用，或用普通函数 + 参数传递。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>eval</code> 或 <code>with</code> 会阻止闭包优化</div>
+          <p>
+            V8 只能在"函数体里能静态分析出用到哪些变量"的前提下优化。<code>eval("x")</code> 或
+            <code>with (obj) { ... }</code> 让静态分析失效，引擎只能悲观保留整个作用域。<strong
+              >永远不用 eval / with</strong
+            >。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">忘记解绑订阅</div>
+          <p>
+            <code>store.subscribe(listener)</code> 里的 listener 通过闭包持有组件 state。不调用 unsubscribe
+            就会泄漏。统一用 <code>const unsub = store.subscribe(...); return unsub</code>（React useEffect cleanup、Vue
+            watch effect 清理）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">共享可变 state 的竞态</div>
+          <p>
+            <code>function make() { let s = []; return () =&gt; s; }</code> ——
+            多次调用返回同一个数组！多个消费者互相影响。需要"独立实例"就每次在工厂函数里
+            <code>return () =&gt; []</code>，每次调用返回新的。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================ -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-function-environment-records" target="_blank" rel="noopener"
+              >ECMA-262 · 9.1.1.3 Function Environment Records</a
+            >
+          </li>
+          <li>
+            <a href="https://v8.dev/blog/slack-tracking" target="_blank" rel="noopener">V8 blog · Slack Tracking</a>
+          </li>
+          <li>
+            <a
+              href="https://github.com/mdn/content/blob/main/files/en-us/web/javascript/closures/index.md"
+              target="_blank"
+              rel="noopener"
+              >MDN · Closures</a
+            >
+          </li>
+          <li>
+            <strong>下一步</strong> → <a href="03-this.html">03 · this 四规则</a> — 把"闭包捕获 this
+            吗？"的问题回答清楚。
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-scope-tdz.html"
+            ><span class="label">← 上一章</span><span class="title">01 · 作用域与 TDZ</span></a
+          >
+          <a class="next" href="03-this.html"
+            ><span class="label">下一章 →</span><span class="title">03 · this 四规则</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

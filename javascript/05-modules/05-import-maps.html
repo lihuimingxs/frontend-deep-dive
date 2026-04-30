@@ -1,0 +1,632 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>import maps 与模块解析 · P4 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="bare specifier 规则、浏览器 import maps 与 scopes、Node.js package exports/imports 字段、条件导出（node/browser/import/require/default）、subpath imports 的 # 前缀、monorepo 路径别名。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · 模块 & 元编程</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-esm.html">01 · ESM 规范与模块图</a></li>
+          <li><a href="02-cjs-interop.html">02 · CJS 与 ESM 互操作</a></li>
+          <li><a href="03-dynamic-import.html">03 · 动态 import</a></li>
+          <li><a href="04-tree-shaking.html">04 · Tree-shaking 原理</a></li>
+          <li><a href="05-import-maps.html">05 · import maps 与模块解析</a></li>
+          <li><a href="06-polyfills.html">06 · Polyfill 策略</a></li>
+          <li><a href="07-eval-function.html">07 · eval 与 new Function</a></li>
+          <li><a href="08-workers.html">08 · Web Workers</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../02-fundamentals/index.html">P2 · 语言基础</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · 模块 & 元编程</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>import maps 与模块解析</span>
+        </nav>
+
+        <h1>import maps 与模块解析</h1>
+        <p class="lead">
+          <code>import "lodash"</code> 浏览器不知道去哪找 —— 必须告诉它。工具链里是打包器的 resolver；原生浏览器里是
+          <strong>import maps</strong>；Node 里是 <strong>exports/imports 字段</strong>。本章把三种环境下的"specifier →
+          URL"规则讲清楚。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~20 分钟</span>
+          <span><strong>前置</strong> 01 ESM · 02 CJS 互操作</span>
+          <span
+            ><strong>规范</strong>
+            <a href="https://github.com/WICG/import-maps" target="_blank" rel="noopener">WICG Import Maps</a></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <h3>Specifier 的三种类型</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>类型</th>
+              <th>例子</th>
+              <th>解析方式</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Relative</strong></td>
+              <td><code>./utils.mjs</code> / <code>../shared.mjs</code></td>
+              <td>相对当前模块 URL</td>
+            </tr>
+            <tr>
+              <td><strong>Absolute URL</strong></td>
+              <td><code>https://cdn.example.com/lib.mjs</code></td>
+              <td>直接用</td>
+            </tr>
+            <tr>
+              <td><strong>Bare specifier</strong></td>
+              <td><code>lodash</code> / <code>@org/pkg</code> / <code>#internal</code></td>
+              <td><strong>需要 resolver</strong>（import map / node modules / exports）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>三种环境的 resolver</h3>
+        <ul>
+          <li><strong>浏览器</strong>：<code>&lt;script type="importmap"&gt;</code> JSON 配置</li>
+          <li>
+            <strong>Node.js</strong>：<code>node_modules</code> 目录查找 + package.json <code>exports</code>/<code
+              >imports</code
+            >
+          </li>
+          <li>
+            <strong>打包器</strong>：<code>resolve.alias</code>/<code>paths</code>/<code>tsconfig</code> + 上述规则
+          </li>
+        </ul>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="browser-importmap">浏览器 Import Maps</h3>
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-js">&lt;script type=&quot;importmap&quot;&gt;
+{
+  &quot;imports&quot;: {
+    &quot;lodash&quot;: &quot;https://cdn.skypack.dev/lodash-es&quot;,
+    &quot;lodash/&quot;: &quot;https://cdn.skypack.dev/lodash-es/&quot;,   // 斜杠结尾：子路径映射
+    &quot;react&quot;:  &quot;https://esm.sh/react@18.3.1&quot;,
+    &quot;react-dom/client&quot;: &quot;https://esm.sh/react-dom@18.3.1/client&quot;,
+    &quot;@/&quot;: &quot;/src/&quot;
+  },
+  &quot;scopes&quot;: {
+    &quot;/admin/&quot;: {
+      &quot;react&quot;: &quot;https://esm.sh/react@19.0.0&quot;   // admin 目录用 React 19
+    }
+  }
+}
+&lt;/script&gt;
+
+&lt;script type=&quot;module&quot;&gt;
+  import _ from &quot;lodash&quot;;               // 走 map → skypack
+  import { debounce } from &quot;lodash/debounce&quot;;  // 子路径
+  import Foo from &quot;@/components/Foo.mjs&quot;;  // /src/components/Foo.mjs
+&lt;/script&gt;</code></pre>
+        </div>
+        <p>
+          Chrome 89+ / Firefox 108+ / Safari 16.4+ 支持。一个页面只能有一个 importmap，必须在任何
+          <code>type="module"</code> script 之前。
+        </p>
+
+        <h3 id="scopes">Scopes：作用域级别的 override</h3>
+        <p>
+          <code>scopes</code>
+          允许在特定路径下覆盖全局映射。用于"页面不同子路由用不同版本库"或"某个第三方包自己要求用特定依赖版本"：
+        </p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-js">{
+  "imports": {
+    "react": "https://esm.sh/react@18"
+  },
+  "scopes": {
+    "/legacy/": {
+      "react": "https://esm.sh/react@17"   // legacy 代码用 React 17
+    }
+  }
+}</code></pre>
+        </div>
+
+        <h3 id="node-exports">Node.js exports 字段</h3>
+        <p>包作者用 <code>exports</code> 字段声明"哪些子路径可以被外部 import"+ "针对不同环境给不同文件"：</p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-js">{
+  "name": "mylib",
+  "type": "module",
+  "exports": {
+    ".": {                                // 主入口
+      "types": "./dist/index.d.ts",
+      "browser": "./dist/browser.mjs",    // bundler 看到 target=web
+      "import": "./dist/index.mjs",       // ESM 消费者
+      "require": "./dist/index.cjs",      // CJS 消费者
+      "default": "./dist/index.mjs"       // fallback
+    },
+    "./utils": "./dist/utils.mjs",        // 子路径导出
+    "./locale/*.json": "./dist/locales/*.json",  // 模式匹配
+    "./package.json": "./package.json"    // 允许读 package.json
+  }
+}
+
+// 消费者
+import mylib from "mylib";                 // → dist/index.mjs
+import { helper } from "mylib/utils";      // → dist/utils.mjs
+import zh from "mylib/locale/zh.json";     // → dist/locales/zh.json</code></pre>
+        </div>
+
+        <p>
+          <strong>exports 字段强封装</strong>：没在 exports 里列的子路径，消费者<strong>无法 import</strong>（Node 报
+          ERR_PACKAGE_PATH_NOT_EXPORTED）。这防止了库内部文件被外部误用。
+        </p>
+
+        <h3 id="conditional-exports">条件导出的优先级</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>条件键</th>
+              <th>何时匹配</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>types</code></td>
+              <td>TypeScript 解析类型时（必须放最前！）</td>
+            </tr>
+            <tr>
+              <td><code>browser</code></td>
+              <td>构建器 target 是浏览器</td>
+            </tr>
+            <tr>
+              <td><code>deno</code> / <code>bun</code> / <code>workerd</code></td>
+              <td>对应 runtime</td>
+            </tr>
+            <tr>
+              <td><code>node</code></td>
+              <td>Node.js</td>
+            </tr>
+            <tr>
+              <td><code>import</code></td>
+              <td>ESM 消费者</td>
+            </tr>
+            <tr>
+              <td><code>require</code></td>
+              <td>CJS 消费者</td>
+            </tr>
+            <tr>
+              <td><code>default</code></td>
+              <td>兜底（必须放最后）</td>
+            </tr>
+            <tr>
+              <td><code>development</code> / <code>production</code></td>
+              <td>NODE_ENV 值（Node 22+）</td>
+            </tr>
+          </tbody>
+        </table>
+        <p><strong>顺序敏感！</strong>从上到下匹配第一个 true 的键。错顺序会让 TypeScript 拿到 .js 而不是 .d.ts。</p>
+
+        <h3 id="subpath-imports">Subpath imports（# 前缀）</h3>
+        <p><code>imports</code> 字段（和 exports 平级）用于包<strong>内部</strong>的路径别名：</p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-js">// package.json
+{
+  "imports": {
+    "#utils": "./src/utils/index.mjs",
+    "#config": {
+      "development": "./config/dev.mjs",
+      "production": "./config/prod.mjs",
+      "default": "./config/default.mjs"
+    }
+  }
+}
+
+// 包内部代码
+import { helper } from "#utils";        // ← 不用 ../../utils
+import config from "#config";           // 按环境选文件</code></pre>
+        </div>
+        <p>替代相对路径（<code>../../../utils</code>）和 tsconfig paths。规范标准，Node 原生支持，不依赖构建工具。</p>
+
+        <h3 id="bundler-paths">打包器的路径别名</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// Webpack
+{
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "src"),
+      "@shared": path.resolve(__dirname, "../shared"),
+    }
+  }
+}
+
+// Vite / Rollup
+{
+  resolve: {
+    alias: [{ find: "@", replacement: "/src" }]
+  }
+}
+
+// tsconfig.json（TypeScript 识别）
+{
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./src/*"],
+      "@shared/*": ["../shared/*"]
+    }
+  }
+}
+
+// ⚠ tsconfig paths 只是<strong>编译时</strong>别名
+// 运行时需要打包器也识别（Webpack/Vite 自动读 tsconfig.paths，Bun 也是）</code></pre>
+        </div>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">无构建开发（本地 ESM + import map）</h3>
+          <div class="code-block">
+            <span class="code-label">html</span>
+            <pre class="code"><code class="lang-js">&lt;!-- index.html --&gt;
+&lt;script type=&quot;importmap&quot;&gt;
+{
+  &quot;imports&quot;: {
+    &quot;lit&quot;: &quot;https://esm.sh/lit@3&quot;,
+    &quot;@/&quot;: &quot;./src/&quot;
+  }
+}
+&lt;/script&gt;
+&lt;script type=&quot;module&quot; src=&quot;./main.mjs&quot;&gt;&lt;/script&gt;
+
+&lt;!-- main.mjs --&gt;
+import { html, render } from &quot;lit&quot;;
+import { App } from &quot;@/app.mjs&quot;;
+
+// 适合：demo、playground、小项目、教学
+// 不适合：大项目（HTTP 请求数爆炸，不支持 TS 等）</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">monorepo 内部路径别名</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// package.json (内部私有包)
+{
+  "imports": {
+    "#domain": "./src/domain/index.mjs",
+    "#services": "./src/services/index.mjs",
+    "#db/*": "./src/db/*"
+  }
+}
+
+// 业务代码
+import { User } from "#domain";
+import { sendEmail } from "#services";
+import { userRepo } from "#db/user";
+
+// 好处：代码移动时不用改 import 路径
+// Node 原生支持 imports 字段，无需打包器</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">dev / prod 条件导出</h3>
+          <div class="code-block">
+            <span class="code-label">json</span>
+            <pre class="code"><code class="lang-js">// 库提供 dev 版（带警告 / 额外检查）和 prod 版（轻量）
+{
+  "exports": {
+    ".": {
+      "development": "./dist/index.dev.mjs",
+      "production": "./dist/index.prod.mjs",
+      "default": "./dist/index.prod.mjs"
+    }
+  }
+}
+
+// React、Redux 等库的标准做法
+// Node 22+ 自动按 NODE_ENV 选择</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">浏览器直连 CDN 的 React 项目</h3>
+          <div class="code-block">
+            <span class="code-label">html</span>
+            <pre class="code"><code class="lang-js">&lt;script type=&quot;importmap&quot;&gt;
+{
+  &quot;imports&quot;: {
+    &quot;react&quot;: &quot;https://esm.sh/react@18.3.1?dev&quot;,
+    &quot;react-dom&quot;: &quot;https://esm.sh/react-dom@18.3.1?dev&quot;,
+    &quot;react-dom/client&quot;: &quot;https://esm.sh/react-dom@18.3.1/client?dev&quot;
+  }
+}
+&lt;/script&gt;
+&lt;script type=&quot;module&quot; src=&quot;./app.mjs&quot;&gt;&lt;/script&gt;
+
+&lt;!-- app.mjs --&gt;
+import { createRoot } from &quot;react-dom/client&quot;;
+import { App } from &quot;./App.mjs&quot;;
+createRoot(document.getElementById(&quot;root&quot;)).render(&lt;App /&gt;);
+
+&lt;!-- 无构建工具、无 node_modules、可直接访问
+⚠ 生产仍建议打包（HTTP 请求数 / 代码分割 / 压缩） --&gt;</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">TypeScript paths + 实际运行时配对</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// tsconfig.json
+{
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  }
+}
+
+// 配套 vite.config.ts
+import { fileURLToPath, URL } from "node:url";
+export default {
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url))
+    }
+  }
+}
+
+// 或用 vite-tsconfig-paths 插件自动同步</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-full-exports">完整 exports 示例（类型 + 双模）</h3>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-js">{
+  "name": "@myorg/ui",
+  "type": "module",
+  "version": "2.0.0",
+  "main": "./dist/index.cjs",            // 老式 main（fallback）
+  "module": "./dist/index.mjs",          // module 字段（bundler 识别）
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./Button": {
+      "types": "./dist/Button.d.ts",
+      "import": "./dist/Button.mjs",
+      "require": "./dist/Button.cjs"
+    },
+    "./styles.css": "./dist/styles.css",
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "*": ["dist/*"]
+    }
+  }
+}</code></pre>
+        </div>
+
+        <h3 id="ex-dual-runtime">跨 runtime 包（Node + Browser + Deno）</h3>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-js">{
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "deno": "./dist/deno.mjs",
+      "bun": "./dist/bun.mjs",
+      "browser": "./dist/browser.mjs",
+      "node": {
+        "import": "./dist/node.mjs",
+        "require": "./dist/node.cjs"
+      },
+      "default": "./dist/index.mjs"
+    }
+  }
+}
+
+// 每个 runtime 可以用对应的 API（如 Node fs、Deno 权限 API）</code></pre>
+        </div>
+
+        <h3 id="ex-importmap-generator">动态生成 import map</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 从 lockfile 生成 import map（常见 tool：@jspm/generator）
+import { Generator } from "@jspm/generator";
+
+const generator = new Generator({
+  mapUrl: import.meta.url,
+  defaultProvider: "esm.sh",
+  env: ["production", "browser"],
+});
+
+await generator.install(["react@18", "react-dom@18"]);
+console.log(JSON.stringify(generator.getMap(), null, 2));
+
+// 输出可以直接写进 &lt;script type="importmap"&gt;</code></pre>
+        </div>
+
+        <h3 id="ex-node-resolve">Node 的 resolution 调试</h3>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-js">// 看 Node 怎么解析一个包
+node --experimental-specifier-resolution=explicit --trace-module-resolution my-script.mjs
+
+// 或在代码里
+import { resolve } from "node:path";
+console.log(import.meta.resolve("lodash"));    // 返回解析后的 URL
+
+// node_modules 查找顺序：
+// 1. 当前目录的 node_modules
+// 2. 上级目录的 node_modules
+// 3. ... 直到文件系统根</code></pre>
+        </div>
+
+        <!-- 05 陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>exports</code> 字段存在就是"只能 import 列出的路径"</div>
+          <p>
+            一旦 package.json 有 exports，<strong>没列</strong>的路径消费者无法 import（即使文件存在）。升级库时加
+            exports 可能破坏消费者的深层 import。要保留老路径就在 exports 里显式列出。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">条件导出顺序错，TypeScript 拿不到类型</div>
+          <p>
+            <code>types</code> 必须排在 <code>import</code>/<code>require</code><strong>之前</strong>。否则 TS 先匹配到
+            <code>import</code> 拿到 .mjs 而不是 .d.ts → 类型失效。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">import map 只能有一个</div>
+          <p>
+            每个页面<strong>最多一个</strong> <code>&lt;script type="importmap"&gt;</code>，且必须在所有
+            <code>type="module"</code> 之前。多个会被忽略。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">import map 不支持继承</div>
+          <p>
+            子 iframe / Worker 不能继承父文档的 import map，需要自己声明。<code>importmap-external</code> 提案还没普及。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">tsconfig paths 运行时不生效</div>
+          <p>
+            <code>paths</code> 只是 TS 编译器的解析别名。运行时必须有对应的 bundler 配置（Webpack alias、Vite
+            resolve.alias）或 Node 的 imports 字段。Bun / Deno 也支持 tsconfig paths。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Subpath pattern 必须包含 <code>*</code></div>
+          <p>
+            <code>"./locale/*": "./locale/*.mjs"</code> 中 <code>*</code> 在 key 和 value 必须配对。不能
+            <code>"./locale/*": "./locale/all.mjs"</code>（固定 value，不支持）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">browser 字段 vs exports.browser</div>
+          <p>
+            老式 <code>browser</code> 字段：根级别，仅 bundler 识别；<strong>新式</strong>用
+            <code>exports.browser</code> 条件更精细。混用可能冲突。建议只用 <code>exports</code>（支持全部场景）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">imports 字段的 # 不能用于 exports</div>
+          <p>
+            <code>#xxx</code> 是 subpath imports 专用，<strong>只在包内部可用</strong>。不能
+            <code>import "pkg/#xxx"</code> 从外部 import。外部用 <code>exports</code>。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://github.com/WICG/import-maps" target="_blank" rel="noopener">WICG · Import Maps 规范</a>
+          </li>
+          <li>
+            <a href="https://nodejs.org/api/packages.html#conditional-exports" target="_blank" rel="noopener"
+              >Node.js · Conditional Exports</a
+            >
+          </li>
+          <li>
+            <a href="https://nodejs.org/api/packages.html#subpath-imports" target="_blank" rel="noopener"
+              >Node.js · Subpath Imports</a
+            >
+          </li>
+          <li><a href="https://generator.jspm.io/" target="_blank" rel="noopener">JSPM Import Map Generator</a></li>
+          <li><strong>下一步</strong> → <a href="06-polyfills.html">06 · Polyfill 策略</a>。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="04-tree-shaking.html"
+            ><span class="label">← 上一章</span><span class="title">04 · Tree-shaking 原理</span></a
+          >
+          <a class="next" href="06-polyfills.html"
+            ><span class="label">下一章 →</span><span class="title">06 · Polyfill 策略</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

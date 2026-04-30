@@ -1,0 +1,787 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>10 · Mapped Types & Template Literal · Part 2 · TypeScript 深度学习</title>
+    <meta
+      name="description"
+      content="TypeScript 类型层的「循环」与「字符串拼接」：mapped types 通过 keyof 对每个 key 做映射，template literal types 在类型层做字符串模板。配合 key remapping as 与 union 笛卡尔积，构成 TS 最强的代码生成器。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%233178c6'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETS%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>TypeScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.62 0.13 245); color: #fff">TS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">TS 首页</a>
+          <a href="index.html">Part 3 目录</a>
+          <a href="https://www.typescriptlang.org/docs/handbook/2/mapped-types.html" target="_blank" rel="noopener"
+            >原站</a
+          >
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Part 3 · 类型操作</h3>
+        <ul>
+          <li><a href="index.html">Part 概览</a></li>
+          <li><a href="07-generics.html">07 · Generics</a></li>
+          <li><a href="08-keyof-typeof.html">08 · keyof / typeof / Indexed Access</a></li>
+          <li><a href="09-conditional-types.html">09 · Conditional Types & infer</a></li>
+          <li><a href="10-mapped-types.html">10 · Mapped Types & Template Literal</a></li>
+          <li><a href="11-utility-types.html">11 · Utility Types</a></li>
+          <li><a href="12-satisfies.html">12 · satisfies 与组合艺术</a></li>
+        </ul>
+        <h3>其他 Part</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">Part 1 · TypeScript 是谁</a></li>
+          <li><a href="../02-handbook-basics/index.html">Part 2 · Handbook 基础</a></li>
+          <li><a href="../04-reference/index.html">Part 4 · Reference</a></li>
+          <li><a href="../05-project/index.html">Part 5 · 工程化</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TypeScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Part 3 · 类型操作</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>10 · Mapped Types & Template Literal</span>
+        </nav>
+
+        <h1>10 · Mapped Types & Template Literal Types</h1>
+        <p class="lead">
+          Mapped types 是类型层的"循环"——遍历一个对象的每个 key 做映射；template literal types 是类型层的"字符串拼接"。两者配合 09 章的 conditional types 构成 TS 最强大的<strong>类型代码生成器</strong>：从一个简单类型自动派生出 getter / setter 全套、从配置 schema 派生出表单字段、从路由模板派生参数对象。本章拆解这两个工具的<strong>修饰符语义、key remapping、union 笛卡尔积、内置 intrinsic 字符串类型</strong>，并演示它们组合的"代码生成"能力。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~35 分钟</span>
+          <span><strong>前置</strong>
+            <a href="08-keyof-typeof.html">08 keyof/typeof</a> +
+            <a href="09-conditional-types.html">09 Conditional</a></span>
+          <span
+            ><strong>对应 typescriptlang.org</strong>
+            <a href="https://www.typescriptlang.org/docs/handbook/2/mapped-types.html" target="_blank" rel="noopener"
+              >Mapped Types</a
+            >
+            +
+            <a
+              href="https://www.typescriptlang.org/docs/handbook/2/template-literal-types.html"
+              target="_blank"
+              rel="noopener"
+              >Template Literal</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>Mapped type 最小例子：</p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 把对象 T 的每个字段都变 readonly
+type Readonly&lt;T&gt; = { readonly [K in keyof T]: T[K] };
+
+// 把对象 T 的每个字段都变 optional
+type Partial&lt;T&gt; = { [K in keyof T]?: T[K] };
+
+// Pick：只保留指定 key
+type Pick&lt;T, K extends keyof T&gt; = { [P in K]: T[P] };</code></pre>
+        </div>
+        <p>Template literal type 最小例子：</p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">type Greeting = `Hello, ${string}`;
+const a: Greeting = "Hello, world";   // ✓
+const b: Greeting = "Hi";              // ❌
+
+// Union 在插值位置 → 笛卡尔积
+type Color = "red" | "blue";
+type Shade = 100 | 500;
+type Class = `bg-${Color}-${Shade}`;
+//   ^? "bg-red-100" | "bg-red-500" | "bg-blue-100" | "bg-blue-500"</code></pre>
+        </div>
+        <p>组合（key remapping，TS 4.1+）：</p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 把 { name, age } 变成 { getName, getAge }
+type Getters&lt;T&gt; = {
+  [K in keyof T as `get${Capitalize&lt;string &amp; K&gt;}`]: () =&gt; T[K]
+};
+
+interface User { name: string; age: number }
+type UserGetters = Getters&lt;User&gt;;
+//   ^? { getName: () =&gt; string; getAge: () =&gt; number }</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>1. Mapped type 是类型层的 <code>Object.fromEntries(...)</code></h3>
+        <p>
+          想象 mapped type 是一个类型层的循环：对 <code>keyof T</code> 的每个 key 跑一次，输出 key + value。运行时等价物：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript · 类比</span>
+          <pre class="code"><code class="lang-ts">// 类型层
+type Mapped&lt;T&gt; = { [K in keyof T]: T[K] };
+
+// 运行时等价
+function mapped&lt;T extends object&gt;(o: T): T {
+  return Object.fromEntries(
+    Object.keys(o).map(k =&gt; [k, (o as any)[k]])
+  ) as T;
+}</code></pre>
+        </div>
+        <p>
+          Mapped type 的语法分三部分：
+        </p>
+        <ol>
+          <li><strong>修饰符</strong>：<code>readonly</code> / <code>?</code> + 加减号 <code>+/-</code></li>
+          <li><strong><code>[K in Keys]</code></strong>：枚举 key 来源（通常 <code>keyof T</code>）</li>
+          <li><strong>value 类型</strong>：可以引用 K，通常 <code>T[K]</code></li>
+        </ol>
+
+        <h3>2. Modifier 的 + / - 语义</h3>
+        <p>
+          mapped type 不只能"加"修饰符，还能"减"。这点常被忽略：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 加 readonly（+ 是默认，可省）
+type Readonly&lt;T&gt; = { +readonly [K in keyof T]: T[K] };
+type Readonly&lt;T&gt; = { readonly [K in keyof T]: T[K] };  // 等价
+
+// 加 optional
+type Partial&lt;T&gt; = { [K in keyof T]+?: T[K] };
+type Partial&lt;T&gt; = { [K in keyof T]?: T[K] };  // 等价
+
+// 减 readonly — 这就是 Mutable
+type Mutable&lt;T&gt; = { -readonly [K in keyof T]: T[K] };
+
+// 减 optional — 这就是 Required
+type Required&lt;T&gt; = { [K in keyof T]-?: T[K] };
+
+interface User {
+  readonly id: string;
+  name?: string;
+}
+
+type M = Mutable&lt;User&gt;;
+//   ^? { id: string; name?: string }   id 不再 readonly
+
+type R = Required&lt;User&gt;;
+//   ^? { readonly id: string; name: string }   name 不再 optional</code></pre>
+        </div>
+        <p>
+          关键认知：<strong>mapped type 默认会"带过"原类型的 readonly / ? 修饰符</strong>。所以 <code>Partial&lt;Readonly&lt;T&gt;&gt;</code> 仍然是 readonly 的；要去掉必须显式 <code>-readonly</code>。
+        </p>
+
+        <h3>3. Key remapping <code>as</code>（TS 4.1+）：循环输出可改 key</h3>
+        <p>
+          没有 key remapping 时，mapped type 的输出 key 必须等于输入 key（只能改 value 类型）。<code>as</code> 让输出 key 也可计算：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"<code class="lang-ts">// 老语法（无 remapping）
+type Same&lt;T&gt; = { [K in keyof T]: T[K] };
+//                              ^   K 直接当输出 key
+
+// 新语法（带 as）
+type Renamed&lt;T&gt; = { [K in keyof T as `prefix_${string &amp; K}`]: T[K] };
+//                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   重命名
+
+interface User { name: string; age: number }
+type R = Renamed&lt;User&gt;;
+//   ^? { prefix_name: string; prefix_age: number }</code></pre>
+        </div>
+        <p>
+          关键能力：<strong><code>as</code> 后面可以是任意类型表达式</strong>。配合 conditional 可以<strong>过滤 key</strong>（让某些 key 输出 <code>never</code> 即被丢弃）：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 只保留 string 字段
+type StringFields&lt;T&gt; = {
+  [K in keyof T as T[K] extends string ? K : never]: T[K]
+};
+
+interface Mixed { name: string; age: number; email: string }
+type R = StringFields&lt;Mixed&gt;;
+//   ^? { name: string; email: string }   age 被 never 过滤掉</code></pre>
+        </div>
+        <p>
+          这是写"<strong>选出符合某条件的字段</strong>"的标准 idiom。lib.es5.d.ts 里 <code>Pick</code> / <code>Omit</code> 的现代实现都依赖这种过滤。
+        </p>
+
+        <h3>4. 为什么 key remapping 需要 <code>string &amp; K</code></h3>
+        <p>
+          <code>keyof T</code> 的类型是 <code>string | number | symbol</code>（即所有可能 key）。但 <code>Capitalize</code> 等内置只接受 string。所以需要"<strong>把 K 收窄到 string 的部分</strong>"：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// ❌ 直接 Capitalize&lt;K&gt;
+type Bad&lt;T&gt; = { [K in keyof T as `get${Capitalize&lt;K&gt;}`]: () =&gt; T[K] };
+//                                              ^   Type 'K' does not satisfy the constraint 'string'
+
+// ✅ string &amp; K：取 K 中是 string 的部分
+type Good&lt;T&gt; = { [K in keyof T as `get${Capitalize&lt;string &amp; K&gt;}`]: () =&gt; T[K] };
+
+// 或更精确：约束 T 的 key 只能是 string
+type Good2&lt;T extends Record&lt;string, unknown&gt;&gt; = {
+  [K in keyof T as `get${Capitalize&lt;K extends string ? K : never&gt;}`]: () =&gt; T[K]
+};</code></pre>
+        </div>
+        <p>
+          <code>string &amp; K</code> 是 <strong>intersection</strong> —— 把 K（可能是 string|number|symbol）与 string 取交集，结果是 K 中的 string 部分。number / symbol 部分变 never，被自动过滤。
+        </p>
+
+        <h3>5. Template literal type：类型层的字符串模板</h3>
+        <p>
+          Template literal types 让你在类型层做<strong>字符串拼接</strong>。语法和 JS 模板字符串相同：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">type World = "world";
+type Greet = `Hello, ${World}!`;        // "Hello, world!"
+
+// 占位符可以是 string / number / boolean / bigint 字面量
+type N1 = `value: ${42}`;                // "value: 42"
+type N2 = `enabled: ${true}`;            // "enabled: true"
+
+// 占位符可以是 string / number / bigint / boolean（接受任意字符串/数字/布尔）
+type Fmt&lt;S extends string&gt; = `[${S}]`;
+type R = Fmt&lt;"abc"&gt;;                     // "[abc]"</code></pre>
+        </div>
+
+        <h3>6. Union 在插值位置 → 笛卡尔积</h3>
+        <p>
+          这是 template literal 最强大也最危险的特性：<strong>union 在插值位置自动展开成所有组合</strong>。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">type Color = "red" | "blue" | "green";
+type Shade = 100 | 500 | 900;
+
+type ClassName = `bg-${Color}-${Shade}`;
+//   ^? "bg-red-100" | "bg-red-500" | "bg-red-900"
+//      | "bg-blue-100" | ... | "bg-green-900"   3×3 = 9 种组合</code></pre>
+        </div>
+        <p>
+          组合数 = 各位置 union size 的<strong>乘积</strong>。3 × 3 还好，但：
+        </p>
+        <ul>
+          <li>10 个 color × 10 个 shade × 5 个 prefix = 500 个</li>
+          <li>20 × 20 × 20 = 8000 个 — 编译器开始喘</li>
+          <li>30 × 30 × 30 = 27000 个 — TS 直接拒绝展开（"Expression produces a union type that is too complex to represent"）</li>
+        </ul>
+        <p>
+          <strong>规避</strong>：组合大集合时改用 <code>string</code> 做约束（不展开），用 <code>${string}</code> 占位符匹配任意字符串。例如 Tailwind 的实际类型用 <code>string</code> 而不是穷举所有 class。
+        </p>
+
+        <h3>7. 内置字符串 utility 是 intrinsic</h3>
+        <p>
+          <code>Uppercase</code> / <code>Lowercase</code> / <code>Capitalize</code> / <code>Uncapitalize</code> 这四个内置类型是<strong>编译器特殊实现</strong>（intrinsic），不是普通 mapped type 能写出来的。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">type A = Uppercase&lt;"hello"&gt;;        // "HELLO"
+type B = Lowercase&lt;"WORLD"&gt;;        // "world"
+type C = Capitalize&lt;"alice"&gt;;       // "Alice"
+type D = Uncapitalize&lt;"Hello"&gt;;     // "hello"
+
+// 它们的"实现"看起来很奇怪
+// type Uppercase&lt;S extends string&gt; = intrinsic;
+
+// 配合 template literal 做转换
+type GetterName&lt;K extends string&gt; = `get${Capitalize&lt;K&gt;}`;
+type R = GetterName&lt;"name"&gt;;         // "getName"</code></pre>
+        </div>
+        <p>
+          这四个 intrinsic 在<strong>运行时没有对应函数</strong>—— 它们是纯类型工具。要在运行时做大小写转换仍要写 <code>"hello".toUpperCase()</code> 或自己写 <code>capitalize</code>。
+        </p>
+
+        <h3>8. Conditional + Mapped + Template 三剑客组合</h3>
+        <p>
+          三者的真实威力在组合。一个真实例子：从对象类型自动派生出"事件总线 emitter"：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 输入：事件 → payload 映射表
+type EventMap = {
+  click: { x: number; y: number };
+  submit: { values: Record&lt;string, string&gt; };
+  reset: void;
+};
+
+// 输出：emitter 接口
+//   { onClick: (h: (p: { x; y }) =&gt; void) =&gt; void
+//     onSubmit: ...
+//     onReset: ... }
+type Emitter&lt;T&gt; = {
+  [K in keyof T as `on${Capitalize&lt;string &amp; K&gt;}`]: (handler: (payload: T[K]) =&gt; void) =&gt; void;
+};
+
+type AppEmitter = Emitter&lt;EventMap&gt;;
+//   ^? { onClick: (handler: (payload: { x: number; y: number }) =&gt; void) =&gt; void;
+//        onSubmit: ...
+//        onReset: ... }</code></pre>
+        </div>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 表单字段类型自动派生</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">interface User {
+  name: string;
+  email: string;
+  age: number;
+}
+
+// 给每个字段加一个 "Error" 后缀
+type FormErrors&lt;T&gt; = {
+  [K in keyof T as `${string &amp; K}Error`]?: string;
+};
+
+type UserFormErrors = FormErrors&lt;User&gt;;
+//   ^? { nameError?: string; emailError?: string; ageError?: string }
+
+// 或：value 和 error 共存的 form state
+type FormState&lt;T&gt; = {
+  [K in keyof T]: { value: T[K]; error?: string; touched: boolean };
+};
+
+type UserForm = FormState&lt;User&gt;;
+//   ^? { name: { value: string; error?: string; touched: boolean };
+//        email: ...; age: ... }</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 嵌套对象的扁平 key 字符串（i18n）</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// 把嵌套对象的 key 路径展平为 "a.b.c" 字符串 union
+type FlatKeys&lt;T, Prefix extends string = ""&gt; = {
+  [K in keyof T &amp; string]: T[K] extends object
+    ? FlatKeys&lt;T[K], `${Prefix}${K}.`&gt;
+    : `${Prefix}${K}`;
+}[keyof T &amp; string];
+
+const messages = {
+  hello: "Hello",
+  user: {
+    profile: "Profile",
+    settings: {
+      theme: "Theme",
+      language: "Language",
+    },
+  },
+} as const;
+
+type Key = FlatKeys&lt;typeof messages&gt;;
+//   ^? "hello" | "user.profile" | "user.settings.theme" | "user.settings.language"
+
+function t(key: Key): string { /* ... */ return "" }
+t("user.settings.theme");   // ✓
+t("user.typo");              // ❌</code></pre>
+          </div>
+          <p>
+            这是 react-i18next / next-intl 等库提供的"类型化 key"基础。配合 09 章 conditional types 递归。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 路由参数对象类型</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// 从路由模板抽出参数 union
+type ExtractParams&lt;T extends string&gt; =
+  T extends `${string}/:${infer P}/${infer Rest}` ? P | ExtractParams&lt;`/${Rest}`&gt; :
+  T extends `${string}/:${infer P}` ? P :
+  never;
+
+// 用 mapped type 把 union 变成 { param1: string, param2: string } 对象
+type RouteParams&lt;T extends string&gt; = {
+  [K in ExtractParams&lt;T&gt;]: string;
+};
+
+type P1 = RouteParams&lt;"/users/:userId/posts/:postId"&gt;;
+//   ^? { userId: string; postId: string }
+
+function navigate&lt;T extends string&gt;(path: T, params: RouteParams&lt;T&gt;) {}
+navigate("/users/:userId", { userId: "u_1" });   // ✓
+navigate("/users/:userId", {});                    // ❌</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · Tailwind 风格的样式生成（约束规模）</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// ⚠️ 注意规模 — 这种穷举只对小集合可行
+type Size = "sm" | "md" | "lg";
+type Color = "primary" | "secondary";
+
+type SizeClass = `text-${Size}`;
+//   ^? "text-sm" | "text-md" | "text-lg"
+
+type ColorClass = `bg-${Color}` | `text-${Color}`;
+//   ^? "bg-primary" | "bg-secondary" | "text-primary" | "text-secondary"
+
+// 大集合时：用 string 占位符 + 运行时校验
+type AnyButtonClass = `btn-${string}`;   // 接受任意 btn- 开头字符串
+function button(cls: AnyButtonClass) { /* ... */ }
+button("btn-foo");   // ✓
+button("primary");   // ❌</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>所有内置 utility 都是 mapped type</h3>
+        <div class="code-block">
+          <span class="code-label">typescript · lib.es5.d.ts</span>
+          <pre class="code"><code class="lang-ts">// 全部就是这么简单
+type Partial&lt;T&gt; = { [P in keyof T]?: T[P] };
+type Required&lt;T&gt; = { [P in keyof T]-?: T[P] };
+type Readonly&lt;T&gt; = { readonly [P in keyof T]: T[P] };
+type Pick&lt;T, K extends keyof T&gt; = { [P in K]: T[P] };
+type Record&lt;K extends keyof any, T&gt; = { [P in K]: T };</code></pre>
+        </div>
+
+        <h3>DeepReadonly / DeepPartial（递归 mapped type）</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">type DeepReadonly&lt;T&gt; = T extends (infer U)[]
+  ? ReadonlyArray&lt;DeepReadonly&lt;U&gt;&gt;
+  : T extends object
+    ? { readonly [K in keyof T]: DeepReadonly&lt;T[K]&gt; }
+    : T;
+
+interface Config {
+  api: { url: string; timeout: number };
+  features: string[];
+}
+
+type Frozen = DeepReadonly&lt;Config&gt;;
+const c: Frozen = { api: { url: "x", timeout: 100 }, features: ["a"] };
+// c.api.url = "y";    // ❌
+// c.features.push();  // ❌
+
+// DeepPartial 同理
+type DeepPartial&lt;T&gt; = T extends object
+  ? { [K in keyof T]?: DeepPartial&lt;T[K]&gt; }
+  : T;</code></pre>
+        </div>
+
+        <h3>过滤字段：只保留 / 排除某种类型的字段</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 过滤掉 method 字段
+type DataFields&lt;T&gt; = {
+  [K in keyof T as T[K] extends Function ? never : K]: T[K];
+};
+
+class User {
+  name = "";
+  age = 0;
+  greet() { return `Hi ${this.name}` }
+}
+type UserData = DataFields&lt;User&gt;;
+//   ^? { name: string; age: number }   greet 被过滤
+
+// 反过来：只保留 method
+type Methods&lt;T&gt; = {
+  [K in keyof T as T[K] extends Function ? K : never]: T[K];
+};
+type UserMethods = Methods&lt;User&gt;;
+//   ^? { greet: () =&gt; string }
+
+// 提取所有 readonly 字段（用 09 章的 Equal 高级技巧）
+type WritableKeys&lt;T&gt; = {
+  [K in keyof T]-?: (&lt;U&gt;() =&gt; U extends { [P in K]: T[K] } ? 1 : 2) extends
+    (&lt;U&gt;() =&gt; U extends { -readonly [P in K]: T[K] } ? 1 : 2)
+    ? K
+    : never
+}[keyof T];</code></pre>
+        </div>
+
+        <h3>把 union 转 intersection（高级 trick）</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">type UnionToIntersection&lt;U&gt; =
+  (U extends any ? (x: U) =&gt; void : never) extends ((x: infer I) =&gt; void) ? I : never;
+
+type R = UnionToIntersection&lt;{ a: 1 } | { b: 2 }&gt;;
+//   ^? { a: 1 } &amp; { b: 2 }
+
+// 原理：
+// 1. distributive：每个成员变成 (x: T) =&gt; void
+// 2. 用 infer 在"参数位置"推断 — 函数参数是逆变（17 章），union 在逆变位置变 intersection</code></pre>
+        </div>
+
+        <h3>Template literal 配 infer 解析字符串</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 把 "user_name" 转成 "userName"
+type SnakeToCamel&lt;S extends string&gt; =
+  S extends `${infer Head}_${infer Tail}`
+    ? `${Head}${Capitalize&lt;SnakeToCamel&lt;Tail&gt;&gt;}`
+    : S;
+
+type R1 = SnakeToCamel&lt;"hello_world_foo"&gt;;   // "helloWorldFoo"
+
+// 把对象的所有 snake_case key 转成 camelCase
+type CamelCaseKeys&lt;T&gt; = {
+  [K in keyof T as SnakeToCamel&lt;string &amp; K&gt;]: T[K];
+};
+
+interface ApiResponse {
+  user_id: string;
+  user_name: string;
+  created_at: number;
+}
+type R2 = CamelCaseKeys&lt;ApiResponse&gt;;
+//   ^? { userId: string; userName: string; createdAt: number }</code></pre>
+        </div>
+
+        <h3>所有 modifier 组合一览</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">interface Original {
+  readonly id: string;
+  name?: string;
+  age: number;
+}
+
+// 全部 readonly + optional
+type Full&lt;T&gt; = { readonly [K in keyof T]?: T[K] };
+type R1 = Full&lt;Original&gt;;
+//   ^? { readonly id?: string; readonly name?: string; readonly age?: number }
+
+// 去掉所有 readonly + optional
+type Bare&lt;T&gt; = { -readonly [K in keyof T]-?: T[K] };
+type R2 = Bare&lt;Original&gt;;
+//   ^? { id: string; name: string; age: number }
+
+// 仅去 readonly
+type Mut&lt;T&gt; = { -readonly [K in keyof T]: T[K] };
+
+// 仅去 optional
+type Req&lt;T&gt; = { [K in keyof T]-?: T[K] };
+
+// 添加新 optional 同时保留 readonly
+type Opt&lt;T&gt; = { [K in keyof T]+?: T[K] };</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 忘了减号 readonly / optional 默认带过</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">interface User {
+  readonly id: string;
+  name?: string;
+}
+
+// ❌ 想"重新映射"，结果 readonly 和 ? 都被保留
+type Mapped&lt;T&gt; = { [K in keyof T]: T[K] };
+type R = Mapped&lt;User&gt;;
+//   ^? { readonly id: string; name?: string }
+
+// ✅ 显式去掉
+type Bare&lt;T&gt; = { -readonly [K in keyof T]-?: T[K] };
+type R2 = Bare&lt;User&gt;;
+//   ^? { id: string; name: string }</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：写 mapped type 时<strong>明确想保留还是去掉</strong>修饰符。"重新映射"的语义是模糊的，要么 + 要么 -。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · key remapping 时 K 的类型范围</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// keyof T 实际是 string | number | symbol
+type Bad&lt;T&gt; = { [K in keyof T as `prefix_${K}`]: T[K] };
+//                                          ^   Type 'K' is not assignable to 'string'...
+
+// 解法 1：string &amp; K 收窄
+type Good1&lt;T&gt; = { [K in keyof T as `prefix_${string &amp; K}`]: T[K] };
+
+// 解法 2：约束 T 的 key 必须是 string
+type Good2&lt;T extends Record&lt;string, unknown&gt;&gt; = { [K in keyof T as `prefix_${K}`]: T[K] };
+
+// 解法 3：在 keyof 后过滤
+type Good3&lt;T&gt; = { [K in keyof T as K extends string ? `prefix_${K}` : never]: T[K] };</code></pre>
+          </div>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 大 union 笛卡尔积导致编译爆炸</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// ❌ 这个会让编译器吃力或直接拒绝
+type C = "red" | "blue" | "green" | "yellow" | "purple" | "pink" | "orange" | "brown";
+type S = 50 | 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900;
+type Class = `bg-${C}-${S}`;
+//   ^? 80 个组合 — 还能展开
+
+type V = `${"hover" | "focus" | "active" | "disabled"}:${Class}`;
+//   ^? 320 个组合 — 开始慢
+
+type R = `${"sm" | "md" | "lg"}:${V}`;
+//   ^? 960 个组合 — 编译器抗议</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：组合数 &gt; 几百时，把外层换成 <code>${string}</code> 占位（不展开），用运行时 + IDE 完成提示弥补。Tailwind 实际类型用 <code>string</code> 不穷举。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 过滤字段时忘了 [keyof T]</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// 想：取出所有 string 字段的 key union
+// ❌ 错的（少了 [keyof T]）
+type StringKeys1&lt;T&gt; = {
+  [K in keyof T]: T[K] extends string ? K : never;
+};
+// 类型实际是：{ name: "name"; age: never; email: "email" }
+// 不是 union！
+
+// ✅ 加 [keyof T] 取所有 value 的 union
+type StringKeys2&lt;T&gt; = {
+  [K in keyof T]: T[K] extends string ? K : never;
+}[keyof T];
+
+interface U { name: string; age: number; email: string }
+type R = StringKeys2&lt;U&gt;;   // "name" | "email"</code></pre>
+          </div>
+          <p>
+            <strong>记忆口诀</strong>："写一个 mapped 选 key，最后加 <code>[keyof T]</code> 取出 union"。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 递归 mapped type 没有 base case 导致无限</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// ❌ 没有 base case — 编译器一直递归到深度上限
+type DeepReadonly&lt;T&gt; = { readonly [K in keyof T]: DeepReadonly&lt;T[K]&gt; };
+
+type R = DeepReadonly&lt;{ a: number }&gt;;
+//   ^? { readonly a: { readonly toString: { readonly toString: ... } } }
+//      把所有 string 的 prototype method 也递归了
+
+// ✅ 加 base case：原始类型不递归
+type DeepReadonly&lt;T&gt; = T extends object
+  ? { readonly [K in keyof T]: DeepReadonly&lt;T[K]&gt; }
+  : T;</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：递归 mapped type 必须有 conditional 兜底，区分"object 才递归" vs "原始类型直接返回"。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · Capitalize / Uppercase 没运行时对应</div>
+          <p>
+            这四个内置类型只活在编译期：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">type R = Capitalize&lt;"hello"&gt;;   // "Hello"
+
+// 运行时仍要自己写
+function capitalize&lt;S extends string&gt;(s: S): Capitalize&lt;S&gt; {
+  return (s.charAt(0).toUpperCase() + s.slice(1)) as Capitalize&lt;S&gt;;
+}
+
+const r = capitalize("hello");
+//    ^? "Hello"</code></pre>
+          </div>
+        </div>
+
+        <!-- 06 延伸阅读 ================================================ -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://www.typescriptlang.org/docs/handbook/2/mapped-types.html" target="_blank" rel="noopener"
+              >Handbook · Mapped Types</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://www.typescriptlang.org/docs/handbook/2/template-literal-types.html"
+              target="_blank"
+              rel="noopener"
+              >Handbook · Template Literal Types</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-1.html#key-remapping-in-mapped-types"
+              target="_blank"
+              rel="noopener"
+              >TS 4.1 · Key Remapping & Template Literal 引入</a
+            >
+          </li>
+          <li>
+            <a href="https://github.com/sindresorhus/type-fest" target="_blank" rel="noopener">type-fest</a> —— 大量 mapped type 实现可读
+          </li>
+          <li>
+            下一章 →
+            <a href="11-utility-types.html">11 Utility Types</a> 标准库 22+ utility 逐个拆解
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="09-conditional-types.html">
+            <span class="label">← 上一章</span>
+            <span class="title">09 · Conditional Types & infer</span>
+          </a>
+          <a class="next" href="11-utility-types.html">
+            <span class="label">下一章 →</span>
+            <span class="title">11 · Utility Types</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

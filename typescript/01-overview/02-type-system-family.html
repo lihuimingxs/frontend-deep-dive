@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>类型系统家族中的位置 · Part 1 · TypeScript 深度学习</title>
+    <meta
+      name="description"
+      content="TS 设计选择（结构化类型 / 类型擦除 / 不 sound / 渐进采用）+ 与 Flow / Hegel / JSDoc / ReScript / Closure Compiler 各方案对照 + TC39 Type Annotations 提案。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%233178c6'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETS%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>TypeScript 深度学习</span><span class="site-title-badge">TS</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">Part 1 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Part 1 · TypeScript 是谁</h3>
+        <ul>
+          <li><a href="index.html">Part 概览</a></li>
+          <li><a href="01-history.html">01 · TypeScript 项目史 2010-2025</a></li>
+          <li><a href="02-type-system-family.html" class="active">02 · 类型系统家族中的位置</a></li>
+        </ul>
+        <h3>其他 Part</h3>
+        <ul>
+          <li><a href="../02-handbook-basics/index.html">Part 2 · Handbook 基础</a></li>
+          <li><a href="../03-type-manipulation/index.html">Part 3 · 类型操作</a></li>
+          <li><a href="../04-reference/index.html">Part 4 · Reference</a></li>
+          <li><a href="../05-project/index.html">Part 5 · 工程化</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Part 1 · TypeScript 是谁</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>02 · 类型系统家族中的位置</span>
+        </nav>
+
+        <h1>类型系统家族中的位置</h1>
+        <p class="lead">
+          Part 1.1 讲了 TS 怎么走到今天。本章讲 TS <strong>站在 2025 年看是什么类型系统</strong>—— 它的<strong>4 个核心设计选择</strong>（结构化类型 / 类型擦除 / 不 sound / 渐进采用）、它的<strong>同代人</strong>（Flow / Hegel / JSDoc / ReScript / Closure Compiler 各自结局）、它<strong>与传统类型语言</strong>（Java / Haskell / Rust）的对比、<strong>TC39 Type Annotations 提案</strong>对未来的影响。读完后你能给团队讲清"TS 在 2025 年还有没有挑战者"。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> Part 1.1 项目史</span>
+          <span><strong>主要来源</strong> Flow / Hegel / ReScript 官方文档 · TC39 Type Annotations 提案 · Anders Hejlsberg 演讲</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>TS 不是"最强类型系统"——是"最务实类型系统"</strong>。它故意放弃 sound（让生态兼容）、放弃 dependent types（让性能可控），换来了 JS 生态的<strong>无缝渐进采用</strong>。</li>
+          <li><strong>所有挑战者都因不渐进而萎缩</strong>。Flow 太严 / Hegel 太学术 / ReScript 语法太远——它们没能在 npm 生态站稳。这条规则在 2025 年仍然适用。</li>
+          <li><strong>TC39 Type Annotations 提案如果通过，TS 类型语法成 JS 标准</strong>—— 浏览器原生支持类型注解（虽然不检查）。这会进一步巩固 TS 地位。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>TS 的 4 个核心设计选择</h3>
+
+        <h4>① 结构化类型（structural typing）而非命名类型</h4>
+        <p>
+          Java / C# 用<strong>命名类型</strong>—— 两个 class 即使字段相同也不互相兼容（必须显式 <code>implements interface</code>）。TS 用<strong>结构化类型</strong>——只要"形状"匹配就互相兼容。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+<pre class="code"><code class="lang-typescript">interface Point { x: number; y: number; }
+interface Vector { x: number; y: number; }
+const p: Point = { x: 1, y: 2 };
+const v: Vector = p;  // ✅ 合法 - 结构匹配
+// Java/C# 里同样的代码会报"类型不匹配"</code></pre>
+        </div>
+        <p>
+          这个选择直接<strong>对应 JS 鸭子类型传统</strong>——JS 写 <code>{name: "..."}</code> 不会显式标记类型，TS 也不能强制。如果 TS 要求显式 <code>implements User</code>，<strong>大量 npm 包没法直接用</strong>—— 这就违反了"渐进采用"原则。
+        </p>
+
+        <h4>② 类型擦除（type erasure）</h4>
+        <p>
+          TS 编译输出<strong>纯 JS</strong>——所有 <code>: string</code> / <code>interface</code> / <code>type</code> 都消失。运行时<strong>无法</strong>反射回类型信息。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript-vs-js</span>
+<pre class="code"><code class="lang-typescript">// TS 源码
+interface User { name: string; age: number; }
+function greet(u: User) { console.log(`Hi ${u.name}`); }
+
+// 编译后 JS（类型完全消失）
+function greet(u) { console.log(`Hi ${u.name}`); }</code></pre>
+        </div>
+        <p>
+          这条决策让 TS 编译产物<strong>100% 与现有 JS 工具链兼容</strong>——可以直接给 webpack / Babel / SWC 处理。代价是<strong>运行时不能做类型检查</strong>——必须用 <strong>zod / yup / class-validator</strong> 等运行时验证库（这是 2024 年极火的方向）。
+        </p>
+
+        <h4>③ 不做 sound type system（故意的）</h4>
+        <p>
+          sound 意味着"<em>类型 check 通过的代码运行时不会出 type error</em>"。TS 明确放弃 sound：
+        </p>
+        <ul>
+          <li><strong><code>any</code> 类型</strong>—— 故意提供逃生口，让用户能渐进加类型</li>
+          <li><strong>函数参数双向兼容</strong>（bivariant）—— TS 允许 <code>(x: Animal) =&gt; void</code> 赋给 <code>(x: Dog) =&gt; void</code>（理论上不安全），换 callback API 兼容</li>
+          <li><strong>"index 类型"宽松</strong>—— <code>arr[100]</code> 在 TS 里类型是 <code>T</code>（即使可能 undefined），需要 <code>noUncheckedIndexedAccess</code> flag 才更严</li>
+        </ul>
+        <p>
+          这些"不 sound"决策都是为了<strong>兼容 JS 写法</strong>。Flow（Facebook 的同类型项目）尝试做更 sound 的版本，结果是<strong>很多 JS 库的写法 Flow 直接报错</strong>，用户只能不停加 <code>$FlowFixMe</code> 注释——最终 Flow 失败。TS 的"不 sound"设计是它击败 Flow 的核心原因。
+        </p>
+
+        <h4>④ 渐进采用（gradual typing）</h4>
+        <p>
+          这是 TS 最重要也最被低估的设计——<strong>JS 超集 + <code>any</code> 类型 + <code>// @ts-check</code> 在 .js 文件里启用类型检查</strong>。让用户能：
+        </p>
+        <ul>
+          <li>把项目里 1 个文件改 <code>.ts</code>，其他保持 <code>.js</code></li>
+          <li>第三方库没 <code>.d.ts</code> 时用 <code>any</code> 兜底</li>
+          <li>从 JSDoc 注释开始，慢慢迁移到 <code>.ts</code></li>
+        </ul>
+        <p>
+          这条<strong>渐进采用</strong>路径是 TS 击败所有竞争者的根本原因。任何要求"<em>从一开始就用全套类型系统</em>"的语言（Dart / Elm / ReScript）都失败了——因为切换成本太高。
+        </p>
+
+        <h3>TS 的同代人：4 个挑战者的不同结局</h3>
+
+        <h4>同代人 · Flow（Facebook，2014-）</h4>
+        <p>
+          Facebook 2014 年推出 Flow，<strong>和 TS 几乎同时</strong>。Flow 设计上比 TS 更接近 sound——更严的类型推断、更少的"宽松边界"。React 项目内部用 Flow 几年，<strong>但 2018 后逐步迁移到 TS</strong>。
+        </p>
+        <p>
+          <strong>Flow 失败的原因</strong>：
+        </p>
+        <ul>
+          <li><strong>太严</strong>——很多 npm 包的 JS 写法 Flow 直接报错，用户疲于打补丁</li>
+          <li><strong>生态贫血</strong>——Flow 的类型定义生态远小于 TS 的 DefinitelyTyped（@types）</li>
+          <li><strong>工具链集成弱</strong>——VSCode / WebStorm 对 TS 集成更好</li>
+          <li><strong>Microsoft 投入大</strong>—— TS 团队几十人持续迭代，Flow 团队规模小</li>
+        </ul>
+        <p>
+          2024 年 Facebook 内部 React Native 仍用 Flow，但<strong>外部生态完全是 TS</strong>。Flow 是"<em>更 sound 但失去用户</em>"的典型案例。
+        </p>
+
+        <h4>同代人 · Hegel（2018-2021，已死）</h4>
+        <p>
+          Hegel 是 2018 年俄罗斯工程师 JSMonk 团队推出的<strong>纯 sound 的 JS 类型系统</strong>——比 Flow 更严，比 TS 严格 100×。例：Hegel 永远不允许 <code>any</code>，要求所有类型可推导，强行类型推断错误信息超长。
+        </p>
+        <p>
+          <strong>Hegel 失败的原因</strong>：太学术。开发者上手 30 分钟后就放弃——错误信息看不懂、写法约束太死、生态空。<strong>2021 年项目几乎停止</strong>。Hegel 是"<em>纯学术追求 sound</em>"的失败案例。
+        </p>
+
+        <h4>同代人 · JSDoc + tsc（共生模式）</h4>
+        <p>
+          JSDoc 注释（<code>/** @param {string} name */</code>）从 1999 起就有，是 JS 的"<em>注释式类型</em>"。<strong>TS 兼容 JSDoc 注释</strong>—— 你可以在 <code>.js</code> 文件加 JSDoc 注释，用 <code>// @ts-check</code> 启用 tsc 类型检查。
+        </p>
+        <p>
+          这种<strong>"JS + JSDoc + tsc"模式</strong>有特殊优势：
+        </p>
+        <ul>
+          <li><strong>不需要构建步骤</strong>—— <code>.js</code> 文件直接跑（重要的是 <strong>V8 / Node 不能直接跑 .ts</strong>，必须先编译）</li>
+          <li><strong>类型注解仍是注释</strong>—— grep / git diff 友好</li>
+          <li><strong>逃生口比 TS 更宽</strong>—— 默认就是"动态类型"，用 JSDoc 是"<em>选择性</em>"</li>
+        </ul>
+        <p>
+          这种模式在<strong>V8 自身代码 / Node 自身代码 / Vite 等工具链</strong>实际使用——他们要避免编译步骤又想要类型 check，JSDoc + tsc 是最优解。但用户应用层面 .ts 仍是主流。
+        </p>
+
+        <h4>同代人 · ReScript（OCaml 后端，2020+）</h4>
+        <p>
+          ReScript 是 BuckleScript（OCaml → JS 编译器）2020 年改名后的项目。语法离 JS 远（OCaml 风格）但<strong>类型系统比 TS 更强</strong>—— sound + 模式匹配 + ADT。
+        </p>
+        <p>
+          <strong>ReScript 不会成主流的原因</strong>：(1) 语法不像 JS——切换成本高；(2) <strong>不能渐进</strong>——一个文件不能"<em>这部分用 ReScript，那部分用 JS</em>"；(3) 生态小——npm 类型定义大多没有 ReScript binding。
+        </p>
+        <p>
+          ReScript 在小众场景（金融 / 关键安全代码）有忠实用户——它是<strong>"为坚定的强类型爱好者"</strong>的选择，但永远不会取代 TS。
+        </p>
+
+        <h4>历史方案 · Closure Compiler（Google，2009-2024）</h4>
+        <p>
+          Google 内部从 2009 起用 Closure Compiler——基于 JSDoc 的静态类型 + 死代码消除 + 极致优化。Gmail / Google Maps 等大型 web app 都用 Closure。
+        </p>
+        <p>
+          <strong>2024 年 Google 内部宣布逐步迁移到 TypeScript</strong>—— Closure 维护成本高、招聘难、与外部生态脱节。<strong>这是 TS 在最后一个大公司内部对手的胜利</strong>。
+        </p>
+
+        <h3>TS 与传统类型语言的对比</h3>
+
+        <h4>vs Java / C#（命名类型 + sound）</h4>
+        <p>
+          <strong>共同点</strong>：都有静态类型 + 类 + 接口。<strong>不同点</strong>：
+        </p>
+        <ul>
+          <li>Java/C# 是<strong>命名类型</strong>—— 两个相同形状的 class 不兼容；TS 是<strong>结构化</strong>—— 形状一样就兼容</li>
+          <li>Java/C# 是 sound（虽然 Java 泛型擦除有 ClassCastException）；TS 故意不 sound</li>
+          <li>Java/C# 编译后是<strong>字节码</strong>（保留类型信息）；TS 编译后是 JS（类型擦除）</li>
+          <li>Java/C# 用<strong>JIT 优化</strong>；TS 编译后由 V8 / 引擎优化</li>
+        </ul>
+        <p>
+          来自 Java / C# 的工程师初学 TS 常觉"<em>太宽松</em>"——这是预期的——TS 的设计哲学就是<strong>JS 优先 / 务实优先</strong>。
+        </p>
+
+        <h4>vs Haskell / Rust（强类型 + 函数式 / 所有权）</h4>
+        <p>
+          <strong>共同点</strong>：都有泛型 + 高阶类型操作。<strong>不同点</strong>：
+        </p>
+        <ul>
+          <li>Haskell / Rust 有 sound 类型系统 + dependent types（一定程度）；TS 都没有</li>
+          <li>Haskell / Rust 有显式所有权 / 内存管理（Rust）/ 纯函数（Haskell）；TS 用 JS 的 GC + 不强制纯函数</li>
+          <li>Haskell / Rust 学习曲线陡；TS 学习曲线相对平缓</li>
+        </ul>
+        <p>
+          来自 Haskell / Rust 的工程师常对 TS 表达力满意——条件类型 + 模板字面量类型让 TS 能做很多类型层操作（虽然没 dependent types 的极致表达力）。
+        </p>
+
+        <h4>vs JavaScript（无类型）</h4>
+        <p>
+          这是最关键的对比。TS 不是"<em>更好的 JS</em>"——是<strong>"在 JS 之上加类型注解"</strong>。运行时它就是 JS。
+        </p>
+        <p>
+          所有 TS 优势（自动补全 / 重构安全 / 文档化 API）都来自<strong>编译期类型 check</strong>。运行时 TS 与 JS 没区别。这就是为什么<strong>2025 年大型项目几乎都用 TS</strong>——零运行时开销 + 编译期保护。
+        </p>
+
+        <h3>TC39 Type Annotations 提案：TS 类型语法可能进 JS 标准</h3>
+        <p>
+          2022 年 Microsoft TS 团队 + Igalia 推动 TC39 启动 <strong>"Type Annotations as Comments"</strong> 提案。核心想法：让 JS 引擎<strong>忽略</strong>类型注解（不检查、不报错），把 <code>let x: number = 1</code> 当 <code>let x = 1</code> 跑。
+        </p>
+        <p>
+          <strong>提案动机</strong>：
+        </p>
+        <ul>
+          <li>让<strong>浏览器原生跑 TS 文件</strong>（不需要先 transpile）—— 简化 dev / 教学场景</li>
+          <li>让 TS 类型语法成<strong>事实标准</strong>—— 任何工具都能 parse</li>
+          <li><strong>不</strong>把 TS 类型 checker 纳入引擎——保持引擎简单</li>
+        </ul>
+        <p>
+          <strong>提案现状（2025-04）</strong>：Stage 1。进展缓慢——TC39 内部对"<em>把单一公司的语法纳入标准</em>"有顾虑。Brendan Eich 等人持谨慎态度。但<strong>Microsoft 投入大</strong>——他们想让 TS 更深嵌入 JS 标准。
+        </p>
+        <p>
+          <strong>如果通过的影响</strong>：
+        </p>
+        <ul>
+          <li>浏览器原生支持 TS 语法（虽不 check）—— 教学 / dev 简化</li>
+          <li>TS 类型工具更碎片化—— 现在 tsc 是唯一权威 checker，未来可能有多个 checker（tsgo / esbuild-check / ...）</li>
+          <li>"JS = 弱类型"的传统印象彻底改变—— 类型成为 JS 的"<em>一等可见</em>"概念</li>
+        </ul>
+
+        <div class="callout success">
+          <div class="callout-title">📊 TS 设计哲学一句话总结</div>
+          <p>
+            TS 不追求"最强类型系统"——追求"<strong>最适合 JS 生态的类型系统</strong>"。务实优先 / 渐进采用 / 不 sound / 类型擦除——这 4 个看似"妥协"的决策，让 TS 在 12 年里击败所有竞争对手。这种<strong>"<em>务实击败学术</em>"</strong>的胜利是软件工程史上的经典案例。
+          </p>
+        </div>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 解释"为什么 TS 这样妥协"</h3>
+          <p>
+            来自 Java / Haskell / Rust 的工程师初学 TS 常困惑"<em>为什么这么宽松？为什么 any 这么宽？</em>"。理解 TS 的 4 个设计选择（结构化 / 擦除 / 不 sound / 渐进）后，这些"妥协"都有具体根因——为了兼容 JS 生态。<strong>"妥协"不等于"差"——是务实选择</strong>。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 选 TS 还是 JSDoc + tsc</h3>
+          <p>
+            判据：(1) 项目是<strong>用户应用</strong>还是<strong>工具链 / 库</strong>？应用用 TS 主流；工具链优先 JSDoc（不需要 build step）。(2) 项目<strong>会被嵌入</strong>吗？如 V8 / Node 自身代码、Vite / esbuild 等——倾向 JSDoc。(3) 团队偏好如何？JSDoc 写法稍冗长但可读性更高。Vite / Node 都从 TS 迁回了 JSDoc + tsc。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 评估"换语言"诱惑（再次）</h3>
+          <p>
+            团队有人提"换 ReScript / Hegel / Flow"。<strong>大概率不应该换</strong>——所有 TS 的同代人都因不能渐进而萎缩。除非：(1) 整个项目从零开始；(2) 团队全员熟悉目标语言；(3) 不需要大量 npm 生态。这三个条件全满足才考虑——大多数情况只满足 1 个，所以保持 TS。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 关注 Type Annotations 提案进展</h3>
+          <p>
+            如果 2026-2030 提案进 Stage 4，<strong>影响生态最大的事件</strong>——之后浏览器原生跑 TS 语法。即使提案不通过，TS 已经是事实标准。<strong>不需要因这个提案改变现有项目</strong>——但值得关注 TC39 进展。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+<pre class="code"><code class="lang-typescript">// TS 4 个设计选择的具体体现
+
+// ① 结构化类型 - 形状匹配即兼容
+interface Named { name: string }
+function greet(x: Named) { console.log(x.name); }
+greet({ name: 'Alice', age: 30 });  // ✅ 多余字段也 OK（变量场景）
+
+// ② 类型擦除 - 编译后无类型
+type User = { id: number };
+const u = {} as User;
+console.log(typeof u);  // 'object' 不是 'User'
+
+// ③ 不 sound - any 兜底 + 协变变体
+const arr: any[] = [1, 'two', { three: 3 }];
+arr.push(null);  // ✅ 完全合法
+
+// ④ 渐进采用 - JS 文件加 @ts-check
+// @ts-check
+/** @param {string} name */
+function hello(name) {
+  console.log(name.toUpperCase());  // tsc 会 check 类型
+}</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="pitfall">
+          <div class="pitfall-title">"TS 是带类型的 JS"——简化但有用</div>
+          <p>更准确：TS 是 JS 超集 + 编译期类型检查 + 类型擦除。运行时<strong>没有</strong>类型——擦除后就是普通 JS。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">"any 是 TS 设计错误"——不，是设计选择</div>
+          <p>没有 any 就没法渐进采用，没法兼容 npm 生态。<code>any</code> 是 TS 击败 Flow / Hegel 的根本原因。但生产代码应该<strong>尽量避免</strong> any——逃生口不是日常写法。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">"运行时类型 check 用 TS 就行"——错</div>
+          <p>TS 运行时<strong>没有</strong>类型。要 runtime 验证用 zod / yup / class-validator / ts-runtime 等运行时类型库。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">"Flow 比 TS 更 sound 所以更好"——理论对，实际不</div>
+          <p>更 sound 意味着更严，更严意味着更难兼容 JS 生态。Flow 已经被市场用脚投票——选 TS。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">TC39 Type Annotations 提案不是"TS 进 JS 标准"</div>
+          <p>提案只让 JS 引擎"忽略"类型注解（不检查），TS checker 仍然在编译期跑。这与"TS 类型成为 JS 标准"完全不同。</p>
+        </div>
+
+        <!-- 06 延伸阅读 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://www.typescriptlang.org/docs/handbook/type-compatibility.html" target="_blank" rel="noopener">TS · Type Compatibility（结构化类型）</a></li>
+          <li><a href="https://flow.org/" target="_blank" rel="noopener">Flow 官网</a> · 同代人对照</li>
+          <li><a href="https://rescript-lang.org/" target="_blank" rel="noopener">ReScript 官网</a> · OCaml 风格的 JS 编译器</li>
+          <li><a href="https://github.com/tc39/proposal-type-annotations" target="_blank" rel="noopener">TC39 Type Annotations Proposal</a></li>
+          <li><a href="https://github.com/microsoft/TypeScript/wiki/FAQ" target="_blank" rel="noopener">TypeScript FAQ</a> · 设计决策官方解释</li>
+          <li><a href="../../javascript/01-overview/02-language-landscape.html">JS P1.2 · JS 在生态中的位置</a> · TS 是这里"编译到 JS 唯一活下来的"</li>
+          <li>下一阶段 → <a href="../02-handbook-basics/index.html">Part 2 · Handbook 基础</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-history.html">
+            <span class="label">← 上一章</span>
+            <span class="title">Part 1.1 · TypeScript 项目史 2010-2025</span>
+          </a>
+          <a class="next" href="../02-handbook-basics/index.html">
+            <span class="label">下一阶段 →</span>
+            <span class="title">Part 2 · Handbook 基础</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

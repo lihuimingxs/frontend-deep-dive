@@ -1,0 +1,785 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>07 · Generics · Part 2 · TypeScript 深度学习</title>
+    <meta
+      name="description"
+      content="TypeScript 泛型全谱：延迟绑定的本质、约束的能力赋予、双类型参数互相约束、Class type generic、Generic parameter defaults、TS 5.0 const type parameter、TS 5.4 NoInfer。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%233178c6'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETS%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>TypeScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.62 0.13 245); color: #fff">TS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">TS 首页</a>
+          <a href="index.html">Part 3 目录</a>
+          <a href="https://www.typescriptlang.org/docs/handbook/2/generics.html" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Part 3 · 类型操作</h3>
+        <ul>
+          <li><a href="index.html">Part 概览</a></li>
+          <li><a href="07-generics.html">07 · Generics</a></li>
+          <li><a href="08-keyof-typeof.html">08 · keyof / typeof / Indexed Access</a></li>
+          <li><a href="09-conditional-types.html">09 · Conditional Types & infer</a></li>
+          <li><a href="10-mapped-types.html">10 · Mapped Types & Template Literal</a></li>
+          <li><a href="11-utility-types.html">11 · Utility Types</a></li>
+          <li><a href="12-satisfies.html">12 · satisfies 与组合艺术</a></li>
+        </ul>
+        <h3>其他 Part</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">Part 1 · TypeScript 是谁</a></li>
+          <li><a href="../02-handbook-basics/index.html">Part 2 · Handbook 基础</a></li>
+          <li><a href="../04-reference/index.html">Part 4 · Reference</a></li>
+          <li><a href="../05-project/index.html">Part 5 · 工程化</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TypeScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Part 3 · 类型操作</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>07 · Generics</span>
+        </nav>
+
+        <h1>07 · Generics</h1>
+        <p class="lead">
+          泛型不是 any 的代名词，<strong>是延迟绑定的具体类型</strong>。<code>T</code> 是占位符，在调用处被某个具体类型替代，所有出现 T 的位置同步替换 —— 这就是为什么"如果一个类型参数只出现一次，几乎肯定不需要它"。本章覆盖泛型 6 个维度：基础语法、约束、双参数互相约束、class type generic、defaults、TS 5.0 <code>&lt;const T&gt;</code> 与 5.4 <code>NoInfer&lt;T&gt;</code> 这两个新工具。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~32 分钟</span>
+          <span><strong>前置</strong> <a href="../02-handbook-basics/04-functions.html">04 Functions</a></span>
+          <span
+            ><strong>对应 typescriptlang.org</strong>
+            <a href="https://www.typescriptlang.org/docs/handbook/2/generics.html" target="_blank" rel="noopener"
+              >Handbook · Generics</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>
+          泛型的最小例子：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 不带泛型 — 类型信息丢失
+function identityAny(x: any): any { return x }
+const a = identityAny("hello");
+//    ^? any   类型已坏
+
+// 带泛型 — 类型信息保留
+function identity&lt;T&gt;(x: T): T { return x }
+const b = identity("hello");
+//    ^? "hello"     字面量类型保留（因为 const）
+const c = identity&lt;number&gt;(42);
+//    ^? number      显式实参</code></pre>
+        </div>
+        <p>
+          关键观察：<code>T</code> 在<strong>定义时</strong>是占位，<strong>调用时</strong>被替换成具体类型，所有出现 <code>T</code> 的位置同步替换。这是"延迟绑定"的本质。
+        </p>
+        <p>
+          可在四种位置使用泛型：
+        </p>
+        <ul>
+          <li><strong>function</strong>：<code>function f&lt;T&gt;(x: T): T</code></li>
+          <li><strong>type alias</strong>：<code>type Box&lt;T&gt; = { value: T }</code></li>
+          <li><strong>interface</strong>：<code>interface Box&lt;T&gt; { value: T }</code></li>
+          <li><strong>class</strong>：<code>class Stack&lt;T&gt; { items: T[] = [] }</code></li>
+        </ul>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>1. 延迟绑定：T 在使用点被实例化，不是定义点</h3>
+        <p>
+          理解 <code>T</code> 的生命周期是写好泛型的核心。<code>T</code> 不是一个实际类型，是一个<strong>变量名</strong>。函数定义时，类型系统知道"这里有一个未确定类型 T"；调用时，根据实参类型推断出具体的 T，然后把所有 <code>T</code> 替换。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript · 推断过程示意</span>
+          <pre class="code"><code class="lang-ts">function pair&lt;T&gt;(a: T, b: T): [T, T] {
+  return [a, b];
+}
+
+// 调用时：
+pair(1, 2);
+// 1️⃣ 看到 a: T，传入 1（number），假设 T = number
+// 2️⃣ 看到 b: T，传入 2（也是 number），与假设一致 ✓
+// 3️⃣ 把所有 T 替换为 number：function pair(a: number, b: number): [number, number]
+// 返回值类型：[number, number]
+
+pair("a", 1);
+// 1️⃣ 看到 a: T，T 推断为 string
+// 2️⃣ 看到 b: T，传入 1（number），与 string 不一致
+// 3️⃣ TS 取共同父类型：string | number 不兼容时降为更宽 union
+// 实际：报错或推断为 string | number 取决于上下文</code></pre>
+        </div>
+        <p>
+          这个过程叫 <strong>type inference</strong>。它有几个关键性质：
+        </p>
+        <ul>
+          <li>**单调性**：每次实参都给 T 加一个"必须满足"的约束，最终 T 是所有约束的"最小满足"</li>
+          <li>**位置敏感**：同一个 T 出现两次时，两次的实参类型必须能"会和"成一个</li>
+          <li>**可显式覆盖**：用 <code>identity&lt;string&gt;(x)</code> 可以强制指定，跳过推断</li>
+        </ul>
+
+        <h3>2. 约束（constraint）让 T 获得能力</h3>
+        <p>
+          没有约束时，函数体内对 <code>T</code> 几乎什么都不能做：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">function lengthy&lt;T&gt;(x: T): number {
+  return x.length;   // ❌ Property 'length' does not exist on type 'T'
+}</code></pre>
+        </div>
+        <p>
+          为什么？因为 T 可能是任意类型 —— number、boolean 都没有 <code>length</code>。约束告诉 TS"我对 T 的最低要求"：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">function lengthy&lt;T extends { length: number }&gt;(x: T): number {
+  return x.length;   // ✓ T 至少有 length 字段
+}
+
+lengthy([1, 2, 3]);     // ✓ 数组有 length
+lengthy("abc");          // ✓ 字符串有 length
+lengthy({ length: 5 });  // ✓ 显式 length 也行
+lengthy(42);             // ❌ number 没有 length</code></pre>
+        </div>
+        <p>
+          约束读作"<strong>T 必须可以赋给 X</strong>"（T extends X），不是 OOP 意义上的"继承"。这是结构化类型的概念：T 形状必须包含 X 形状的所有要求。
+        </p>
+
+        <h3>3. 双类型参数互相约束（K extends keyof T）</h3>
+        <p>
+          一个类型参数可以通过 <code>extends</code> 引用另一个：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">function getProp&lt;T, K extends keyof T&gt;(obj: T, key: K): T[K] {
+  return obj[key];
+}
+
+const u = { name: "Alice", age: 30 };
+const n = getProp(u, "name");   // n: string
+const a = getProp(u, "age");    // a: number
+const x = getProp(u, "email");  // ❌ 'email' is not assignable to '"name" | "age"'</code></pre>
+        </div>
+        <p>
+          这一组约束做了三件事：
+        </p>
+        <ol>
+          <li><code>T</code> 没约束 → 任何对象都能传</li>
+          <li><code>K extends keyof T</code> → key 必须是 T 实际存在的字段名</li>
+          <li>返回类型 <code>T[K]</code> → 用 indexed access 精确取出对应字段类型（08 章详讲）</li>
+        </ol>
+        <p>
+          整体效果：<strong>JS 的"动态属性访问"获得了精确类型</strong>。<code>obj[key]</code> 的运行时操作在类型层有完全对应的 <code>T[K]</code>。这种"类型层与运行时层一一对应"的能力是 TS 高级类型最迷人的部分。
+        </p>
+
+        <h3>4. 官方守则："如果一个类型参数只出现一次，几乎肯定不需要它"</h3>
+        <p>
+          泛型的目的是<strong>建立两个或多个位置之间的类型关联</strong>。只出现一次说明没有关联可建：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// ❌ T 只在参数出现，没有关联
+function greet&lt;T extends string&gt;(s: T): void {
+  console.log(s.toUpperCase());
+}
+
+// ✅ 等价的简洁写法
+function greet(s: string): void {
+  console.log(s.toUpperCase());
+}
+
+// ✅ T 出现两次（参数 + 返回值）— 真正需要泛型
+function identity&lt;T&gt;(x: T): T {
+  return x;
+}
+
+// ✅ T 出现两次（参数 + 返回值用 T 派生）— 真正需要泛型
+function box&lt;T&gt;(x: T): { value: T } {
+  return { value: x };
+}</code></pre>
+        </div>
+        <p>
+          反模式："给所有函数都加泛型让它看起来更通用"。事实是这样写让代码更<strong>难读</strong>而非更通用。
+        </p>
+
+        <h3>5. const type parameter（TS 5.0）：让推断保留字面量</h3>
+        <p>
+          5.0 之前的痛点：传入对象字面量给泛型函数，TS 把它推宽成可变类型，丢失精确性：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript · 5.0 之前</span>
+          <pre class="code"><code class="lang-ts">function describe&lt;T&gt;(x: T): T { return x }
+
+const r = describe(["red", "green"]);
+//    ^? string[]                  字面量 "red" / "green" 丢失</code></pre>
+        </div>
+        <p>
+          解决方法是在调用处加 <code>as const</code>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">const r = describe(["red", "green"] as const);
+//    ^? readonly ["red", "green"]   ✓</code></pre>
+        </div>
+        <p>
+          但每次调用都加 <code>as const</code> 烦人。<strong>5.0 起在类型参数前加 <code>const</code></strong>，让函数自己强制保留字面量推断：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript · 5.0+</span>
+          <pre class="code"><code class="lang-ts">function describe&lt;const T&gt;(x: T): T { return x }
+
+const r = describe(["red", "green"]);
+//    ^? readonly ["red", "green"]   ✓ 自动保留字面量
+//                                   不用调用方加 as const
+
+// 嵌套对象同样
+const cfg = describe({ theme: "dark", size: 12 });
+//    ^? { readonly theme: "dark"; readonly size: 12 }</code></pre>
+        </div>
+        <p>
+          这是写"接受配置对象"类型工具时的杀手锏。Vite / Rollup / Tailwind 等库的配置 helper 大量使用。
+        </p>
+
+        <h3>6. NoInfer&lt;T&gt;（TS 5.4）：阻止某个位置参与推断</h3>
+        <p>
+          一个常见痛点：函数有多个使用同一个 T 的位置，但有时希望<strong>只让某些位置主导推断</strong>，其他位置只做检查：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript · 5.4 之前的问题</span>
+          <pre class="code"><code class="lang-ts">function createState&lt;T&gt;(initial: T, validate: (value: T) =&gt; boolean) {
+  return { initial, validate };
+}
+
+// 期望：T 由 initial 决定，validate 接受同样类型
+const s = createState(42, (x) =&gt; x &gt; 0);   // 直觉上 T = number 没问题
+
+// 但
+const s = createState("hello", (x) =&gt; typeof x === "string");
+//                                       ^^ x: string  ✓
+// 但如果两边类型不一致：
+const s = createState(42 as 42 | 100, (x: number) =&gt; x &gt; 0);
+// T 被推断为 union "42 | 100 | number" — 太宽，可能不是意图</code></pre>
+        </div>
+        <p>
+          5.4 引入 <code>NoInfer&lt;T&gt;</code>，让某个位置<strong>不参与推断</strong>，仅做检查：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript · 5.4+</span>
+          <pre class="code"><code class="lang-ts">function createState&lt;T&gt;(
+  initial: T,                              // T 由这里推断
+  validate: (value: NoInfer&lt;T&gt;) =&gt; boolean  // 这里不参与，只接受 T
+) {
+  return { initial, validate };
+}
+
+// 现在 T 由 initial 主导
+const s = createState(42, (x) =&gt; x &gt; 0);
+//                       ^^ x: number  ✓ 由 initial 决定</code></pre>
+        </div>
+        <p>
+          典型场景：<code>useState(initial, reducer)</code>、<code>configure(value, options)</code> 这种"主参数 + 副参数"模式。React 团队在 19 之后会逐步用上。
+        </p>
+
+        <h3>7. 推断的"宽化"行为</h3>
+        <p>
+          字面量传给泛型时，TS 通常把它推断为<strong>更宽的类型</strong>（除非有 const T 或 const 上下文）：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">function id&lt;T&gt;(x: T): T { return x }
+
+// const 上下文 → 字面量保留
+const a = id("hello");        // a: "hello"
+
+// let 上下文 → 推宽
+let b = id("hello");           // b: string
+
+// 显式给 string 类型 → 强制为 string
+const c: string = id("hello"); // c: string
+
+// 默认上下文 → 宽化
+function f() { return id("hello") }
+//                                 推断 T = string
+const r = f();                 // r: string</code></pre>
+        </div>
+        <p>
+          要保留字面量的两种方式：用 <code>as const</code>、或函数定义时用 <code>&lt;const T&gt;</code>。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · Generic Repository（数据访问层）</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">interface Entity { id: string }
+
+class Repository&lt;T extends Entity&gt; {
+  constructor(
+    private collection: T[],
+    private idField: keyof T = "id" as keyof T,
+  ) {}
+
+  findById(id: string): T | undefined {
+    return this.collection.find(x =&gt; x[this.idField] === id);
+  }
+
+  // 双参数泛型：where 必须是 T 字段的子集
+  findWhere&lt;K extends keyof T&gt;(field: K, value: T[K]): T[] {
+    return this.collection.filter(x =&gt; x[field] === value);
+  }
+
+  // 返回部分字段
+  select&lt;K extends keyof T&gt;(keys: K[]): Pick&lt;T, K&gt;[] {
+    return this.collection.map(x =&gt; {
+      const out = {} as Pick&lt;T, K&gt;;
+      for (const k of keys) out[k] = x[k];
+      return out;
+    });
+  }
+}
+
+interface User extends Entity { name: string; age: number }
+const repo = new Repository&lt;User&gt;([{ id: "1", name: "Alice", age: 30 }]);
+
+const u = repo.findById("1");                 // User | undefined
+const adults = repo.findWhere("age", 30);     // User[]
+const partial = repo.select(["name", "age"]); // { name: string; age: number }[]
+// 拼写错误立刻报：
+repo.findWhere("ageeeeee", 30);                // ❌ '"ageeeeee"' not assignable to 'keyof User'</code></pre>
+          </div>
+          <p>
+            这是 Drizzle / Prisma / TypeORM 等 ORM 在用户层暴露的核心模式。多个泛型参数 + keyof 约束，把"动态字段名"操作类型化。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 类型安全的 fetch wrapper</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">import { z } from "zod";
+
+async function api&lt;T&gt;(
+  url: string,
+  schema: z.ZodType&lt;T&gt;,
+  init?: RequestInit,
+): Promise&lt;T&gt; {
+  const res = await fetch(url, init);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data: unknown = await res.json();
+  return schema.parse(data);   // 运行时校验 + 类型推断
+}
+
+const UserSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+
+const u = await api("/api/users/1", UserSchema);
+//    ^? { id: string; name: string }  从 schema 反推</code></pre>
+          </div>
+          <p>
+            <strong>关键</strong>：<code>z.ZodType&lt;T&gt;</code> 把 <code>T</code> 与 schema 的输出类型绑定，调用方只要写 schema，类型自动跟随。这种"schema 驱动类型"是 tRPC / Hono / Drizzle 的核心套路。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 类型安全的事件总线</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// 事件名 → payload 类型的映射表
+type EventMap = {
+  "user:login": { userId: string; at: Date };
+  "user:logout": { userId: string };
+  "post:created": { postId: string; authorId: string };
+};
+
+class EventBus&lt;Events extends Record&lt;string, unknown&gt;&gt; {
+  private listeners: { [K in keyof Events]?: Array&lt;(payload: Events[K]) =&gt; void&gt; } = {};
+
+  on&lt;K extends keyof Events&gt;(event: K, handler: (payload: Events[K]) =&gt; void): void {
+    (this.listeners[event] ??= []).push(handler);
+  }
+
+  emit&lt;K extends keyof Events&gt;(event: K, payload: Events[K]): void {
+    this.listeners[event]?.forEach(h =&gt; h(payload));
+  }
+}
+
+const bus = new EventBus&lt;EventMap&gt;();
+
+// 触发事件 — payload 类型精确
+bus.emit("user:login", { userId: "u_1", at: new Date() });   // ✓
+bus.emit("user:login", { userId: "u_1" });                    // ❌ 缺 at
+
+// 监听 — handler 参数类型精确
+bus.on("post:created", (p) =&gt; console.log(p.postId, p.authorId));
+//                          ^? { postId: string; authorId: string }
+
+bus.emit("user:typo", { /* ... */ });   // ❌ 'user:typo' not in keys of EventMap</code></pre>
+          </div>
+          <p>
+            这是 trpc / typed-emitter / mitt 等库的基础模式。把 event 名映射到 payload 类型，调用 emit / on 时自动联动。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 自定义 Hook 配 const T 保留字面量</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// 接受字面量数组，返回联合类型 + 切换函数
+function useToggle&lt;const T extends readonly string[]&gt;(options: T) {
+  const [value, setValue] = useState&lt;T[number]&gt;(options[0]);
+
+  const next = () =&gt; {
+    const idx = options.indexOf(value);
+    setValue(options[(idx + 1) % options.length]);
+  };
+
+  return [value, next] as const;
+}
+
+const [theme, toggle] = useToggle(["light", "dark", "system"]);
+//      ^? "light" | "dark" | "system"   字面量自动保留</code></pre>
+          </div>
+          <p>
+            如果没有 <code>const T</code>，<code>options</code> 推断为 <code>string[]</code>，<code>T[number]</code> 退化为 <code>string</code>，调用方拿到的 <code>theme</code> 就是 <code>string</code> 而非精确联合。
+          </p>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>泛型函数的所有形态</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 单参
+function id&lt;T&gt;(x: T): T { return x }
+
+// 多参
+function pair&lt;A, B&gt;(a: A, b: B): [A, B] { return [a, b] }
+
+// 约束
+function lengthy&lt;T extends { length: number }&gt;(x: T): number { return x.length }
+
+// 双参互相约束
+function getProp&lt;T, K extends keyof T&gt;(obj: T, key: K): T[K] { return obj[key] }
+
+// 类型参数有默认值（5.0+ 可加约束 + 默认）
+function create&lt;T extends string = "default"&gt;(): T[] { return [] as T[] }
+
+// const 类型参数（5.0+）
+function describe&lt;const T&gt;(x: T): T { return x }
+
+// 显式实参
+const a = id&lt;string&gt;("abc");
+
+// 推断实参
+const b = id("abc");</code></pre>
+        </div>
+
+        <h3>Generic interface / type / class</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// interface
+interface Box&lt;T&gt; {
+  value: T;
+  setValue(v: T): void;
+}
+
+// type alias
+type Pair&lt;A, B&gt; = [A, B];
+type Result&lt;T, E = Error&gt; =
+  | { ok: true; value: T }
+  | { ok: false; error: E };
+
+// class
+class Stack&lt;T&gt; {
+  private items: T[] = [];
+  push(x: T) { this.items.push(x) }
+  pop(): T | undefined { return this.items.pop() }
+  peek(): T | undefined { return this.items.at(-1) }
+}
+
+const s = new Stack&lt;number&gt;();
+s.push(1);
+s.peek();   // number | undefined</code></pre>
+        </div>
+
+        <h3>构造器类型（class as type）</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 接受一个 class 构造器，返回它的实例
+function create&lt;T&gt;(Ctor: { new (): T }): T {
+  return new Ctor();
+}
+
+class Cat { meow() {} }
+class Dog { bark() {} }
+
+const c = create(Cat);   // c: Cat
+c.meow();
+
+// 带参数的构造器
+function createWith&lt;T, A extends unknown[]&gt;(Ctor: { new (...args: A): T }, ...args: A): T {
+  return new Ctor(...args);
+}
+
+class User { constructor(public name: string, public age: number) {} }
+const u = createWith(User, "Alice", 30);   // u: User</code></pre>
+        </div>
+
+        <h3>泛型默认值</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 没指定时使用默认
+type ApiResponse&lt;T = unknown&gt; = { ok: boolean; data: T };
+
+const r1: ApiResponse = { ok: true, data: { x: 1 } };
+//        ^? ApiResponse&lt;unknown&gt;
+const r2: ApiResponse&lt;string&gt; = { ok: true, data: "hello" };
+
+// 默认值与约束组合
+type WithDefault&lt;T extends string = "default"&gt; = { value: T };
+const a: WithDefault = { value: "default" };       // ✓
+// const b: WithDefault = { value: "other" };      // ❌ 'other' not assignable to 'default'
+const c: WithDefault&lt;"any-string"&gt; = { value: "any-string" };  // ✓ 显式实参覆盖</code></pre>
+        </div>
+
+        <h3>TS 5.0 const T 与 5.4 NoInfer 实战</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// const T：保留字面量
+function makeRoutes&lt;const T extends Record&lt;string, string&gt;&gt;(routes: T): T {
+  return routes;
+}
+const r = makeRoutes({ home: "/", about: "/about" });
+//    ^? { readonly home: "/"; readonly about: "/about" }
+
+// NoInfer：让某位置不参与推断
+declare function useAnimation&lt;T extends string&gt;(
+  initial: T,
+  states: NoInfer&lt;T&gt;[],
+): T;
+
+// initial 主导推断
+const a = useAnimation("idle", ["idle", "running", "done"]);
+//    ^? "idle"   仅由 initial 决定
+//                state 数组只能含 "idle"（因为 T 已锁为 "idle"）</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 函数体内偷偷把 T 变成 any</div>
+          <p>
+            常见反模式：clone 函数用 JSON 实现，类型上看起来通用，实际 T 内部被破坏：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">function clone&lt;T&gt;(x: T): T {
+  return JSON.parse(JSON.stringify(x));   // 运行时丢失 Date / Map / Set / RegExp / function 等
+}
+
+const d = new Date();
+const d2 = clone(d);
+//    ^? Date     类型上仍是 Date — 但运行时已经是 string！
+d2.getTime();   // 运行时 TypeError</code></pre>
+          </div>
+          <p>
+            <strong>根因</strong>：JSON 序列化 Date 变 string、丢 function、Map 变 {}。但类型签名仍是 <code>T → T</code>，编译期完全无感。
+          </p>
+          <p>
+            <strong>规避</strong>：用 <code>structuredClone()</code>（运行时支持的深拷贝）或 lodash <code>cloneDeep</code>，并在签名上注明限制。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 过度泛型化让代码变难读</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// ❌ 看似通用，实际样板
+function logAll&lt;T extends unknown[]&gt;(items: T): void {
+  for (const item of items) console.log(item);
+}
+
+// ✅ 简洁等价
+function logAll(items: unknown[]): void {
+  for (const item of items) console.log(item);
+}</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：每写一个泛型问"它出现几次？两次以上才需要"。一次出现的几乎都是冗余。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 推断失败时报"Could not infer T"</div>
+          <p>
+            如果 T 在签名里只出现在一个不能反向推断的位置（如返回值），TS 不知道 T 应该是什么：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">function fetchData&lt;T&gt;(): Promise&lt;T&gt; {
+  return fetch("/api").then(r =&gt; r.json());
+}
+
+const data = await fetchData();
+//    ^? unknown   T 没法推 — 退化成 unknown
+
+// 必须显式指定
+const data = await fetchData&lt;User&gt;();
+//    ^? User</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：返回值含 T 但参数没 T 的函数，调用方<strong>必须显式实参</strong>。或者改设计，让参数也含 T（如传入 schema）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 默认值与约束的顺序错</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// ❌ 默认值先于约束
+type Bad&lt;T = number, U extends T&gt; = ...;
+//             ^^^^^^^^^^^^^^^^^ Required type parameters may not follow optional type parameters
+
+// ✅ 约束先，默认值后
+type Good&lt;T extends string = "default", U extends T = T&gt; = ...;</code></pre>
+          </div>
+          <p>
+            <strong>规则</strong>：与函数参数同理，必填的类型参数在前，带默认的在后。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · const T 与 readonly 的"传染"</div>
+          <p>
+            <code>&lt;const T&gt;</code> 把传入对象推断成<strong>深 readonly</strong>，导致"想传给非 readonly 参数"的位置报错：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">function describe&lt;const T&gt;(x: T): T { return x }
+
+const arr = describe([1, 2, 3]);
+//    ^? readonly [1, 2, 3]
+
+function takeMutable(xs: number[]) {}
+takeMutable(arr);   // ❌ 'readonly [1, 2, 3]' is 'readonly' and cannot be assigned to mutable type</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：<code>const T</code> 仅在<strong>需要保留字面量</strong>时使用。如果后续要交给可变参数，要么不用 <code>const T</code>，要么显式 <code>[...arr]</code> 复制成可变。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · 泛型用在错误的位置（应该约束的地方放成参数）</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// ❌ T 用作 union 表达
+function setStatus&lt;T extends "active" | "inactive"&gt;(s: T): void {
+  console.log(s);
+}
+
+// ✅ 直接 union
+function setStatus(s: "active" | "inactive"): void {
+  console.log(s);
+}
+
+// ⚠️ 真要泛型，是因为想保留字面量精确
+function record&lt;const T extends string&gt;(s: T): { value: T } {
+  return { value: s };
+}
+const r = record("active");
+//    ^? { value: "active" }   字面量保留</code></pre>
+          </div>
+          <p>
+            <strong>规则</strong>：泛型让"使用位置的具体类型"被 captured。只要不需要 capture，就用 union / 具体类型代替。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://www.typescriptlang.org/docs/handbook/2/generics.html" target="_blank" rel="noopener"
+              >TypeScript Handbook · Generics</a
+            >
+          </li>
+          <li>
+            <a href="https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-0.html#const-type-parameters" target="_blank" rel="noopener"
+              >TS 5.0 · const Type Parameters</a
+            >
+          </li>
+          <li>
+            <a href="https://devblogs.microsoft.com/typescript/announcing-typescript-5-4/#the-noinfer-utility-type" target="_blank" rel="noopener"
+              >TS 5.4 · NoInfer&lt;T&gt; 引入背景</a
+            >
+          </li>
+          <li>
+            下一章 →
+            <a href="08-keyof-typeof.html">08 keyof / typeof / Indexed Access</a>
+          </li>
+          <li>
+            JS 衔接 →
+            <a href="../../javascript/03-advanced/02-closures.html">JS · 闭包内存模型</a> 配合理解延迟绑定
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../02-handbook-basics/06-classes.html">
+            <span class="label">← 上一章</span>
+            <span class="title">06 · Classes</span>
+          </a>
+          <a class="next" href="08-keyof-typeof.html">
+            <span class="label">下一章 →</span>
+            <span class="title">08 · keyof / typeof / Indexed Access</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>11 · Utility Types · Part 2 · TypeScript 深度学习</title>
+    <meta
+      name="description"
+      content="TypeScript 标准库 22+ utility types 全谱：按属性变换 / union 操作 / 函数操作 / 字符串四个家族分组，逐个解读源码、应用场景、限制。重点解释 Awaited 的递归实现、NoInfer 的推断阻断、ThisType 的上下文施加。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%233178c6'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETS%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>TypeScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.62 0.13 245); color: #fff">TS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">TS 首页</a>
+          <a href="index.html">Part 3 目录</a>
+          <a href="https://www.typescriptlang.org/docs/handbook/utility-types.html" target="_blank" rel="noopener"
+            >原站</a
+          >
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Part 3 · 类型操作</h3>
+        <ul>
+          <li><a href="index.html">Part 概览</a></li>
+          <li><a href="07-generics.html">07 · Generics</a></li>
+          <li><a href="08-keyof-typeof.html">08 · keyof / typeof / Indexed Access</a></li>
+          <li><a href="09-conditional-types.html">09 · Conditional Types & infer</a></li>
+          <li><a href="10-mapped-types.html">10 · Mapped Types & Template Literal</a></li>
+          <li><a href="11-utility-types.html">11 · Utility Types</a></li>
+          <li><a href="12-satisfies.html">12 · satisfies 与组合艺术</a></li>
+        </ul>
+        <h3>其他 Part</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">Part 1 · TypeScript 是谁</a></li>
+          <li><a href="../02-handbook-basics/index.html">Part 2 · Handbook 基础</a></li>
+          <li><a href="../04-reference/index.html">Part 4 · Reference</a></li>
+          <li><a href="../05-project/index.html">Part 5 · 工程化</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TypeScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Part 3 · 类型操作</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>11 · Utility Types</span>
+        </nav>
+
+        <h1>11 · Utility Types</h1>
+        <p class="lead">
+          TS 标准库提供了 22+ 个常用 utility types，分四个家族：<strong>属性变换 / union 操作 / 函数操作 / 字符串</strong>。每一个都能用 09/10 章的 conditional + mapped + template literal 工具复现 —— 读它们的源码（<code>lib.es5.d.ts</code> 几百行）是学 TS 类型操作最有效的方式。本章按家族过一遍每个 utility 的<strong>实现剖析、应用场景、限制</strong>，重点拆 Awaited 递归、NoInfer 推断阻断、ThisType 上下文施加这三个最不直觉的工具。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong>
+            <a href="09-conditional-types.html">09 Conditional</a> +
+            <a href="10-mapped-types.html">10 Mapped</a></span>
+          <span
+            ><strong>对应 typescriptlang.org</strong>
+            <a href="https://www.typescriptlang.org/docs/handbook/utility-types.html" target="_blank" rel="noopener"
+              >Utility Types</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>按家族速览（实现都在 <code>lib.es5.d.ts</code>）：</p>
+        <table>
+          <thead>
+            <tr><th>家族</th><th>名称</th><th>用途</th></tr>
+          </thead>
+          <tbody>
+            <tr><td rowspan="6">属性变换</td><td><code>Partial&lt;T&gt;</code></td><td>所有字段变可选</td></tr>
+            <tr><td><code>Required&lt;T&gt;</code></td><td>所有字段变必填</td></tr>
+            <tr><td><code>Readonly&lt;T&gt;</code></td><td>所有字段变 readonly</td></tr>
+            <tr><td><code>Pick&lt;T, K&gt;</code></td><td>只保留指定字段</td></tr>
+            <tr><td><code>Omit&lt;T, K&gt;</code></td><td>剔除指定字段</td></tr>
+            <tr><td><code>Record&lt;K, T&gt;</code></td><td>构造 key=K, value=T 的对象类型</td></tr>
+            <tr><td rowspan="3">union 操作</td><td><code>Exclude&lt;T, U&gt;</code></td><td>从 T 排除可赋给 U 的成员</td></tr>
+            <tr><td><code>Extract&lt;T, U&gt;</code></td><td>从 T 取出可赋给 U 的成员</td></tr>
+            <tr><td><code>NonNullable&lt;T&gt;</code></td><td>排除 null / undefined</td></tr>
+            <tr><td rowspan="7">函数操作</td><td><code>Parameters&lt;F&gt;</code></td><td>取参数 tuple</td></tr>
+            <tr><td><code>ConstructorParameters&lt;C&gt;</code></td><td>取构造器参数 tuple</td></tr>
+            <tr><td><code>ReturnType&lt;F&gt;</code></td><td>取返回值类型</td></tr>
+            <tr><td><code>InstanceType&lt;C&gt;</code></td><td>取构造器的实例类型</td></tr>
+            <tr><td><code>ThisParameterType&lt;F&gt;</code></td><td>取函数的 this 参数类型</td></tr>
+            <tr><td><code>OmitThisParameter&lt;F&gt;</code></td><td>去掉 this 参数</td></tr>
+            <tr><td><code>ThisType&lt;T&gt;</code></td><td>给对象字面量"标注"上下文 this（特殊）</td></tr>
+            <tr><td>Promise</td><td><code>Awaited&lt;T&gt;</code></td><td>递归解 Promise / thenable</td></tr>
+            <tr><td>5.4 新增</td><td><code>NoInfer&lt;T&gt;</code></td><td>阻止位置参与推断</td></tr>
+            <tr><td rowspan="4">字符串（intrinsic）</td><td><code>Uppercase&lt;S&gt;</code></td><td>全大写</td></tr>
+            <tr><td><code>Lowercase&lt;S&gt;</code></td><td>全小写</td></tr>
+            <tr><td><code>Capitalize&lt;S&gt;</code></td><td>首字母大写</td></tr>
+            <tr><td><code>Uncapitalize&lt;S&gt;</code></td><td>首字母小写</td></tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>属性变换族 —— 6 个一行搞定</h3>
+        <div class="code-block">
+          <span class="code-label">typescript · lib.es5.d.ts</span>
+          <pre class="code"><code class="lang-ts">type Partial&lt;T&gt; = { [P in keyof T]?: T[P] };
+type Required&lt;T&gt; = { [P in keyof T]-?: T[P] };
+type Readonly&lt;T&gt; = { readonly [P in keyof T]: T[P] };
+type Pick&lt;T, K extends keyof T&gt; = { [P in K]: T[P] };
+type Record&lt;K extends keyof any, T&gt; = { [P in K]: T };
+
+// Omit 借助 Exclude 实现（5.0 之前更复杂）
+type Omit&lt;T, K extends keyof any&gt; = Pick&lt;T, Exclude&lt;keyof T, K&gt;&gt;;</code></pre>
+        </div>
+        <p>
+          注意几个细节：
+        </p>
+        <ul>
+          <li><strong>Pick 的 K 受约束 <code>K extends keyof T</code></strong> —— 防止指定不存在的字段</li>
+          <li><strong>Omit 的 K 是 <code>keyof any</code>（即 <code>string | number | symbol</code>）</strong>，不受 keyof T 约束 —— 这是 TS 故意为之，让 <code>Omit</code> 兼容更多场景（详见陷阱 1）</li>
+          <li><strong>Record 用 <code>K extends keyof any</code></strong>，所以 <code>Record&lt;"a" | "b", number&gt;</code>、<code>Record&lt;number, string&gt;</code> 都合法</li>
+          <li><strong>Required 用 <code>-?</code> 显式去掉 optional</strong>；<strong>Readonly 用默认 <code>readonly</code>（即 <code>+readonly</code>）</strong></li>
+        </ul>
+
+        <h3>union 操作族 —— 依赖分发性</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">type Exclude&lt;T, U&gt; = T extends U ? never : T;
+type Extract&lt;T, U&gt; = T extends U ? T : never;
+type NonNullable&lt;T&gt; = T &amp; {};   // 5.0+ 简化版（之前用 Exclude&lt;T, null | undefined&gt;）</code></pre>
+        </div>
+        <p>
+          <code>Exclude</code> / <code>Extract</code> 都依赖 09 章讲过的 <strong>distributive</strong>。<code>T</code> 是裸类型参数，union 自动展开。
+        </p>
+        <p>
+          <code>NonNullable</code> 在 TS 5.0 改成 <code>T &amp; {}</code>（即与"任意非 null/undefined 值类型"求交）。这等价于 <code>Exclude&lt;T, null | undefined&gt;</code>，但更简洁、性能更好。
+        </p>
+
+        <h3>函数操作族 —— 全靠 infer</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">type Parameters&lt;T extends (...args: any) =&gt; any&gt; =
+  T extends (...args: infer P) =&gt; any ? P : never;
+
+type ConstructorParameters&lt;T extends abstract new (...args: any) =&gt; any&gt; =
+  T extends abstract new (...args: infer P) =&gt; any ? P : never;
+
+type ReturnType&lt;T extends (...args: any) =&gt; any&gt; =
+  T extends (...args: any) =&gt; infer R ? R : any;
+
+type InstanceType&lt;T extends abstract new (...args: any) =&gt; any&gt; =
+  T extends abstract new (...args: any) =&gt; infer R ? R : any;
+
+type ThisParameterType&lt;T&gt; =
+  T extends (this: infer U, ...args: never) =&gt; any ? U : unknown;
+
+type OmitThisParameter&lt;T&gt; =
+  unknown extends ThisParameterType&lt;T&gt; ? T :
+  T extends (...args: infer A) =&gt; infer R ? (...args: A) =&gt; R : T;</code></pre>
+        </div>
+        <p>
+          注意 <code>abstract new (...)</code> 的写法 —— TS 4.2+ 引入，让 ConstructorParameters / InstanceType 也能用于 abstract class（06 章讲过）。
+        </p>
+
+        <h3><code>Awaited&lt;T&gt;</code> —— 递归解 Promise / thenable</h3>
+        <p>
+          这是<strong>用 conditional + recursion 实现 deep unwrap</strong> 的最佳示例：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript · lib.es5.d.ts</span>
+          <pre class="code"><code class="lang-ts">type Awaited&lt;T&gt; =
+  T extends null | undefined ? T :                         // 1. null/undefined 不变
+  T extends object &amp; { then(onfulfilled: infer F, ...args: infer _): any } ?
+    F extends ((value: infer V, ...args: infer _) =&gt; any) ?
+      Awaited&lt;V&gt; :                                          // 2. thenable —&gt; 递归 unwrap
+      never :
+    T;                                                       // 3. 其他原样返回</code></pre>
+        </div>
+        <p>
+          为什么这么复杂？因为 Promise 不是唯一的 thenable —— TS 用 <code>{ then(...): any }</code> 这种 duck typing 匹配所有"长得像 Promise"的对象。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">type R1 = Awaited&lt;Promise&lt;string&gt;&gt;;             // string
+type R2 = Awaited&lt;Promise&lt;Promise&lt;number&gt;&gt;&gt;;    // number   ← 递归
+type R3 = Awaited&lt;number&gt;;                       // number   ← 不是 thenable
+type R4 = Awaited&lt;{ then: (cb: (v: boolean) =&gt; void) =&gt; void }&gt;;   // boolean   ← duck typed thenable
+
+// async function 推 ReturnType 自动 unwrap
+async function fetchUser(): Promise&lt;User&gt; { /* ... */ return {} as User }
+type R = Awaited&lt;ReturnType&lt;typeof fetchUser&gt;&gt;;   // User</code></pre>
+        </div>
+
+        <h3><code>NoInfer&lt;T&gt;</code>（TS 5.4）—— 阻止位置参与推断</h3>
+        <p>
+          07 章已经讲过 NoInfer 的应用。这里看实现：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript · lib.es5.d.ts</span>
+          <pre class="code"><code class="lang-ts">// 5.4+ 标准实现（intrinsic — 编译器特殊处理）
+type NoInfer&lt;T&gt; = intrinsic;</code></pre>
+        </div>
+        <p>
+          这又是一个 intrinsic（编译器内置）—— 它不能用普通 conditional + mapped 实现。语义：在<strong>类型推断算法中跳过这个位置</strong>，让另一个位置主导。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 经典场景：函数有"主参 + 副参"，希望主参推断 T
+function configure&lt;T extends string&gt;(
+  initial: T,                            // T 在此推断
+  validators: NoInfer&lt;T&gt;[],              // 此处不参与，仅检查
+): T {
+  return initial;
+}
+
+// initial 主导 T = "ready"
+const x = configure("ready", ["ready", "loading", "done"]);
+//                                        ^^^^^^^^^^^^^^^^^^^^^
+//                                        Argument of type '"loading"' not assignable to '"ready"'
+// 因为 T 已锁为 "ready"，validators 数组只接受 "ready"</code></pre>
+        </div>
+
+        <h3><code>ThisType&lt;T&gt;</code> —— 给对象字面量"标注"上下文 this</h3>
+        <p>
+          这是 utility 中最不直觉的一个 —— 它本身没有任何"形状要求"，但<strong>出现在对象字面量类型的 intersection 中时，TS 会用它推断对象内方法的 this 类型</strong>。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">interface VueLikeOptions&lt;D, M&gt; {
+  data(): D;
+  methods: M &amp; ThisType&lt;D &amp; M&gt;;   // 关键：ThisType 让 methods 的 this 推断为 D &amp; M
+}
+
+declare function makeVue&lt;D, M&gt;(opts: VueLikeOptions&lt;D, M&gt;): D &amp; M;
+
+const app = makeVue({
+  data() {
+    return { count: 0 };
+  },
+  methods: {
+    increment() {
+      this.count++;        // ✓ this: { count: number } &amp; { increment(): void }
+    },
+    log() {
+      console.log(this.count);   // ✓ count 自动可见
+    },
+  },
+});</code></pre>
+        </div>
+        <p>
+          要"<code>--noImplicitThis</code> 配合"才生效。Vue 2 的 Options API 类型支持就靠它。
+        </p>
+
+        <h3>字符串 utility —— 全是 intrinsic</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">type Uppercase&lt;S extends string&gt; = intrinsic;
+type Lowercase&lt;S extends string&gt; = intrinsic;
+type Capitalize&lt;S extends string&gt; = intrinsic;
+type Uncapitalize&lt;S extends string&gt; = intrinsic;</code></pre>
+        </div>
+        <p>
+          它们也无法用 mapped + template literal 写出来 —— 字符的"大小写转换"在 TS 类型层不是普通操作。运行时没有对应函数（<code>"abc".toUpperCase()</code> 需要自己写）。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · DTO 转换（数据库实体 ↔ API 形状）</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">interface User {
+  id: string;
+  email: string;
+  name: string;
+  passwordHash: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// 创建：不需要数据库自动生成的字段
+type CreateUserInput = Omit&lt;User, "id" | "createdAt" | "updatedAt"&gt;;
+
+// 更新：除 id 外可选
+type UpdateUserInput = Partial&lt;Omit&lt;User, "id" | "createdAt" | "updatedAt"&gt;&gt;;
+
+// 公共：不能暴露 passwordHash
+type PublicUser = Omit&lt;User, "passwordHash"&gt;;
+
+// API 响应 list：只返回 id 和 name
+type UserListItem = Pick&lt;User, "id" | "name"&gt;;
+
+// 全 readonly 版本（防止层间被改）
+type ReadonlyUser = Readonly&lt;User&gt;;</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · React Props 派生</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// 把原生 button 的所有 props 拿来 + 加自定义 variant
+type ButtonProps = ComponentPropsWithoutRef&lt;"button"&gt; &amp; {
+  variant: "primary" | "secondary";
+  size?: "sm" | "md" | "lg";
+};
+
+// 也可以反向：从一个 React 组件取 props
+import { Button } from "./Button";
+type Props = ComponentProps&lt;typeof Button&gt;;
+
+// 取 onClick 的事件类型
+type ClickHandler = NonNullable&lt;ButtonProps["onClick"]&gt;;
+//   ^? (e: MouseEvent&lt;HTMLButtonElement&gt;) =&gt; void
+type ClickEvent = Parameters&lt;ClickHandler&gt;[0];
+//   ^? MouseEvent&lt;HTMLButtonElement&gt;</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · Reducer / Action 类型派生</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// 从已有 reducer 函数反推 state / action 类型
+function reducer(state: { count: number }, action: { type: "inc" } | { type: "set"; value: number }) {
+  switch (action.type) {
+    case "inc": return { count: state.count + 1 };
+    case "set": return { count: action.value };
+  }
+}
+
+type State = Parameters&lt;typeof reducer&gt;[0];     // { count: number }
+type Action = Parameters&lt;typeof reducer&gt;[1];    // { type: "inc" } | { type: "set"; value: number }
+type Result = ReturnType&lt;typeof reducer&gt;;       // { count: number }
+
+// 进一步：从 Action union 取出特定 action 的 payload
+type SetAction = Extract&lt;Action, { type: "set" }&gt;;   // { type: "set"; value: number }</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 第三方库返回类型反推</h3>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// drizzle-orm 的 query builder
+import { db, users } from "./schema";
+
+const findUsers = () =&gt; db.select().from(users).where(...).execute();
+type UserList = Awaited&lt;ReturnType&lt;typeof findUsers&gt;&gt;;
+//   ^? User[]   自动跟随 schema 变化
+
+// 第三方 SDK 没导出某个返回类型
+declare const stripe: { charges: { create(opts: any): Promise&lt;{ id: string; amount: number }&gt; } };
+
+type ChargeResult = Awaited&lt;ReturnType&lt;typeof stripe.charges.create&gt;&gt;;
+//   ^? { id: string; amount: number }</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>常用组合模式</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// Partial + Pick
+type DraftUser = Partial&lt;Pick&lt;User, "name" | "email"&gt;&gt;;
+
+// Required + Pick
+type RequiredFields = Required&lt;Pick&lt;User, "id" | "email"&gt;&gt;;
+
+// Readonly + Omit
+type ImmutableNoTimestamps = Readonly&lt;Omit&lt;User, "createdAt" | "updatedAt"&gt;&gt;;
+
+// Pick + Record（构造从 keys 派生的对象）
+type Errors&lt;K extends string&gt; = Record&lt;K, string | undefined&gt;;
+type FormErrors = Errors&lt;"name" | "email" | "password"&gt;;
+//   ^? { name: string | undefined; email: string | undefined; password: string | undefined }
+
+// 反向 NonNullable
+type StrictUser = { [K in keyof User]: NonNullable&lt;User[K]&gt; };</code></pre>
+        </div>
+
+        <h3>构造类型安全的 form helper</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">function createForm&lt;T extends Record&lt;string, unknown&gt;&gt;(initialValues: T) {
+  return {
+    initialValues,
+    // 提交需要全部字段
+    onSubmit: (cb: (values: Required&lt;T&gt;) =&gt; void) =&gt; cb,
+    // 重置只接受 Partial
+    setValues: (values: Partial&lt;T&gt;) =&gt; values,
+    // 错误对象的 key 集合就是表单字段
+    errors: {} as Partial&lt;Record&lt;keyof T, string&gt;&gt;,
+  };
+}
+
+const form = createForm({ name: "", age: 0 });
+form.setValues({ name: "Alice" });   // ✓ Partial OK
+form.errors;                          // { name?: string; age?: string }</code></pre>
+        </div>
+
+        <h3>函数操作族实战：包装 fetch 自动派生类型</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 给现有 API client 加 cache 装饰
+function withCache&lt;F extends (...args: any[]) =&gt; Promise&lt;any&gt;&gt;(fn: F): F {
+  const cache = new Map&lt;string, Awaited&lt;ReturnType&lt;F&gt;&gt;&gt;();
+  //                                  ^^^^^^^^^^^^^^^^^^^^^   反推内部值类型
+  return ((...args: Parameters&lt;F&gt;) =&gt; {
+    const key = JSON.stringify(args);
+    if (cache.has(key)) return Promise.resolve(cache.get(key));
+    return fn(...args).then(v =&gt; {
+      cache.set(key, v);
+      return v;
+    });
+  }) as F;
+}
+
+declare function fetchUser(id: string): Promise&lt;User&gt;;
+const cached = withCache(fetchUser);
+const u = await cached("u_1");   // u: User</code></pre>
+        </div>
+
+        <h3>InstanceType 用于工厂函数</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">function factory&lt;C extends new (...args: any[]) =&gt; any&gt;(
+  Ctor: C,
+  ...args: ConstructorParameters&lt;C&gt;
+): InstanceType&lt;C&gt; {
+  return new Ctor(...args);
+}
+
+class User { constructor(public name: string) {} }
+class Post { constructor(public title: string, public body: string) {} }
+
+const u = factory(User, "Alice");                  // u: User
+const p = factory(Post, "Hello", "World");         // p: Post
+factory(User, "Alice", "extra");                   // ❌ 多了参数</code></pre>
+        </div>
+
+        <h3>可选链 +Required 处理可选树</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">interface Config {
+  api?: {
+    url?: string;
+    timeout?: number;
+  };
+}
+
+// "处理"过程：把可能 undefined 的字段填默认值，输出严格类型
+function normalize(c: Config): Required&lt;{ api: Required&lt;NonNullable&lt;Config["api"]&gt;&gt; }&gt; {
+  return {
+    api: {
+      url: c.api?.url ?? "https://default",
+      timeout: c.api?.timeout ?? 5000,
+    },
+  };
+}
+
+const cfg = normalize({});
+cfg.api.url;        // ✓ string（不再 undefined）
+cfg.api.timeout;    // ✓ number</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · Omit 不要求 K 是 keyof T</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">interface User { id: string; name: string }
+
+// ❌ 拼错字段名也不报
+type Bad = Omit&lt;User, "naem"&gt;;
+//   ^? { id: string; name: string }   "naem" 不存在但 TS 不报
+
+// 这是设计如此 — 让 Omit 兼容更广
+// 但你失去了一道防错网</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：写一个严格的 <code>StrictOmit</code>：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">type StrictOmit&lt;T, K extends keyof T&gt; = Omit&lt;T, K&gt;;
+
+type Bad = StrictOmit&lt;User, "naem"&gt;;
+//   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   ❌ '"naem"' is not assignable to 'keyof User'</code></pre>
+          </div>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · Partial / Required / Readonly 不递归</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">interface Nested {
+  user: { name: string };
+}
+
+type R = Required&lt;Nested&gt;;
+//   ^? { user: { name: string } }   外层 user 必填，内层 name 仍按原样
+
+type P = Partial&lt;Nested&gt;;
+//   ^? { user?: { name: string } }   外层 user 可选，内层 name 仍必填
+
+type O = Readonly&lt;Nested&gt;;
+//   ^? { readonly user: { name: string } }   外层 readonly，内层 name 仍可改</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：自己写递归版（10 章），或用 type-fest 的 <code>PartialDeep</code> / <code>ReadonlyDeep</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · ReturnType 在重载函数上只取最后一个签名</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">function fn(x: string): string;
+function fn(x: number): number;
+function fn(x: any): any { return x }
+
+type R = ReturnType&lt;typeof fn&gt;;
+//   ^? any   ← 只取了"实现签名"的返回值（更宽）</code></pre>
+          </div>
+          <p>
+            <strong>根因</strong>：04 章讲过 overload 的"实现签名宽松，对外签名精确"。<code>ReturnType</code> 只看到最后一个签名（实现的）。
+          </p>
+          <p>
+            <strong>规避</strong>：尽量用 union 参数代替 overload；或者用 type-fest 的 <code>OverloadReturnType</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · Awaited 仍受递归深度限制</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// 几层 Promise 嵌套都 OK
+type R1 = Awaited&lt;Promise&lt;Promise&lt;Promise&lt;number&gt;&gt;&gt;&gt;;   // number
+
+// 但循环引用会爆栈
+interface Circular {
+  then(cb: (v: Circular) =&gt; void): void;
+}
+type R2 = Awaited&lt;Circular&gt;;
+//   ^? Circular 自身 — TS 检测到循环，停止递归</code></pre>
+          </div>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · ThisType 必须配合 noImplicitThis</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// 没开 noImplicitThis 时，对象字面量内 this 推断为 any
+interface Opts {
+  data: number;
+  methods: { increment(): void } &amp; ThisType&lt;Opts&gt;;
+}
+
+const o: Opts = {
+  data: 1,
+  methods: {
+    increment() { this.data++ }   // ❌ 'this' implicitly has type 'any'（如果没开 noImplicitThis）
+  },
+};</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：tsconfig 里启用 <code>"noImplicitThis": true</code>（包含在 <code>strict</code>）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · Pick 把 method 也当字段</div>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">class User {
+  name = "";
+  greet() { return `Hi ${this.name}` }
+}
+
+// Pick 不区分字段和方法
+type R = Pick&lt;User, "greet"&gt;;
+//   ^? { greet: () =&gt; string }
+
+// 想"只 Pick 数据字段"需要先过滤
+type DataOnly&lt;T&gt; = Pick&lt;T, { [K in keyof T]: T[K] extends Function ? never : K }[keyof T]&gt;;
+type R2 = DataOnly&lt;User&gt;;
+//   ^? { name: string }</code></pre>
+          </div>
+        </div>
+
+        <!-- 06 延伸阅读 ================================================ -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://www.typescriptlang.org/docs/handbook/utility-types.html" target="_blank" rel="noopener"
+              >Handbook · Utility Types</a
+            >
+          </li>
+          <li>
+            <strong>读源码</strong>：在 IDE 中 <code>Cmd/Ctrl + 点击</code> Partial / Pick 跳转到 <code>node_modules/typescript/lib/lib.es5.d.ts</code> ——
+            是学习类型操作最有冲击力的方式
+          </li>
+          <li>
+            <a href="https://github.com/sindresorhus/type-fest" target="_blank" rel="noopener">type-fest</a> ——
+            社区扩展 utility（DeepPartial / RequireAtLeastOne / Promisable / 等）
+          </li>
+          <li>
+            <a href="https://github.com/piotrwitek/utility-types" target="_blank" rel="noopener">utility-types</a> ——
+            另一套 utility 集合
+          </li>
+          <li>
+            下一章 →
+            <a href="12-satisfies.html">12 satisfies 与组合艺术</a> 综合实战
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="10-mapped-types.html">
+            <span class="label">← 上一章</span>
+            <span class="title">10 · Mapped Types & Template Literal</span>
+          </a>
+          <a class="next" href="12-satisfies.html">
+            <span class="label">下一章 →</span>
+            <span class="title">12 · satisfies 与组合艺术</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

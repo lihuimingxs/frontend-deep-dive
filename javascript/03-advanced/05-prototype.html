@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>原型链 · P2 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="[[Prototype]] 内部槽 vs prototype 属性的本质区别、原型链查找算法、Object.create 与 Object.setPrototypeOf 性能、instanceof 的规范语义、原型污染防御、hasOwn vs hasOwnProperty。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P3 目录</a>
+          <a href="https://javascript.info/prototype-inheritance" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · 高阶语言</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-scope-tdz.html">01 · 作用域与 TDZ</a></li>
+          <li><a href="02-closures.html">02 · 闭包内存模型</a></li>
+          <li><a href="03-this.html">03 · this 四规则</a></li>
+          <li><a href="04-bind-call-apply.html">04 · bind / call / apply</a></li>
+          <li><a href="05-prototype.html">05 · 原型链</a></li>
+          <li><a href="06-class.html">06 · class 与继承</a></li>
+          <li><a href="07-private-decorators.html">07 · 私有字段与装饰器</a></li>
+          <li><a href="08-proxy-reflect.html">08 · Proxy 与 Reflect</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../02-fundamentals/index.html">P2 · 语言基础</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · 高阶语言</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>原型链</span>
+        </nav>
+
+        <h1>原型链</h1>
+        <p class="lead">
+          JS 是<strong>基于原型</strong>的面向对象语言。<code>class</code> 是 ES6 加的语法糖 ——
+          底下仍然是原型链。理解这一章以后，<code>class</code>
+          的行为（继承、方法查找、<code>instanceof</code>、<code>super</code>）就全是常识。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> P1 对象、函数</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/prototype-inheritance" target="_blank" rel="noopener"
+              >Prototypal inheritance</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================= -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <p>两个名字很像、实质完全不同的东西：</p>
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th><code>[[Prototype]]</code> 内部槽</th>
+              <th><code>prototype</code> 属性</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>谁有？</td>
+              <td><strong>所有对象</strong>都有</td>
+              <td>只有 <strong>函数</strong>（构造器）才有</td>
+            </tr>
+            <tr>
+              <td>指向什么</td>
+              <td>对象的"父原型"</td>
+              <td>一个被 <code>new fn()</code> 时设为实例 [[Prototype]] 的对象</td>
+            </tr>
+            <tr>
+              <td>访问方式</td>
+              <td><code>Object.getPrototypeOf(o)</code> / <code>o.__proto__</code>（弃用但可用）</td>
+              <td><code>fn.prototype</code>（直接属性）</td>
+            </tr>
+            <tr>
+              <td>修改</td>
+              <td><code>Object.setPrototypeOf</code>（性能差）/ <code>Object.create</code>（构造时定）</td>
+              <td>直接赋值 <code>fn.prototype = ...</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function Animal() {}
+Animal.prototype.speak = function () { return "sound"; };
+
+const a = new Animal();
+
+a.[[Prototype]]       === Animal.prototype;  // true  （内部槽关系）
+Object.getPrototypeOf(a) === Animal.prototype;  // true
+Animal.prototype.[[Prototype]]  === Object.prototype;
+Object.prototype.[[Prototype]]  === null;    // 链尽头
+
+// 属性查找：a.speak 先查 a 自有 → 再查 Animal.prototype → 再查 Object.prototype → null
+a.speak();            // "sound"</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 ============================================ -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="chain">原型链查找算法</h3>
+        <p><code>obj.prop</code> 读取时：</p>
+        <ol>
+          <li>如果 obj 自有 prop → 直接返回。</li>
+          <li>否则查 <code>obj.[[Prototype]]</code>，递归步骤 1。</li>
+          <li>直到某一层是 <code>null</code> → 返回 <code>undefined</code>。</li>
+        </ol>
+        <p>
+          写入 <code>obj.prop = v</code> 行为不同：<strong>总是在 obj 自身上设置</strong>（除非原型链上有 setter 或 prop
+          不可写）。这叫 "property shadowing"（属性遮蔽）。
+        </p>
+
+        <h3 id="create">构造对象的 3 种方式 → 原型来源</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>方式</th>
+              <th>实例的 [[Prototype]]</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>new Foo()</code></td>
+              <td><code>Foo.prototype</code></td>
+            </tr>
+            <tr>
+              <td><code>Object.create(proto)</code></td>
+              <td><code>proto</code>（可为任意对象或 <code>null</code>）</td>
+            </tr>
+            <tr>
+              <td><code>{ ... }</code> 字面量</td>
+              <td><code>Object.prototype</code></td>
+            </tr>
+            <tr>
+              <td><code>[]</code> 字面量</td>
+              <td><code>Array.prototype</code></td>
+            </tr>
+            <tr>
+              <td><code>new class extends Base { }</code> 实例</td>
+              <td>子类 prototype → Base.prototype → ...</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 id="instanceof"><code>instanceof</code> 的规范语义</h3>
+        <p><code>obj instanceof Klass</code> 的规范伪代码（忽略 <code>Symbol.hasInstance</code> 分支）：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function instanceOf(obj, Klass) {
+  const target = Klass.prototype;
+  let proto = Object.getPrototypeOf(obj);
+  while (proto !== null) {
+    if (proto === target) return true;
+    proto = Object.getPrototypeOf(proto);
+  }
+  return false;
+}</code></pre>
+        </div>
+        <p>换句话说，<code>instanceof</code> <strong>沿 obj 的原型链找 Klass.prototype</strong>。这有两个启示：</p>
+        <ol>
+          <li>
+            <strong>跨 realm</strong> 时，不同 iframe 的 <code>Array</code> 构造器 .prototype 不是同一个对象 →
+            <code>arr instanceof Array</code> 可能 false。用 <code>Array.isArray(arr)</code> 规避。
+          </li>
+          <li>
+            <strong>可以自定义</strong>：给 class 加 <code>static [Symbol.hasInstance]</code> 方法，替换内置逻辑（见
+            P1-11 Symbol）。
+          </li>
+        </ol>
+
+        <h3 id="constructor"><code>constructor</code> 属性的约定</h3>
+        <p>
+          每个 <code>fn.prototype</code> 上默认有个 <code>constructor</code> 属性指回
+          <code>fn</code>。这是"约定"，不是"规则"：你能覆盖或删掉（但最好别）。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function F() {}
+F.prototype.constructor === F;       // true
+
+// 直接赋值 prototype 会丢
+F.prototype = { sayHi() { return "hi"; } };   // ❌ constructor 链断了
+new F().constructor === F;            // false（变 Object）
+
+// 正确做法：扩展而不是替换
+Object.assign(F.prototype, { sayHi() { return "hi"; } });</code></pre>
+        </div>
+
+        <h3 id="proto-warning"><code>__proto__</code> 是弃用 getter/setter</h3>
+        <p>
+          <code>obj.__proto__</code> 在 ES6 前是实现细节，ES6 在附录 B（Web
+          兼容）中写进规范保留。<strong>不要直接用</strong>：
+        </p>
+        <ul>
+          <li>使用读：<code>Object.getPrototypeOf(obj)</code></li>
+          <li>
+            使用写：<code>Object.setPrototypeOf(obj, proto)</code>（但<strong>性能差</strong>：V8 会去优化整个对象）
+          </li>
+          <li>创建时指定：<code>Object.create(proto)</code>（<strong>推荐</strong>，无性能惩罚）</li>
+        </ul>
+
+        <h3 id="prototype-pollution">原型污染（prototype pollution）</h3>
+        <p>
+          如果攻击者能控制任意对象的 <code>__proto__</code> 键赋值 → 污染 <code>Object.prototype</code> → 影响所有对象：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 恶意 JSON
+const dirty = JSON.parse('{"__proto__": {"admin": true}}');
+// JSON.parse 本身不会污染（__proto__ 作为字符串 key 是 own property）
+// 但如果你再深拷贝 / merge：
+const target = {};
+Object.assign(target, dirty);          // 这里不会污染 Object.prototype（assign 只拷自有属性）
+
+// 真正的坑：自己实现的"递归 merge"
+function merge(a, b) {
+  for (const k in b) {
+    if (typeof b[k] === "object") merge(a[k] ??= {}, b[k]);
+    else a[k] = b[k];
+  }
+}
+merge({}, dirty);
+({}).admin;                             // true  ← 所有 {} 都"继承"了 admin！</code></pre>
+        </div>
+        <p><strong>防御</strong>：</p>
+        <ul>
+          <li>merge 时跳过 <code>__proto__</code> / <code>constructor</code> / <code>prototype</code> 键</li>
+          <li>
+            用 <code>Object.create(null)</code> 建"无原型对象"作字典 key → <code>__proto__</code> 是普通字符串
+            key，不污染
+          </li>
+          <li>现代库（lodash.merge、structuredClone）已加防护</li>
+        </ul>
+
+        <!-- 03 应用场景 =========================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">方法共享节省内存</h3>
+          <p>
+            实例数多时，把方法挂 prototype 让所有实例共享（而不是每个实例一份）。<code>class</code>
+            的"方法简写"默认是这个行为。
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// ❌ 每个实例一份 method
+function User(name) {
+  this.name = name;
+  this.greet = function () { return `Hi, ${this.name}`; };    // 每个实例独立
+}
+
+// ✓ 共享一份
+function User(name) { this.name = name; }
+User.prototype.greet = function () { return `Hi, ${this.name}`; };
+
+// 1000 个实例：前者分配 1000 个 greet 函数，后者只 1 个
+// class 等价物：class User { greet() {...} }</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Record / Dictionary: <code>Object.create(null)</code></h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">const dict = Object.create(null);
+dict["toString"] = 1;             // 普通赋值，不和 Object.prototype.toString 冲突
+"hasOwnProperty" in dict;         // false
+// 但：dict.hasOwnProperty(k) 抛 TypeError（没继承 Object.prototype）
+Object.hasOwn(dict, k);            // ✓ 用这个</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Mixin（多重继承模拟）</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">const Serializable = {
+  serialize() { return JSON.stringify(this); },
+};
+const Comparable = {
+  equals(other) { return JSON.stringify(this) === JSON.stringify(other); },
+};
+
+class User { /* ... */ }
+Object.assign(User.prototype, Serializable, Comparable);
+
+new User().serialize();          // ✓
+
+// 更现代：用 class factory
+const WithSerialize = (Base) =&gt; class extends Base {
+  serialize() { return JSON.stringify(this); }
+};
+class User extends WithSerialize(Object) { }</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title"><code>Object.create</code> 做"继承"</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// ES5 时代的原型继承
+function Animal() {}
+Animal.prototype.eat = function () { };
+
+function Dog() { Animal.call(this); }
+Dog.prototype = Object.create(Animal.prototype);
+Dog.prototype.constructor = Dog;       // 修回 constructor
+Dog.prototype.bark = function () { };
+
+new Dog().eat();                       // ✓
+new Dog() instanceof Animal;           // true
+
+// 现代直接用 class extends，行为等价</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Null-prototype 避免原型污染</h3>
+          <p>处理用户输入 JSON 后若需要作为"字段名 key"的对象，先转成 null-prototype：</p>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">function safeObject(src) {
+  const out = Object.create(null);
+  for (const k of Object.keys(src)) {
+    if (k === "__proto__" || k === "constructor") continue;
+    out[k] = src[k];
+  }
+  return out;
+}</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 =========================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-chain-inspect">原型链可视化</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function printChain(obj) {
+  let current = obj;
+  let depth = 0;
+  while (current !== null) {
+    console.log(`${" ".repeat(depth * 2)}→`, current.constructor?.name ?? "(no constructor)", current);
+    current = Object.getPrototypeOf(current);
+    depth++;
+  }
+}
+
+class A {}
+class B extends A {}
+printChain(new B());
+// → B { }
+//   → A { constructor: A }
+//     → Object { constructor: Object, ... }
+//       → null</code></pre>
+        </div>
+
+        <h3 id="ex-hasown"><code>hasOwn</code> 的正确方式</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// ❌ 在 null-prototype 对象上崩
+const o = Object.create(null);
+o.x = 1;
+o.hasOwnProperty("x");                     // TypeError
+
+// ❌ 被覆盖时失效
+const evil = { hasOwnProperty: () =&gt; "LOL" };
+evil.hasOwnProperty("x");                  // "LOL"
+
+// ✓ ES2022 Object.hasOwn
+Object.hasOwn(o, "x");                     // true
+Object.hasOwn(evil, "x");                  // false（正确）
+
+// ✓ 老项目中的安全写法
+Object.prototype.hasOwnProperty.call(o, "x");</code></pre>
+        </div>
+
+        <h3 id="ex-setproto"><code>Object.create</code> vs <code>setPrototypeOf</code></h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// ✓ 创建时指定 —— 无性能代价
+const a = Object.create(proto);
+
+// ✓ 作为字面量 + null 原型
+const dict = Object.create(null);
+
+// ⚠ 事后修改 —— V8 会去优化（de-optimize）所有依赖该对象形状的代码
+const o = {};
+Object.setPrototypeOf(o, proto);     // 尽量避免
+
+// 另一个弃用写法，性能同 setPrototypeOf：o.__proto__ = proto</code></pre>
+        </div>
+
+        <h3 id="ex-instanceof-custom">自定义 <code>instanceof</code></h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 让数字"属于"Even 类（鸭子类型）
+class Even {
+  static [Symbol.hasInstance](v) {
+    return typeof v === "number" &amp;&amp; v % 2 === 0;
+  }
+}
+2 instanceof Even;                   // true
+3 instanceof Even;                   // false
+"2" instanceof Even;                 // false
+
+// 跨 realm 的兼容性 check
+class SerializedError {
+  static [Symbol.hasInstance](v) {
+    return v &amp;&amp; typeof v.name === "string" &amp;&amp; typeof v.message === "string";
+  }
+}</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 =========================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">赋值 <code>fn.prototype = { ... }</code> 丢 constructor</div>
+          <p>
+            整块替换会让 <code>prototype.constructor</code> 指回 Object。用
+            <code>Object.assign(fn.prototype, { ... })</code> 或 class 语法。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">修改内置 <code>Array.prototype</code> 等</div>
+          <p>
+            <code>Array.prototype.myMethod = ...</code> 会污染所有数组的
+            <code>for-in</code
+            >、<code>in</code>、第三方代码。<strong>永远</strong>不扩展内置原型。要加通用工具就写独立函数或用 class
+            wrapper。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>for-in</code> 爬原型链</div>
+          <p>
+            <code>for (const k in obj)</code>
+            包含继承的可枚举属性。看起来干净的对象可能有意外键。要只遍历自有属性：<code
+              >for (const k of Object.keys(obj))</code
+            >。详见 P1-03。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">跨 iframe / realm 的 <code>instanceof</code> 失败</div>
+          <p>
+            父文档的 <code>Array</code> 和 iframe 的 <code>Array</code> 是不同构造器 —— 它们的
+            <code>prototype</code> 不相等 → <code>iframeArray instanceof Array</code> 是 false。<code
+              >Array.isArray</code
+            >
+            用特殊的内部 brand check，跨 realm 可靠。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">原型链上的 setter 屏蔽赋值</div>
+          <p>
+            写 <code>obj.x = 1</code> 时，如果 <code>obj</code> 自身没 x 但原型链上有 setter，<strong
+              >调的是原型链上的 setter</strong
+            >，不会在 obj 上创建属性。如果原型链上有 <code>writable: false</code> 的数据属性，严格模式下赋值抛错。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">箭头函数没有 <code>prototype</code> 属性</div>
+          <p>
+            <code>(() =&gt; {}).prototype</code> 是 <code>undefined</code>。不能
+            <code>new</code>。如果打算让函数作为构造器，用 <code>function</code> 或 class。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>Object.setPrototypeOf</code> 的性能</div>
+          <p>
+            V8 对"稳定 shape"对象有 hidden class 优化；改 prototype 会让所有缓存失效。热点代码路径上一次 setPrototypeOf
+            能让整个函数 de-opt。建议只在对象<strong>创建时</strong>通过 <code>Object.create</code> 定。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">子类 <code>static</code> 方法的继承</div>
+          <p>
+            <code>class B extends A {}</code> 时，<code>B.someStaticMethod</code> 的查找也走原型链（<code
+              >B.__proto__ === A</code
+            >）。大多数人以为 static 方法不继承 —— 实际是<strong>会继承</strong>的，通过 class 本身的原型链。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================ -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a
+              href="https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots"
+              target="_blank"
+              rel="noopener"
+              >ECMA-262 · 10.1 Ordinary Object Internal Methods</a
+            >
+          </li>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-instanceofoperator" target="_blank" rel="noopener"
+              >ECMA-262 · 13.10 The instanceof Operator</a
+            >
+          </li>
+          <li>
+            <a href="https://v8.dev/blog/fast-properties" target="_blank" rel="noopener">V8 blog · Fast properties</a>
+          </li>
+          <li>
+            <a href="https://owasp.org/www-community/vulnerabilities/Prototype_Pollution" target="_blank" rel="noopener"
+              >OWASP · Prototype Pollution</a
+            >
+          </li>
+          <li><strong>下一步</strong> → <a href="06-class.html">06 · class 与继承</a> — 基于原型链的"现代语法"。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="04-bind-call-apply.html"
+            ><span class="label">← 上一章</span><span class="title">04 · bind / call / apply</span></a
+          >
+          <a class="next" href="06-class.html"
+            ><span class="label">下一章 →</span><span class="title">06 · class 与继承</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

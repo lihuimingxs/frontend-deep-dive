@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Node Event Loop + 错误收口 · P3 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="Node.js libuv 的 6 个 phase、process.nextTick 的特殊性、setImmediate vs setTimeout(0) 顺序、microtask 在 phase 间清空的真实时机、unhandledRejection 策略、AsyncLocalStorage 传递请求上下文、graceful shutdown。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · 异步 & 错误处理</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-event-loop.html">01 · Event Loop 模型</a></li>
+          <li><a href="02-microtask-macrotask.html">02 · 微任务 vs 宏任务</a></li>
+          <li><a href="03-promise.html">03 · Promise 状态机</a></li>
+          <li><a href="04-promise-combinators.html">04 · Promise 组合器</a></li>
+          <li><a href="05-async-await.html">05 · async / await</a></li>
+          <li><a href="06-abort-controller.html">06 · AbortController</a></li>
+          <li><a href="07-concurrency.html">07 · 并发控制</a></li>
+          <li><a href="08-node-eventloop-errors.html">08 · Node Event Loop + 错误收口</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../02-fundamentals/index.html">P2 · 语言基础</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · 异步 & 错误处理</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Node Event Loop + 错误收口</span>
+        </nav>
+
+        <h1>Node Event Loop + 错误收口</h1>
+        <p class="lead">
+          浏览器 Event Loop 是 HTML 规范定义的；Node.js 的底层是 <strong>libuv</strong>，有 6 个明确的 phase，<code
+            >process.nextTick</code
+          >
+          / <code>setImmediate</code> 等 API 的时序行为和浏览器不同。本章讲 Node 特有的机制 + 把 P1-14 的错误处理在 Node
+          语境下收口：unhandledRejection 政策、graceful shutdown、AsyncLocalStorage。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 01 Event Loop · P1-14 错误处理</span>
+          <span
+            ><strong>对应 Node 文档</strong>
+            <a
+              href="https://nodejs.org/en/learn/asynchronous-work/event-loop-timers-and-nexttick"
+              target="_blank"
+              rel="noopener"
+              >Event Loop, Timers, and process.nextTick</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <h3>Node libuv 的 6 个 phase</h3>
+        <p>每轮 Node event loop 按固定顺序走 6 个 phase，每个 phase 有自己的回调队列：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Phase</th>
+              <th>处理什么</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1</td>
+              <td><strong>timers</strong></td>
+              <td><code>setTimeout</code> / <code>setInterval</code> 到期</td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td>pending callbacks</td>
+              <td>上轮延迟的系统调用回调（TCP errors 等）</td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>idle, prepare</td>
+              <td>Node 内部</td>
+            </tr>
+            <tr>
+              <td>4</td>
+              <td><strong>poll</strong></td>
+              <td>接收新 I/O 事件（大部分 fs/net 回调在这）；阻塞等待</td>
+            </tr>
+            <tr>
+              <td>5</td>
+              <td><strong>check</strong></td>
+              <td><code>setImmediate</code> 回调</td>
+            </tr>
+            <tr>
+              <td>6</td>
+              <td>close callbacks</td>
+              <td>socket.on("close") 等</td>
+            </tr>
+          </tbody>
+        </table>
+        <p><strong>每个 phase 结束后，清空 microtask（含 nextTick + Promise）</strong>再进入下一 phase。</p>
+
+        <h3>浏览器 vs Node 的时序差异</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>场景</th>
+              <th>浏览器</th>
+              <th>Node</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>setTimeout(0)</code></td>
+              <td>最少 4ms（嵌套 5+）</td>
+              <td>最少 1ms</td>
+            </tr>
+            <tr>
+              <td><code>setImmediate</code></td>
+              <td>非标准（Node 特有）</td>
+              <td>check phase 回调</td>
+            </tr>
+            <tr>
+              <td><code>process.nextTick</code></td>
+              <td>不存在</td>
+              <td>microtask 的"更高优先级"队列</td>
+            </tr>
+            <tr>
+              <td>microtask 清空时机</td>
+              <td>每个 task 结束后</td>
+              <td>每个 phase 结束后（更粗粒度）</td>
+            </tr>
+            <tr>
+              <td>Promise 和 nextTick 优先级</td>
+              <td>Promise 唯一</td>
+              <td>nextTick &gt; Promise</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="next-tick"><code>process.nextTick</code> 的特殊性</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">setTimeout(() =&gt; console.log("timeout"), 0);
+setImmediate(() =&gt; console.log("immediate"));
+Promise.resolve().then(() =&gt; console.log("promise"));
+process.nextTick(() =&gt; console.log("nextTick"));
+
+// 大致输出（timer 和 immediate 相对顺序不稳定）：
+// nextTick       ← 最高优先级 microtask
+// promise        ← 普通 microtask
+// timeout        ← timer phase（可能，取决于启动时机）
+// immediate      ← check phase
+
+// nextTick 在当前操作完成后、下一个 phase 前立即执行
+// 规则："在 Node 的每个阶段切换点清空 nextTick 队列，再清空其他 microtask"</code></pre>
+        </div>
+
+        <h3 id="timeout-vs-immediate"><code>setTimeout(0)</code> vs <code>setImmediate</code> 的顺序</h3>
+        <p>
+          规范说 <code>setTimeout(0)</code> 会被 clamp 到 1ms —— 但精度不准。在 IO
+          回调<strong>之外</strong>调用两者的顺序<em>不确定</em>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 脚本顶层 —— 顺序不确定
+setTimeout(() =&gt; console.log("timeout"), 0);
+setImmediate(() =&gt; console.log("immediate"));
+// 可能先 timeout 也可能先 immediate
+
+// 在 IO 回调里 —— setImmediate 一定先
+fs.readFile("x", () =&gt; {
+  setTimeout(() =&gt; console.log("timeout"), 0);
+  setImmediate(() =&gt; console.log("immediate"));
+  // 输出：immediate, timeout
+  // 因为此时在 poll phase，下一个就是 check，再下一轮 timers
+});</code></pre>
+        </div>
+
+        <h3 id="microtask-drain-per-phase">Microtask 在每 phase 间清空</h3>
+        <p>
+          浏览器是"每 task 结束清空 microtask"。Node 更粗：<strong>每个 phase 结束后清空一次</strong>。所以 Node 里
+          microtask 之间穿插的是 phase，而不是单个回调。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// Node 的典型执行单位
+// [一个 phase 跑完所有到期 callback] → [清空 nextTick 队列] → [清空 Promise microtask 队列] → [下一 phase]
+
+// 所以同一 phase 里的多个 timer 回调之间，microtask 会被插入：
+setTimeout(() =&gt; {
+  console.log("timer 1");
+  Promise.resolve().then(() =&gt; console.log("promise 1"));
+}, 0);
+setTimeout(() =&gt; {
+  console.log("timer 2");
+  Promise.resolve().then(() =&gt; console.log("promise 2"));
+}, 0);
+
+// Node 11+ 输出：
+// timer 1
+// promise 1
+// timer 2
+// promise 2
+// （Node 10 及更早是 timer 1, timer 2, promise 1, promise 2）</code></pre>
+        </div>
+
+        <h3 id="unhandled-rejection">unhandledRejection 政策演变</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Node 版本</th>
+              <th>unhandled rejection 默认行为</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>&lt; 15</td>
+              <td>只警告，不崩溃</td>
+            </tr>
+            <tr>
+              <td>15+</td>
+              <td><strong>抛出且崩溃进程</strong>（推荐）</td>
+            </tr>
+            <tr>
+              <td>任意版本</td>
+              <td><code>--unhandled-rejections=warn/throw/none</code> CLI flag 控制</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          生产代码<strong>应当</strong>让它崩溃 —— unhandled rejection 几乎一定是代码 bug。靠 PM2 / systemd
+          重启恢复服务。
+        </p>
+
+        <h3 id="async-local-storage">AsyncLocalStorage 传递请求上下文</h3>
+        <p>
+          Node 独有的 API（基于 <code>async_hooks</code>），让你跨 async 边界传递上下文（如
+          requestId、traceId）而不用显式参数传递：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">import { AsyncLocalStorage } from "node:async_hooks";
+
+const context = new AsyncLocalStorage();
+
+// HTTP server 入口：每个请求 run 一次，建立独立 store
+app.use((req, res, next) =&gt; {
+  context.run({ reqId: req.headers["x-request-id"] ?? randomUUID() }, () =&gt; next());
+});
+
+// 深层业务代码：拿 reqId 不需要传参
+function log(msg) {
+  const store = context.getStore();
+  console.log(`[${store?.reqId}] ${msg}`);
+}
+
+// 跨 await / setTimeout / Promise.then 仍可见
+async function handler() {
+  await fetch(...);
+  log("done");            // 能拿到 reqId
+}</code></pre>
+        </div>
+
+        <h3 id="node-specific">Node 特有异步 API 速览</h3>
+        <ul>
+          <li><code>fs.promises.*</code> / <code>fs/promises</code> —— Promise 风格 fs API</li>
+          <li>
+            <code>node:timers/promises</code> —— <code>setTimeout(1000, value, { signal })</code> 返回 Promise，支持取消
+          </li>
+          <li><code>node:stream</code> / <code>stream/promises</code> —— pipeline、finished 的 Promise 版本</li>
+          <li><code>worker_threads</code> —— 真正的多线程 CPU 任务</li>
+          <li><code>child_process</code> —— 进程级并发</li>
+        </ul>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">全局错误上报 + graceful shutdown</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 启动时一次性注册
+process.on("uncaughtException", (err, origin) =&gt; {
+  logger.fatal({ err, origin }, "uncaught exception");
+  // ⚠ 状态已不可信 —— 尽快退出，让 PM 重启
+  shutdown(1);
+});
+
+process.on("unhandledRejection", (reason) =&gt; {
+  logger.fatal({ reason }, "unhandled rejection");
+  shutdown(1);
+});
+
+async function shutdown(code = 0) {
+  try {
+    await Promise.race([
+      Promise.all([
+        server.close(),
+        db.disconnect(),
+        redis.quit(),
+      ]),
+      new Promise((_, rej) =&gt; setTimeout(() =&gt; rej(new Error("shutdown timeout")), 10_000)),
+    ]);
+  } catch (err) {
+    logger.error({ err }, "shutdown failed");
+  } finally {
+    process.exit(code);
+  }
+}
+
+// SIGTERM：容器 / PM 发送的"优雅退出"信号
+process.on("SIGTERM", () =&gt; shutdown(0));
+process.on("SIGINT", () =&gt; shutdown(0));   // Ctrl+C</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">请求级上下文追踪</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 配合 pino logger
+import pino from "pino";
+const baseLogger = pino();
+
+const als = new AsyncLocalStorage();
+
+function wrappedLogger() {
+  const ctx = als.getStore();
+  return ctx ? baseLogger.child({ reqId: ctx.reqId, userId: ctx.userId }) : baseLogger;
+}
+
+// middleware
+app.use(async (req, res, next) =&gt; {
+  const store = {
+    reqId: req.headers["x-request-id"] ?? randomUUID(),
+    userId: req.user?.id,
+  };
+  als.run(store, async () =&gt; next());
+});
+
+// 业务里任何位置
+wrappedLogger().info({ event: "login" });   // 自动带 reqId/userId</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Node 原生的 timers/promises + AbortSignal</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">import { setTimeout, setImmediate } from "node:timers/promises";
+
+// 可取消的 sleep
+async function poll(fn, { intervalMs = 1000, signal } = {}) {
+  while (true) {
+    if (await fn()) return;
+    await setTimeout(intervalMs, undefined, { signal });
+  }
+}
+
+// 让一次行
+await setImmediate();  // 相当于 await new Promise(setImmediate)</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">CPU 密集任务转 Worker</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// main.mjs
+import { Worker } from "node:worker_threads";
+function runHeavy(data) {
+  return new Promise((resolve, reject) =&gt; {
+    const worker = new Worker("./heavy.mjs", { workerData: data });
+    worker.on("message", resolve);
+    worker.on("error", reject);
+    worker.on("exit", (code) =&gt; { if (code !== 0) reject(new Error(`Worker exit ${code}`)); });
+  });
+}
+
+// heavy.mjs
+import { parentPort, workerData } from "node:worker_threads";
+const result = cpuIntensiveCompute(workerData);
+parentPort.postMessage(result);</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-error-hierarchy">错误分类与恢复策略</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">class AppError extends Error {
+  constructor(message, { cause, statusCode = 500, code, recoverable = false } = {}) {
+    super(message, { cause });
+    this.name = this.constructor.name;
+    this.statusCode = statusCode;
+    this.code = code;
+    this.recoverable = recoverable;
+  }
+}
+
+class ValidationError extends AppError {
+  constructor(msg, fields) { super(msg, { statusCode: 400, recoverable: true }); this.fields = fields; }
+}
+class NotFoundError extends AppError {
+  constructor(entity, id) { super(`${entity} ${id} not found`, { statusCode: 404, recoverable: true }); }
+}
+class AuthError extends AppError {
+  constructor(msg) { super(msg, { statusCode: 401, recoverable: true }); }
+}
+
+// Express / fastify error handler
+app.use((err, req, res, next) =&gt; {
+  const appErr = err instanceof AppError ? err : new AppError("internal error", { cause: err });
+  if (!appErr.recoverable) logger.error({ err: appErr }, "non-recoverable");
+  res.status(appErr.statusCode).json({
+    error: appErr.message,
+    code: appErr.code,
+    ...(appErr instanceof ValidationError &amp;&amp; { fields: appErr.fields }),
+  });
+});</code></pre>
+        </div>
+
+        <h3 id="ex-graceful">生产级 graceful shutdown</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">class Shutdown {
+  #handlers = [];
+  #shuttingDown = false;
+  register(name, fn) { this.#handlers.push({ name, fn }); return this; }
+  async run(timeout = 30_000) {
+    if (this.#shuttingDown) return;
+    this.#shuttingDown = true;
+    logger.info("shutdown started");
+    for (const { name, fn } of this.#handlers.reverse()) {
+      try {
+        await Promise.race([
+          fn(),
+          new Promise((_, rej) =&gt; setTimeout(() =&gt; rej(new Error("timeout")), timeout / this.#handlers.length)),
+        ]);
+        logger.info(`✓ ${name}`);
+      } catch (err) {
+        logger.error({ err, name }, "handler failed");
+      }
+    }
+    logger.info("shutdown complete");
+  }
+}
+
+const shutdown = new Shutdown()
+  .register("http", () =&gt; server.close())
+  .register("db", () =&gt; db.pool.end())
+  .register("redis", () =&gt; redis.quit())
+  .register("queue", () =&gt; queue.drain());
+
+for (const sig of ["SIGTERM", "SIGINT"]) {
+  process.on(sig, () =&gt; shutdown.run().then(() =&gt; process.exit(0)));
+}</code></pre>
+        </div>
+
+        <h3 id="ex-timing">Node 时序观察</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 在 Node 里运行以下代码：
+console.log("sync 1");
+process.nextTick(() =&gt; console.log("nextTick 1"));
+Promise.resolve().then(() =&gt; console.log("promise 1"));
+setImmediate(() =&gt; console.log("immediate 1"));
+setTimeout(() =&gt; console.log("timeout 1"), 0);
+process.nextTick(() =&gt; console.log("nextTick 2"));
+Promise.resolve().then(() =&gt; console.log("promise 2"));
+console.log("sync 2");
+
+/* 典型输出：
+sync 1
+sync 2
+nextTick 1         ← 所有 nextTick 先清
+nextTick 2
+promise 1          ← 然后所有 Promise microtask
+promise 2
+timeout 1          ← timers phase（或 immediate 先，取决于启动）
+immediate 1        ← check phase
+*/</code></pre>
+        </div>
+
+        <h3 id="ex-als-patterns">AsyncLocalStorage 高阶用法</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 嵌套 scope
+als.run({ a: 1 }, () =&gt; {
+  als.getStore();          // { a: 1 }
+  als.run({ b: 2 }, () =&gt; {
+    als.getStore();        // { b: 2 } —— 不自动合并
+  });
+});
+
+// 添加字段到当前 store（需要 mutate）
+function addToContext(key, value) {
+  const store = als.getStore();
+  if (store) store[key] = value;
+  else throw new Error("not in async context");
+}
+
+// ⚠ AsyncLocalStorage 在 worker_threads 间不共享
+// 每个 thread 有自己的 ALS 实例</code></pre>
+        </div>
+
+        <!-- 05 陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>process.nextTick</code> 饿死 IO</div>
+          <p>
+            nextTick 队列必须<strong>清空后</strong>才能进下一 phase。在 nextTick 回调里再加 nextTick 会无限循环 →
+            timers/IO 永远不跑。Node 文档明确警告。用 <code>queueMicrotask</code> 或 <code>setImmediate</code> 代替。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>uncaughtException</code> 后不应继续运行</div>
+          <p>
+            Node 文档警告：进入此处理器时程序状态已不确定（部分对象已损坏）。应该记日志后 <code>process.exit</code>，让
+            PM 重启。保留运行只适合"写崩溃日志到磁盘"这种最小化善后。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Node 15+ 的 unhandledRejection = crash</div>
+          <p>
+            从 Node 15 开始默认 <code>--unhandled-rejections=throw</code>。升级时遇到"突然进程退出"的情况很可能是隐藏的
+            floating Promise 暴露。用 ESLint 的 <code>no-floating-promises</code> + 全局 handler 记录 +
+            在生产做监控告警。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">AsyncLocalStorage 有性能开销</div>
+          <p>
+            为了追踪异步上下文 Node 要拦截所有 async 原语。Node 17+
+            做了大量优化，但仍比直接参数传递慢。性能关键路径可以用回调+显式 ctx 参数替代。日志/追踪场景 ALS
+            开销可以接受。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Domain API 已弃用</div>
+          <p>
+            <code>domain</code> 模块自 Node 4 弃用但仍在（某些老框架如 Hapi 某些版本用）。新代码用
+            AsyncLocalStorage。迁移时注意错误隔离边界不同。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">ESM 顶层 await 阻塞启动</div>
+          <p>
+            Node 22+ 原生 ESM 顶层 await 可以用，但 <code>import</code> 链上任一模块 await
+            慢就会拖慢整体启动。部署容器健康检查时如果启动 &gt; 30s 会被 K8s 认为失败 → 无限重启。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">混用 <code>require</code> 和 <code>import</code></div>
+          <p>
+            CJS 和 ESM 的加载模型不同 —— CJS 同步、ESM 异步。<code>require("./esm.mjs")</code> 抛错，<code
+              >import("./cjs.js")</code
+            >
+            返回 <code>{ default: module.exports }</code>。Next.js / tRPC 等工具链默认处理了，手写时要注意。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">worker_threads 不共享 memory 也不共享 AsyncLocalStorage</div>
+          <p>
+            每个 worker 是独立 V8 实例。传递大对象要 <code>transferList</code>（Transferable 对象）或
+            <code>SharedArrayBuffer</code>。请求级上下文需要在主线程通过 message 手动发过去。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a
+              href="https://nodejs.org/en/learn/asynchronous-work/event-loop-timers-and-nexttick"
+              target="_blank"
+              rel="noopener"
+              >Node.js · Event Loop, Timers, process.nextTick</a
+            >
+          </li>
+          <li>
+            <a href="https://nodejs.org/api/async_context.html" target="_blank" rel="noopener"
+              >Node.js · async_context (AsyncLocalStorage)</a
+            >
+          </li>
+          <li>
+            <a href="https://nodejs.org/api/worker_threads.html" target="_blank" rel="noopener"
+              >Node.js · worker_threads</a
+            >
+          </li>
+          <li><a href="https://libuv.org/" target="_blank" rel="noopener">libuv 文档</a></li>
+          <li>
+            <strong>P3 完</strong>。下一步 → <a href="../05-modules/index.html">P5 · 模块 & 元编程</a>（ESM/CJS、动态
+            import、tree-shaking、Proxy 高阶、polyfill）。
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="07-concurrency.html"
+            ><span class="label">← 上一章</span><span class="title">07 · 并发控制</span></a
+          >
+          <a class="next" href="../05-modules/01-esm.html"
+            ><span class="label">下一章 →</span><span class="title">P4-01 · ESM 规范与模块图</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

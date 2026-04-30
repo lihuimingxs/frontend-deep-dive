@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Web Workers · P4 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="Dedicated Worker / Shared Worker / Service Worker 对比、Module Worker（type=module）、postMessage 与 Transferable 对象、SharedArrayBuffer + Atomics、Comlink RPC 模式、Service Worker 的角色定位。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · 模块 & 元编程</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-esm.html">01 · ESM 规范与模块图</a></li>
+          <li><a href="02-cjs-interop.html">02 · CJS 与 ESM 互操作</a></li>
+          <li><a href="03-dynamic-import.html">03 · 动态 import</a></li>
+          <li><a href="04-tree-shaking.html">04 · Tree-shaking 原理</a></li>
+          <li><a href="05-import-maps.html">05 · import maps 与模块解析</a></li>
+          <li><a href="06-polyfills.html">06 · Polyfill 策略</a></li>
+          <li><a href="07-eval-function.html">07 · eval 与 new Function</a></li>
+          <li><a href="08-workers.html">08 · Web Workers</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../02-fundamentals/index.html">P2 · 语言基础</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · 模块 & 元编程</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Web Workers</span>
+        </nav>
+
+        <h1>Web Workers 与 Module Workers</h1>
+        <p class="lead">
+          Worker 是 JS 的<strong>多线程</strong>能力 —— 把 CPU 密集型计算挪出主线程，保持 UI 60fps 响应。本章讲三种
+          Worker（Dedicated / Shared / Service）的角色定位、Module Worker 的 ESM 支持、postMessage + Transferable
+          的零拷贝传输、SharedArrayBuffer + Atomics 的共享内存模型、以及 Comlink 带来的 RPC 编程体验。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> P3 异步 · 01 ESM</span>
+          <span
+            ><strong>MDN</strong>
+            <a href="https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API" target="_blank" rel="noopener"
+              >Web Workers API</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <h3>三种 Worker 对比</h3>
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th>Dedicated Worker</th>
+              <th>Shared Worker</th>
+              <th>Service Worker</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>用途</td>
+              <td>单页面 CPU 并行</td>
+              <td>多 tab 共享一个线程</td>
+              <td>网络代理、推送、离线</td>
+            </tr>
+            <tr>
+              <td>生命周期</td>
+              <td>页面关闭即终止</td>
+              <td>所有 tab 关闭才结束</td>
+              <td>独立于页面，浏览器管理</td>
+            </tr>
+            <tr>
+              <td>通信方式</td>
+              <td>postMessage（1 对 1）</td>
+              <td>MessagePort（1 对多）</td>
+              <td>fetch/message 事件</td>
+            </tr>
+            <tr>
+              <td>访问 DOM</td>
+              <td>✗</td>
+              <td>✗</td>
+              <td>✗</td>
+            </tr>
+            <tr>
+              <td>浏览器支持</td>
+              <td>几乎所有</td>
+              <td>Chrome / Firefox，Safari 17+</td>
+              <td>全主流</td>
+            </tr>
+            <tr>
+              <td>典型场景</td>
+              <td>图像处理、大数据、加密</td>
+              <td>多 tab 共享连接</td>
+              <td>PWA、离线缓存</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>基本使用（Dedicated Module Worker）</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// main.mjs
+const worker = new Worker(
+  new URL("./worker.mjs", import.meta.url),
+  { type: "module" }                   // ← 启用 ESM
+);
+
+worker.postMessage({ cmd: "compute", data: largeArray });
+worker.addEventListener("message", (e) =&gt; console.log("got", e.data));
+worker.addEventListener("error", (e) =&gt; console.error(e));
+
+// 发送后终止
+worker.terminate();
+
+// worker.mjs
+import { heavyCompute } from "./lib.mjs";   // ESM 里能用 import
+self.addEventListener("message", (e) =&gt; {
+  const result = heavyCompute(e.data);
+  self.postMessage(result);
+});</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="isolation">Worker 的隔离模型</h3>
+        <p>
+          每个 Worker 是一个<strong>独立的 realm</strong>：独立的 globalThis、独立的 V8 isolate、独立的 event loop。
+        </p>
+        <ul>
+          <li>无 <code>window</code> / <code>document</code>（有 <code>self</code>, <code>location</code>）</li>
+          <li>无 DOM API（但能用 <code>fetch</code>, <code>setTimeout</code>, <code>IndexedDB</code>）</li>
+          <li>有自己的内存堆 —— 和主线程完全不共享（除非用 SharedArrayBuffer）</li>
+          <li>出错不影响主线程，但主线程能监听 error 事件</li>
+        </ul>
+
+        <h3 id="postmessage">postMessage 的结构化克隆</h3>
+        <p>
+          <code>worker.postMessage(data)</code> 不是直接传引用，而是走<strong>结构化克隆算法</strong>（见 P1-05 /
+          P1-12）：
+        </p>
+        <ul>
+          <li>支持：primitive、Object、Array、Date、RegExp、Map、Set、TypedArray、ArrayBuffer、Blob、File、循环引用</li>
+          <li>不支持：Function、Symbol、Error 的某些字段、DOM 节点、class 原型</li>
+          <li>对于大对象是<strong>深拷贝</strong> —— 有性能成本（几 MB 数据要几 ms）</li>
+        </ul>
+
+        <h3 id="transferable">Transferable 对象（零拷贝）</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 大 ArrayBuffer 如果都要拷贝一份就浪费
+const buf = new ArrayBuffer(100 * 1024 * 1024);   // 100MB
+worker.postMessage({ buf }, [buf]);
+//                          ↑ Transferable 数组
+// 效果：buf 的所有权<strong>转移</strong>到 worker，主线程的 buf.byteLength 变 0
+
+// 可转移类型：ArrayBuffer、MessagePort、ImageBitmap、OffscreenCanvas、ReadableStream、WritableStream、TransformStream、AudioData、VideoFrame
+
+// 常用模式：TypedArray 的底层 buffer 转移
+const data = new Uint8Array(1024 * 1024);
+worker.postMessage(data, [data.buffer]);
+// 转移后 data 本身不可用</code></pre>
+        </div>
+
+        <h3 id="sab">SharedArrayBuffer + Atomics</h3>
+        <p>真正的<strong>共享内存</strong>：主线程和 Worker 可以同时读写同一块内存：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 主
+const sab = new SharedArrayBuffer(4);
+const view = new Int32Array(sab);
+worker.postMessage(sab);
+
+// 主线程
+Atomics.store(view, 0, 42);      // 原子写
+Atomics.notify(view, 0, 1);      // 唤醒等待者
+
+// worker
+self.onmessage = (e) =&gt; {
+  const view = new Int32Array(e.data);
+  Atomics.wait(view, 0, 0);      // 阻塞直到 view[0] !== 0
+  console.log(Atomics.load(view, 0));  // 42
+};
+
+// ⚠ 启用限制：
+// 要求 cross-origin-isolated 环境（Response headers）：
+// Cross-Origin-Opener-Policy: same-origin
+// Cross-Origin-Embedder-Policy: require-corp
+// 否则 SharedArrayBuffer 不可用（Spectre 缓解）</code></pre>
+        </div>
+
+        <h3 id="service-worker">Service Worker 的特殊性</h3>
+        <p>Service Worker 是<strong>网络代理</strong>，不是通用 Worker：</p>
+        <ul>
+          <li>拦截 fetch 事件 → 自定义响应（缓存/离线/网络拦截）</li>
+          <li>响应 push 通知</li>
+          <li>后台同步（background sync）</li>
+          <li>必须 HTTPS（或 localhost）</li>
+          <li>浏览器决定何时启动/休眠，不受页面控制</li>
+        </ul>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 注册（主线程）
+if ("serviceWorker" in navigator) {
+  await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+}
+
+// sw.js
+self.addEventListener("install", (e) =&gt; {
+  e.waitUntil(caches.open("v1").then(c =&gt; c.addAll(["/app.js", "/style.css"])));
+});
+self.addEventListener("fetch", (e) =&gt; {
+  e.respondWith(caches.match(e.request).then(r =&gt; r ?? fetch(e.request)));
+});
+// 详见 P6 网络 & 存储</code></pre>
+        </div>
+
+        <h3 id="comlink">Comlink：RPC 风格的 Worker 通信</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 手动 postMessage 绑 message id、等回复 … 非常烦
+// Comlink 用 Proxy 把它封装成"像调本地函数一样"
+
+// worker.mjs
+import * as Comlink from "comlink";
+class Api {
+  async compute(data) { /* ... */ return result; }
+  counter = 0;
+  inc() { return ++this.counter; }
+}
+Comlink.expose(new Api());
+
+// main.mjs
+import * as Comlink from "comlink";
+const worker = new Worker(new URL("./worker.mjs", import.meta.url), { type: "module" });
+const api = Comlink.wrap(worker);
+
+await api.compute(data);         // 实际发 postMessage，等 reply
+await api.inc();                 // 1
+await api.counter;               // 1  ← 读属性也是异步 proxy
+
+// 底层：每次调用生成 id，message 里带 id，reply 里带 id 匹配对应 Promise</code></pre>
+        </div>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">图像处理</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// main.mjs
+const canvas = document.getElementById("preview");
+const offscreen = canvas.transferControlToOffscreen();
+const worker = new Worker(new URL("./image-worker.mjs", import.meta.url), { type: "module" });
+worker.postMessage({ canvas: offscreen }, [offscreen]);
+// 主线程完全不再碰 canvas，所有绘制在 worker
+
+// image-worker.mjs
+self.onmessage = ({ data }) =&gt; {
+  const ctx = data.canvas.getContext("2d");
+  // 在这里做滤镜 / 合成 / 动画 —— 不阻塞主线程
+};</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">大数据排序 / 聚合</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 100 万行 Excel 排序 —— 主线程 300ms+ 卡顿
+// 挪到 Worker：
+const worker = new Worker(new URL("./sort-worker.mjs", import.meta.url), { type: "module" });
+worker.postMessage({ data, column: "price" }, [data.buffer]);  // 转移 buffer
+worker.onmessage = (e) =&gt; renderTable(e.data);
+
+// 用户在排序期间还能滚动、点其他按钮
+// 适合场景：bundle 里的大数据、CSV parse、ProtoBuf 编解码</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">加密 / 压缩</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// WebCrypto 在主线程也能用，但大文件加密会阻塞 UI
+// Worker + 流式处理
+const worker = new Worker(new URL("./crypto-worker.mjs", import.meta.url), { type: "module" });
+const encrypted = await new Promise((resolve, reject) =&gt; {
+  worker.onmessage = (e) =&gt; resolve(e.data);
+  worker.onerror = reject;
+  worker.postMessage({ op: "encrypt", file }, []);
+});
+
+// pdf.js、ffmpeg.wasm 等 CPU 密集型库都运行在 Worker</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Monorepo 里 Worker 的 bundling</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// Vite / Webpack 5 都支持 new Worker(new URL(...)) 静态分析
+const worker = new Worker(
+  new URL("./workers/image.mjs", import.meta.url),
+  { type: "module" }
+);
+// 构建器自动把 image.mjs 打成独立 worker chunk
+
+// Vite 还有 ?worker / ?sharedworker 的 url suffix
+import ImageWorker from "./workers/image.mjs?worker";
+const w = new ImageWorker();</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Service Worker 离线优先</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// sw.js（workbox 简化示例）
+self.addEventListener("fetch", (e) =&gt; {
+  if (e.request.url.endsWith(".json")) {
+    // API：网络优先，离线回退缓存
+    e.respondWith(
+      fetch(e.request).then((r) =&gt; {
+        caches.open("v1").then((c) =&gt; c.put(e.request, r.clone()));
+        return r;
+      }).catch(() =&gt; caches.match(e.request))
+    );
+  }
+});
+
+// 详细策略在 P6 介绍</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-worker-pool">简易 Worker 池</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">class WorkerPool {
+  #workers = [];
+  #queue = [];
+  constructor(url, size = navigator.hardwareConcurrency ?? 4) {
+    for (let i = 0; i &lt; size; i++) {
+      this.#workers.push({ w: new Worker(url, { type: "module" }), busy: false });
+    }
+  }
+  exec(msg, transfer = []) {
+    return new Promise((resolve, reject) =&gt; {
+      const task = { msg, transfer, resolve, reject };
+      const free = this.#workers.find((x) =&gt; !x.busy);
+      if (free) this.#run(free, task);
+      else this.#queue.push(task);
+    });
+  }
+  #run(slot, { msg, transfer, resolve, reject }) {
+    slot.busy = true;
+    slot.w.onmessage = (e) =&gt; {
+      slot.busy = false;
+      resolve(e.data);
+      if (this.#queue.length) this.#run(slot, this.#queue.shift());
+    };
+    slot.w.onerror = reject;
+    slot.w.postMessage(msg, transfer);
+  }
+}
+
+const pool = new WorkerPool(new URL("./compute.mjs", import.meta.url));
+const results = await Promise.all(tasks.map((t) =&gt; pool.exec(t)));</code></pre>
+        </div>
+
+        <h3 id="ex-typed-messaging">类型安全的消息协议</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// shared.ts
+export type MainToWorker =
+  | { type: "compute"; payload: { data: Float64Array } }
+  | { type: "cancel"; id: string };
+
+export type WorkerToMain =
+  | { type: "result"; payload: { data: Float64Array } }
+  | { type: "progress"; payload: number }
+  | { type: "error"; message: string };
+
+// main.ts
+const worker = new Worker(url, { type: "module" });
+function send(msg: MainToWorker, transfer: Transferable[] = []) {
+  worker.postMessage(msg, transfer);
+}
+worker.onmessage = (e: MessageEvent&lt;WorkerToMain&gt;) =&gt; {
+  switch (e.data.type) {
+    case "result": handleResult(e.data.payload); break;
+    case "progress": updateBar(e.data.payload); break;
+    case "error": showError(e.data.message); break;
+  }
+};</code></pre>
+        </div>
+
+        <h3 id="ex-sab-counter">SharedArrayBuffer 计数器</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 多 Worker 并行递增同一计数器
+const sab = new SharedArrayBuffer(4);
+const counter = new Int32Array(sab);
+
+for (let i = 0; i &lt; 4; i++) {
+  const w = new Worker(new URL("./inc.mjs", import.meta.url), { type: "module" });
+  w.postMessage(sab);
+}
+
+// inc.mjs
+self.onmessage = ({ data }) =&gt; {
+  const counter = new Int32Array(data);
+  for (let i = 0; i &lt; 1_000_000; i++) {
+    Atomics.add(counter, 0, 1);    // 原子递增
+  }
+};
+
+// 4 个 worker 跑完后 counter[0] === 4_000_000（无竞态）
+// 用普通 += 就丢数据了</code></pre>
+        </div>
+
+        <h3 id="ex-offscreen-canvas">OffscreenCanvas 完整示例</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// main.mjs
+const canvas = document.getElementById("game");
+const offscreen = canvas.transferControlToOffscreen();
+const worker = new Worker(new URL("./renderer.mjs", import.meta.url), { type: "module" });
+worker.postMessage({ canvas: offscreen, width: canvas.width, height: canvas.height },
+                   [offscreen]);
+
+// renderer.mjs
+let ctx, width, height;
+self.onmessage = (e) =&gt; {
+  ({ canvas: { getContext }, width, height } = e.data);
+  ctx = e.data.canvas.getContext("2d");
+  animate();
+};
+
+function animate() {
+  ctx.clearRect(0, 0, width, height);
+  // ... 绘制
+  requestAnimationFrame(animate);   // Worker 里也有 rAF（Chrome 支持）
+}</code></pre>
+        </div>
+
+        <!-- 05 陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">postMessage 大对象阻塞</div>
+          <p>结构化克隆 100MB 对象可能 ~几十 ms。大数据用 Transferable 或 SAB。频繁传小数据不如批量传大消息。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Worker 启动有成本</div>
+          <p>创建 Worker + 下载 + parse 大概 ~100ms。频繁创建/销毁不值。用 Worker 池复用。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>type: "module"</code> 不是所有浏览器支持</div>
+          <p>
+            Chrome 80+ / Firefox 114+ / Safari 15+。老版本 Worker 只能经典脚本（不能 import）。降级策略：构建器把 worker
+            源码 inline 或用 importScripts。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>importScripts</code> 是经典脚本专属</div>
+          <p>
+            Module Worker 里不能用 <code>importScripts</code>（抛 Error）—— 要用原生 import。Service Worker 现在也支持
+            module 形式，但库生态还在迁移。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Worker 文件路径相对于<strong>脚本 URL</strong></div>
+          <p>
+            <code>new Worker("worker.js")</code> 的 "worker.js" 相对于页面 URL。用
+            <code>new URL("./worker.js", import.meta.url)</code>
+            相对于当前模块。构建工具也会识别这种写法并处理路径替换。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">SharedArrayBuffer 需要 cross-origin isolation</div>
+          <p>
+            现代浏览器要求 COOP + COEP 响应头才能用 SAB。否则
+            <code>typeof SharedArrayBuffer === "undefined"</code>。本地开发可以关，生产必须配。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Atomics.wait 不能在主线程调</div>
+          <p>
+            主线程会抛 TypeError（防死锁）。只能在 Worker 里用。<code>Atomics.waitAsync</code>（ES2024）返回
+            Promise，主线程可用但仍不建议。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Service Worker 作用域陷阱</div>
+          <p>
+            <code>register("/a/sw.js")</code> 默认 scope 是 <code>/a/</code>，不能拦截 <code>/</code> 的请求。要 scope
+            到 <code>/</code> 要服务响应头加 <code>Service-Worker-Allowed: /</code>。生产常见困惑。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://html.spec.whatwg.org/multipage/workers.html" target="_blank" rel="noopener"
+              >HTML · Web Workers</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Using_web_workers"
+              target="_blank"
+              rel="noopener"
+              >MDN · Using web workers</a
+            >
+          </li>
+          <li>
+            <a href="https://github.com/GoogleChromeLabs/comlink" target="_blank" rel="noopener">Comlink</a> — Worker
+            RPC 的事实标准
+          </li>
+          <li>
+            <a href="https://web.dev/articles/coop-coep" target="_blank" rel="noopener"
+              >web.dev · Cross-origin isolation</a
+            >
+          </li>
+          <li>
+            <strong>P4 完</strong>。下一步 → <a href="../06-dom/index.html">P6 · DOM & 事件</a>（Node
+            接口、事件委托、MutationObserver、表单控件）。
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="07-eval-function.html"
+            ><span class="label">← 上一章</span><span class="title">07 · eval 与 new Function</span></a
+          >
+          <a class="next" href="../06-dom/01-dom-tree.html"
+            ><span class="label">下一章 →</span><span class="title">P5-01 · DOM 树与 Node 接口</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

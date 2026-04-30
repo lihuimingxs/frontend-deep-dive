@@ -1,0 +1,834 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>04 · Functions · Part 1 · TypeScript 深度学习</title>
+    <meta
+      name="description"
+      content="TypeScript 函数类型的全部维度：函数类型表达式、call/construct signature、泛型函数与约束、optional/default/rest、function overload、this 参数、void vs never vs unknown 返回类型。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%233178c6'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETS%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>TypeScript 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.62 0.13 245); color: #fff">TS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">TS 首页</a>
+          <a href="index.html">Part 2 目录</a>
+          <a href="https://www.typescriptlang.org/docs/handbook/2/functions.html" target="_blank" rel="noopener"
+            >原站</a
+          >
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>Part 2 · Handbook 基础</h3>
+        <ul>
+          <li><a href="index.html">Part 概览</a></li>
+          <li><a href="01-basics.html">01 · The Basics 与类型系统本质</a></li>
+          <li><a href="02-everyday-types.html">02 · Everyday Types</a></li>
+          <li><a href="03-narrowing.html">03 · Narrowing 与控制流分析</a></li>
+          <li><a href="04-functions.html">04 · Functions</a></li>
+          <li><a href="05-objects.html">05 · Object Types</a></li>
+          <li><a href="06-classes.html">06 · Classes</a></li>
+        </ul>
+        <h3>其他 Part</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">Part 1 · TypeScript 是谁</a></li>
+          <li><a href="../03-type-manipulation/index.html">Part 3 · 类型操作</a></li>
+          <li><a href="../04-reference/index.html">Part 4 · Reference</a></li>
+          <li><a href="../05-project/index.html">Part 5 · 工程化</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TypeScript</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">Part 2 · Handbook 基础</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>04 · Functions</span>
+        </nav>
+
+        <h1>04 · Functions</h1>
+        <p class="lead">
+          函数是 TS 类型系统最复杂的部分之一 —— 不只是「参数和返回值的类型」，还涉及 callable 与 newable 的区分、泛型延迟绑定、function overload、<code>this</code> 参数、<code>void</code> / <code>never</code> / <code>unknown</code> 三种特殊返回类型的细节差异。本章覆盖函数类型的 9 个维度，重点回答<strong>为什么 forEach 回调可以 return 任意值、为什么 overload 实现签名宽松而对外签名精确、什么时候用 never 兜底</strong>。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> <a href="02-everyday-types.html">02 Everyday Types</a></span>
+          <span
+            ><strong>对应 typescriptlang.org</strong>
+            <a href="https://www.typescriptlang.org/docs/handbook/2/functions.html" target="_blank" rel="noopener"
+              >Handbook · More on Functions</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================== -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>
+          TS 描述函数类型有两种语法：<strong>function type expression</strong>（短）和 <strong>call signature</strong>（在对象/接口里）：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 形式 A：function type expression（变量 / 参数 / 返回值类型最常用）
+type Greeter = (name: string) =&gt; string;
+const g: Greeter = (name) =&gt; `Hello, ${name}`;
+
+// 形式 B：call signature（描述带额外属性的可调用对象）
+interface Counter {
+  (start: number): string;     // 可调用
+  count: number;                // 还有自己的属性
+  reset(): void;
+}
+
+// 形式 C：construct signature（描述构造器）
+interface UserCtor {
+  new (name: string): User;
+}</code></pre>
+        </div>
+        <p>
+          函数<strong>类型</strong>的三大变量：参数（数量、可选、rest）、返回值（含 void/never）、泛型参数（约束、默认）。再叠加 overload、this 参数、解构注解，构成全谱。
+        </p>
+
+        <!-- 02 底层逻辑 ============================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+        <p class="lead-sub">
+          函数类型的几个非直觉决策都和 JS 的"宽松调用约定"有关。理解它们的设计动机就理解了 TS 在易用性与严格性之间的取舍。
+        </p>
+
+        <h3>1. <code>void</code> 不等于"必须返回 undefined"</h3>
+        <p>
+          表面上 <code>void</code> 表示"无返回值"，但 TS 的 <code>void</code> 返回类型有一个<strong>特殊宽松规则</strong>：<strong>调用方期望 void 时，函数实际返回任意值都允许</strong>。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">type VoidFn = () =&gt; void;
+
+const f1: VoidFn = () =&gt; 42;          // ✓ 返回 number 也通过
+const f2: VoidFn = () =&gt; "hello";     // ✓ 返回 string 也通过
+
+// 但调用方拿到的类型仍是 void
+const r = f1();   // r: void（不是 number）</code></pre>
+        </div>
+        <p>
+          为什么这样设计？最经典的例子是 <code>Array.prototype.forEach</code>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// forEach 的类型签名（简化）：
+// forEach(callback: (value: T) =&gt; void): void;
+
+const src = [1, 2, 3];
+const dst: number[] = [];
+
+src.forEach(x =&gt; dst.push(x));
+//                ^^^^^^^^^^^ push 返回 number，但回调期望 void
+//                          ⇒ 如果 void 严格要求 undefined，这一行会报错</code></pre>
+        </div>
+        <p>
+          TS 的设计：<strong>声明 void 表达"我不在乎你返回什么"，让调用方写得自由</strong>。但函数<strong>定义自己</strong>是 void 时，函数体内 <code>return x</code>（带值）仍会报错。
+
+        </p>
+        <p>
+          这条规则只对函数<strong>类型</strong>（赋值兼容性）适用，不影响函数<strong>定义本身</strong>的检查。
+        </p>
+
+        <h3>2. <code>never</code> 是"永不返回"，不是"返回 nothing"</h3>
+        <p>
+          <code>never</code> 描述的是<strong>函数永远到不了 return 那一行</strong>的情况：
+        </p>
+        <ul>
+          <li>函数体一定会抛错：<code>function fail(msg: string): never { throw new Error(msg) }</code></li>
+          <li>死循环：<code>function loop(): never { while (true) {} }</code></li>
+          <li>调用 <code>process.exit()</code></li>
+        </ul>
+        <p>
+          <code>never</code> 是<strong>所有类型的子类型</strong>（"底类型"），可以赋给任何位置：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">function fail(msg: string): never {
+  throw new Error(msg);
+}
+
+const x: number = fail("nope");   // ✓ never 可以赋给 number
+const y: string = fail("nope");   // ✓ never 可以赋给 string
+
+// 应用：写"必须取到值"的辅助函数
+function getOrThrow&lt;T&gt;(value: T | undefined): T {
+  if (value === undefined) return fail("missing");
+  return value;
+}</code></pre>
+        </div>
+        <p>
+          组合：03 章已经讲过 <code>never</code> 在 exhaustive check 中的兜底用法。两种用法本质相通 —— never 表示"这里逻辑上不该到达"。
+        </p>
+
+        <h3>3. Overload signature 不参与实现</h3>
+        <p>
+          Function overload 的语法：<strong>多个签名 + 一个实现</strong>。调用方只能看签名，实现签名只是给实现者看的：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 对外可见的两个签名
+function len(x: string): number;
+function len(x: unknown[]): number;
+// 实现签名 — 必须能"覆盖"所有 overload 签名，但调用方看不见
+function len(x: string | unknown[]): number {
+  return x.length;
+}
+
+len("abc");      // ✓ 匹配第一个签名
+len([1, 2, 3]);  // ✓ 匹配第二个签名
+len(123);        // ❌ 没有签名能匹配 number</code></pre>
+        </div>
+        <p>
+          关键设计决策：<strong>实现签名宽松，对外签名精确</strong>。这是为什么实现签名常写 <code>x: string | unknown[]</code> 这种 union，对外暴露的两个签名却是分开的。调用方拿到的类型信息是<strong>更精确</strong>的版本。
+        </p>
+        <p>
+          但 overload 在 TS 里属于<strong>偏复杂的特性</strong>。能用 union 解决的就用 union 解决：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// ❌ 不必要的 overload
+function len(x: string): number;
+function len(x: unknown[]): number;
+function len(x: string | unknown[]): number { return x.length; }
+
+// ✅ 直接 union 更简洁，行为一样
+function len(x: string | unknown[]): number {
+  return x.length;
+}</code></pre>
+        </div>
+        <p>
+          <strong>真正需要 overload 的场景</strong>：返回类型依赖参数类型（不同输入有不同输出），靠 union 表达不了：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 参数是 string → 返回 string；参数是 number → 返回 number
+function double(x: string): string;
+function double(x: number): number;
+function double(x: string | number): string | number {
+  return typeof x === "string" ? x + x : x * 2;
+}
+
+const a = double("ab");   // a: string
+const b = double(3);      // b: number</code></pre>
+        </div>
+        <p>
+          但即便这种情况，conditional types（09 章）通常是更好的解：<code>function double&lt;T extends string | number&gt;(x: T): T extends string ? string : number</code>。
+        </p>
+
+        <h3>4. 泛型在 TS 中是延迟绑定</h3>
+        <p>
+          泛型<strong>不是 any 的代名词</strong>。<code>T</code> 是<strong>占位符</strong>，在调用处被某个具体类型替代，所有出现 T 的位置同步替换。
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">function firstElement&lt;T&gt;(arr: T[]): T | undefined {
+  return arr[0];
+}
+
+const a = firstElement(["a", "b"]);    // a: string | undefined
+const b = firstElement([1, 2]);        // b: number | undefined
+const c = firstElement([true]);        // c: boolean | undefined</code></pre>
+        </div>
+        <p>
+          调用 <code>firstElement(["a"])</code> 时，TS 推断 T = "a" 的"宽化"形式（即 <code>string</code>），把所有 T 替换成 string。这是<strong>使用点绑定</strong>，不是定义点绑定。
+        </p>
+        <p>
+          约束让 T 获得"最少能力"：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// T 必须有 length 属性，函数体才能用 .length
+function longest&lt;T extends { length: number }&gt;(a: T, b: T): T {
+  return a.length &gt;= b.length ? a : b;
+}
+
+longest([1, 2], [1, 2, 3]);    // ✓ 数组有 length
+longest("abc", "ab");           // ✓ 字符串有 length
+longest(10, 100);               // ❌ number 没有 length</code></pre>
+        </div>
+
+        <h3>5. "如果一个类型参数只出现一次，几乎肯定不需要它"</h3>
+        <p>
+          这是 TS 官方手册的明确建议。理由是：泛型的目的是<strong>建立两个或多个位置之间的关联</strong>。只出现一次说明没有关联可建：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// ❌ T 只用了一次 — 多此一举
+function greet&lt;T extends string&gt;(s: T): void {
+  console.log(s.toUpperCase());
+}
+
+// ✅ 直接用具体类型
+function greet(s: string): void {
+  console.log(s.toUpperCase());
+}
+
+// ✅ T 出现两次（参数 + 返回值）— 真正需要泛型
+function identity&lt;T&gt;(x: T): T {
+  return x;
+}</code></pre>
+        </div>
+        <p>
+          单次出现的泛型常常是"看起来通用但实际没用"的样板代码。删掉换成 <code>string</code> 等具体类型一般是改进。
+        </p>
+
+        <h3>6. <code>this</code> 参数：编译期约束运行时绑定</h3>
+        <p>
+          JS 函数里 <code>this</code> 的值由<strong>调用方式</strong>决定（4 规则：默认 / 隐式 / 显式 / new；详见 JS <a href="../../javascript/03-advanced/03-this.html">this 四规则</a>）。TS 提供了 <code>this</code> 参数语法，让函数声明<strong>它期望被怎样调用</strong>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">interface User {
+  name: string;
+  greet(this: User): string;
+}
+
+const u: User = {
+  name: "Alice",
+  greet() {            // this 被声明为 User
+    return `Hi ${this.name}`;
+  },
+};
+
+u.greet();             // ✓ this 是 u（User）
+
+// 但
+const fn = u.greet;
+fn();                  // ❌ The 'this' context of type 'void' is not assignable to method's 'this' of type 'User'</code></pre>
+        </div>
+        <p>
+          关键：<code>this: User</code> <strong>不是真实参数</strong>，编译产物里完全消失。它只是一个特殊位置的类型注解，告诉 TS"调用此函数时 this 必须是 User"。配合 <code>strictBindCallApply</code> 后 <code>fn.call(notAUser)</code> 也会报错。
+        </p>
+
+        <h3>7. <code>Function</code> 类型相当于半个 any</h3>
+        <p>
+          有些人会写 <code>let cb: Function = ...</code>，看起来像"任意函数"。<strong>这是反模式</strong>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// ❌ Function 类型几乎等于 any
+function caller(cb: Function) {
+  cb();              // 通过
+  cb(1, 2, 3);       // 通过
+  cb.foo();          // 也通过 — 因为 Function 上没有形状约束
+  return cb;         // 通过
+}
+
+// ✅ 用具体的函数类型
+function caller(cb: () =&gt; void) { cb() }
+function caller&lt;A extends unknown[], R&gt;(cb: (...args: A) =&gt; R, ...args: A): R { return cb(...args) }</code></pre>
+        </div>
+        <p>
+          <code>typescript-eslint</code> 的 <code>@typescript-eslint/no-unsafe-function-type</code> 规则会拦住 <code>Function</code> 类型。永远写具体签名。
+        </p>
+
+        <!-- 03 应用场景 ============================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · Express / Hono middleware 的 void 返回</h3>
+          <p>
+            HTTP framework middleware 的 handler 类型几乎都是 <code>void</code> 返回，让你能写 <code>return res.json(...)</code> 也能写 <code>res.json(...)</code>：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">type Handler = (req: Request, res: Response, next: NextFunction) =&gt; void;
+
+const auth: Handler = (req, res, next) =&gt; {
+  if (!req.headers.authorization) {
+    return res.status(401).json({ error: "Unauthorized" });
+    //     ^^^^^^^^^^^^^^^^^^^^^^^^ 返回 Response — void 不在乎
+  }
+  next();
+};
+
+// 如果 Handler 改成 (...) =&gt; undefined，上面那行就要拆成两行（先调用再 return）</code></pre>
+          </div>
+          <p>
+            这是 void 设计的最大价值场景。Express、Hono、Koa、Fastify 等都用同一套 idiom。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 类型安全的 fetch wrapper</h3>
+          <p>
+            泛型让 fetch 的返回类型由调用方决定：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">async function api&lt;T&gt;(url: string, init?: RequestInit): Promise&lt;T&gt; {
+  const res = await fetch(url, init);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise&lt;T&gt;;
+}
+
+// 调用方指定预期类型
+interface User { id: string; name: string }
+const user = await api&lt;User&gt;("/api/users/1");
+//    ^? User</code></pre>
+          </div>
+          <p>
+            ⚠️ 这种模式<strong>不安全</strong> —— <code>res.json()</code> 实际类型是 unknown，但被强制 cast 成 T。生产代码应配合 zod 在边界校验：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">async function api&lt;T&gt;(url: string, schema: z.ZodType&lt;T&gt;, init?: RequestInit): Promise&lt;T&gt; {
+  const res = await fetch(url, init);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return schema.parse(await res.json());   // 运行时校验
+}
+
+const UserSchema = z.object({ id: z.string(), name: z.string() });
+const user = await api("/api/users/1", UserSchema);
+//    ^? { id: string; name: string }</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · React 事件 handler 类型</h3>
+          <p>
+            React 给所有 DOM 事件提供了泛型类型：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">import { ChangeEvent, FormEvent, MouseEvent } from "react";
+
+function MyForm() {
+  const onSubmit = (e: FormEvent&lt;HTMLFormElement&gt;) =&gt; {
+    e.preventDefault();
+    const data = new FormData(e.currentTarget);
+  };
+
+  const onChange = (e: ChangeEvent&lt;HTMLInputElement&gt;) =&gt; {
+    console.log(e.target.value);
+  };
+
+  const onClick = (e: MouseEvent&lt;HTMLButtonElement&gt;) =&gt; {
+    console.log(e.button);
+  };
+
+  return (
+    &lt;form onSubmit={onSubmit}&gt;
+      &lt;input onChange={onChange} /&gt;
+      &lt;button type="button" onClick={onClick}&gt;Click&lt;/button&gt;
+    &lt;/form&gt;
+  );
+}</code></pre>
+          </div>
+          <p>
+            tip：写 <code>onChange={(e) =&gt; ...}</code> 内联时 TS 自动从 prop 类型推 e 的类型（contextual typing，详见 17 章）。脱离 JSX 上下文时必须显式注解。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · ORM 查询的泛型函数</h3>
+          <p>
+            Repository pattern 的标配：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">interface Entity { id: string }
+
+class Repository&lt;T extends Entity&gt; {
+  constructor(private collection: T[]) {}
+
+  findById(id: string): T | undefined {
+    return this.collection.find(x =&gt; x.id === id);
+  }
+
+  findWhere(where: Partial&lt;T&gt;): T[] {
+    return this.collection.filter(x =&gt;
+      Object.entries(where).every(([k, v]) =&gt; (x as any)[k] === v)
+    );
+  }
+}
+
+interface User extends Entity { name: string; age: number }
+const users = new Repository&lt;User&gt;([{ id: "1", name: "A", age: 30 }]);
+const adults = users.findWhere({ age: 30 });   // adults: User[]
+const u = users.findById("1");                  // u: User | undefined</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 ============================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>所有参数形态</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 必传
+function f1(x: number) {}
+
+// 可选 — 类型自动 union undefined
+function f2(x?: number) {}                    // x: number | undefined
+f2();                                          // ✓
+f2(1);                                         // ✓
+
+// 默认值 — 调用方仍是 number | undefined，函数体内是 number
+function f3(x: number = 0) {}
+f3();          // ✓
+f3(undefined); // ✓
+// 注意：默认参数和 ? 不能同时写
+
+// rest
+function f4(first: string, ...rest: number[]) {}
+f4("a", 1, 2, 3);
+
+// rest 用 tuple 类型表达可变签名
+function f5(...args: [string, number] | [boolean]) {}
+f5("a", 1);   // ✓
+f5(true);     // ✓
+
+// 参数解构 + 默认值
+function f6({ name, age = 0 }: { name: string; age?: number }) {}
+f6({ name: "Alice" });</code></pre>
+        </div>
+
+        <h3>泛型函数 + 多个约束</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 类型参数互相约束：K 必须是 T 的某个 key
+function getProp&lt;T, K extends keyof T&gt;(obj: T, key: K): T[K] {
+  return obj[key];
+}
+
+const u = { name: "Alice", age: 30 };
+const n = getProp(u, "name");   // n: string
+const a = getProp(u, "age");    // a: number
+const x = getProp(u, "email");  // ❌ 'email' is not assignable to '"name" | "age"'
+
+// 泛型默认值（TS 5.0+）
+function create&lt;T = string&gt;(): T[] {
+  return [];
+}
+const xs = create();          // xs: string[]（用了默认）
+const ys = create&lt;number&gt;();  // ys: number[]
+
+// const type parameter（TS 5.0）— 让传入对象自动按 readonly 字面量推断
+function pair&lt;const T extends readonly string[]&gt;(x: T): T {
+  return x;
+}
+const p = pair(["a", "b"]);
+//    ^? readonly ["a", "b"]   不是 string[]！</code></pre>
+        </div>
+
+        <h3>function overload 的实战写法</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// jQuery 风格的 selector
+function $(s: string): HTMLElement | null;
+function $(s: string, parent: Element): HTMLElement | null;
+function $&lt;T extends HTMLElement&gt;(s: string, parent?: Element): T | null {
+  return (parent ?? document).querySelector&lt;T&gt;(s);
+}
+
+// 时间格式化
+function formatDate(d: Date): string;
+function formatDate(d: Date, withTime: true): string;
+function formatDate(d: Date, withTime: false): string;
+function formatDate(d: Date, withTime = false): string {
+  return withTime ? d.toISOString() : d.toDateString();
+}</code></pre>
+        </div>
+
+        <h3>Call signature + 函数对象（带属性的可调用对象）</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 描述一个既可调用、又有属性的对象
+interface Calculator {
+  (x: number, y: number): number;     // call signature
+  history: string[];                   // 普通属性
+  clear(): void;                       // method
+}
+
+const add: Calculator = Object.assign(
+  (x: number, y: number) =&gt; x + y,
+  {
+    history: [] as string[],
+    clear() { this.history.length = 0; },
+  },
+);
+
+add(1, 2);              // 3
+add.history.push("1+2"); // ✓</code></pre>
+        </div>
+
+        <h3>void 返回的"宽松"演示</h3>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 从类型层接受任意返回值的回调
+function each&lt;T&gt;(arr: T[], cb: (x: T) =&gt; void): void {
+  for (const x of arr) cb(x);
+}
+
+// 各种返回都通过
+each([1, 2], x =&gt; console.log(x));         // ✓ 隐式 undefined
+each([1, 2], x =&gt; x + 1);                  // ✓ 返回 number
+each([1, 2], (x) =&gt; { return x.toString() }); // ✓ 显式 return string
+
+// 但函数声明自己是 void 时不能 return 带值
+function badFn(): void {
+  return 42;   // ❌ Type 'number' is not assignable to type 'void'
+}</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 ============================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 把 void 当 undefined 用</div>
+          <p>
+            两者表面相似，但语义不同：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// undefined：函数确实必须返回 undefined
+type StrictFn = () =&gt; undefined;
+const f1: StrictFn = () =&gt; { return; };       // ✓
+const f2: StrictFn = () =&gt; 42;                  // ❌ Type 'number' is not assignable to 'undefined'
+
+// void：调用方不在乎返回值
+type LooseFn = () =&gt; void;
+const f3: LooseFn = () =&gt; 42;                   // ✓
+const f4: LooseFn = () =&gt; { return; };          // ✓</code></pre>
+          </div>
+          <p>
+            <strong>规则</strong>：函数类型描述"调用方期望"用 <code>void</code>；声明"我必须返回 undefined（不返回别的）"用 <code>undefined</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · overload 顺序错误导致永远匹配不到窄签名</div>
+          <p>
+            TS 从上到下匹配 overload，<strong>第一个匹配的就用</strong>。宽签名放前面会"吃掉"后面的窄签名：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// ❌ 顺序错
+function format(x: string | number): string;
+function format(x: string): "string-result";   // 永远匹配不到 — 上面那个先吞了
+function format(x: string | number): string {
+  return typeof x === "string" ? "string-result" : x.toString();
+}
+
+const r = format("abc");
+//    ^? string         不是 "string-result"
+
+// ✅ 窄签名放前面
+function format(x: string): "string-result";
+function format(x: string | number): string;
+function format(x: string | number): string {
+  return typeof x === "string" ? "string-result" : x.toString();
+}
+
+const r = format("abc");
+//    ^? "string-result"   ✓</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：overload 永远<strong>窄签名在前，宽签名在后</strong>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 用泛型表达 union 是冗余</div>
+          <p>
+            常见反模式：用 <code>extends string | number</code> 约束泛型，但函数体并不依赖参数类型在 T 上的关联：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// ❌ T 只用了一次 + 函数体不需要保留 T 的精确性
+function log&lt;T extends string | number&gt;(x: T): void {
+  console.log(x);
+}
+
+// ✅ 等价的简洁写法
+function log(x: string | number): void {
+  console.log(x);
+}</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：泛型用于"在两个或多个位置之间建立类型关联"。单次出现就改成具体类型 / union。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 箭头函数赋值后 this 丢失</div>
+          <p>
+            JS 经典陷阱在 TS 里仍然存在：method 拿出来赋值后调用，<code>this</code> 不再是原对象。
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">class Counter {
+  count = 0;
+  inc() { this.count++; }
+}
+const c = new Counter();
+const fn = c.inc;
+fn();   // 运行时：this 是 undefined（strict 模式），this.count++ 炸
+
+// ✅ 解法 1：bind
+const fn = c.inc.bind(c);
+
+// ✅ 解法 2：箭头函数 field（自动绑定 this）
+class Counter {
+  count = 0;
+  inc = () =&gt; { this.count++; };
+}
+const c = new Counter();
+const fn = c.inc;
+fn();   // ✓ 箭头函数捕获了 c
+
+// ✅ 解法 3：声明 this 参数让 TS 拦住
+class Counter {
+  count = 0;
+  inc(this: Counter) { this.count++; }
+}
+const c = new Counter();
+const fn = c.inc;
+fn();   // ❌ TS 报错：The 'this' context of type 'void' is not assignable...</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：React 类组件 / 状态机等场景优先用箭头函数 field；不能改写时用 <code>this:</code> 参数 + <code>strictBindCallApply</code> 让 TS 帮你抓 bug。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 函数类型的"参数变型"陷阱（method bivariance）</div>
+          <p>
+            这是 17 章会展开的内容，但函数章必须先剧透：默认情况下 TS 对 method 参数的类型检查是<strong>双变（bivariant）</strong>，不严格。开启 <code>strictFunctionTypes</code> 后才严格。
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">interface Animal { name: string }
+interface Dog extends Animal { bark(): void }
+
+type AnimalCb = (x: Animal) =&gt; void;
+type DogCb = (x: Dog) =&gt; void;
+
+const dogCb: DogCb = (d) =&gt; d.bark();
+
+// strictFunctionTypes: false（默认 strict 包含 true）
+const cb: AnimalCb = dogCb;   // 不安全 — dogCb 期望 Dog 但被传 Animal
+cb({ name: "cat" });            // 运行时 TypeError: bark is not a function
+
+// strictFunctionTypes: true → 这一赋值会报错</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：永远开 <code>strict: true</code>（默认包含 strictFunctionTypes）。详见 17 章。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · 用 Function 类型逃避思考</div>
+          <p>
+            <code>Function</code> 类型几乎等于 <code>any</code>，绕过所有类型检查：
+          </p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-ts">// ❌
+function once(fn: Function): Function {
+  let done = false;
+  let result: any;
+  return function (this: unknown, ...args: any[]) {
+    if (done) return result;
+    done = true;
+    return result = fn.apply(this, args);
+  };
+}
+
+// ✅ 用泛型 + tuple 表达"任意签名的函数"
+function once&lt;A extends unknown[], R&gt;(fn: (...args: A) =&gt; R): (...args: A) =&gt; R {
+  let done = false;
+  let result: R;
+  return function (this: unknown, ...args: A): R {
+    if (done) return result;
+    done = true;
+    return result = fn.apply(this, args);
+  };
+}</code></pre>
+          </div>
+          <p>
+            <strong>规避</strong>：永远写具体函数签名。"任意函数"用 <code>(...args: A) =&gt; R</code> 配合泛型 A、R 表达。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================== -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://www.typescriptlang.org/docs/handbook/2/functions.html" target="_blank" rel="noopener"
+              >TypeScript Handbook · More on Functions</a
+            > —— 官方对应章节
+          </li>
+          <li>
+            <a href="https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-0.html#const-type-parameters" target="_blank" rel="noopener"
+              >TS 5.0 · const type parameters</a
+            > —— <code>&lt;const T&gt;</code> 引入背景
+          </li>
+          <li>
+            <a href="https://github.com/Microsoft/TypeScript/wiki/FAQ#why-are-functions-with-fewer-parameters-assignable-to-functions-that-take-more-parameters" target="_blank" rel="noopener"
+              >TS FAQ · 函数参数赋值兼容性</a
+            > —— 为什么少参数函数能赋给多参数函数类型
+          </li>
+          <li>
+            下一章 →
+            <a href="05-objects.html">05 Object Types</a>：对象 / 数组 / tuple / index signature 全谱
+          </li>
+          <li>
+            JS 衔接 →
+            <a href="../../javascript/03-advanced/03-this.html">JS · this 四规则</a> 配合理解 this 参数
+          </li>
+          <li>
+            JS 衔接 →
+            <a href="../../javascript/03-advanced/02-closures.html">JS · 闭包内存模型</a> 配合理解 once / debounce 等高阶函数
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="03-narrowing.html">
+            <span class="label">← 上一章</span>
+            <span class="title">03 · Narrowing</span>
+          </a>
+          <a class="next" href="05-objects.html">
+            <span class="label">下一章 →</span>
+            <span class="title">05 · Object Types</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

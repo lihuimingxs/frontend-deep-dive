@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Symbol 全景 · P1 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="Symbol 创建与唯一身份、Symbol.for 全局注册表、15 个 well-known symbols 完整用途、Symbol.iterator/toPrimitive/toStringTag/hasInstance 实战、Symbol 作为语言协议钩子的设计哲学。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P2 目录</a>
+          <a href="https://javascript.info/symbol" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · 语言基础</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-types.html">01 · 数据类型系统</a></li>
+          <li><a href="02-operators.html">02 · 操作符与强制转换</a></li>
+          <li><a href="03-control-flow.html">03 · 控制流</a></li>
+          <li><a href="04-functions.html">04 · 函数基础</a></li>
+          <li><a href="05-objects.html">05 · 对象深入</a></li>
+          <li><a href="06-arrays.html">06 · 数组深入</a></li>
+          <li><a href="07-strings.html">07 · 字符串深入</a></li>
+          <li><a href="08-numbers.html">08 · 数字与 Math</a></li>
+          <li><a href="09-date-intl.html">09 · Date 与 Intl</a></li>
+          <li><a href="10-map-set.html">10 · Map / Set 家族</a></li>
+          <li><a href="11-symbol.html">11 · Symbol 全景</a></li>
+          <li><a href="12-json.html">12 · JSON</a></li>
+          <li><a href="13-iterators.html">13 · 迭代器与 Generator</a></li>
+          <li><a href="14-errors.html">14 · 错误处理</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · 语言基础</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Symbol 全景</span>
+        </nav>
+
+        <h1>Symbol 全景</h1>
+        <p class="lead">
+          Symbol 不是给业务代码直接用的 "ID 生成器"，而是 JS
+          给<strong>语言本身</strong>留的"协议钩子"。想让自定义类像数组一样被 <code>for-of</code>、像数字一样被
+          <code>+</code>、像某个 class 一样被 <code>instanceof</code> ——全靠 well-known symbols。本章把 Symbol
+          的设计哲学与 15 个内置 symbol 的实战用途讲清楚。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~20 分钟</span>
+          <span><strong>前置</strong> 01 数据类型（Symbol 基础）</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/symbol" target="_blank" rel="noopener">Symbol type</a></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================= -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 创建：每次调用都全新、不等
+const s1 = Symbol();
+const s2 = Symbol("debug-tag");     // 描述字符串，仅用于 debug
+s2.toString();                       // "Symbol(debug-tag)"
+s2.description;                      // "debug-tag"
+Symbol() === Symbol();               // false
+
+// ⚠ 不能 new
+new Symbol();                        // TypeError
+
+// 全局注册表：同名复用同一个 Symbol
+const a = Symbol.for("app.id");
+const b = Symbol.for("app.id");
+a === b;                             // true
+Symbol.keyFor(a);                    // "app.id"  （反查）
+
+// 作为对象 key
+const PRIV = Symbol("private");
+obj[PRIV] = "secret";
+obj[PRIV];                           // "secret"
+
+// 对 Object.keys / for-in / JSON.stringify 不可见
+Object.keys(obj);                    // [...]  （不含 PRIV）
+Object.getOwnPropertySymbols(obj);   // [PRIV]</code></pre>
+        </div>
+
+        <h3>15 个 Well-known symbols</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>协议钩子</th>
+              <th>典型用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>Symbol.iterator</code></td>
+              <td><code>for-of</code>、spread、解构</td>
+              <td>自定义同步可迭代</td>
+            </tr>
+            <tr>
+              <td><code>Symbol.asyncIterator</code></td>
+              <td><code>for await...of</code></td>
+              <td>自定义异步流</td>
+            </tr>
+            <tr>
+              <td><code>Symbol.toPrimitive</code></td>
+              <td><code>ToPrimitive</code> 强转</td>
+              <td>自定义 <code>+</code>/<code>==</code> 行为</td>
+            </tr>
+            <tr>
+              <td><code>Symbol.toStringTag</code></td>
+              <td><code>Object.prototype.toString</code></td>
+              <td>自定义 <code>[object X]</code></td>
+            </tr>
+            <tr>
+              <td><code>Symbol.hasInstance</code></td>
+              <td><code>instanceof</code></td>
+              <td>自定义成员判断</td>
+            </tr>
+            <tr>
+              <td><code>Symbol.isConcatSpreadable</code></td>
+              <td><code>Array.prototype.concat</code></td>
+              <td>控制 concat 是否展开对象</td>
+            </tr>
+            <tr>
+              <td><code>Symbol.species</code></td>
+              <td>子类方法的构造函数</td>
+              <td>让 <code>subArray.map</code> 返回子类</td>
+            </tr>
+            <tr>
+              <td><code>Symbol.match</code></td>
+              <td><code>String.match</code> / <code>@@match</code></td>
+              <td>自定义 regex 类型</td>
+            </tr>
+            <tr>
+              <td><code>Symbol.matchAll</code></td>
+              <td><code>String.matchAll</code></td>
+              <td>同上</td>
+            </tr>
+            <tr>
+              <td><code>Symbol.replace</code></td>
+              <td><code>String.replace</code></td>
+              <td>同上</td>
+            </tr>
+            <tr>
+              <td><code>Symbol.search</code></td>
+              <td><code>String.search</code></td>
+              <td>同上</td>
+            </tr>
+            <tr>
+              <td><code>Symbol.split</code></td>
+              <td><code>String.split</code></td>
+              <td>同上</td>
+            </tr>
+            <tr>
+              <td><code>Symbol.unscopables</code></td>
+              <td><code>with</code> 作用域</td>
+              <td>Array.includes/flat 的新 API 兼容旧 <code>with</code></td>
+            </tr>
+            <tr>
+              <td><code>Symbol.dispose</code></td>
+              <td><code>using</code>（ES2024）</td>
+              <td>自动资源清理（同步）</td>
+            </tr>
+            <tr>
+              <td><code>Symbol.asyncDispose</code></td>
+              <td><code>await using</code></td>
+              <td>自动资源清理（异步）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 =========================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="uniqueness">唯一身份的实现</h3>
+        <p>
+          每个 <code>Symbol()</code> 调用产生一个新的 Symbol 值，引擎内部给它分配一个<strong>唯一 seq_id</strong
+          >（类似进程内的原子计数器）。<code>===</code> 比较 Symbol 就是比较 seq_id。这是"不可伪造 ID"的技术保证 ——
+          除了拿到引用，没有任何办法构造出相等的 Symbol。
+        </p>
+
+        <h3 id="registry">全局注册表：跨 realm 的 Symbol</h3>
+        <p>
+          <code>Symbol()</code> 的唯一性在<strong>单个 realm</strong>（同一个全局环境）内。iframe、Worker、Node vm
+          模块各有独立 realm。<code>Symbol.for("key")</code> 使用一个<strong>跨 realm 共享的字符串注册表</strong>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 主文档
+const main = Symbol.for("my.marker");
+
+// iframe / Worker 里
+const iframe = Symbol.for("my.marker");
+
+// 在同一浏览器进程里
+main === iframe;               // true（通过 HTML 结构化克隆传递时）
+
+// 只有 Symbol.for 的结果可以通过 postMessage 传递
+// Symbol() 创建的本地 Symbol 无法跨 realm（会变成 undefined 或抛错）</code></pre>
+        </div>
+        <p>
+          <strong>用途</strong>：跨 iframe 协议标识（"你是不是我认识的那种对象？" 检查），Node.js 的
+          <code>Symbol.for("nodejs.util.inspect.custom")</code> 就是这种用法。
+        </p>
+
+        <h3 id="protocol-hooks">Well-known symbols 作为协议钩子</h3>
+        <p>JS 早期给内置行为开口只有两个名字约定：<code>toString</code> 和 <code>valueOf</code>。这有两个问题：</p>
+        <ol>
+          <li><strong>命名冲突</strong> —— 业务代码里也会有 <code>.toString</code> 方法，意图可能完全不同。</li>
+          <li>
+            <strong>不可扩展</strong> —— 想给 <code>for-of</code>、<code>instanceof</code>
+            等新特性开口，不能用已有字符串。
+          </li>
+        </ol>
+        <p>
+          ES6 引入 Symbol 后，新协议用 <code>Symbol.xxx</code> 作为 key：<code>for-of</code> 调用
+          <code>obj[Symbol.iterator]</code>、<code>instanceof</code> 调用 <code>Class[Symbol.hasInstance]</code>……
+          Symbol key 不会被业务字段撞上，也可以随时增加新协议。
+        </p>
+
+        <h3 id="not-invisible">"隐藏性"的真实含义</h3>
+        <p>
+          Symbol key 对
+          <code>Object.keys</code
+          >、<code>for-in</code>、<code>JSON.stringify</code>、<code>Object.assign</code>（注意：assign 其实会拷贝
+          Symbol key）等默认"字符串 key 导向"的 API 不可见。但<strong>仍然可以通过</strong>：
+        </p>
+        <ul>
+          <li><code>Object.getOwnPropertySymbols(obj)</code></li>
+          <li><code>Reflect.ownKeys(obj)</code></li>
+          <li><code>JSON.stringify</code> 的 replacer（如果显式指定）</li>
+          <li><code>{ ...obj }</code> 展开（会拷贝 Symbol key）</li>
+        </ul>
+        <p>
+          <strong>Symbol 不是"加密"</strong>。它是"默认不暴露"，拿到引用仍能访问。真私有用 class 的
+          <code>#field</code>。
+        </p>
+
+        <h3 id="coercion">Symbol 强制转换的规则</h3>
+        <p>Symbol 是几乎所有强转的"坚硬异物"：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>操作</th>
+              <th>结果</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>String(Symbol("x"))</code></td>
+              <td><code>"Symbol(x)"</code>（显式 String 可行）</td>
+            </tr>
+            <tr>
+              <td><code>`${Symbol("x")}`</code></td>
+              <td><strong>TypeError</strong>（模板字符串拒绝）</td>
+            </tr>
+            <tr>
+              <td><code>Symbol("x") + ""</code></td>
+              <td>TypeError（+ 的 ToPrimitive 拒绝）</td>
+            </tr>
+            <tr>
+              <td><code>Number(Symbol())</code></td>
+              <td>TypeError</td>
+            </tr>
+            <tr>
+              <td><code>Boolean(Symbol())</code></td>
+              <td><code>true</code>（只有 Boolean 强转被允许）</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>设计意图：强迫调用方显式意识到"这是 Symbol，你要自己决定怎么处理"，避免 Symbol 被意外吞进字符串拼接。</p>
+
+        <!-- 03 应用场景 =========================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title"><code>Symbol.iterator</code>：让自定义类型支持 <code>for-of</code></h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">class Range {
+  constructor(start, end, step = 1) {
+    this.start = start; this.end = end; this.step = step;
+  }
+  *[Symbol.iterator]() {               // generator 是 iterable
+    for (let i = this.start; i &lt; this.end; i += this.step) yield i;
+  }
+}
+
+const r = new Range(1, 10, 2);
+[...r];                                // [1, 3, 5, 7, 9]
+for (const n of r) { }                  // ok
+const [a, b] = r;                       // 解构也走这里</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title"><code>Symbol.toPrimitive</code>：接管强转</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">class Money {
+  constructor(cents, currency) {
+    this.cents = cents;
+    this.currency = currency;
+  }
+  [Symbol.toPrimitive](hint) {
+    if (hint === "number") return this.cents / 100;          // 算术
+    if (hint === "string") return `${this.cents / 100} ${this.currency}`;
+    return this.toJSON();                                     // default
+  }
+  toJSON() { return `${this.cents / 100} ${this.currency}`; }
+}
+
+const price = new Money(12345, "CNY");
++price;                       // 123.45
+`${price}`;                   // "123.45 CNY"
+price + " (tax included)";    // "123.45 CNY (tax included)"
+price &gt; 100;                  // true（比较用 number hint）</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title"><code>Symbol.toStringTag</code>：自定义 Object.prototype.toString</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">class MyList {
+  get [Symbol.toStringTag]() { return "MyList"; }
+}
+Object.prototype.toString.call(new MyList());   // "[object MyList]"
+
+// 对 debug / 日志 / 类型探测很有用
+function typeOf(v) {
+  return Object.prototype.toString.call(v).slice(8, -1);
+}
+typeOf(new Map());              // "Map"（内置也这么实现）
+typeOf(new MyList());           // "MyList"</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title"><code>Symbol.hasInstance</code>：自定义 <code>instanceof</code></h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 鸭子类型的 instanceof
+class Even {
+  static [Symbol.hasInstance](n) { return typeof n === "number" &amp;&amp; n % 2 === 0; }
+}
+2 instanceof Even;            // true
+3 instanceof Even;            // false
+
+// 工程上：让 Rejected 这种 sentinel 在跨 realm 仍能被识别
+class AbortErr {
+  static [Symbol.hasInstance](e) {
+    return e &amp;&amp; e.name === "AbortError";
+  }
+}
+caughtError instanceof AbortErr;   // 依 name 判定，不依赖引用</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title"><code>Symbol.dispose</code>：显式资源管理（ES2024）</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">class DBConn {
+  async connect() { /* ... */ }
+  [Symbol.dispose]() { this.close(); }
+  close() { /* ... */ }
+}
+
+{
+  using conn = new DBConn();            // ES2024 using 声明
+  await conn.connect();
+  // ... 使用
+}  // 离开 block 自动调用 conn[Symbol.dispose]()
+
+// 异步版：await using db = new DB();  离开时调用 [Symbol.asyncDispose]()
+// 类比 C# using、Python with、Rust Drop</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 =========================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-enum">用 Symbol 做不可伪造枚举</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 常见做法：字符串枚举
+const Status = { PENDING: "pending", DONE: "done" };
+// 问题：别处写 "pending" 也能匹配，拼写错误编译期抓不到
+
+// Symbol 版：必须拿到引用才能匹配
+const Status = {
+  PENDING: Symbol("pending"),
+  DONE: Symbol("done"),
+};
+switch (task.status) {
+  case Status.PENDING: ...            // ✓
+  case "pending": ...                 // 永远不会匹配（Symbol !== string）
+}
+// 代价：不能 JSON 序列化传输，仅限内部使用</code></pre>
+        </div>
+
+        <h3 id="ex-extend">给第三方对象附 Symbol 字段</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 给别人的对象加"内部标记"，不干扰它原有的 JSON.stringify
+const CACHED = Symbol("cached");
+
+function fetchCached(obj) {
+  if (obj[CACHED]) return obj[CACHED];
+  return (obj[CACHED] = computeExpensive(obj));
+}
+
+JSON.stringify(obj);             // 不包含 CACHED
+Object.keys(obj);                // 不包含 CACHED
+// 但引用相等仍能访问：fetchCached(obj)</code></pre>
+        </div>
+
+        <h3 id="ex-iterable-pair">iterable + async iterable 双协议</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 既能同步也能异步迭代的数据源
+class Queue {
+  #items = [];
+  push(x) { this.#items.push(x); }
+  [Symbol.iterator]() { return this.#items[Symbol.iterator](); }
+  async *[Symbol.asyncIterator]() {
+    while (this.#items.length) {
+      yield this.#items.shift();
+      await Promise.resolve();           // 让出给微任务
+    }
+  }
+}
+
+for (const x of q) { ... }               // 同步
+for await (const x of q) { ... }         // 异步（逐个处理，让出 CPU）</code></pre>
+        </div>
+
+        <h3 id="ex-keyfor">全局注册表的反查</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const s1 = Symbol.for("app.v1");
+const s2 = Symbol("local");
+
+Symbol.keyFor(s1);        // "app.v1"
+Symbol.keyFor(s2);        // undefined   ← 不在注册表里
+
+// 使用场景：跨 iframe 协议版本协商
+function isCompatible(sym) {
+  const key = Symbol.keyFor(sym);
+  return key &amp;&amp; key.startsWith("app.v") &amp;&amp; parseInt(key.slice(5)) &gt;= 2;
+}</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 =========================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>new Symbol()</code> 抛错</div>
+          <p>
+            Symbol 和 BigInt 是仅有的两个"不能 new"的原始类型包装。规范显式规定了这是为了避免它们变成 wrapper
+            对象（那样就破坏"唯一性"保证）。用 <code>Symbol("desc")</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">模板字符串隐式转 Symbol 抛 TypeError</div>
+          <p>
+            <code>`${sym}`</code>、<code>sym + ""</code> 都抛错。显式转用 <code>String(sym)</code> 或
+            <code>sym.description</code>。设计意图是防止 Symbol 被意外吞进 UI 字符串。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>Symbol.for</code> 的全局注册表泄漏到 iframe</div>
+          <p>
+            主文档用 <code>Symbol.for("internal")</code>，恶意 iframe 可以
+            <code>Symbol.for("internal")</code> 拿到同一个 Symbol 并用它访问你挂在对象上的 Symbol 键。<strong
+              >敏感数据不要用 Symbol.for 做 key</strong
+            >。用本地 <code>Symbol()</code> 安全。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>Object.assign</code> 复制 Symbol 键</div>
+          <p>
+            文档常说 "Symbol key 不可枚举"，但 <code>Object.assign(target, source)</code> <strong>会</strong>复制自有
+            enumerable Symbol key（ES2017 起明确规范）。想保护 Symbol 属性不被意外复制，用
+            <code>Object.defineProperty</code> 设 <code>enumerable: false</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>JSON.stringify</code> 忽略 Symbol 键<strong>和</strong>值</div>
+          <p>
+            <code>JSON.stringify({ [Symbol("k")]: 1, x: Symbol("v") })</code> 是 <code>"{}"</code>（忽略 Symbol 键）还是
+            <code>'{"x":null}' </code> 呢？实际是 <code>'{}'</code>（ES2017 标准说键忽略）。Symbol
+            值作为对象属性值会被忽略、作为数组元素会变 null。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>Symbol.for(undefined)</code> 返回一个"undefined" key 的 Symbol</div>
+          <p>
+            <code>Symbol.for(undefined)</code> 把参数 <code>ToString</code> 成
+            <code>"undefined"</code> 再查注册表。这通常不是意图。对未定义值要显式校验。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>Symbol.species</code> 是个罕用坑</div>
+          <p>
+            子类继承 <code>Array</code>、<code>Promise</code> 时，<code>.map</code> / <code>.then</code> 会调用
+            <code>this.constructor[Symbol.species]</code> 决定用哪个构造函数。默认是子类本身 ——
+            可能导致子类方法返回子类实例。TC39 已有提案移除 <code>Symbol.species</code>（太复杂、用的地方少）。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================ -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-symbol-objects" target="_blank" rel="noopener"
+              >ECMA-262 · 20.4 Symbol Objects</a
+            >
+          </li>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-well-known-symbols" target="_blank" rel="noopener"
+              >ECMA-262 · 6.1.5.1 Well-Known Symbols</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol"
+              target="_blank"
+              rel="noopener"
+              >MDN · Symbol</a
+            >
+          </li>
+          <li>
+            <a href="https://github.com/tc39/proposal-explicit-resource-management" target="_blank" rel="noopener"
+              >TC39 · using / Symbol.dispose 提案</a
+            >
+          </li>
+          <li>
+            <strong>下一步</strong> → <a href="12-json.html">12 · JSON</a>，看 JSON.stringify 的 replacer/reviver
+            如何处理 Symbol 和其他特殊类型。
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="10-map-set.html"
+            ><span class="label">← 上一章</span><span class="title">10 · Map / Set 家族</span></a
+          >
+          <a class="next" href="12-json.html"
+            ><span class="label">下一章 →</span><span class="title">12 · JSON</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

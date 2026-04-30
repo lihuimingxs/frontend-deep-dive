@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fetch API 完整语义 · P6 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="Fetch 的 Request/Response/Headers 对象模型、credentials/mode/cache/redirect 选项、流式响应 ReadableStream、multipart 上传、Body 只能读一次、fetch 仅对网络失败 reject 的错误边界。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P7 目录</a>
+          <a href="https://fetch.spec.whatwg.org/" target="_blank" rel="noopener">规范</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · 网络 & 存储</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-fetch.html">01 · Fetch API</a></li>
+          <li><a href="02-xhr.html">02 · XHR 残余场景</a></li>
+          <li><a href="03-websocket.html">03 · WebSocket</a></li>
+          <li><a href="04-sse.html">04 · Server-Sent Events</a></li>
+          <li><a href="05-cors-csp.html">05 · CORS 与 CSP</a></li>
+          <li><a href="06-cookie-storage.html">06 · Cookie / Storage</a></li>
+          <li><a href="07-indexeddb.html">07 · IndexedDB</a></li>
+          <li><a href="08-service-worker.html">08 · Service Worker + 跨标签</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../02-fundamentals/index.html">P2 · 语言基础</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · 网络 & 存储</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Fetch API</span>
+        </nav>
+
+        <h1>Fetch API 完整语义</h1>
+        <p class="lead">
+          <code>fetch</code> 是浏览器/Node 现代网络请求的标准接口。它比 XHR 更 Promise-native、支持流式响应、更精细的
+          CORS 控制。但也有几个反直觉的"规范设计"—— HTTP 404 <strong>不会</strong> reject、body 只能读一次、默认不发
+          cookie。本章把这些细节串起来。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P3 Promise · P3 AbortController</span>
+          <span
+            ><strong>规范</strong>
+            <a href="https://fetch.spec.whatwg.org/" target="_blank" rel="noopener">Fetch Standard</a></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 最小示例
+const res = await fetch("/api/users");
+if (!res.ok) throw new Error(`HTTP ${res.status}`);
+const data = await res.json();
+
+// 完整选项
+const res = await fetch(url, {
+  method: "POST",
+  headers: { "Content-Type": "application/json", "X-Token": "..." },
+  body: JSON.stringify({ name: "Alice" }),
+  credentials: "include",      // "omit" / "same-origin" / "include"
+  mode: "cors",                // "cors" / "no-cors" / "same-origin"
+  cache: "no-store",           // "default" / "no-store" / "reload" / "force-cache" / ...
+  redirect: "follow",          // "follow" / "error" / "manual"
+  referrer: "no-referrer",     // 或 URL 字符串
+  referrerPolicy: "strict-origin",
+  integrity: "sha256-...",     // SRI
+  signal: controller.signal,   // AbortSignal
+  keepalive: true,             // 页面关闭后仍发送（sendBeacon 替代）
+  priority: "high",            // "high" / "low" / "auto"（Fetch Priority）
+});</code></pre>
+        </div>
+
+        <h3>Response 读 body 的方式</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>方法</th>
+              <th>返回类型</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>res.json()</code></td>
+              <td>Promise&lt;any&gt;</td>
+            </tr>
+            <tr>
+              <td><code>res.text()</code></td>
+              <td>Promise&lt;string&gt;</td>
+            </tr>
+            <tr>
+              <td><code>res.arrayBuffer()</code></td>
+              <td>Promise&lt;ArrayBuffer&gt;</td>
+            </tr>
+            <tr>
+              <td><code>res.blob()</code></td>
+              <td>Promise&lt;Blob&gt;</td>
+            </tr>
+            <tr>
+              <td><code>res.formData()</code></td>
+              <td>Promise&lt;FormData&gt;</td>
+            </tr>
+            <tr>
+              <td><code>res.bytes()</code></td>
+              <td>Promise&lt;Uint8Array&gt;（ES2025）</td>
+            </tr>
+            <tr>
+              <td><code>res.body</code></td>
+              <td>ReadableStream（流式）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="reject-policy">fetch 的错误边界</h3>
+        <p><code>fetch</code> <strong>只在网络层失败</strong>时 reject：</p>
+        <ul>
+          <li>DNS 解析失败、连接中断、TLS 握手失败</li>
+          <li>CORS 预检失败（opaque response 或 blocked）</li>
+          <li>abort（AbortError）</li>
+          <li>请求构造错误（非法 URL / headers）</li>
+        </ul>
+        <p>
+          <strong>HTTP 4xx / 5xx 不 reject</strong> —— 服务器响应了就算"成功"。必须手动
+          <code>if (!res.ok) throw ...</code>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">async function safeFetch(url, options) {
+  const res = await fetch(url, options);
+  if (!res.ok) {
+    const text = await res.text().catch(() =&gt; "");
+    throw new Error(`HTTP ${res.status} ${res.statusText}: ${text}`);
+  }
+  return res;
+}
+
+// 和 axios 对比：axios 默认对 4xx/5xx reject（有 validateStatus 选项）
+// fetch 保持"HTTP 是成功的语义"，4xx 也是服务器正确响应</code></pre>
+        </div>
+
+        <h3 id="body-once">Body 只能读一次</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const res = await fetch(url);
+const text = await res.text();
+const data = await res.json();          // ❌ TypeError: body already read
+
+// 想读两次 → clone
+const text = await res.clone().text();
+const data = await res.json();
+
+// 或根据 content-type 决定读法
+const ct = res.headers.get("Content-Type") ?? "";
+if (ct.includes("application/json")) return res.json();
+else return res.text();
+
+// 这是 fetch 对"流式 body"的一致设计 —— body 本质是 stream，读过就 consumed</code></pre>
+        </div>
+
+        <h3 id="streaming">流式读取响应</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 用 ReadableStream 逐块读取（适合大文件 / 流式 AI 响应）
+const res = await fetch("/large-data");
+const reader = res.body.getReader();
+const decoder = new TextDecoder();
+
+let received = 0;
+const contentLength = +res.headers.get("Content-Length");
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  received += value.length;
+  const text = decoder.decode(value, { stream: true });
+  process(text);
+  updateProgress(received / contentLength);
+}
+
+// 或用 async iteration（ES2024）
+for await (const chunk of res.body) {
+  process(chunk);   // Uint8Array
+}</code></pre>
+        </div>
+
+        <h3 id="request-object">Request 对象</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 封装请求为对象
+const req = new Request("/api/users", {
+  method: "POST",
+  body: JSON.stringify(data),
+  headers: { "Content-Type": "application/json" },
+});
+
+// 传给 fetch
+const res = await fetch(req);
+
+// clone 可以重用（Service Worker 里常见）
+const res = await fetch(req.clone());
+
+// Request 的属性
+req.url;
+req.method;
+req.headers;
+req.body;            // ReadableStream
+req.bodyUsed;        // boolean
+req.signal;
+req.referrer;</code></pre>
+        </div>
+
+        <h3 id="headers-object">Headers 对象</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const headers = new Headers({ "X-Token": "abc" });
+headers.append("X-Token", "xyz");       // 多值
+headers.set("Content-Type", "application/json");
+headers.has("X-Token");                  // true
+headers.get("X-Token");                  // "abc, xyz"
+headers.delete("X-Token");
+headers.getSetCookie();                  // ES2023，特殊处理 Set-Cookie（不合并）
+
+// 迭代
+for (const [key, value] of headers) { console.log(key, value); }
+
+// 注意：某些 header 是 forbidden（不能从 JS 设置）
+// User-Agent, Host, Origin, Cookie, ...</code></pre>
+        </div>
+
+        <h3 id="credentials">credentials 策略</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>值</th>
+              <th>带 cookie / Authorization</th>
+              <th>浏览器默认</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>"omit"</code></td>
+              <td>不带</td>
+              <td></td>
+            </tr>
+            <tr>
+              <td><code>"same-origin"</code></td>
+              <td>同源带</td>
+              <td>✓（旧浏览器）</td>
+            </tr>
+            <tr>
+              <td><code>"include"</code></td>
+              <td>跨源也带</td>
+              <td>✓（现代 Chrome）</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          <strong>注意</strong>：<code>credentials: "include"</code> 对跨源请求来说要求服务器响应
+          <code>Access-Control-Allow-Credentials: true</code> 且 <code>Access-Control-Allow-Origin</code> 不能是
+          <code>*</code>（必须具体域名）。详见 05 CORS。
+        </p>
+
+        <h3 id="cache-mode">cache 选项</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>值</th>
+              <th>含义</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>"default"</code></td>
+              <td>按 HTTP cache header 决定（最常用）</td>
+            </tr>
+            <tr>
+              <td><code>"no-store"</code></td>
+              <td>不读不写 HTTP cache</td>
+            </tr>
+            <tr>
+              <td><code>"reload"</code></td>
+              <td>强制向服务器验证（Ctrl+F5）</td>
+            </tr>
+            <tr>
+              <td><code>"no-cache"</code></td>
+              <td>读 cache 但总要服务器验证</td>
+            </tr>
+            <tr>
+              <td><code>"force-cache"</code></td>
+              <td>优先用 cache，没有才请求</td>
+            </tr>
+            <tr>
+              <td><code>"only-if-cached"</code></td>
+              <td>只读 cache，没有就失败（需要 <code>mode: "same-origin"</code>）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">带超时 + 取消的 fetch</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre
+              class="code"
+            ><code class="lang-js">async function apiFetch(url, { timeout = 10_000, signal, ...options } = {}) {
+  // 合并多个 signal：超时 + 外部取消
+  const signals = [AbortSignal.timeout(timeout)];
+  if (signal) signals.push(signal);
+  const combined = AbortSignal.any(signals);
+
+  const res = await fetch(url, { ...options, signal: combined });
+  if (!res.ok) throw new HttpError(res.status, await res.text());
+  return res.json();
+}
+
+// 用法
+const ctrl = new AbortController();
+button.addEventListener("click", () =&gt; ctrl.abort());
+await apiFetch("/api/data", { signal: ctrl.signal });</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">SSE / OpenAI 流式输出</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 逐 token 显示 AI 回答
+const res = await fetch("/api/chat", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ prompt }),
+});
+
+const reader = res.body.getReader();
+const decoder = new TextDecoder();
+let buffer = "";
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  buffer += decoder.decode(value, { stream: true });
+  const lines = buffer.split("\n");
+  buffer = lines.pop();     // 保留最后一行（可能不完整）
+  for (const line of lines) {
+    if (line.startsWith("data: ")) {
+      const data = JSON.parse(line.slice(6));
+      appendToken(data.token);
+    }
+  }
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Multipart 上传</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">const formData = new FormData();
+formData.append("file", fileInput.files[0]);
+formData.append("title", "My document");
+formData.append("tags", JSON.stringify(["a", "b"]));
+
+// 不要手动设 Content-Type！浏览器自动填 multipart/form-data + boundary
+await fetch("/upload", {
+  method: "POST",
+  body: formData,
+  // headers: { "Content-Type": "multipart/form-data" }  ❌ 缺 boundary → 服务端解析失败
+});</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">页面关闭时上报（keepalive）</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 传统：navigator.sendBeacon（一条命令）
+navigator.sendBeacon("/analytics", JSON.stringify(data));
+
+// fetch + keepalive 更灵活（支持 POST、有更多 header 控制）
+fetch("/analytics", {
+  method: "POST",
+  body: JSON.stringify(data),
+  headers: { "Content-Type": "application/json" },
+  keepalive: true,            // 页面关闭后仍发送
+});
+
+// keepalive 限制：body 最大 64KB；浏览器可能有请求数限制</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">文件下载带进度</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">async function download(url, onProgress) {
+  const res = await fetch(url);
+  const total = +res.headers.get("Content-Length") || 0;
+  const reader = res.body.getReader();
+  const chunks = [];
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (total) onProgress(received / total);
+  }
+  return new Blob(chunks);
+}
+
+const blob = await download("/big-file.pdf", (p) =&gt; console.log(`${(p*100).toFixed(1)}%`));
+const url = URL.createObjectURL(blob);
+// &lt;a href={url} download&gt;save&lt;/a&gt;</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-wrapper">生产级 fetch wrapper</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">class HttpError extends Error {
+  constructor(status, body, url) {
+    super(`HTTP ${status} at ${url}`);
+    this.name = "HttpError";
+    this.status = status;
+    this.body = body;
+    this.url = url;
+  }
+}
+
+async function api(url, { timeout = 10_000, retries = 0, ...options } = {}) {
+  let lastErr;
+  for (let i = 0; i &lt;= retries; i++) {
+    try {
+      const res = await fetch(url, {
+        ...options,
+        signal: options.signal ?? AbortSignal.timeout(timeout),
+      });
+      if (res.status &gt;= 500) throw new HttpError(res.status, await res.text(), url);
+      if (!res.ok) throw new HttpError(res.status, await res.json().catch(() =&gt; ({})), url);
+      const ct = res.headers.get("Content-Type") ?? "";
+      return ct.includes("application/json") ? res.json() : res.text();
+    } catch (err) {
+      lastErr = err;
+      if (err.name === "AbortError") throw err;
+      if (err instanceof HttpError &amp;&amp; err.status &lt; 500) throw err;
+      if (i &lt; retries) await new Promise(r =&gt; setTimeout(r, 500 * 2 ** i));
+    }
+  }
+  throw lastErr;
+}</code></pre>
+        </div>
+
+        <h3 id="ex-timeout">基于 AbortSignal 的超时</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 原生 AbortSignal.timeout（ES2024）
+fetch(url, { signal: AbortSignal.timeout(5000) });
+
+// 组合超时 + 手动取消
+const userCancel = new AbortController();
+const signal = AbortSignal.any([AbortSignal.timeout(5000), userCancel.signal]);
+fetch(url, { signal });
+
+// 区分错误
+try { await fetch(url, { signal: AbortSignal.timeout(5000) }); }
+catch (err) {
+  if (err.name === "TimeoutError") showError("请求超时");
+  else if (err.name === "AbortError") {/* 用户取消 */}
+  else throw err;
+}</code></pre>
+        </div>
+
+        <h3 id="ex-streaming-upload">上传流式（Chrome 105+）</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// ReadableStream 作为 body，上传进度就是 stream 里的进度
+const stream = new ReadableStream({
+  async start(controller) {
+    for await (const chunk of bigDataSource()) {
+      controller.enqueue(chunk);
+      reportProgress(bytesSent += chunk.length);
+    }
+    controller.close();
+  },
+});
+
+await fetch("/upload", {
+  method: "POST",
+  body: stream,
+  duplex: "half",            // 必填（Chrome 要求）
+  headers: { "Content-Type": "application/octet-stream" },
+});</code></pre>
+        </div>
+
+        <h3 id="ex-json-with-schema">fetch + Zod 校验</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">import { z } from "zod";
+
+const UserSchema = z.object({ id: z.string(), name: z.string(), age: z.number() });
+type User = z.infer&lt;typeof UserSchema&gt;;
+
+async function getUser(id: string): Promise&lt;User&gt; {
+  const res = await fetch(`/api/users/${id}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  return UserSchema.parse(data);        // 运行时校验 + 类型断言
+}</code></pre>
+        </div>
+
+        <!-- 05 陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">HTTP 404 不 reject</div>
+          <p>
+            最常见的 fetch 错误认知。<code>await fetch(url)</code> 对 404 / 500 返回 response 对象。必须
+            <code>if (!res.ok)</code>。axios 默认 reject，从 axios 迁移到 fetch 要全量改。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">body 只能读一次</div>
+          <p>
+            <code>res.json()</code> 已经消费 body，再 <code>res.text()</code> 抛错。读两次必须
+            <code>res.clone()</code>。用 interceptor / logger 时特别容易踩。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">跨源请求默认不带 cookie</div>
+          <p>
+            fetch 默认 <code>credentials: "same-origin"</code>。跨源要 <code>credentials: "include"</code> + 服务器配合
+            CORS 头。升级 fetch 从老 XHR 代码要注意行为差异。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">FormData 不要手动设 Content-Type</div>
+          <p>
+            浏览器根据 FormData 自动生成 <code>Content-Type: multipart/form-data; boundary=...</code>。手动设会丢失
+            boundary → 服务端无法解析。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">JSON 字符串的 body 要配 header</div>
+          <p>
+            <code>body: JSON.stringify(data)</code> 要手动设 <code>Content-Type: application/json</code>，浏览器默认
+            <code>text/plain</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">keepalive 限制 64KB</div>
+          <p>
+            <code>keepalive: true</code> 的 body 不能超过 64KB。超了 fetch 失败。大量埋点数据用
+            <code>navigator.sendBeacon</code>（同样限制）或分片上报。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>no-cors</code> 得到 opaque response</div>
+          <p>
+            <code>mode: "no-cors"</code> 允许请求跨源资源但响应 <code>type: "opaque"</code> —— status 总是 0、body
+            不可读。几乎没有实用价值（除非纯副作用请求）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Headers 某些 key 被禁用</div>
+          <p>
+            <code>User-Agent</code> / <code>Referer</code> / <code>Host</code> / <code>Connection</code> /
+            <code>Content-Length</code> 等 forbidden header。浏览器控制台会有警告但不抛错。想模拟这些需要 Service Worker
+            或 fetch 拦截代理。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://fetch.spec.whatwg.org/" target="_blank" rel="noopener">Fetch Standard</a></li>
+          <li>
+            <a href="https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API" target="_blank" rel="noopener"
+              >MDN · Fetch API</a
+            >
+          </li>
+          <li>
+            <a href="https://developer.chrome.com/docs/web-platform/fetch-priority" target="_blank" rel="noopener"
+              >Chrome · Fetch Priority</a
+            >
+          </li>
+          <li>
+            <a href="https://web.dev/articles/fetch-upload-streaming" target="_blank" rel="noopener"
+              >web.dev · Fetch upload streaming</a
+            >
+          </li>
+          <li><strong>下一步</strong> → <a href="02-xhr.html">02 · XHR 残余场景</a>。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../06-dom/08-loading.html"
+            ><span class="label">← 上一章</span><span class="title">P5-08 · 资源加载时机</span></a
+          >
+          <a class="next" href="02-xhr.html"
+            ><span class="label">下一章 →</span><span class="title">02 · XHR 残余场景</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

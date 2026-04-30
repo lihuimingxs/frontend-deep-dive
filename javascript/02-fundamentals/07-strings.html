@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>字符串深入 · P1 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="字符串方法分类、模板字符串与标签模板（tagged template）、String.raw、Unicode normalize、Intl.Segmenter 字素簇、Intl.Collator 本地化排序、基础正则、substring/substr/slice 的差异。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P2 目录</a>
+          <a href="https://javascript.info/string" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · 语言基础</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-types.html">01 · 数据类型系统</a></li>
+          <li><a href="02-operators.html">02 · 操作符与强制转换</a></li>
+          <li><a href="03-control-flow.html">03 · 控制流</a></li>
+          <li><a href="04-functions.html">04 · 函数基础</a></li>
+          <li><a href="05-objects.html">05 · 对象深入</a></li>
+          <li><a href="06-arrays.html">06 · 数组深入</a></li>
+          <li><a href="07-strings.html">07 · 字符串深入</a></li>
+          <li><a href="08-numbers.html">08 · 数字与 Math</a></li>
+          <li><a href="09-date-intl.html">09 · Date 与 Intl</a></li>
+          <li><a href="10-map-set.html">10 · Map / Set 家族</a></li>
+          <li><a href="11-symbol.html">11 · Symbol 全景</a></li>
+          <li><a href="12-json.html">12 · JSON</a></li>
+          <li><a href="13-iterators.html">13 · 迭代器与 Generator</a></li>
+          <li><a href="14-errors.html">14 · 错误处理</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · 语言基础</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>字符串深入</span>
+        </nav>
+
+        <h1>字符串深入</h1>
+        <p class="lead">
+          字符串是 JS 里被"看起来简单实则复杂"的典型。UTF-16 存储、Unicode 归一化、本地化比较、字素簇切分、标签模板的
+          AST 级能力 —— 工程代码里但凡涉及"用户输入 / i18n / 搜索匹配 / SQL 构造"就会碰到。本章集中整理所有高频操作。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> 01 数据类型（UTF-16）</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/string" target="_blank" rel="noopener">Strings</a></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================= -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <p>常用方法按目的分组：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>目的</th>
+              <th>方法</th>
+              <th>备注</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td rowspan="4"><strong>访问</strong></td>
+              <td><code>length</code></td>
+              <td>UTF-16 code unit 数，不是字符数</td>
+            </tr>
+            <tr>
+              <td><code>s[i]</code> / <code>s.at(i)</code></td>
+              <td>按索引；<code>at</code> 支持负索引</td>
+            </tr>
+            <tr>
+              <td><code>charCodeAt / codePointAt</code></td>
+              <td>前者 UTF-16，后者 Unicode code point</td>
+            </tr>
+            <tr>
+              <td><code>for...of s</code></td>
+              <td>按 code point 迭代（emoji 完整）</td>
+            </tr>
+            <tr>
+              <td rowspan="3"><strong>切取</strong></td>
+              <td><code>slice(start?, end?)</code></td>
+              <td>支持负索引；<strong>推荐</strong></td>
+            </tr>
+            <tr>
+              <td><code>substring(start, end)</code></td>
+              <td>负数当 0；start &gt; end 会交换参数</td>
+            </tr>
+            <tr>
+              <td><code>substr(start, len)</code></td>
+              <td><strong>已弃用</strong>，用 slice</td>
+            </tr>
+            <tr>
+              <td rowspan="4"><strong>查找</strong></td>
+              <td><code>indexOf / lastIndexOf</code></td>
+              <td>按位置；<code>===</code> 比较</td>
+            </tr>
+            <tr>
+              <td><code>includes / startsWith / endsWith</code></td>
+              <td>boolean；语义清晰</td>
+            </tr>
+            <tr>
+              <td><code>match / matchAll</code></td>
+              <td>正则匹配；<code>matchAll</code> 返回迭代器</td>
+            </tr>
+            <tr>
+              <td><code>search</code></td>
+              <td>正则首次位置（少用）</td>
+            </tr>
+            <tr>
+              <td rowspan="2"><strong>替换</strong></td>
+              <td><code>replace(re/str, new)</code></td>
+              <td>无 <code>/g</code> 时只换首个</td>
+            </tr>
+            <tr>
+              <td><code>replaceAll(re/str, new)</code></td>
+              <td>ES2021；替换所有匹配</td>
+            </tr>
+            <tr>
+              <td rowspan="4"><strong>变形</strong></td>
+              <td><code>toLowerCase / toUpperCase</code></td>
+              <td>ASCII 地区安全；土耳其等语言需 <code>toLocaleLowerCase</code></td>
+            </tr>
+            <tr>
+              <td><code>trim / trimStart / trimEnd</code></td>
+              <td>仅处理 Unicode 空白；不处理全角空格 U+3000？是会处理</td>
+            </tr>
+            <tr>
+              <td><code>padStart / padEnd</code></td>
+              <td>补齐到指定长度</td>
+            </tr>
+            <tr>
+              <td><code>repeat(n)</code></td>
+              <td>重复 n 次</td>
+            </tr>
+            <tr>
+              <td><strong>拆分</strong></td>
+              <td><code>split(sep, limit?)</code></td>
+              <td>string 或 RegExp；<code>""</code> 按 code unit 切（emoji 断）</td>
+            </tr>
+            <tr>
+              <td><strong>拼接</strong></td>
+              <td><code>concat / +</code> / 模板字符串</td>
+              <td>现代代码用模板字符串</td>
+            </tr>
+            <tr>
+              <td rowspan="3"><strong>Unicode / i18n</strong></td>
+              <td><code>normalize(form?)</code></td>
+              <td>NFC / NFD / NFKC / NFKD 归一化</td>
+            </tr>
+            <tr>
+              <td><code>localeCompare(other, locale, opts)</code></td>
+              <td>本地化比较；返回 -1/0/1</td>
+            </tr>
+            <tr>
+              <td><code>new Intl.Segmenter(...)</code></td>
+              <td>按字素簇 / 词 / 句切分（ES2024）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 =========================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="template-literal">模板字符串的规范定义</h3>
+        <p>反引号字符串被解析器拆成两个数组：<strong>字面量片段</strong>和<strong>表达式</strong>。</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const name = "Mira";
+const greeting = `Hello, ${name}!`;
+
+// 等价于
+const greeting = "Hello, " + name + "!";
+
+// 支持任意表达式、多行、保留缩进
+const html = `
+  &lt;div class="card"&gt;
+    &lt;h2&gt;${user.name.toUpperCase()}&lt;/h2&gt;
+    &lt;p&gt;${user.bio || "无简介"}&lt;/p&gt;
+  &lt;/div&gt;
+`;</code></pre>
+        </div>
+
+        <h3 id="tagged-template">标签模板：最强大的语法糖</h3>
+        <p>在模板字符串前加函数名，变成"调用这个函数"，但参数是拆分后的字面量数组 + 表达式值：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function tag(strings, ...values) {
+  // strings 是字面量片段数组（有 .raw 属性）
+  // values 是插值结果数组
+  return strings.map((s, i) =&gt; s + (values[i] ?? "")).join("");
+}
+
+const name = "Mira", age = 2;
+tag`name=${name}, age=${age}`;
+// 调用时参数：
+// strings = ["name=", ", age=", ""]
+// values  = ["Mira", 2]</code></pre>
+        </div>
+        <p>
+          这让标签函数能<strong>按需处理插值</strong> —— 比如 SQL 转义、HTML 转义、CSS 语法生成、GraphQL 查询、i18n
+          等。styled-components、lit-html、graphql-tag 都是这个机制。
+        </p>
+
+        <h3 id="string-raw"><code>String.raw</code></h3>
+        <p>内置标签函数，返回<strong>原始</strong>字符串（不处理 <code>\n</code> 等转义）：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">`\n`.length;               // 1  （换行符）
+String.raw`\n`.length;     // 2  （反斜杠 + n）
+
+// 用途：Windows 路径、正则、LaTeX
+const path = String.raw`C:\Users\Alice\Documents`;
+const re = new RegExp(String.raw`\d+\.\d+`);</code></pre>
+        </div>
+
+        <h3 id="normalize">Unicode 归一化：同一个字符的多种字节表示</h3>
+        <p>"é" 能有两种 Unicode 表示：</p>
+        <ul>
+          <li>NFC：<code>U+00E9</code>（单个预组合字符）</li>
+          <li>NFD：<code>U+0065 U+0301</code>（e + 组合重音符）</li>
+        </ul>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const a = "é";            // "é" NFC
+const b = "é";      // "é" NFD
+a === b;                       // false!  视觉相同，字节不同
+a.length;                      // 1
+b.length;                      // 2
+a.normalize() === b.normalize();  // true  默认 NFC
+a.normalize("NFD") === b;         // true</code></pre>
+        </div>
+        <p>
+          <strong>工程意义</strong>：来自不同源的字符串（macOS 文件名是 NFD、大部分文本编辑器是
+          NFC、用户粘贴带组合字符的 emoji）做比较前必须 <code>.normalize()</code>。四种形式：
+        </p>
+        <ul>
+          <li><strong>NFC</strong>（默认）—— 规范组合：尽可能合并。大多数场景用这个。</li>
+          <li><strong>NFD</strong> —— 规范分解。</li>
+          <li>
+            <strong>NFKC</strong> —— 兼容组合：把"兼容等价"字符（<code>㈣</code> → <code>(四)</code>、<code>㎏</code> →
+            <code>kg</code>）也合并。<strong>搜索/索引用这个</strong>。
+          </li>
+          <li><strong>NFKD</strong> —— 兼容分解。</li>
+        </ul>
+
+        <h3 id="intl-collator"><code>Intl.Collator</code>：本地化比较</h3>
+        <p>
+          <code>a &lt; b</code> 按 Unicode code unit 排序（纯字节比较）。对用户可见的排序应该用
+          <code>Intl.Collator</code>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 快速用法
+"张三".localeCompare("李四", "zh");              // 1（"李" 拼音靠前）
+"a".localeCompare("B", "en", { sensitivity: "base" });  // -1（忽略大小写）
+
+// 批量排序创建复用 Collator（性能提升 10-100 倍）
+const cn = new Intl.Collator("zh", { numeric: true });
+files.sort(cn.compare);    // "file1", "file2", "file10", "file20"  数字顺序而非字典序
+
+// sensitivity 控制
+// "base"     → a === A, a === á
+// "accent"   → a === A, a !== á
+// "case"     → a !== A, a === á
+// "variant"  → 默认；严格按 Unicode</code></pre>
+        </div>
+
+        <h3 id="segmenter"><code>Intl.Segmenter</code>：字素簇 / 词 / 句切分</h3>
+        <p>
+          按用户视觉"字符"切割字符串 —— 处理 emoji、ZWJ 序列、组合字符、肤色修饰符。ES2024 标准化，Chrome 87+ / Safari
+          14.1+ / Node 16+。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const s = "👨‍👩‍👧 Hello 你好";
+
+[...s].length;                                 // 11（按 code point）
+s.length;                                      // 更多（UTF-16 units）
+
+const seg = new Intl.Segmenter("zh", { granularity: "grapheme" });
+[...seg.segment(s)].length;                    // 9（按字素簇，emoji 家族算 1）
+
+// 按词切分（中文需要语言）
+const word = new Intl.Segmenter("zh", { granularity: "word" });
+for (const { segment, isWordLike } of word.segment("学习 JavaScript 编程")) {
+  if (isWordLike) console.log(segment);         // "学习", "JavaScript", "编程"
+}</code></pre>
+        </div>
+
+        <h3 id="immutable">字符串的不可变性与引擎优化</h3>
+        <p>所有字符串方法返回<em>新</em>字符串，原字符串不变。引擎内部有三种常见存储优化：</p>
+        <ul>
+          <li><strong>Sequential string</strong> —— 常规连续字符数组。</li>
+          <li>
+            <strong>Cons string / Rope</strong> ——
+            <code>a + b</code> 结果是个"两个子串的树"，懒展开（避免立即分配大内存）。
+          </li>
+          <li><strong>Sliced string</strong> —— <code>s.slice(i, j)</code> 只存指针 + 偏移，不复制。</li>
+        </ul>
+        <p>
+          这就是为什么频繁拼接 <code>s += chunk</code> 在现代引擎上不算灾难性。但循环里用 <code>arr.push(chunk)</code> +
+          <code>arr.join("")</code> 仍然更一致地快。
+        </p>
+
+        <!-- 03 应用场景 =========================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">SQL 转义：标签模板防注入</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 危险 —— 用户输入直接拼进 SQL
+const bad = `SELECT * FROM users WHERE name = '${input}'`;
+// input = "'; DROP TABLE users; --" 则裂开
+
+// 安全 —— 标签函数区分字面量和插值，自动参数化
+function sql(strings, ...values) {
+  return {
+    text: strings.reduce((q, s, i) =&gt; q + s + (i &lt; values.length ? `$${i + 1}` : ""), ""),
+    values,
+  };
+}
+const q = sql`SELECT * FROM users WHERE name = ${input}`;
+// { text: "SELECT * FROM users WHERE name = $1", values: [input] }
+// 交给 pg.query(q) 做参数化查询</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">HTML 安全转义：lit-html 模式</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">const esc = v =&gt; String(v)
+  .replace(/&amp;/g, "&amp;amp;").replace(/&lt;/g, "&amp;lt;").replace(/&gt;/g, "&amp;gt;");
+
+function html(strings, ...values) {
+  return strings.reduce((s, lit, i) =&gt; s + lit + (i &lt; values.length ? esc(values[i]) : ""), "");
+}
+const name = "&lt;script&gt;";
+html`&lt;h1&gt;${name}&lt;/h1&gt;`;
+// "&lt;h1&gt;&amp;lt;script&amp;gt;&lt;/h1&gt;"   ← 自动转义</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">模糊搜索：normalize + 小写 + 去重音</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 让 "Café" 能被 "cafe" 搜到
+function fuzzy(s) {
+  return s.normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")    // 去组合重音符
+    .toLowerCase();
+}
+fuzzy("Café") === fuzzy("cafe");      // true</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">文件名排序：numeric 比较</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">const files = ["file1.txt", "file10.txt", "file2.txt"];
+
+files.sort();
+// ["file1.txt", "file10.txt", "file2.txt"]  ← 字典序（错）
+
+files.sort(new Intl.Collator(undefined, { numeric: true }).compare);
+// ["file1.txt", "file2.txt", "file10.txt"]  ← 数字序（对）</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">截取用户输入前 N 个"可见字符"</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">function truncate(s, n) {
+  const seg = new Intl.Segmenter();
+  const chars = [];
+  for (const { segment } of seg.segment(s)) {
+    chars.push(segment);
+    if (chars.length &gt;= n) break;
+  }
+  return chars.join("");
+}
+truncate("👨‍👩‍👧 Hello 你好", 5);        // "👨‍👩‍👧 Hel"
+// 简单方案 (适合 BMP 字符)：[...s].slice(0, n).join("")</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 =========================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-replace">replace 的所有姿势</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 1. 字符串替换一次
+"a-b-c".replace("-", "/");                // "a/b-c"
+
+// 2. 全部替换
+"a-b-c".replaceAll("-", "/");             // "a/b/c"
+"a-b-c".replace(/-/g, "/");               // "a/b/c"  旧写法
+// ⚠ replaceAll 要求正则必须有 /g，否则 TypeError
+
+// 3. 用捕获组
+"John Doe".replace(/(\w+) (\w+)/, "$2, $1");   // "Doe, John"
+
+// 4. 用函数（按每次匹配计算替换）
+"item-123".replace(/\d+/, n =&gt; `[${+n * 2}]`);  // "item-[246]"
+
+// 5. 正则 + 命名捕获组（ES2018）
+"2024-03-15".replace(/(?&lt;y&gt;\d+)-(?&lt;m&gt;\d+)-(?&lt;d&gt;\d+)/, "$&lt;d&gt;/$&lt;m&gt;/$&lt;y&gt;");
+// "15/03/2024"</code></pre>
+        </div>
+
+        <h3 id="ex-pad">padStart / padEnd</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 零填充
+String(5).padStart(3, "0");         // "005"
+String(42).padStart(3, "0");        // "042"
+String(300).padStart(3, "0");       // "300"（不截断）
+
+// 对齐输出
+const data = [["Alice", 90], ["Bob", 100], ["Eve", 5]];
+data.forEach(([n, s]) =&gt; console.log(n.padEnd(10) + String(s).padStart(5)));
+// Alice         90
+// Bob          100
+// Eve            5
+
+// 时间戳
+new Date().getHours().toString().padStart(2, "0");  // "09"</code></pre>
+        </div>
+
+        <h3 id="ex-slice-diff">slice / substring 对比</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const s = "Hello";
+
+s.slice(1, 3);           // "el"
+s.slice(-3);             // "llo"      ← 支持负数
+s.slice(1, -1);          // "ell"
+
+s.substring(1, 3);       // "el"
+s.substring(-3);         // "Hello"    ← 负数当 0
+s.substring(3, 1);       // "el"       ← 会交换参数
+
+// 一律用 slice。substring 行为怪异，substr 已弃用</code></pre>
+        </div>
+
+        <h3 id="ex-split">split 的进阶</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">"a,b,c".split(",");                      // ["a", "b", "c"]
+"a,b,c,d".split(",", 2);                 // ["a", "b"]  ← 截断
+"".split(",");                           // [""]  ← 不是 []
+"abc".split("");                         // ["a", "b", "c"]  ⚠ 按 UTF-16 切，emoji 会裂
+[..."🔥abc"];                             // ["🔥", "a", "b", "c"]  ✓ 按 code point
+
+// 正则分隔 + 捕获组：组内容也在结果里
+"a1b2c".split(/(\d)/);                   // ["a", "1", "b", "2", "c"]</code></pre>
+        </div>
+
+        <h3 id="ex-format">数字格式化（字符串）</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// ❌ 手动 + 容易出错
+(12345.6).toFixed(2);                    // "12345.60"
+
+// ✓ Intl.NumberFormat 处理千分位、货币、本地化
+new Intl.NumberFormat("zh-CN").format(12345.6);                    // "12,345.6"
+new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(12345.6);
+// "¥12,345.60"
+new Intl.NumberFormat("en-US", { notation: "compact" }).format(12345);
+// "12K"
+new Intl.NumberFormat("de-DE").format(12345.6);                    // "12.345,6"
+
+// 性能：循环前预创建 formatter，调用 .format 复用</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 =========================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>"abc".length</code> 数的是 UTF-16 code unit</div>
+          <p>
+            <code>"👨‍👩‍👧".length === 8</code>。"字符数"用 <code>[...str].length</code>（code points）或
+            <code>Intl.Segmenter</code>（字素簇，最正确）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>substring</code> 的负数被当成 0</div>
+          <p>
+            <code>"abc".substring(-1)</code> 是 <code>"abc"</code>，不是 <code>"c"</code>。想要"从尾部取"用
+            <code>slice(-1)</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>replaceAll</code> 传正则必须有 <code>/g</code></div>
+          <p>
+            <code>"a-b-c".replaceAll(/-/, "/")</code> 抛
+            <code>TypeError</code>。设计如此，为了让语义明确。要么传字符串，要么传带 <code>/g</code> 的正则。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>toLowerCase</code> 在土耳其语不对</div>
+          <p>
+            土耳其语的 "I" 小写是 "ı"（无点），"İ" 小写才是 "i"。<code>"I".toLowerCase()</code> 在浏览器默认 locale
+            下可能不如预期。涉及 locale 敏感的大小写用 <code>toLocaleLowerCase("tr")</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">比较前忘了 normalize</div>
+          <p>
+            macOS 传上来的文件名是 NFD，数据库里存的是 NFC。<code>fileName === record.name</code> 可能假性不等。统一
+            <code>.normalize()</code> 后再比。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>new String("abc")</code> 不是字符串</div>
+          <p>
+            <code>typeof new String("abc") === "object"</code>，<code>new String("abc") === "abc"</code> 是
+            false。<strong>永远不要 <code>new String</code></strong
+            >，详见 01 章装箱与拆箱。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>split("")</code> 切碎 emoji</div>
+          <p>
+            <code>"🔥".split("")</code> → <code>["\uD83D", "\uDD25"]</code>（孤立代理对）。按字符切用
+            <code>[...str]</code> 或 <code>Intl.Segmenter</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>+</code> 拼接时对象会调 <code>toString</code></div>
+          <p>
+            <code>"hello " + { x: 1 }</code> → <code>"hello [object Object]"</code>。自定义 class
+            想要友好字符串表示，override <code>toString</code> 或 <code>Symbol.toPrimitive</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">标签模板 <code>strings.raw</code> vs <code>strings</code></div>
+          <p>
+            <code>strings</code> 是经过转义处理的；<code>strings.raw</code> 保留原始转义序列（<code>\n</code>
+            是两个字符）。写自定义 DSL 若需要原样文本用 <code>strings.raw</code>。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================ -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-string-objects" target="_blank" rel="noopener"
+              >ECMA-262 · 22.1 String Objects</a
+            >
+          </li>
+          <li>
+            <a href="https://unicode.org/reports/tr15/" target="_blank" rel="noopener"
+              >UAX #15 · Unicode Normalization Forms</a
+            >
+          </li>
+          <li>
+            <a href="https://tc39.es/proposal-intl-segmenter/" target="_blank" rel="noopener">TC39 · Intl.Segmenter</a>
+          </li>
+          <li>
+            <a
+              href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl"
+              target="_blank"
+              rel="noopener"
+              >MDN · Intl 全家族</a
+            >
+          </li>
+          <li>
+            <strong>P1 小结</strong>：语言基础 7 章覆盖完毕。下一批会进入
+            <a href="../03-advanced/index.html">P3 · 高阶语言</a>（作用域、闭包、this、原型、class）。
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="06-arrays.html">
+            <span class="label">← 上一章</span>
+            <span class="title">06 · 数组深入</span>
+          </a>
+          <a class="next" href="08-numbers.html">
+            <span class="label">下一章 →</span>
+            <span class="title">08 · 数字与 Math</span>
+          </a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

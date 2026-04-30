@@ -1,0 +1,735 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>数字与 Math · P1 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="Number 静态成员、toFixed/toPrecision/toExponential 的精度策略、Math 方法全景、5 种取整方式对比、Math.hypot 数值稳定性、Math.random 不是密码学安全、parseInt radix 陷阱。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P2 目录</a>
+          <a href="https://javascript.info/number" target="_blank" rel="noopener">原站</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · 语言基础</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-types.html">01 · 数据类型系统</a></li>
+          <li><a href="02-operators.html">02 · 操作符与强制转换</a></li>
+          <li><a href="03-control-flow.html">03 · 控制流</a></li>
+          <li><a href="04-functions.html">04 · 函数基础</a></li>
+          <li><a href="05-objects.html">05 · 对象深入</a></li>
+          <li><a href="06-arrays.html">06 · 数组深入</a></li>
+          <li><a href="07-strings.html">07 · 字符串深入</a></li>
+          <li><a href="08-numbers.html">08 · 数字与 Math</a></li>
+          <li><a href="09-date-intl.html">09 · Date 与 Intl</a></li>
+          <li><a href="10-map-set.html">10 · Map / Set 家族</a></li>
+          <li><a href="11-symbol.html">11 · Symbol 全景</a></li>
+          <li><a href="12-json.html">12 · JSON</a></li>
+          <li><a href="13-iterators.html">13 · 迭代器与 Generator</a></li>
+          <li><a href="14-errors.html">14 · 错误处理</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · 语言基础</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>数字与 Math</span>
+        </nav>
+
+        <h1>数字与 Math</h1>
+        <p class="lead">
+          Number 背后是 IEEE 754（已在 01 章讲过）；本章专注在<strong>操作</strong>层面：如何正确取整、如何判空值、<code
+            >Math.*</code
+          >
+          何时会让你意外、为什么随机数不能直接用于密码学。工程师最常踩的 5 个坑都在这里。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~18 分钟</span>
+          <span><strong>前置</strong> 01 数据类型（IEEE 754 部分）</span>
+          <span
+            ><strong>对应 javascript.info</strong>
+            <a href="https://javascript.info/number" target="_blank" rel="noopener">Numbers</a></span
+          >
+        </div>
+
+        <!-- 01 速览 ================================================= -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <h3>Number 上的常量与静态方法</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>成员</th>
+              <th>值/用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>Number.EPSILON</code></td>
+              <td>≈ 2.22e-16，最小可区分差值；浮点相等比较的阈值基准</td>
+            </tr>
+            <tr>
+              <td><code>Number.MAX_SAFE_INTEGER</code></td>
+              <td>2⁵³ - 1</td>
+            </tr>
+            <tr>
+              <td><code>Number.MIN_SAFE_INTEGER</code></td>
+              <td>-(2⁵³ - 1)</td>
+            </tr>
+            <tr>
+              <td><code>Number.MAX_VALUE</code></td>
+              <td>≈ 1.8e308；超出变 <code>Infinity</code></td>
+            </tr>
+            <tr>
+              <td><code>Number.MIN_VALUE</code></td>
+              <td>≈ 5e-324；最小正数（非负最小，不是最小整数）</td>
+            </tr>
+            <tr>
+              <td><code>Number.POSITIVE_INFINITY / NEGATIVE_INFINITY / NaN</code></td>
+              <td>跟全局一致</td>
+            </tr>
+            <tr>
+              <td><code>Number.isFinite(x)</code></td>
+              <td>不做强转；<code>Number.isFinite("1")</code> 是 false</td>
+            </tr>
+            <tr>
+              <td><code>Number.isInteger(x)</code></td>
+              <td>包括 <code>1.0</code>；<code>Number.isInteger(1.5)</code> false</td>
+            </tr>
+            <tr>
+              <td><code>Number.isSafeInteger(x)</code></td>
+              <td>在安全整数范围内的整数</td>
+            </tr>
+            <tr>
+              <td><code>Number.isNaN(x)</code></td>
+              <td>不做强转；等价 <code>x !== x</code></td>
+            </tr>
+            <tr>
+              <td><code>Number.parseInt / parseFloat</code></td>
+              <td>和全局一样，挂在 Number 上便于模块化引用</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Number.prototype（实例方法）</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>方法</th>
+              <th>作用</th>
+              <th>返回</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>n.toString(radix?)</code></td>
+              <td>任意 2-36 进制</td>
+              <td>字符串</td>
+            </tr>
+            <tr>
+              <td><code>n.toFixed(digits)</code></td>
+              <td>固定小数位</td>
+              <td><strong>字符串</strong></td>
+            </tr>
+            <tr>
+              <td><code>n.toPrecision(digits)</code></td>
+              <td>保留总有效位</td>
+              <td>字符串</td>
+            </tr>
+            <tr>
+              <td><code>n.toExponential(fracDigits)</code></td>
+              <td>科学计数法</td>
+              <td>字符串</td>
+            </tr>
+            <tr>
+              <td><code>n.toLocaleString(locale, opts)</code></td>
+              <td>本地化（同 Intl.NumberFormat）</td>
+              <td>字符串</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Math 方法速查（按用途）</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>用途</th>
+              <th>方法</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>基本</td>
+              <td><code>abs, sign, sqrt, cbrt, pow, exp, log, log2, log10</code></td>
+            </tr>
+            <tr>
+              <td>取整</td>
+              <td><code>round, floor, ceil, trunc</code></td>
+            </tr>
+            <tr>
+              <td>极值</td>
+              <td><code>min(...args), max(...args)</code></td>
+            </tr>
+            <tr>
+              <td>距离</td>
+              <td><code>hypot(...args)</code> — √(a²+b²+...)，数值稳定</td>
+            </tr>
+            <tr>
+              <td>三角</td>
+              <td><code>sin, cos, tan, asin, acos, atan, atan2</code></td>
+            </tr>
+            <tr>
+              <td>双曲</td>
+              <td><code>sinh, cosh, tanh, asinh, acosh, atanh</code></td>
+            </tr>
+            <tr>
+              <td>随机</td>
+              <td><code>random()</code> — [0, 1)</td>
+            </tr>
+            <tr>
+              <td>位操作</td>
+              <td><code>clz32, fround, imul</code></td>
+            </tr>
+            <tr>
+              <td>常量</td>
+              <td><code>PI, E, LN2, LN10, LOG2E, LOG10E, SQRT2, SQRT1_2</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 =========================================== -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="isNaN-vs-Number-isNaN"><code>isNaN</code> vs <code>Number.isNaN</code></h3>
+        <p>两个名字几乎一样的函数，行为差别巨大：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 全局 isNaN：先 ToNumber，转不了才判断 NaN
+isNaN(NaN);           // true
+isNaN("abc");         // true     ← Number("abc") 是 NaN
+isNaN(undefined);     // true     ← Number(undefined) 是 NaN
+isNaN({});            // true
+
+// Number.isNaN：不做强转，只判"值是不是 NaN"
+Number.isNaN(NaN);           // true
+Number.isNaN("abc");         // false  ← "abc" 不是 NaN，它是字符串
+Number.isNaN(undefined);     // false
+Number.isNaN({});            // false</code></pre>
+        </div>
+        <p>
+          <strong>永远用 <code>Number.isNaN</code></strong
+          >（或等价的 <code>x !== x</code>）。全局 <code>isNaN</code> 是 ES5 前的遗留，保留仅为兼容。同理
+          <code>isFinite</code> / <code>Number.isFinite</code>、<code>parseInt</code> / <code>Number.parseInt</code>。
+        </p>
+
+        <h3 id="rounding">取整的 5 种方式</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre
+            class="code"
+          ><code class="lang-js">Math.round(x)    // 四舍五入；⚠ Math.round(-0.5) === 0，不是 -1（规范是"向 +∞ 舍入半值"）
+Math.floor(x)    // 向下（-∞）
+Math.ceil(x)     // 向上（+∞）
+Math.trunc(x)    // 向零截断（去小数部分）
+x | 0            // 位运算；仅 32-bit 整数安全（|Math.abs(x)| &lt; 2³¹）
+Math.round(1.5);   // 2
+Math.round(2.5);   // 3
+Math.round(-1.5);  // -1  （非 -2！）
+Math.round(-2.5);  // -2  （非 -3！）
+
+Math.trunc(-3.7);  // -3   向零截断
+Math.floor(-3.7);  // -4   向 -∞
+(3.9 | 0);         // 3    位运算截断
+(-3.9 | 0);        // -3   也是向零</code></pre>
+        </div>
+        <p>
+          <strong>工程建议</strong>：向下用 <code>Math.floor</code>；去小数用 <code>Math.trunc</code>；位运算
+          <code>| 0</code> 可读性差且有 32-bit 限制 —— 不再推荐（现代 V8 两者性能接近）。<code>Math.round</code>
+          的"半值向上"规则与财务四舍五入不同，金额场景需要自己实现银行家舍入（round half to even）。
+        </p>
+
+        <h3 id="toFixed">toFixed 的"浮点舍入"尴尬</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">(1.005).toFixed(2);     // "1.00"  ⚠ 不是 "1.01"
+// 原因：1.005 在二进制里实际是 1.00499999...，截两位仍是 1.00
+
+(1.015).toFixed(2);     // "1.01"  ⚠ 不是 "1.02"
+(1.25).toFixed(1);      // "1.3"   碰巧对
+
+// 想要精确：先放大成整数，舍入后再缩小
+function roundTo(num, decimals) {
+  const factor = 10 ** decimals;
+  return Math.round(num * factor) / factor;
+}
+roundTo(1.005, 2);      // 1.01</code></pre>
+        </div>
+
+        <h3 id="math-hypot"><code>Math.hypot</code> 为什么值得用</h3>
+        <p>
+          计算向量长度 √(x²+y²) 的朴素做法 <code>Math.sqrt(x*x + y*y)</code> 在 <code>x</code>/<code>y</code>
+          很大时会溢出（中间结果超 <code>Number.MAX_VALUE</code> 变 Infinity）。<code>Math.hypot</code>
+          用<strong>缩放算法</strong>：先除以最大分量再平方和，避免溢出，同时对极小值保留精度。
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const x = 1e200, y = 1e200;
+Math.sqrt(x*x + y*y);       // Infinity  ← 中间溢出
+Math.hypot(x, y);           // ≈ 1.414e200  ✓
+
+Math.hypot(3, 4);            // 5
+Math.hypot(3, 4, 12);        // 13  （3D 距离）
+Math.hypot();                // 0</code></pre>
+        </div>
+
+        <h3 id="random">Math.random 不是密码学安全的</h3>
+        <p>
+          <code>Math.random()</code> 用的是 PRNG（伪随机，V8 使用
+          xorshift128+），熵来自进程启动时刻。它<strong>能预测</strong>：
+        </p>
+        <ul>
+          <li>若攻击者能观察连续几个随机数，理论上可以推导内部状态。</li>
+          <li>
+            任何涉及<strong>安全</strong>的场景（token、session id、CSRF、密码、密钥）必须用 <code>crypto</code>：
+          </li>
+        </ul>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 浏览器 / Node 19+
+const buf = new Uint8Array(16);
+crypto.getRandomValues(buf);          // 16 字节强随机
+
+// UUID v4（现代 API）
+crypto.randomUUID();                  // "a1b2c3d4-..."
+
+// 0-1 的密码学安全浮点（较少直接需要）
+function secureRandom() {
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  return buf[0] / 0xFFFFFFFF;
+}</code></pre>
+        </div>
+
+        <h3 id="parse-vs-number"><code>Number()</code> vs <code>parseInt()</code> vs <code>+x</code></h3>
+        <table>
+          <thead>
+            <tr>
+              <th>输入</th>
+              <th><code>Number(x)</code></th>
+              <th><code>+x</code></th>
+              <th><code>parseInt(x, 10)</code></th>
+              <th><code>parseFloat(x)</code></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>"42"</code></td>
+              <td>42</td>
+              <td>42</td>
+              <td>42</td>
+              <td>42</td>
+            </tr>
+            <tr>
+              <td><code>"42px"</code></td>
+              <td>NaN</td>
+              <td>NaN</td>
+              <td><strong>42</strong></td>
+              <td><strong>42</strong></td>
+            </tr>
+            <tr>
+              <td><code>"3.14"</code></td>
+              <td>3.14</td>
+              <td>3.14</td>
+              <td><strong>3</strong></td>
+              <td>3.14</td>
+            </tr>
+            <tr>
+              <td><code>" 42 "</code></td>
+              <td>42</td>
+              <td>42</td>
+              <td>42</td>
+              <td>42</td>
+            </tr>
+            <tr>
+              <td><code>""</code></td>
+              <td><strong>0</strong></td>
+              <td><strong>0</strong></td>
+              <td>NaN</td>
+              <td>NaN</td>
+            </tr>
+            <tr>
+              <td><code>null</code></td>
+              <td><strong>0</strong></td>
+              <td><strong>0</strong></td>
+              <td>NaN</td>
+              <td>NaN</td>
+            </tr>
+            <tr>
+              <td><code>undefined</code></td>
+              <td>NaN</td>
+              <td>NaN</td>
+              <td>NaN</td>
+              <td>NaN</td>
+            </tr>
+            <tr>
+              <td><code>true</code></td>
+              <td>1</td>
+              <td>1</td>
+              <td>NaN</td>
+              <td>NaN</td>
+            </tr>
+            <tr>
+              <td><code>[42]</code></td>
+              <td>42</td>
+              <td>42</td>
+              <td>42</td>
+              <td>42</td>
+            </tr>
+            <tr>
+              <td><code>[1,2]</code></td>
+              <td>NaN</td>
+              <td>NaN</td>
+              <td>1</td>
+              <td>1</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          <strong>决策</strong>：严格数字字符串（表单、API 返回）用 <code>Number()</code> +
+          <code>Number.isFinite</code> 校验。从 CSS "100px" 等解析前缀数字用 <code>parseInt/parseFloat</code>。<code
+            >+x</code
+          >
+          简短但在长链中可读性差。<strong><code>parseInt</code> 永远显式传 radix</strong>，老 JS 对 "08"
+          按八进制解析会返回 0（ES5+ 修了默认是 10，但仍建议显式）。
+        </p>
+
+        <!-- 03 应用场景 =========================================== -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">金额用整数存储</h3>
+          <p>
+            用 <strong>分 / 厘</strong>整数存储金额（DB 字段、API 字段、内存变量），展示时
+            <code>(amount / 100).toFixed(2)</code>。好处：不依赖浮点、数据库 <code>SUM</code> 精确、相等比较可靠。2⁵³ 分
+            ≈ 9 万亿元，足够电商业务。超出 → BigInt。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">生成 UUID / token</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// UUID v4（浏览器、Node 19+）
+crypto.randomUUID();             // "11111111-2222-4333-8444-555555555555"
+
+// 短 token（Base64 编码 N 字节随机）
+function token(bytes = 16) {
+  const buf = new Uint8Array(bytes);
+  crypto.getRandomValues(buf);
+  return btoa(String.fromCharCode(...buf)).replaceAll("=", "").replaceAll("+", "-").replaceAll("/", "_");
+}
+token();                         // "a1B2c3D..." URL 安全</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">浮点安全比较</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 朴素 === 不行
+0.1 + 0.2 === 0.3;                              // false
+
+// 用相对误差
+function nearlyEqual(a, b, eps = Number.EPSILON * 8) {
+  return Math.abs(a - b) &lt;= eps * Math.max(1, Math.abs(a), Math.abs(b));
+}
+nearlyEqual(0.1 + 0.2, 0.3);                    // true
+
+// 大数场景需要按相对误差比，不是绝对 EPSILON</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">本地化显示：Intl.NumberFormat</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">const nf = new Intl.NumberFormat("zh-CN", {
+  style: "currency",
+  currency: "CNY",
+});
+nf.format(12345.67);              // "￥12,345.67"
+
+// 百分比
+new Intl.NumberFormat("zh", { style: "percent", maximumFractionDigits: 1 }).format(0.1234);
+// "12.3%"
+
+// 紧凑
+new Intl.NumberFormat("en", { notation: "compact" }).format(12_345);   // "12K"
+new Intl.NumberFormat("zh", { notation: "compact" }).format(12_345);   // "1.2万"</code></pre>
+          </div>
+          <p style="margin-top: 8px">
+            循环里反复 <code>new Intl.NumberFormat</code> 有显著开销，应该<strong>在模块顶层创建一次复用</strong>。
+          </p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">大整数 ID：BigInt 还是字符串？</h3>
+          <p>后端 int64 ID 超 2⁵³ 时前端接收：</p>
+          <ul>
+            <li><strong>仅作标识符</strong>（不参与算术）—— 用字符串最简单，API 层序列化为字符串。</li>
+            <li>
+              <strong>需要算术/比较</strong>（如分页游标计算）—— 用 BigInt，但要注意 <code>JSON.stringify</code> 不支持
+              BigInt，需要自定义 replacer。
+            </li>
+            <li>库支持：Mongoose、Prisma 等 ORM 都有对应选项。</li>
+          </ul>
+        </div>
+
+        <!-- 04 典型代码 =========================================== -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-range">区间随机</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 整数 [min, max] 均匀
+function randInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+randInt(1, 6);         // 1 - 6（骰子）
+
+// 数组随机元素
+function randPick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+// 洗牌（Fisher-Yates）
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i &gt; 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}</code></pre>
+        </div>
+
+        <h3 id="ex-max-min"><code>Math.max / min</code> 配合 spread</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const nums = [3, 1, 4, 1, 5, 9, 2, 6];
+Math.max(...nums);           // 9
+Math.min(...nums);           // 1
+
+// ⚠ 不能传数组
+Math.max([1, 2, 3]);         // NaN  （数组被 ToNumber → NaN）
+Math.max();                  // -Infinity  ← 空参数时！
+Math.min();                  // Infinity
+
+// 数组很大（&gt; 100k）会栈溢出，用 reduce
+function maxSafe(arr) { return arr.reduce((m, v) =&gt; v &gt; m ? v : m, -Infinity); }</code></pre>
+        </div>
+
+        <h3 id="ex-clamp">钳位到区间</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const clamp = (x, lo, hi) =&gt; Math.min(Math.max(x, lo), hi);
+
+clamp(5, 0, 10);       // 5
+clamp(-5, 0, 10);      // 0
+clamp(50, 0, 10);      // 10
+
+// 进度条、音量、颜色通道、游戏边界 —— 都用得上</code></pre>
+        </div>
+
+        <h3 id="ex-radix">进制转换</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 数字 → 字符串
+(255).toString(16);           // "ff"
+(255).toString(2);            // "11111111"
+(255).toString(36);           // "6r"     （常用于短 ID）
+
+// 字符串 → 数字
+parseInt("ff", 16);           // 255
+parseInt("11111111", 2);      // 255
+Number("0xff");               // 255      （自动识别 0x 前缀）
+Number("0b11111111");         // 255      （ES6+ 二进制前缀）
+Number("0o777");              // 511      （八进制前缀）</code></pre>
+        </div>
+
+        <h3 id="ex-number-format">格式化工具集</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 千分位
+(1234567).toLocaleString();                    // "1,234,567"（按浏览器 locale）
+
+// 千分位 + 固定 2 位小数
+(1234.5).toLocaleString("en-US", {
+  minimumFractionDigits: 2, maximumFractionDigits: 2,
+});                                             // "1,234.50"
+
+// 补零
+String(5).padStart(2, "0");                    // "05"
+(5).toString().padStart(4, "0");               // "0005"</code></pre>
+        </div>
+
+        <!-- 05 常见陷阱 =========================================== -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>Math.max()</code> 空参返回 <code>-Infinity</code></div>
+          <p>
+            <code>Math.max(...[])</code> 是 <code>-Infinity</code>。在筛选后数组可能为空的场景，忘记校验会把
+            <code>-Infinity</code> 写进 UI 或 DB。<code>Math.max(0, ...arr)</code> 或
+            <code>arr.length ? Math.max(...arr) : 0</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>Math.round(-0.5) === 0</code> 不是 -1</div>
+          <p>
+            规范是"半值向 +∞ 舍入"：-0.5 到 0 比到 -1 近（算上符号）。要对称取整用
+            <code>Math.sign(x) * Math.round(Math.abs(x))</code>，或者用 <code>Math.trunc</code> + 业务条件。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>toFixed</code> 的浮点舍入不"数学直觉"</div>
+          <p>
+            <code>(1.005).toFixed(2)</code> 是 <code>"1.00"</code>，因为 1.005
+            的二进制不是精确值。金融计算要么整数化，要么用 <code>decimal.js</code>。见上面
+            <code>roundTo</code> 工具函数作权宜。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>parseInt</code> 未传 radix 的历史坑</div>
+          <p>
+            ES5+ 默认 radix 10（不再按 "0x" 前缀当 16），但 "08"/"09" 在老引擎按八进制返回 0。<strong
+              >强制写 <code>parseInt(x, 10)</code></strong
+            >，ESLint <code>radix</code> 规则能检测。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">
+            <code>Number("")</code> 是 <code>0</code>，<code>Number(null)</code> 也是 <code>0</code>
+          </div>
+          <p>
+            这两个是 JS 最反直觉的强转之一。表单校验 <code>Number(input) === 0</code> 不能区分"用户输入
+            0"和"用户没输"。用 <code>Number.parseFloat</code> 或先 <code>.trim()</code> 判空。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>Math.random</code> 不能用于 token / UUID</div>
+          <p>
+            生成 session ID、防重放 token、密码盐 —— 必须 <code>crypto.getRandomValues</code> 或
+            <code>crypto.randomUUID</code>。Math.random 的输出在某些 V8 版本上连续调用可预测。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">BigInt 和 Number 不可混算</div>
+          <p>
+            <code>1n + 1</code> 抛 TypeError，必须 <code>1n + 1n</code> 或 <code>Number(1n) + 1</code>。<code
+              >Math.max(1n, 2n)</code
+            >
+            也不工作（Math 不支持 BigInt）。手写 <code>a &gt; b ? a : b</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>x % n</code> 对负数的行为</div>
+          <p>
+            <code>-1 % 3 === -1</code>，不是 2。需要"真正的模运算"（总是正结果）：<code>((x % n) + n) % n</code
+            >。常用于循环数组索引：<code>arr[(i - 1 + arr.length) % arr.length]</code>。
+          </p>
+        </div>
+
+        <!-- 06 延伸阅读 ============================================ -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-number-objects" target="_blank" rel="noopener"
+              >ECMA-262 · 21.1 Number Objects</a
+            >
+          </li>
+          <li>
+            <a href="https://tc39.es/ecma262/#sec-math-object" target="_blank" rel="noopener"
+              >ECMA-262 · 21.3 The Math Object</a
+            >
+          </li>
+          <li>
+            <a
+              href="https://randomascii.wordpress.com/2012/02/25/comparing-floating-point-numbers-2012-edition/"
+              target="_blank"
+              rel="noopener"
+              >Comparing Floating Point Numbers</a
+            >
+            — 浮点比较的权威讨论
+          </li>
+          <li>
+            <a href="https://developer.mozilla.org/en-US/docs/Web/API/Web_Crypto_API" target="_blank" rel="noopener"
+              >MDN · Web Crypto API</a
+            >
+            — crypto.getRandomValues / randomUUID
+          </li>
+          <li><strong>下一步</strong> → <a href="09-date-intl.html">09 · Date 与 Intl</a>，JS 最被吐槽的内置类型。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="07-strings.html"
+            ><span class="label">← 上一章</span><span class="title">07 · 字符串深入</span></a
+          >
+          <a class="next" href="09-date-intl.html"
+            ><span class="label">下一章 →</span><span class="title">09 · Date 与 Intl</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

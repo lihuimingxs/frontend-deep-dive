@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>各种 Observer · P5 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="MutationObserver / ResizeObserver / IntersectionObserver / PerformanceObserver 的 API、用途、批处理机制、disconnect 重要性、与 requestAnimationFrame 的时序关系。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · DOM & 事件</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-dom-tree.html">01 · DOM 树与 Node 接口</a></li>
+          <li><a href="02-dom-query.html">02 · DOM 查询与遍历</a></li>
+          <li><a href="03-dom-mutation.html">03 · DOM 修改与安全</a></li>
+          <li><a href="04-event-propagation.html">04 · 事件传播三阶段</a></li>
+          <li><a href="05-delegation-custom.html">05 · 事件委托与自定义事件</a></li>
+          <li><a href="06-observers.html">06 · 各种 Observer</a></li>
+          <li><a href="07-forms.html">07 · Form 控件与验证</a></li>
+          <li><a href="08-loading.html">08 · 资源加载时机</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../02-fundamentals/index.html">P2 · 语言基础</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · DOM & 事件</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>各种 Observer</span>
+        </nav>
+
+        <h1>各种 Observer</h1>
+        <p class="lead">
+          DOM 的 4 大 Observer：<strong>Mutation / Resize / Intersection / Performance</strong>。它们是"异步观察 DOM
+          变化 / 视口 / 性能指标"的规范 API。相比事件监听 + 轮询，Observer
+          有<strong>批处理</strong>、<strong>性能优化</strong>、<strong>浏览器调度</strong>的优势。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~20 分钟</span>
+          <span><strong>前置</strong> 01 DOM · P3 Event Loop</span>
+          <span
+            ><strong>对应 MDN</strong>
+            <a href="https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver" target="_blank" rel="noopener"
+              >MutationObserver</a
+            ></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Observer</th>
+              <th>观察什么</th>
+              <th>回调时机</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>MutationObserver</code></td>
+              <td>DOM 树结构 / 属性 / 文本变化</td>
+              <td>microtask</td>
+            </tr>
+            <tr>
+              <td><code>ResizeObserver</code></td>
+              <td>元素尺寸变化</td>
+              <td>rAF 之前</td>
+            </tr>
+            <tr>
+              <td><code>IntersectionObserver</code></td>
+              <td>元素与视口（或 root）的交叉</td>
+              <td>空闲时批量</td>
+            </tr>
+            <tr>
+              <td><code>PerformanceObserver</code></td>
+              <td>性能时间线条目（LCP / FCP / long task 等）</td>
+              <td>条目生成后</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>共同 API 形态</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 4 个 Observer 的 API 形态基本一致
+const observer = new XxxObserver((entries) =&gt; {
+  for (const entry of entries) { /* 处理 */ }
+});
+
+observer.observe(target, options);
+observer.unobserve(target);      // 部分 Observer 有
+observer.disconnect();            // 停止观察所有</code></pre>
+        </div>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="mutation">MutationObserver</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const mo = new MutationObserver((mutations) =&gt; {
+  for (const m of mutations) {
+    m.type;              // "childList" / "attributes" / "characterData"
+    m.target;            // 变化的节点
+    m.addedNodes;        // NodeList（新增）
+    m.removedNodes;      // NodeList（移除）
+    m.attributeName;     // attributes 时：属性名
+    m.oldValue;          // 如果 attributeOldValue/characterDataOldValue: true
+  }
+});
+
+mo.observe(el, {
+  childList: true,            // 子节点增删
+  attributes: true,           // 属性变化
+  characterData: true,        // 文本变化
+  subtree: true,              // 递归观察子树
+  attributeFilter: ["class"], // 只关心某些属性
+  attributeOldValue: true,    // 提供旧值
+  characterDataOldValue: true,
+});
+
+// 停止
+mo.disconnect();
+
+// 特性：
+// - 回调走 microtask 队列，多个 mutation 批量合并
+// - 同步 DOM 修改连续发生 → 一次 callback
+// - 回调里再改 DOM 会累积到下一轮</code></pre>
+        </div>
+
+        <h3 id="resize">ResizeObserver</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const ro = new ResizeObserver((entries) =&gt; {
+  for (const entry of entries) {
+    entry.target;                     // 被观察元素
+    entry.contentRect;                // {x, y, width, height}（不含 padding/border）
+    entry.borderBoxSize;              // 含 border（device pixel）
+    entry.contentBoxSize;             // 不含 border
+    entry.devicePixelContentBoxSize;  // 设备像素精度
+  }
+});
+
+ro.observe(el, { box: "content-box" });    // 或 "border-box" / "device-pixel-content-box"
+
+// 用途：
+// - 响应式组件：根据自身宽度调整布局（container queries 的 JS 实现）
+// - Chart 自适应容器尺寸
+// - 图片 / iframe 自动调整
+
+// 比 window.resize 好在：
+// - 观察单个元素，不用遍历
+// - 浏览器在 layout 之后调 → 拿到准确尺寸
+// - 不触发 layout thrashing</code></pre>
+        </div>
+
+        <div class="callout warn">
+          <div class="callout-title">⚠ ResizeObserver loop 警告</div>
+          <p>
+            如果回调里改 DOM 导致它观察的元素再次 resize → 无限循环。浏览器检测到会抛
+            <code>ResizeObserver loop limit exceeded</code> 警告。在回调里改 DOM 前检查"是否真的需要改"。
+          </p>
+        </div>
+
+        <h3 id="intersection">IntersectionObserver</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const io = new IntersectionObserver((entries) =&gt; {
+  for (const entry of entries) {
+    entry.target;
+    entry.isIntersecting;       // 是否与 root 相交
+    entry.intersectionRatio;    // 0-1 交叉比例
+    entry.intersectionRect;     // 交叉矩形
+    entry.boundingClientRect;   // target 的矩形
+    entry.rootBounds;           // root 的矩形
+  }
+}, {
+  root: null,                   // null = viewport；或任意可滚动 Element
+  rootMargin: "50px",           // 扩展 root 边界（提前触发）
+  threshold: [0, 0.5, 1],       // 0/50%/100% 时触发（单值或数组）
+});
+
+io.observe(el);
+
+// 用途：
+// - 懒加载图片（进入视口前 100px 开始下载）
+// - 无限滚动（哨兵元素进入视口触发 load more）
+// - 视频自动播放/暂停
+// - 广告曝光统计
+// - 滚动动画触发
+
+// 优势：完全异步，不阻塞主线程，浏览器原生优化</code></pre>
+        </div>
+
+        <h3 id="performance">PerformanceObserver</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const po = new PerformanceObserver((list) =&gt; {
+  for (const entry of list.getEntries()) {
+    entry.entryType;       // "paint" / "largest-contentful-paint" / "longtask" / ...
+    entry.name;
+    entry.startTime;
+    entry.duration;
+  }
+});
+
+po.observe({
+  entryTypes: ["paint", "largest-contentful-paint", "longtask", "layout-shift"],
+  buffered: true,          // 包括观察前已经发生的条目
+});
+
+// 常见 entry type：
+// - navigation      页面导航时长
+// - resource        资源加载
+// - paint           FP / FCP
+// - largest-contentful-paint  LCP
+// - first-input     FID
+// - layout-shift    CLS
+// - longtask        超过 50ms 的 task
+// - measure         performance.measure 的手动标记
+// - event           Event Timing API（INP）</code></pre>
+        </div>
+
+        <h3 id="rAF-integration">Observer 与 rAF 的时序</h3>
+        <p>HTML 规范里每帧的时序：</p>
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>rAF 回调
+ ↓
+IntersectionObserver / ResizeObserver 回调（layout 之后）
+ ↓
+style/layout/paint
+ ↓
+（下一帧）</code></pre>
+        </div>
+        <p>
+          所以 ResizeObserver / IntersectionObserver 里读布局属性是稳定的。MutationObserver 走 microtask，和 rAF 无关。
+        </p>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">懒加载图片</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// HTML：&lt;img data-src="..." /&gt;
+const io = new IntersectionObserver((entries) =&gt; {
+  for (const e of entries) {
+    if (e.isIntersecting) {
+      const img = e.target;
+      img.src = img.dataset.src;
+      io.unobserve(img);
+    }
+  }
+}, { rootMargin: "200px" });    // 提前 200px 开始下载
+
+document.querySelectorAll("img[data-src]").forEach(img =&gt; io.observe(img));
+
+// 现代替代：&lt;img loading="lazy" src="..."&gt;（浏览器原生，更快）
+// IntersectionObserver 适合：复杂场景（带占位图切换、动画进入）</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">无限滚动</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 最后放一个哨兵元素，进入视口就 load more
+const sentinel = document.querySelector(".sentinel");
+const io = new IntersectionObserver(async (entries) =&gt; {
+  if (!entries[0].isIntersecting) return;
+  const newItems = await loadNextPage();
+  appendItems(newItems);
+  if (noMorePages) io.unobserve(sentinel);
+});
+io.observe(sentinel);
+
+// 比监听 scroll 事件 + 距底部距离计算快得多</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Container queries 的 JS 实现</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// CSS @container 出现前，只能靠 ResizeObserver 做容器响应式
+const ro = new ResizeObserver((entries) =&gt; {
+  for (const entry of entries) {
+    const w = entry.contentRect.width;
+    entry.target.dataset.size =
+      w &lt; 400 ? "sm" : w &lt; 800 ? "md" : "lg";
+  }
+});
+ro.observe(card);
+
+// CSS
+// .card[data-size="sm"] { ... }
+// .card[data-size="md"] { ... }
+// .card[data-size="lg"] { ... }
+
+// 现在优先用原生 CSS @container
+// 但复杂 JS 逻辑还是 ResizeObserver 清晰</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">自动 sticky header</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 当 header 被滚出视口顶部时加 class 做阴影等效果
+const sentinel = document.createElement("div");
+document.body.prepend(sentinel);
+new IntersectionObserver(([entry]) =&gt; {
+  header.classList.toggle("scrolled", !entry.isIntersecting);
+}).observe(sentinel);
+
+// 对比 scroll + getBoundingClientRect：零 layout thrashing</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">MutationObserver 跟踪 framework 插入</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// Shopify/Wix 等平台里第三方 SDK 监听 checkout 表单出现
+new MutationObserver((mutations) =&gt; {
+  for (const m of mutations) {
+    for (const node of m.addedNodes) {
+      if (node.matches?.(".checkout-form")) enhanceCheckout(node);
+    }
+  }
+}).observe(document.body, { childList: true, subtree: true });
+
+// ⚠ 性能陷阱：subtree + 大页面 = 频繁回调
+// 尽可能缩小 root / 用 attributeFilter 减少噪音</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">PerformanceObserver 上报 Core Web Vitals</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// LCP / CLS / INP 上报（简化，生产用 web-vitals 库）
+new PerformanceObserver((list) =&gt; {
+  for (const entry of list.getEntries()) {
+    navigator.sendBeacon("/rum", JSON.stringify({
+      name: "lcp",
+      value: entry.startTime,
+    }));
+  }
+}).observe({ type: "largest-contentful-paint", buffered: true });
+
+new PerformanceObserver((list) =&gt; {
+  for (const entry of list.getEntries()) {
+    if (!entry.hadRecentInput) {
+      console.log("layout shift:", entry.value);
+    }
+  }
+}).observe({ type: "layout-shift", buffered: true });</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-resize-ratio">宽高比监听</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function onAspectRatio(el, callback) {
+  let prev = 0;
+  const ro = new ResizeObserver(([entry]) =&gt; {
+    const { width, height } = entry.contentRect;
+    const ratio = width / height;
+    if (Math.abs(ratio - prev) &gt; 0.01) {
+      prev = ratio;
+      callback(ratio, width, height);
+    }
+  });
+  ro.observe(el);
+  return () =&gt; ro.disconnect();
+}
+
+// 用法：图片容器变成正方形或横向时换布局
+onAspectRatio(container, (r) =&gt; {
+  container.classList.toggle("portrait", r &lt; 1);
+});</code></pre>
+        </div>
+
+        <h3 id="ex-visibility">元素进入视口的 Promise</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function whenVisible(el, options = {}) {
+  return new Promise((resolve) =&gt; {
+    const io = new IntersectionObserver(([entry]) =&gt; {
+      if (entry.isIntersecting) {
+        io.disconnect();
+        resolve(entry);
+      }
+    }, options);
+    io.observe(el);
+  });
+}
+
+// 用法
+await whenVisible(analyticsMarker);
+trackView(page);</code></pre>
+        </div>
+
+        <h3 id="ex-mutation-wait">等待元素出现</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">function waitFor(selector, root = document.body, timeout = 10_000) {
+  const existing = root.querySelector(selector);
+  if (existing) return Promise.resolve(existing);
+  return new Promise((resolve, reject) =&gt; {
+    const timer = setTimeout(() =&gt; {
+      mo.disconnect();
+      reject(new Error("timeout"));
+    }, timeout);
+    const mo = new MutationObserver(() =&gt; {
+      const el = root.querySelector(selector);
+      if (el) {
+        clearTimeout(timer);
+        mo.disconnect();
+        resolve(el);
+      }
+    });
+    mo.observe(root, { childList: true, subtree: true });
+  });
+}
+
+// 用法：等异步加载的 widget 出现
+const btn = await waitFor("#dynamic-button");
+btn.click();</code></pre>
+        </div>
+
+        <h3 id="ex-long-task">监控长任务</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">if (typeof PerformanceObserver !== "undefined") {
+  try {
+    new PerformanceObserver((list) =&gt; {
+      for (const entry of list.getEntries()) {
+        if (entry.duration &gt; 100) {
+          report({
+            type: "long-task",
+            duration: entry.duration,
+            name: entry.name,
+            attribution: entry.attribution?.[0]?.containerName,
+          });
+        }
+      }
+    }).observe({ type: "longtask", buffered: true });
+  } catch { /* not supported */ }
+}</code></pre>
+        </div>
+
+        <!-- 05 陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">忘记 disconnect 导致泄漏</div>
+          <p>
+            Observer 持有 target 的弱引用 + callback 的闭包。如果组件卸载后没 disconnect，callback 里引用的 state 就没法
+            GC。React 的 useEffect cleanup 里必须 disconnect。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">ResizeObserver loop</div>
+          <p>
+            回调里改尺寸导致再次回调 → 循环。浏览器会抛 <code>ResizeObserver loop limit exceeded</code> 错误。用 rAF
+            包裹 state 更新或加节流。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">MutationObserver subtree 性能</div>
+          <p>
+            <code>{ subtree: true }</code> + 大页面 → 每次 DOM 变化都触发。降低 root 范围 / 用 attributeFilter
+            限定属性名。不要在 <code>body</code> 上监听整个文档。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">IntersectionObserver threshold 理解</div>
+          <p>
+            <code>threshold: 0</code>：只要有 1px 相交就触发。<code>1</code>：必须 100% 进入才触发。想检测"完全离开" →
+            <code>threshold: 0</code> + 看 <code>isIntersecting === false</code>。<code>[0, 0.25, 0.5, 0.75, 1]</code>
+            用于阶段性触发。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">PerformanceObserver <code>buffered: true</code> 重要性</div>
+          <p>
+            页面早期发生的条目（如 FCP 在 0ms 时就有）如果 <code>buffered: false</code>，你注册得晚就看不到。<strong
+              >总是用 <code>buffered: true</code></strong
+            >（除非明确只要"之后"的条目）。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Observer 回调里不能立即调用 <code>.observe</code></div>
+          <p>
+            MutationObserver 回调里改 DOM 会让该 observer 再次触发（下一 microtask）。循环风险。如果必须，加 disconnect
+            后 re-observe 或用标志防递归。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">Observer 在 React Strict Mode 双触发</div>
+          <p>
+            Dev 模式 useEffect 跑两次 → Observer 被创建两次。cleanup 要 disconnect，React 会在第二次 useEffect 前
+            cleanup 第一次。实际生产只跑一次。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">跨 iframe 的 IntersectionObserver</div>
+          <p>
+            <code>root</code> 必须和 target 在同 realm。跨 iframe 观察需要用 postMessage 通信 + 各自 iframe 里独立
+            Observer。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://dom.spec.whatwg.org/#mutation-observers" target="_blank" rel="noopener"
+              >DOM · Mutation Observers</a
+            >
+          </li>
+          <li>
+            <a href="https://www.w3.org/TR/resize-observer/" target="_blank" rel="noopener">W3C · Resize Observer</a>
+          </li>
+          <li>
+            <a href="https://w3c.github.io/IntersectionObserver/" target="_blank" rel="noopener"
+              >W3C · Intersection Observer</a
+            >
+          </li>
+          <li>
+            <a href="https://github.com/GoogleChrome/web-vitals" target="_blank" rel="noopener">web-vitals 库</a> — 生产
+            Core Web Vitals 上报
+          </li>
+          <li><strong>下一步</strong> → <a href="07-forms.html">07 · Form 控件与验证</a>。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="05-delegation-custom.html"
+            ><span class="label">← 上一章</span><span class="title">05 · 事件委托与自定义事件</span></a
+          >
+          <a class="next" href="07-forms.html"
+            ><span class="label">下一章 →</span><span class="title">07 · Form 控件与验证</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Intl 国际化 API · P7 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="Intl.Collator 语言敏感排序、Intl.DateTimeFormat / formatRange、Intl.NumberFormat（compact / currency / unit）、Intl.RelativeTimeFormat、Intl.ListFormat、Intl.PluralRules、Intl.Segmenter（字素簇/词/句切分）。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P8 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P8 · 高级专题</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-binary.html">01 · ArrayBuffer / TypedArray</a></li>
+          <li><a href="02-blob-file.html">02 · Blob / File / FormData</a></li>
+          <li><a href="03-streams.html">03 · Streams API</a></li>
+          <li><a href="04-canvas.html">04 · Canvas / OffscreenCanvas</a></li>
+          <li><a href="05-animation.html">05 · Animation & RAF</a></li>
+          <li><a href="06-web-components.html">06 · Web Components</a></li>
+          <li><a href="07-regex.html">07 · 正则表达式引擎</a></li>
+          <li><a href="08-intl.html">08 · Intl 国际化</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../02-fundamentals/index.html">P2 · 语言基础</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../07-network/index.html">P7 · 网络 & 存储</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P8 · 高级专题</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Intl 国际化</span>
+        </nav>
+
+        <h1>Intl 国际化 API</h1>
+        <p class="lead">
+          浏览器内置了整套基于 <strong>ICU/CLDR 数据</strong>的国际化实现（ECMA-402）。覆盖：语言敏感排序
+          (Collator)、日期/时间格式化 (DateTimeFormat)、数字/货币/单位 (NumberFormat)、相对时间
+          (RelativeTimeFormat)、列表 (ListFormat)、复数规则 (PluralRules)、字素簇/词/句切分
+          (Segmenter)。比第三方库（moment/dayjs/numeral）更准确、免打包、支持数百种 locale。本章是 R&D
+          工程师出海/本地化时必看。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P1 字符串 · Date</span>
+          <span
+            ><strong>规范</strong> <a href="https://tc39.es/ecma402/" target="_blank" rel="noopener">ECMA-402</a></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ul>
+          <li>
+            <strong>Locale 字符串</strong>：BCP-47
+            格式，<code>zh-CN</code>、<code>en-US</code>、<code>zh-Hant-HK</code>、<code>en-GB-u-hc-h12</code>（带扩展）。
+          </li>
+          <li>
+            <strong>构造器通用签名</strong>：<code>new Intl.X(locales, options)</code>；locales 为字符串或数组（fallback
+            顺序）。
+          </li>
+          <li>
+            <code>Intl.DateTimeFormat</code> 是<strong>语言感知的 Date 格式化</strong>，比
+            <code>Date.toLocaleString()</code> 更灵活（formatToParts 可细粒度控制）。
+          </li>
+          <li>
+            <code>Intl.NumberFormat</code> 支持 compact（1.5K）、currency（¥1,234.56）、unit（10
+            km/h）、scientific、engineering。
+          </li>
+          <li>
+            <code>Intl.PluralRules</code> 告诉你某个数字在某语言属于哪个复数类（zero/one/two/few/many/other）——
+            不要自己写 <code>n === 1 ? ... : ...</code>。
+          </li>
+          <li>
+            <code>Intl.Segmenter</code>（2023 全支持）正确切分字素簇（👨‍👩‍👧‍👦 是 1 个）、词（中文无空格也能分词）、句。
+          </li>
+          <li>性能：构造 Intl.X 实例有开销（加载 locale 数据）；常用的要<strong>缓存</strong>。</li>
+        </ul>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+        <h3>Intl.DateTimeFormat</h3>
+        <pre><code class="language-javascript">const d = new Date("2026-04-24T10:30:00Z");
+
+// 预设 dateStyle / timeStyle（推荐，简洁）
+new Intl.DateTimeFormat("zh-CN", { dateStyle: "long", timeStyle: "short" }).format(d);
+// "2026年4月24日 18:30"（假设用户时区 UTC+8）
+
+new Intl.DateTimeFormat("en-US", { dateStyle: "long", timeStyle: "short" }).format(d);
+// "April 24, 2026 at 6:30 PM"
+
+// 细粒度控制
+new Intl.DateTimeFormat("zh-CN", {
+  year: "numeric", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit",
+  timeZone: "Asia/Tokyo",
+  timeZoneName: "short",
+  hour12: false,
+  calendar: "gregory",          // 或 "chinese"、"japanese"、"hebrew"
+}).format(d);
+// "2026/04/24 19:30 GMT+9"
+
+// formatToParts：拿到每一段（for 自定义样式）
+const parts = new Intl.DateTimeFormat("en").formatToParts(d);
+// [{type:"month",value:"4"}, {type:"literal",value:"/"}, ...]
+
+// formatRange（ES2021）：日期区间
+const start = new Date("2026-04-20");
+const end = new Date("2026-04-24");
+new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" })
+  .formatRange(start, end);  // "Apr 20 – 24"
+new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" })
+  .formatRange(start, end);  // "4月20日至24日"</code></pre>
+
+        <h3>Intl.NumberFormat</h3>
+        <pre><code class="language-javascript">const n = 1234567.89;
+
+// 默认：千分位
+new Intl.NumberFormat("zh-CN").format(n);  // "1,234,567.89"
+new Intl.NumberFormat("de-DE").format(n);  // "1.234.567,89"（德语用 . 分千，, 分小数）
+new Intl.NumberFormat("hi-IN").format(n);  // "12,34,567.89"（印度分位）
+
+// Currency
+new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
+// "$1,234,567.89"
+new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(n);
+// "¥1,234,567.89"
+new Intl.NumberFormat("ja-JP", { style: "currency", currency: "JPY" }).format(n);
+// "￥1,234,568"（日元无小数）
+
+// Compact 紧凑
+new Intl.NumberFormat("en", { notation: "compact" }).format(1.5e3);  // "1.5K"
+new Intl.NumberFormat("zh-CN", { notation: "compact" }).format(1.5e8); // "1.5亿"
+
+// Unit
+new Intl.NumberFormat("en-US", {
+  style: "unit", unit: "kilometer-per-hour", unitDisplay: "long",
+}).format(60); // "60 kilometers per hour"
+
+new Intl.NumberFormat("zh-CN", {
+  style: "unit", unit: "megabyte",
+}).format(50); // "50 MB"
+
+// 科学记数
+new Intl.NumberFormat("en", { notation: "scientific" }).format(1234);
+// "1.234E3"
+
+// 精度控制
+new Intl.NumberFormat("en", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+}).format(1.5); // "1.50"
+
+// 有效数字
+new Intl.NumberFormat("en", {
+  maximumSignificantDigits: 3,
+}).format(1234); // "1,230"
+
+// signDisplay：控制符号
+new Intl.NumberFormat("en", { signDisplay: "always" }).format(5);  // "+5"
+new Intl.NumberFormat("en", { signDisplay: "exceptZero" }).format(0); // "0"（不加 +）</code></pre>
+
+        <h3>Intl.RelativeTimeFormat</h3>
+        <pre><code class="language-javascript">const rtf = new Intl.RelativeTimeFormat("zh-CN", { numeric: "auto" });
+rtf.format(-1, "day");    // "昨天"（numeric:auto 触发特殊词）
+rtf.format(-3, "day");    // "3天前"
+rtf.format(1, "year");    // "明年"
+
+const rtf2 = new Intl.RelativeTimeFormat("en", { numeric: "always" });
+rtf2.format(-3, "day");   // "3 days ago"（不会变 yesterday）
+rtf2.format(0, "day");    // "in 0 days"
+
+// 自己封装 "距离现在"
+function timeAgo(date, locale = "zh-CN") {
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+  const diff = (date.getTime() - Date.now()) / 1000;
+  const units = [
+    ["year", 31536000],
+    ["month", 2592000],
+    ["week", 604800],
+    ["day", 86400],
+    ["hour", 3600],
+    ["minute", 60],
+    ["second", 1],
+  ];
+  for (const [unit, sec] of units) {
+    if (Math.abs(diff) &gt;= sec) return rtf.format(Math.round(diff / sec), unit);
+  }
+  return rtf.format(0, "second");
+}</code></pre>
+
+        <h3>Intl.Collator（语言敏感排序）</h3>
+        <pre><code class="language-javascript">// 普通字符串比较 ≠ 字典序
+["B", "a", "Z", "å"].sort(); // ["B", "Z", "a", "å"] ASCII 序
+
+const coll = new Intl.Collator("sv", { sensitivity: "base" });
+["B", "a", "Z", "å"].sort(coll.compare); // 瑞典语里 å 在 z 之后
+
+// 选项
+new Intl.Collator("zh", {
+  sensitivity: "base",   // 忽略大小写、重音
+  caseFirst: "upper",     // 大写在前
+  numeric: true,          // "file10" 在 "file2" 之后（自然排序）
+  ignorePunctuation: true,
+});
+
+// 中文拼音排序
+new Intl.Collator("zh-Hans-CN").compare("中", "文"); // 负数（中 &lt; 文 拼音 zh &lt; wen？实际 z &gt; w）
+// 更确切：返回 +/-</code></pre>
+
+        <h3>Intl.PluralRules</h3>
+        <pre><code class="language-javascript">const pr = new Intl.PluralRules("en");
+pr.select(0);  // "other"  (0 apples)
+pr.select(1);  // "one"
+pr.select(2);  // "other"
+
+const pl = new Intl.PluralRules("pl"); // 波兰语三种
+pl.select(1);  // "one"
+pl.select(2);  // "few"
+pl.select(5);  // "many"
+pl.select(1.5); // "other"
+
+const ar = new Intl.PluralRules("ar"); // 阿拉伯语六种
+ar.select(0);  // "zero"
+ar.select(1);  // "one"
+ar.select(2);  // "two"
+ar.select(6);  // "few"
+ar.select(100); // "many"
+
+// 正确本地化 "X items"
+function items(n, locale) {
+  const pr = new Intl.PluralRules(locale);
+  const table = {
+    "en": { one: "1 item", other: `${n} items` },
+    "pl": { one: "1 element", few: `${n} elementy`, many: `${n} elementów`, other: `${n} elementu` },
+  };
+  return table[locale][pr.select(n)] ?? table[locale].other;
+}</code></pre>
+
+        <h3>Intl.ListFormat</h3>
+        <pre><code class="language-javascript">new Intl.ListFormat("en", { type: "conjunction" }).format(["A", "B", "C"]);
+// "A, B, and C"
+new Intl.ListFormat("en", { type: "disjunction" }).format(["A", "B", "C"]);
+// "A, B, or C"
+new Intl.ListFormat("zh-CN").format(["A", "B", "C"]);
+// "A、B和C"
+
+new Intl.ListFormat("en", { type: "unit", style: "short" }).format(["5km", "10m"]);
+// "5km, 10m"</code></pre>
+
+        <h3>Intl.Segmenter（2023 稳定）</h3>
+        <pre><code class="language-javascript">// 字素簇：视觉上的"一个字"
+const gs = new Intl.Segmenter("en", { granularity: "grapheme" });
+[...gs.segment("a👨‍👩‍👧‍👦b")].map(s =&gt; s.segment);
+// ["a", "👨‍👩‍👧‍👦", "b"]   注意 family emoji 是一个 grapheme
+// 而 "a👨‍👩‍👧‍👦b".length === 13（code unit），split("") 全打乱
+
+// 词（中文无空格也能分词）
+const ws = new Intl.Segmenter("zh", { granularity: "word" });
+[...ws.segment("自然语言处理很复杂")].filter(s =&gt; s.isWordLike).map(s =&gt; s.segment);
+// ["自然", "语言", "处理", "很", "复杂"]
+
+// 句
+const ss = new Intl.Segmenter("en", { granularity: "sentence" });
+[...ss.segment("Hello! How are you? I'm fine.")].map(s =&gt; s.segment);
+// ["Hello! ", "How are you? ", "I'm fine."]</code></pre>
+
+        <h3>Intl.Locale（操纵 BCP-47）</h3>
+        <pre><code class="language-javascript">const loc = new Intl.Locale("zh-Hant", { region: "HK", numberingSystem: "hanidec" });
+loc.toString();      // "zh-Hant-HK-u-nu-hanidec"
+loc.language;         // "zh"
+loc.script;           // "Hant"
+loc.region;           // "HK"
+loc.maximize();       // "zh-Hant-HK"（填充缺省）
+loc.minimize();       // "zh-Hant-HK"
+
+// 从 navigator.language 构造
+new Intl.Locale(navigator.language).language;</code></pre>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <h3>替换 moment/dayjs 的 99% 用法</h3>
+        <pre><code class="language-typescript">// moment(date).format("YYYY-MM-DD HH:mm")
+new Intl.DateTimeFormat(locale, {
+  year: "numeric", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit",
+  hour12: false,
+}).format(date);
+
+// moment(date).fromNow()
+const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+// ... 见上面 timeAgo 封装
+
+// moment(a).diff(b, "days")
+// 用 Temporal API（2026 即将 stable）或手动计算</code></pre>
+
+        <h3>货币展示（多币种应用）</h3>
+        <pre><code class="language-typescript">function formatCurrency(
+  amount: number,
+  currency: string,
+  locale = navigator.language,
+) {
+  return new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency,
+    // 大金额用紧凑表示，小金额用精确
+    notation: Math.abs(amount) &gt;= 100000 ? "compact" : "standard",
+    compactDisplay: "short",
+  }).format(amount);
+}
+
+formatCurrency(1234567, "USD", "en-US"); // "$1.2M"
+formatCurrency(1234, "USD", "en-US");     // "$1,234.00"
+formatCurrency(1234, "USD", "ja-JP");     // "1,234.00 米ドル"</code></pre>
+
+        <h3>正确地切中文字符串（字素簇）</h3>
+        <pre><code class="language-typescript">// ❌ [...str] 按 code point 切，家庭 emoji 会被切散
+[..."👨‍👩‍👧"].length;   // 5（爸、ZWJ、妈、ZWJ、娃）
+
+// ❌ str.substring(0, 10) 按 code unit，可能切断 surrogate pair
+"🎉hello".substring(0, 1); // "\uD83C"（半个 emoji）
+
+// ✅ 用 Segmenter
+function truncateByGrapheme(str: string, maxGraphemes: number, locale = "en") {
+  const seg = new Intl.Segmenter(locale, { granularity: "grapheme" });
+  const graphemes = [...seg.segment(str)].slice(0, maxGraphemes);
+  return graphemes.map(g =&gt; g.segment).join("");
+}
+truncateByGrapheme("👨‍👩‍👧hello", 2); // "👨‍👩‍👧h"</code></pre>
+
+        <h3>React 场景：缓存 formatters</h3>
+        <pre><code class="language-typescript">// 每次渲染 new Intl.DateTimeFormat 很慢
+// 按 locale 缓存
+
+const dtfCache = new Map&lt;string, Intl.DateTimeFormat&gt;();
+function getDtf(locale: string, opts: Intl.DateTimeFormatOptions) {
+  const key = locale + JSON.stringify(opts);
+  let dtf = dtfCache.get(key);
+  if (!dtf) {
+    dtf = new Intl.DateTimeFormat(locale, opts);
+    dtfCache.set(key, dtf);
+  }
+  return dtf;
+}
+
+// 或用 useFormatter()（next-intl 已内置缓存）
+const formatter = useFormatter();
+formatter.dateTime(date, { dateStyle: "long" });</code></pre>
+
+        <h3>本地化搜索排序</h3>
+        <pre><code class="language-typescript">function sortByName&lt;T&gt;(items: T[], getName: (x: T) =&gt; string, locale = navigator.language) {
+  const coll = new Intl.Collator(locale, { sensitivity: "base", numeric: true });
+  return [...items].sort((a, b) =&gt; coll.compare(getName(a), getName(b)));
+}
+
+// 支持 "file2" &lt; "file10" 的自然排序
+sortByName(files, f =&gt; f.name);
+
+// 繁简体同表排序
+const zhColl = new Intl.Collator("zh-Hans-u-co-pinyin");
+zhColl.compare("中", "文"); // 按拼音比较</code></pre>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <h3>通用时间差显示</h3>
+        <pre><code class="language-typescript">const timeUnits: [Intl.RelativeTimeFormatUnit, number][] = [
+  ["year", 31_536_000_000],
+  ["month", 2_592_000_000],
+  ["week", 604_800_000],
+  ["day", 86_400_000],
+  ["hour", 3_600_000],
+  ["minute", 60_000],
+  ["second", 1_000],
+];
+
+export function timeAgo(date: Date | number, locale = navigator.language): string {
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto", style: "long" });
+  const diff = (new Date(date).getTime()) - Date.now();
+  for (const [unit, ms] of timeUnits) {
+    if (Math.abs(diff) &gt;= ms || unit === "second") {
+      return rtf.format(Math.round(diff / ms), unit);
+    }
+  }
+  return rtf.format(0, "second");
+}</code></pre>
+
+        <h3>ICU MessageFormat 替代（复数 + 性别）</h3>
+        <pre><code class="language-typescript">// 简化的 ICU-like 模板渲染
+function formatMessage(
+  template: string, // "{count, plural, one {1 message} other {# messages}}"
+  vars: Record&lt;string, number | string&gt;,
+  locale = "en",
+): string {
+  // 使用 intl-messageformat 库或 formatjs.io
+  // Intl 原生没有完整 ICU MessageFormat，但 PluralRules 足够应对 90% 场景
+  const pr = new Intl.PluralRules(locale);
+  const nf = new Intl.NumberFormat(locale);
+
+  return template.replace(/\{(\w+), plural,\s*([^}]+)\}/g, (_, name, rules) =&gt; {
+    const n = Number(vars[name]);
+    const form = pr.select(n);
+    const map: Record&lt;string, string&gt; = {};
+    // rules 解析从略；实际用 intl-messageformat
+    return map[form] ?? map.other ?? String(n);
+  });
+}</code></pre>
+
+        <h3>统一的 formatter 工具（项目规范）</h3>
+        <pre><code class="language-typescript">// lib/formatters.ts
+export function createFormatters(locale: string) {
+  return {
+    date(d: Date, style: Intl.DateTimeFormatOptions["dateStyle"] = "medium") {
+      return new Intl.DateTimeFormat(locale, { dateStyle: style }).format(d);
+    },
+    dateTime(d: Date) {
+      return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(d);
+    },
+    time(d: Date) {
+      return new Intl.DateTimeFormat(locale, { timeStyle: "short" }).format(d);
+    },
+    number(n: number, opts?: Intl.NumberFormatOptions) {
+      return new Intl.NumberFormat(locale, opts).format(n);
+    },
+    currency(n: number, currency: string) {
+      return new Intl.NumberFormat(locale, { style: "currency", currency }).format(n);
+    },
+    compact(n: number) {
+      return new Intl.NumberFormat(locale, { notation: "compact" }).format(n);
+    },
+    relative(diffMs: number) {
+      // ... timeAgo 实现
+    },
+    list(items: string[]) {
+      return new Intl.ListFormat(locale).format(items);
+    },
+  };
+}</code></pre>
+
+        <!-- 05 常见陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="callout callout-warn">
+          <strong>陷阱 1：硬编码 "zh-CN" 忽略用户 locale</strong>
+          <p>
+            <code>Date.toLocaleString("zh-CN")</code> 永远用中文格式，不尊重用户偏好。应用层从 i18n 框架（next-intl /
+            vue-i18n）拿 locale，通过参数传入。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 2：navigator.language ≠ 应用 locale</strong>
+          <p>
+            用户浏览器可能是英文但打开中文版应用。<strong>不要读 navigator.language 做业务</strong>，应用层用自己的
+            locale state（cookie/URL/上下文）。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 3：每次渲染都 new Intl.X</strong>
+          <p>
+            构造 Intl 实例要加载 locale 数据，毫秒级开销。列表 1000 项每行 new → 几十 ms。缓存 formatter 实例（见上面
+            dtfCache 例子）。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 4：timeZone 未指定 → 用户本地时区</strong>
+          <p>
+            服务端 Next.js SSR 用 <code>new Intl.DateTimeFormat(locale)</code> 渲染，用户端 hydrate 可能时区不同 →
+            hydration 不匹配 warning。始终显式 <code>timeZone: "UTC"</code> 或用户时区。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 5：PluralRules 不处理复数文本拼接</strong>
+          <p>
+            它只告诉你 "one" / "few" / "many"，不生成字符串。文本仍要按语言在翻译文件里写。自己写
+            <code>n === 1 ? "item" : "items"</code> 在俄语/阿拉伯语等会错得离谱。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 6：str.split("") / [...str] 切不了 emoji</strong>
+          <p><code>[..."👨‍👩‍👧"]</code> 有 5 个 code point（不是 1 个字）。按"字"切一定用 Intl.Segmenter。</p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 7：Collator.compare 的性能</strong>
+          <p>
+            用 <code>Collator.compare</code> 每次比较都穿过 ICU，比 <code>a &lt; b</code> 慢很多倍。大量排序前用
+            <code>const cmp = coll.compare</code> 缓存函数引用。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 8：货币符号占位不一致</strong>
+          <p>
+            <code>style: "currency"</code> 默认前后位置、空格按 locale 决定。如果 UI 强制 "¥ 123"，用
+            <code>formatToParts</code> 重新拼接，不要硬写。
+          </p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 9：JPY / KRW 无小数</strong>
+          <p>日元韩元 <code>minimumFractionDigits</code> 默认 0。如需强制 2 位小数显式设置，但不符合当地习惯。</p>
+        </div>
+        <div class="callout callout-warn">
+          <strong>陷阱 10：Segmenter 在老 Safari 不可用</strong>
+          <p>
+            Safari 14.1 才支持，iOS 14 以下无。移动端要检测 <code>"Segmenter" in Intl</code>，fallback 到按字符粗切。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://tc39.es/ecma402/" target="_blank" rel="noopener">ECMA-402 · Internationalization API</a>
+          </li>
+          <li>
+            <a href="https://cldr.unicode.org/" target="_blank" rel="noopener">Unicode CLDR（Intl 底层数据源）</a>
+          </li>
+          <li>
+            <a href="https://formatjs.io/" target="_blank" rel="noopener">FormatJS · ICU MessageFormat 完整实现</a>
+          </li>
+          <li>
+            <a href="https://tc39.es/proposal-temporal/docs/" target="_blank" rel="noopener">TC39 · Temporal 提案</a
+            >（2026 即将 stable，Date 的继任者）
+          </li>
+          <li>
+            <a href="https://webkit.org/blog/12542/ecma-402-intl-api/" target="_blank" rel="noopener"
+              >WebKit · Intl API 概览</a
+            >
+          </li>
+          <li>
+            <strong>全部 7 阶段完成</strong> 🎉 → 返回 <a href="../index.html">首页</a> 或
+            <a href="index.html">P7 概览</a>。
+          </li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="07-regex.html"
+            ><span class="label">← 上一章</span><span class="title">07 · 正则表达式引擎</span></a
+          >
+          <a class="next" href="../index.html"><span class="label">完成 ✓</span><span class="title">返回首页</span></a>
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

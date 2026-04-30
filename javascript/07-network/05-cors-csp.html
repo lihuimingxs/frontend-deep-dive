@@ -1,0 +1,775 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CORS 与 CSP · P6 · JavaScript 深度学习</title>
+    <meta
+      name="description"
+      content="同源策略、CORS 简单请求 vs 预检、credentials 的额外要求、Sec-Fetch-* 客户端 hints、CSP 指令（script-src / style-src / img-src / connect-src）、strict-dynamic、nonce/hash、Trusted Types 回顾。"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html">
+          <span>JavaScript 深度学习</span>
+          <span class="site-title-badge">JS</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">首页</a>
+          <a href="index.html">P7 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · 网络 & 存储</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-fetch.html">01 · Fetch API</a></li>
+          <li><a href="02-xhr.html">02 · XHR 残余场景</a></li>
+          <li><a href="03-websocket.html">03 · WebSocket</a></li>
+          <li><a href="04-sse.html">04 · Server-Sent Events</a></li>
+          <li><a href="05-cors-csp.html">05 · CORS 与 CSP</a></li>
+          <li><a href="06-cookie-storage.html">06 · Cookie / Storage</a></li>
+          <li><a href="07-indexeddb.html">07 · IndexedDB</a></li>
+          <li><a href="08-service-worker.html">08 · Service Worker + 跨标签</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · JavaScript 是谁</a></li>
+          <li><a href="../02-fundamentals/index.html">P2 · 语言基础</a></li>
+          <li><a href="../03-advanced/index.html">P3 · 高阶语言</a></li>
+          <li><a href="../04-async/index.html">P4 · 异步 & 错误处理</a></li>
+          <li><a href="../05-modules/index.html">P5 · 模块 & 元编程</a></li>
+          <li><a href="../06-dom/index.html">P6 · DOM & 事件</a></li>
+          <li><a href="../08-advanced/index.html">P8 · 高级专题</a></li>
+        </ul>
+      </aside>
+
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">首页</a>
+          <span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · 网络 & 存储</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>CORS 与 CSP</span>
+        </nav>
+
+        <h1>CORS 与 CSP</h1>
+        <p class="lead">
+          浏览器两大安全防线：<strong>CORS</strong>（Cross-Origin Resource
+          Sharing）控制<em>能不能读</em>跨源响应；<strong>CSP</strong>（Content Security
+          Policy）控制<em>能不能加载/执行</em>各种资源。这两个 header 配置错一个字母，生产就挂。本章彻底讲清规则。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> 01 Fetch</span>
+          <span
+            ><strong>MDN</strong>
+            <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS" target="_blank" rel="noopener">CORS</a> /
+            <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP" target="_blank" rel="noopener">CSP</a></span
+          >
+        </div>
+
+        <!-- 01 速览 -->
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <h3>同源策略基础</h3>
+        <p>"同源" = 协议 + 域名 + 端口<strong>全部相同</strong>。</p>
+        <table>
+          <thead>
+            <tr>
+              <th>页面</th>
+              <th>目标</th>
+              <th>同源？</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>https://a.com/page</td>
+              <td>https://a.com/api</td>
+              <td>✓</td>
+            </tr>
+            <tr>
+              <td>https://a.com</td>
+              <td>http://a.com</td>
+              <td>✗（协议不同）</td>
+            </tr>
+            <tr>
+              <td>https://a.com</td>
+              <td>https://b.com</td>
+              <td>✗（域名不同）</td>
+            </tr>
+            <tr>
+              <td>https://a.com</td>
+              <td>https://a.com:8080</td>
+              <td>✗（端口不同）</td>
+            </tr>
+            <tr>
+              <td>https://sub.a.com</td>
+              <td>https://a.com</td>
+              <td>✗（子域名不同）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>CORS 的 4 类响应 header</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Header</th>
+              <th>含义</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>Access-Control-Allow-Origin</code></td>
+              <td>允许的源（<code>*</code> 或具体域名）</td>
+            </tr>
+            <tr>
+              <td><code>Access-Control-Allow-Credentials</code></td>
+              <td><code>true</code> = 允许带 cookie</td>
+            </tr>
+            <tr>
+              <td><code>Access-Control-Allow-Methods</code></td>
+              <td>预检时允许的方法</td>
+            </tr>
+            <tr>
+              <td><code>Access-Control-Allow-Headers</code></td>
+              <td>预检时允许的自定义 header</td>
+            </tr>
+            <tr>
+              <td><code>Access-Control-Expose-Headers</code></td>
+              <td>JS 能读的响应 header（默认只 6 个安全的）</td>
+            </tr>
+            <tr>
+              <td><code>Access-Control-Max-Age</code></td>
+              <td>预检结果缓存时间（秒）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 02 底层逻辑 -->
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3 id="simple-vs-preflight">简单请求 vs 预检请求</h3>
+        <p><strong>简单请求</strong>（不触发预检）必须满足：</p>
+        <ul>
+          <li>方法：<code>GET</code> / <code>HEAD</code> / <code>POST</code></li>
+          <li>
+            Content-Type：<code>application/x-www-form-urlencoded</code> / <code>multipart/form-data</code> /
+            <code>text/plain</code>
+          </li>
+          <li>无自定义 header（除规范允许的几个）</li>
+          <li>没有 <code>ReadableStream</code> body</li>
+        </ul>
+        <p><strong>不符合</strong>就是<em>预检请求</em>：浏览器先发 <code>OPTIONS</code> 请求询问服务器是否允许：</p>
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code>预检请求（浏览器自动发）：
+OPTIONS /api/data HTTP/1.1
+Origin: https://mysite.com
+Access-Control-Request-Method: POST
+Access-Control-Request-Headers: Content-Type, X-Token
+
+预检响应（服务器必须）：
+HTTP/1.1 204 No Content
+Access-Control-Allow-Origin: https://mysite.com
+Access-Control-Allow-Methods: POST, GET, PUT, DELETE
+Access-Control-Allow-Headers: Content-Type, X-Token
+Access-Control-Max-Age: 86400
+
+预检通过后，浏览器发真正请求：
+POST /api/data HTTP/1.1
+Origin: https://mysite.com
+Content-Type: application/json
+X-Token: abc
+
+实际响应（也要带）：
+HTTP/1.1 200 OK
+Access-Control-Allow-Origin: https://mysite.com</code></pre>
+        </div>
+
+        <h3 id="credentials">credentials: include 的额外要求</h3>
+        <p>带 cookie 的跨源请求对服务器配置更严格：</p>
+        <ul>
+          <li>
+            <code>Access-Control-Allow-Origin</code> <strong>不能是 <code>*</code></strong
+            >，必须具体域名
+          </li>
+          <li>必须设 <code>Access-Control-Allow-Credentials: true</code></li>
+          <li>客户端 fetch 必须 <code>credentials: "include"</code></li>
+        </ul>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 前端
+fetch("https://api.other.com/me", { credentials: "include" });
+
+// 后端（Node Express）
+app.use((req, res, next) =&gt; {
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {   // ← 白名单
+    res.setHeader("Access-Control-Allow-Origin", origin);    // 具体域名
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Vary", "Origin");                          // 让缓存区分不同源
+  }
+  next();
+});</code></pre>
+        </div>
+
+        <h3 id="what-gets-blocked">CORS 阻止什么不阻止什么</h3>
+        <ul>
+          <li><strong>阻止</strong>：JS <em>读取</em>跨源响应 body / header（请求还是发出去了）</li>
+          <li>
+            <strong>不阻止</strong>：<code>&lt;img&gt;</code>、<code>&lt;script&gt;</code>、<code>&lt;link&gt;</code>
+            加载（这些是"副作用使用"不是读取）
+          </li>
+          <li>
+            <strong>不阻止</strong>：简单的跨源 POST（fetch 以 <code>no-cors</code> 模式）—— 但响应是 opaque，不可读
+          </li>
+        </ul>
+        <div class="callout warn">
+          <div class="callout-title">⚠ CSRF 和 CORS 是两回事</div>
+          <p>
+            CORS 阻止跨源<em>读取</em>，但不阻止跨源<em>发送</em>。CSRF 攻击是"第三方网站让用户的浏览器带着 cookie
+            发请求" —— CORS 不防 CSRF。防 CSRF 靠 SameSite cookie + CSRF token + 检查 <code>Origin</code> /
+            <code>Referer</code> header。
+          </p>
+        </div>
+
+        <h3 id="expose-headers">Expose-Headers：JS 默认只能读 6 个</h3>
+        <p>
+          跨源响应的 JS <code>res.headers</code> 默认只能访问：<code>Cache-Control</code>,
+          <code>Content-Language</code>, <code>Content-Length</code>, <code>Content-Type</code>, <code>Expires</code>,
+          <code>Last-Modified</code>, <code>Pragma</code>。自定义 header（如
+          <code>X-Total-Count</code>、<code>X-Rate-Limit-Remaining</code>）要显式 expose：
+        </p>
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code>Access-Control-Expose-Headers: X-Total-Count, X-Rate-Limit-Remaining</code></pre>
+        </div>
+
+        <h3 id="sec-fetch">Sec-Fetch-* 客户端 hints</h3>
+        <p>现代浏览器自动发的 request metadata headers，服务端可据此识别请求意图：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Header</th>
+              <th>典型值</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>Sec-Fetch-Site</code></td>
+              <td><code>same-origin</code> / <code>same-site</code> / <code>cross-site</code> / <code>none</code></td>
+            </tr>
+            <tr>
+              <td><code>Sec-Fetch-Mode</code></td>
+              <td><code>cors</code> / <code>navigate</code> / <code>no-cors</code> / <code>same-origin</code></td>
+            </tr>
+            <tr>
+              <td><code>Sec-Fetch-Dest</code></td>
+              <td>
+                <code>document</code> / <code>script</code> / <code>image</code> / <code>empty</code>（fetch）/ ...
+              </td>
+            </tr>
+            <tr>
+              <td><code>Sec-Fetch-User</code></td>
+              <td><code>?1</code>（用户手动触发）</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          工程用途：防 CSRF（拒绝 <code>cross-site</code> + 非 <code>navigate</code>）、分析流量来源、绕过
+          <code>Referer</code> 的不可靠。
+        </p>
+
+        <h3 id="csp-intro">CSP 基础</h3>
+        <p>
+          CSP 是<strong>响应 header</strong
+          >（<code>Content-Security-Policy</code>），告诉浏览器"本页允许加载/执行什么"。违反策略的资源被拒绝，控制台报错，可选上报
+          endpoint。
+        </p>
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code>Content-Security-Policy:
+  default-src 'self';
+  script-src 'self' 'nonce-abc123' https://cdn.example.com;
+  style-src 'self' 'unsafe-inline';
+  img-src 'self' data: https:;
+  connect-src 'self' https://api.example.com wss://realtime.example.com;
+  font-src 'self' https://fonts.gstatic.com;
+  frame-ancestors 'none';
+  base-uri 'self';
+  form-action 'self';
+  upgrade-insecure-requests;
+  report-uri /csp-report;</code></pre>
+        </div>
+
+        <h3 id="csp-directives">CSP 主要指令</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>指令</th>
+              <th>控制</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>default-src</code></td>
+              <td>所有类型的默认值</td>
+            </tr>
+            <tr>
+              <td><code>script-src</code></td>
+              <td>JS（含 inline、eval）</td>
+            </tr>
+            <tr>
+              <td><code>style-src</code></td>
+              <td>CSS</td>
+            </tr>
+            <tr>
+              <td><code>img-src</code></td>
+              <td>图片</td>
+            </tr>
+            <tr>
+              <td><code>font-src</code></td>
+              <td>字体</td>
+            </tr>
+            <tr>
+              <td><code>connect-src</code></td>
+              <td>fetch / XHR / WebSocket / EventSource</td>
+            </tr>
+            <tr>
+              <td><code>frame-src</code></td>
+              <td>iframe 的 src</td>
+            </tr>
+            <tr>
+              <td><code>frame-ancestors</code></td>
+              <td>谁能把本页嵌进 iframe（替代 X-Frame-Options）</td>
+            </tr>
+            <tr>
+              <td><code>base-uri</code></td>
+              <td><code>&lt;base&gt;</code> 标签的 href</td>
+            </tr>
+            <tr>
+              <td><code>form-action</code></td>
+              <td>form submit 的目标</td>
+            </tr>
+            <tr>
+              <td><code>report-uri</code> / <code>report-to</code></td>
+              <td>违规上报端点</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 id="csp-sources">CSP 源列表值</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>值</th>
+              <th>含义</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>'self'</code></td>
+              <td>同源</td>
+            </tr>
+            <tr>
+              <td><code>'none'</code></td>
+              <td>禁止所有</td>
+            </tr>
+            <tr>
+              <td><code>'unsafe-inline'</code></td>
+              <td>允许 inline <code>&lt;script&gt;</code> / <code>style=""</code>（不推荐）</td>
+            </tr>
+            <tr>
+              <td><code>'unsafe-eval'</code></td>
+              <td>允许 eval / new Function</td>
+            </tr>
+            <tr>
+              <td><code>'strict-dynamic'</code></td>
+              <td>信任 nonce/hash 允许的 script 加载的子 script</td>
+            </tr>
+            <tr>
+              <td><code>'nonce-xxx'</code></td>
+              <td>只允许带此 nonce 的 inline script</td>
+            </tr>
+            <tr>
+              <td><code>'sha256-xxx'</code></td>
+              <td>只允许 hash 匹配的 inline script</td>
+            </tr>
+            <tr>
+              <td><code>https:</code> / <code>data:</code> / <code>blob:</code></td>
+              <td>协议白名单</td>
+            </tr>
+            <tr>
+              <td>具体域名</td>
+              <td><code>https://cdn.example.com</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 id="strict-dynamic">strict-dynamic 推荐模式</h3>
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code>Content-Security-Policy:
+  script-src 'nonce-{RANDOM}' 'strict-dynamic';
+  object-src 'none';
+  base-uri 'none';</code></pre>
+        </div>
+        <p>工作流程：</p>
+        <ol>
+          <li>服务器每次响应生成随机 nonce，插入到 script 标签和 CSP header</li>
+          <li>浏览器只允许带此 nonce 的 script 执行</li>
+          <li><code>strict-dynamic</code> 让这些"信任 script"加载的子 script / chunk 自动被信任（无需各自加 nonce）</li>
+          <li>不信任其他所有 script（即使域名在白名单）</li>
+        </ol>
+        <p>Google 推荐的生产 CSP 模式。比"列 CDN 域名白名单"更安全（域名可能被劫持）。</p>
+
+        <h3 id="csp-report-only">Report-Only 模式调试</h3>
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code>Content-Security-Policy-Report-Only:
+  script-src 'self' 'nonce-xxx' 'strict-dynamic';
+  report-uri /csp-report;</code></pre>
+        </div>
+        <p>只报告违规、不阻止。先用这个收集一周数据再切成强制策略。避免"一上来全站白屏"。</p>
+
+        <!-- 03 应用场景 -->
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Express / Fastify 开启 CORS</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// Express + cors 中间件
+import cors from "cors";
+app.use(cors({
+  origin: (origin, cb) =&gt; {
+    const allowed = ["https://mysite.com", "https://admin.mysite.com"];
+    if (!origin || allowed.includes(origin)) cb(null, true);
+    else cb(new Error("Not allowed by CORS"));
+  },
+  credentials: true,
+  maxAge: 3600,
+  exposedHeaders: ["X-Total-Count"],
+}));
+
+// Fastify + @fastify/cors 同理</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">Next.js CSP with nonce</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// middleware.ts
+import { NextResponse } from "next/server";
+import crypto from "crypto";
+
+export function middleware(req) {
+  const nonce = crypto.randomBytes(16).toString("base64");
+  const csp = `
+    default-src 'self';
+    script-src 'self' 'nonce-${nonce}' 'strict-dynamic';
+    style-src 'self' 'unsafe-inline';
+    img-src 'self' blob: data:;
+    connect-src 'self' https://api.mysite.com;
+    frame-ancestors 'none';
+    upgrade-insecure-requests;
+  `.replace(/\s+/g, " ").trim();
+
+  const res = NextResponse.next();
+  res.headers.set("Content-Security-Policy", csp);
+  res.headers.set("x-nonce", nonce);   // 用 header 传给页面
+  return res;
+}
+
+// 页面里
+// import { headers } from "next/headers";
+// const nonce = headers().get("x-nonce");
+// &lt;Script nonce={nonce} ... /&gt;</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">CORS 预检缓存</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 高频 API：每次预检都浪费往返
+// 设 max-age 让浏览器缓存
+
+app.options("/api/*", (req, res) =&gt; {
+  res.setHeader("Access-Control-Allow-Origin", req.headers.origin);
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Max-Age", "86400");   // 24h
+  res.status(204).end();
+});
+
+// Chrome 预检缓存上限实际是 2 小时（规范允许 24h）
+// Firefox 24h
+// Safari 更短</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">CSP 违规上报</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 前端 CSP 头
+Content-Security-Policy:
+  script-src 'self' 'nonce-xxx';
+  report-to csp-endpoint;
+
+// 新的 Reporting-Endpoints header（替代旧 report-uri）
+Reporting-Endpoints: csp-endpoint="/api/csp-report"
+
+// 后端接收
+app.post("/api/csp-report", express.json({ type: "application/reports+json" }), (req, res) =&gt; {
+  logger.warn({ csp: req.body }, "CSP violation");
+  res.status(204).end();
+});
+
+// 数据结构：
+// {
+//   "csp-report": {
+//     "document-uri": "https://mysite.com/page",
+//     "violated-directive": "script-src",
+//     "blocked-uri": "https://evil.com/x.js",
+//     ...
+//   }
+// }</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">防 CSRF 的现代组合</h3>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 1. Cookie: SameSite=Lax 默认（Chrome 80+）或 Strict
+Set-Cookie: session=xxx; Secure; HttpOnly; SameSite=Lax
+
+// 2. 服务端检查 Sec-Fetch-Site
+function rejectCrossSite(req) {
+  const site = req.headers["sec-fetch-site"];
+  if (site === "cross-site") return true;   // 第三方网站发起的
+  return false;
+}
+
+// 3. CSRF token（state-changing 请求）
+// Double-submit cookie 或 synchronizer token
+
+// SameSite Lax + Sec-Fetch-Site 检查对大部分 CSRF 已足够
+// token 补充在老浏览器兜底</code></pre>
+          </div>
+        </div>
+
+        <!-- 04 典型代码 -->
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3 id="ex-dev-proxy">开发代理（绕开 CORS）</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// vite.config.ts
+export default {
+  server: {
+    proxy: {
+      "/api": {
+        target: "https://api.production.com",
+        changeOrigin: true,
+        secure: true,
+      },
+    },
+  },
+};
+
+// Next.js next.config.js
+module.exports = {
+  async rewrites() {
+    return [
+      { source: "/api/:path*", destination: "https://api.prod.com/:path*" },
+    ];
+  },
+};
+
+// 开发时所有请求都看起来同源 → 无需 CORS 配置</code></pre>
+        </div>
+
+        <h3 id="ex-cors-preflight-optimize">减少预检</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// ❌ 触发预检
+fetch("/api/data", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", "X-Token": "abc" },
+  body: JSON.stringify(data),
+});
+
+// ✓ 如果 token 能放 cookie / 能用 Bearer in URL / 能放 form body
+//   就可以设计成简单请求
+
+// ✓ 设置长缓存（24h）减少预检频次
+Access-Control-Max-Age: 86400
+
+// ✓ 合并调用：批量接口比 10 个独立调用少 10 次预检</code></pre>
+        </div>
+
+        <h3 id="ex-csp-inline">CSP + inline event handler 替代</h3>
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-js">&lt;!-- ❌ CSP 严格下不允许 --&gt;
+&lt;button onclick=&quot;submit()&quot;&gt;Go&lt;/button&gt;
+&lt;a href=&quot;javascript:submit()&quot;&gt;Go&lt;/a&gt;
+
+&lt;!-- ✓ 用 addEventListener --&gt;
+&lt;button id=&quot;go&quot;&gt;Go&lt;/button&gt;
+&lt;script nonce=&quot;abc&quot;&gt;
+document.getElementById(&quot;go&quot;).addEventListener(&quot;click&quot;, submit);
+&lt;/script&gt;
+
+&lt;!-- 或更好：委托 + data-action 模式（见 P5-05） --&gt;
+&lt;button data-action=&quot;submit&quot;&gt;Go&lt;/button&gt;</code></pre>
+        </div>
+
+        <h3 id="ex-cors-check">Origin 白名单检查</h3>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 更复杂的白名单（支持通配子域）
+const ALLOWED_PATTERNS = [
+  /^https:\/\/([a-z0-9-]+\.)?mysite\.com$/,
+  /^https:\/\/(staging|preview)--[a-z0-9-]+\.netlify\.app$/,
+];
+
+function checkOrigin(origin) {
+  return ALLOWED_PATTERNS.some((re) =&gt; re.test(origin));
+}
+
+app.use((req, res, next) =&gt; {
+  const origin = req.headers.origin;
+  if (origin &amp;&amp; checkOrigin(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Vary", "Origin");
+  }
+  next();
+});</code></pre>
+        </div>
+
+        <!-- 05 陷阱 -->
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title"><code>Allow-Origin: *</code> + credentials: include</div>
+          <p>
+            这个组合<strong>被浏览器拒绝</strong>。带 cookie 的请求必须
+            <code>Allow-Origin</code> 是具体域名。服务端要维护白名单，根据 request <code>Origin</code> header 回显。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">忘设 <code>Vary: Origin</code></div>
+          <p>
+            服务端根据 Origin 决定 Allow-Origin 时，如果没加 <code>Vary: Origin</code>，CDN /
+            浏览器缓存会把第一个请求的响应缓存给所有其他源 → 跨源请求可能错误地命中缓存 → 403 或 CORS 错误。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">预检失败但无明确错误</div>
+          <p>
+            Chrome 开发者工具的 Network 里预检请求失败时 status 可能是 200（因为服务器响应了 OPTIONS），但 CORS check
+            失败 → console "blocked by CORS policy"。要看 Network 面板里的 <em>CORS 标签</em>，不只是 status。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">X-Frame-Options 和 CSP frame-ancestors 并存</div>
+          <p>
+            两者功能重叠（防 clickjacking）。CSP <code>frame-ancestors</code> 是标准，优先级更高。设了两个时
+            <code>frame-ancestors</code> 生效。现代推荐只用 <code>frame-ancestors</code>。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">CSP 阻止所有 inline style</div>
+          <p>
+            <code>style-src 'self'</code> 不允许 <code>style=""</code> 属性。Emotion / styled-components / TailwindCSS
+            的 arbitrary 样式都可能受影响。解决：<code>'unsafe-inline'</code>（不推荐）、'nonce-xxx'、或 hash 所有
+            inline 样式。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">strict-dynamic 对 &lt;link&gt; / &lt;img&gt; 无效</div>
+          <p>
+            strict-dynamic 只作用于
+            <code>script-src</code>。其他指令（<code>img-src</code>、<code>style-src</code>）仍按白名单。别期待一个
+            nonce 搞定全部。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">CSP 的 eval 限制（回顾 P4-07）</div>
+          <p>
+            <code>'unsafe-eval'</code> 不加，<code>eval</code> / <code>new Function</code> /
+            <code>setTimeout(string)</code> 都被拒。Vue 运行时 compiler / 模板引擎需要，生产应 precompile。
+          </p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">CSP meta 标签的 <em>限制</em></div>
+          <p>
+            <code>&lt;meta http-equiv="Content-Security-Policy"&gt;</code> 不支持 <code>frame-ancestors</code> /
+            <code>sandbox</code> / <code>report-uri</code>。必须用 header。SPA 静态托管如果想用 meta，注意这些指令要走
+            CDN/服务端 header。
+          </p>
+        </div>
+
+        <!-- 06 延伸 -->
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li>
+            <a href="https://fetch.spec.whatwg.org/#cors-protocol" target="_blank" rel="noopener"
+              >Fetch Standard · CORS protocol</a
+            >
+          </li>
+          <li><a href="https://www.w3.org/TR/CSP3/" target="_blank" rel="noopener">CSP Level 3 规范</a></li>
+          <li><a href="https://web.dev/articles/strict-csp" target="_blank" rel="noopener">web.dev · Strict CSP</a></li>
+          <li>
+            <a href="https://csp-evaluator.withgoogle.com/" target="_blank" rel="noopener">Google CSP Evaluator</a>
+          </li>
+          <li><strong>下一步</strong> → <a href="06-cookie-storage.html">06 · Cookie / Storage</a>。</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="04-sse.html"
+            ><span class="label">← 上一章</span><span class="title">04 · Server-Sent Events</span></a
+          >
+          <a class="next" href="06-cookie-storage.html"
+            ><span class="label">下一章 →</span><span class="title">06 · Cookie / Storage</span></a
+          >
+        </nav>
+      </article>
+
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
