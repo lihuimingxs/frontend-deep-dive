@@ -57,11 +57,6 @@
           <span><strong>主要来源</strong> nodejs.org/api/http · undici 文档</span>
         </div>
 
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>骨架版本。对照大纲 <code>node/outline.md § P4.2</code>。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>Node http server 整个 API 是 Streams 的应用</strong>——req 是 Readable、res 是 Writable。</li>
@@ -71,70 +66,140 @@
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
 
-        <h3>http 模块（2009-）</h3>
-        <p><em>正文待写。</em></p>
+        <h3>http 模块（2009-）：Streams 抽象的最佳应用</h3>
+        <p>
+          <code>http</code> 模块是 Node 最老的内置模块之一——和 Node 同年（2009）发布。设计哲学完全建立在 Streams 之上：
+        </p>
         <ul>
-          <li><code>createServer((req, res) =&gt; ...)</code>：req 是 IncomingMessage（Readable）、res 是 ServerResponse（Writable）</li>
-          <li><strong>整个 API 是 Streams 应用</strong>——读 body 用 stream API（async iterator / pipeline）</li>
-          <li>Keep-Alive 自动管理</li>
-          <li>HTTP/1.1 only（HTTP/2 在 http2 模块）</li>
+          <li><strong><code>createServer((req, res) =&gt; ...)</code></strong>：每个 HTTP 请求来时，回调拿到 <code>req</code>（IncomingMessage = Readable，请求 body 流）+ <code>res</code>（ServerResponse = Writable，响应 body 流）</li>
+          <li><strong>整个 API 是 Streams 应用</strong>—— 读 request body 用 stream API（async iterator / pipeline）；写 response 用 <code>res.write()</code> + <code>res.end()</code> 或 <code>readable.pipe(res)</code></li>
+          <li><strong>Keep-Alive 自动管理</strong>：HTTP/1.1 默认 keep-alive，连接复用降低握手开销</li>
+          <li><strong>HTTP/1.1 only</strong>（HTTP/2 在独立的 <code>http2</code> 模块）</li>
         </ul>
+        <p>
+          这套"<em>HTTP = Streams</em>"的抽象让<strong>大请求体 / 大响应体不爆内存</strong>—— 用 pipeline 把 request body 直接 pipe 到 fs / S3 / 下游服务，全程流式无需缓冲。
+        </p>
 
-        <h3>https 模块</h3>
-        <p><em>正文待写。</em></p>
+        <h3>https 模块：TLS 终止</h3>
+        <p>
+          <code>https</code> 是 <code>http</code> 的 TLS 加密版。API 几乎一样（除了多个 <code>key</code> / <code>cert</code> / <code>ca</code> 等 TLS 配置）：
+        </p>
         <ul>
-          <li>同 http 但带 TLS 终止</li>
-          <li>证书管理（key / cert / ca 选项）</li>
-          <li><strong>ALPN 协议协商</strong>：客户端告知支持哪些协议（http/1.1, h2）</li>
+          <li><strong>同 http 但带 TLS 终止</strong>—— Node 端处理证书 + 加密 / 解密</li>
+          <li><strong>证书管理</strong>：<code>key</code>（私钥）+ <code>cert</code>（公钥证书）+ 可选 <code>ca</code>（中间证书链）</li>
+          <li><strong>ALPN 协议协商</strong>：TLS 握手时客户端告知支持哪些协议（http/1.1, h2），server 选择。这是 HTTP/2 升级的标准方式</li>
         </ul>
+        <p>
+          <strong>实践注意</strong>：大多数生产环境<strong>不让 Node 直接处理 TLS</strong>—— 前面放 nginx / Caddy / Cloudflare 做 TLS 终止 + 反向代理到内部 Node（HTTP/1.1）。这样 Node 不需要管证书续签 / TLS 性能 / OCSP 等复杂事。<strong>例外</strong>：内部 service 间通信（mTLS）/ 不能放反向代理的边缘场景才直接用 <code>https</code>。
+        </p>
 
-        <h3>http2 模块（Node 8.4+）</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li>HTTP/2 server / client</li>
-          <li>流多路复用（一个 TCP 连接上跑多个并发 request）</li>
-          <li>Server Push（已废弃，Chrome 已不支持）</li>
-          <li>API 与 http 不兼容（新概念：Http2Session / Http2Stream）</li>
-        </ul>
+        <h3>http2 模块（Node 8.4+）：与 http 不兼容</h3>
+        <p>
+          HTTP/2 是 2015 标准，主要改进是<strong>流多路复用</strong>（一个 TCP 连接上跑多个并发 request）+ 头压缩（HPACK）+ 服务端推送（Server Push，已弃用）。Node 8.4 起加了 <code>node:http2</code> 模块。
+        </p>
+        <p>
+          关键事实：<strong><code>http2</code> API 与 <code>http</code> 不兼容</strong>—— 新概念 Http2Session / Http2Stream / 不同的 push API。Express / Koa 等框架不直接支持 http2 Server，要换专门的 framework（如 Fastify 早期支持）。
+        </p>
+        <p>
+          <strong>2025 实践</strong>：<code>http2</code> 模块直接用得不多——大多数应用让前面的反向代理处理 HTTP/2，Node 内部仍用 HTTP/1.1。直接用 http2 仅在<strong>内部 microservice 间通信</strong>（gRPC 走 HTTP/2）/ 极致性能场景使用。
+        </p>
 
-        <h3>undici（Node 18+ 内置）</h3>
-        <p><em>正文待写。</em></p>
+        <h3>undici（Node 18+ 内置）：高性能 HTTP/1.1 client</h3>
+        <p>
+          <strong>undici</strong> 是 Node 团队（Matteo Collina 主导）2018+ 写的<strong>下一代 HTTP/1.1 client</strong>—— 设计目标"<em>比旧 http.request 快几倍</em>"。结果：吞吐量 <strong>2-3× 旧 client</strong>，特别是高并发 + Keep-Alive 场景。
+        </p>
+        <p>
+          undici 关键优化点：
+        </p>
         <ul>
-          <li>Node 团队 Matteo Collina 主导写的高性能 HTTP/1.1 client</li>
-          <li>显著快于旧 http.request（2-3× 吞吐）</li>
-          <li>连接池 + Keep-Alive 自动管理</li>
-          <li><strong>Node 18+ 内置</strong>，作为 <code>fetch</code> 的实现后端</li>
-          <li>独立 npm 包发布，旧 Node 也能用</li>
+          <li><strong>连接池 + Keep-Alive 自动管理</strong>——内置 <code>Pool</code> 类，配置最大连接数 / pipelining 数</li>
+          <li><strong>Pipelining 支持</strong>——HTTP/1.1 同一连接上不等响应连续发请求（Apache / Nginx 都支持但 Node 旧 client 不用）</li>
+          <li><strong>不分配多余 Buffer</strong>—— 对 Node 内部 zero-copy 优化</li>
+          <li><strong>单一接口</strong>—— <code>request()</code> / <code>fetch()</code> / <code>stream()</code> / <code>upgrade()</code> 同源</li>
         </ul>
+        <p>
+          <strong>Node 18+ 内置 undici 作为 <code>fetch</code> 的实现后端</strong>。也作为独立 npm 包 <code>undici</code> 发布——旧 Node 项目能直接装来用。
+        </p>
 
-        <h3>fetch 内置（Node 18+）</h3>
-        <p><em>正文待写。</em></p>
+        <h3>fetch 内置（Node 18+）：与浏览器同名同义</h3>
+        <p>
+          Node 18（2022-04）起内置 <code>fetch</code>—— 是 undici 的"友好门面"，API 完全照搬<strong>浏览器 fetch 标准</strong>。这意味着<strong>同一段 fetch 代码能跑 Node / Deno / Bun / 浏览器 / Edge Runtime</strong>。
+        </p>
         <ul>
-          <li>API 与浏览器 fetch 一致（Web Standards）</li>
-          <li>实现基于 undici</li>
-          <li>不再需要 node-fetch 之类的 polyfill</li>
-          <li>仍然是<strong>实验性</strong>（Node 21 起稳定）</li>
+          <li><strong>API 与浏览器一致</strong>：<code>fetch(url, options)</code> + <code>Response</code> + <code>Headers</code> + <code>FormData</code> + <code>AbortSignal</code></li>
+          <li><strong>实现基于 undici</strong>—— 性能与直接用 undici 相当</li>
+          <li><strong>不再需要 node-fetch / cross-fetch / isomorphic-fetch</strong> 等 polyfill</li>
+          <li><strong>Node 18-20 标"实验性"，21+ 稳定</strong>。生产应用 Node 22+ 用 fetch 没风险</li>
         </ul>
+        <p>
+          实践推荐：<strong>新代码用 fetch，跨 runtime 兼容</strong>。需要极致性能 / 高级配置（pipelining / 连接池调优）才直接用 undici 底层 API。
+        </p>
 
-        <h3>TLS / SSL</h3>
-        <p><em>正文待写。</em></p>
+        <h3>TLS / SSL：底层抽象</h3>
+        <p>
+          <code>tls</code> 模块是 Node 与 OpenSSL 的桥梁——<code>https</code> / <code>http2</code> 内部都用它。直接用 <code>tls</code> 模块的场景较少：
+        </p>
         <ul>
-          <li><code>tls</code> 模块作底层抽象</li>
-          <li>常见生产配置：HTTP/2 + TLS 1.3 + ALPN + OCSP stapling</li>
+          <li>实现非 HTTP 的 TLS 协议（如 自定义协议 over TLS）</li>
+          <li>调试 TLS 握手细节</li>
+          <li>实现 mTLS（双向认证）</li>
         </ul>
+        <p>
+          <strong>常见生产配置</strong>：HTTP/2 + TLS 1.3 + ALPN + OCSP stapling。但实际上<strong>大多数 Node 应用不需要管这些</strong>—— 让 nginx / Cloudflare 处理。Node 自己的 <code>tls.DEFAULT_MIN_VERSION</code> 在 17+ 已经是 TLS 1.2，正确的安全默认。
+        </p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A · 旧代码用 http.request 迁 undici / fetch</h3>
-          <p><em>正文待写。</em>性能 2-3× 提升 + API 更现代。生产环境常见迁移。</p>
+          <h3 class="scenario-title">场景 A · 旧代码 http.request 迁 undici / fetch</h3>
+          <p>
+            老 Node 服务很多用 <code>http.request</code> + callback 风格调外部 API。迁现代 fetch 收益：(1) <strong>性能 2-3×</strong>（连接池 + pipelining）；(2) <strong>API 更简洁</strong>（async/await 替代 callback）；(3) <strong>跨 runtime 兼容</strong>（同一段代码能跑 Edge / Deno）。改动点：把 <code>http.request(options, cb)</code> 换成 <code>await fetch(url, options)</code>—— options 字段名稍有不同（<code>method</code> 同 / <code>headers</code> 同 / body 名字变 <code>body</code>）。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B · HTTP/2 server 部署</h3>
-          <p><em>正文待写。</em>大多数生产环境前面有反向代理（nginx）做 HTTP/2 终止；Node 直接 HTTP/2 仅 internal service 间用。</p>
+          <h3 class="scenario-title">场景 B · HTTP/2 server 部署判据</h3>
+          <p>
+            <strong>大多数情况让反向代理处理 HTTP/2</strong>—— nginx / Caddy / Cloudflare 在前端做 HTTP/2 终止 + TLS，反向代理到内部 Node 用 HTTP/1.1。这样 Node 不需要管证书 / HTTP/2 流多路复用复杂性，仍能享受客户端 HTTP/2 的体验改善。<strong>例外</strong>：内部 microservice 间用 gRPC（必须 HTTP/2）/ 边缘部署没有反向代理 / 极致性能场景测过 HTTP/2 真有改善——这些情况才直接用 Node http2 模块。
+          </p>
         </div>
         <div class="scenario">
           <h3 class="scenario-title">场景 C · 大文件下载用 stream 不爆内存</h3>
-          <p><em>正文待写。</em><code>const res = await fetch(url); for await (const chunk of res.body) {...}</code>——配合 P4.1 backpressure。</p>
+          <p>
+            下载 1GB 文件——不能 <code>const buf = await response.arrayBuffer()</code>（爆内存），要用 stream：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">import { pipeline } from 'node:stream/promises';
+import { Readable } from 'node:stream';
+import { createWriteStream } from 'node:fs';
+
+const res = await fetch(url);
+// fetch 返回 web stream → 转 Node stream → pipe 到文件
+await pipeline(
+  Readable.fromWeb(res.body),
+  createWriteStream('big-file.bin')
+);</code></pre>
+          </div>
+          <p>
+            内存稳定 16KB 左右，不管文件多大。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · undici 高级用法（连接池调优）</h3>
+          <p>
+            高并发场景（如大量调外部 API 的中间层服务），直接用 undici 的 <code>Pool</code> 配置连接池上限：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">import { Pool } from 'undici';
+const pool = new Pool('https://api.example.com', {
+  connections: 100,        // 最多 100 个并发连接
+  pipelining: 10,          // 每连接最多 10 个请求 pipelining
+});
+const { body } = await pool.request({ path: '/users/1' });</code></pre>
+          </div>
+          <p>
+            比 fetch 默认配置吞吐高几倍——但要管连接池生命周期。
+          </p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>

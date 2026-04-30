@@ -57,11 +57,6 @@
           <span><strong>主要来源</strong> nodejs.org/api/stream</span>
         </div>
 
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>骨架版本。对照大纲 <code>node/outline.md § P4.1</code>。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>Streams 是 Node 数据处理的统一抽象</strong>——http req/res / fs / Worker 通信都是 Stream。</li>
@@ -71,67 +66,127 @@
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
 
-        <h3>4 类 stream</h3>
-        <p><em>正文待写。</em></p>
+        <h3>4 类 stream：Node 数据处理的统一抽象</h3>
+        <p>
+          Node 把<strong>所有数据流</strong>都抽象成 4 类 stream，让上层代码用同一套 API 处理文件、网络、进程通信、加密等。这种统一是 Node 早期最聪明的设计——让用户不需要为每种数据源学不同 API：
+        </p>
         <ul>
-          <li><strong>Readable</strong>：数据源（fs.createReadStream / http req / process.stdin）</li>
-          <li><strong>Writable</strong>：数据汇（fs.createWriteStream / http res / process.stdout）</li>
-          <li><strong>Duplex</strong>：双向，如 socket（net.Socket）</li>
-          <li><strong>Transform</strong>：过滤器（zlib.createGzip / crypto.createCipher）</li>
+          <li><strong>Readable</strong>（数据源）：发出数据的 stream。例：<code>fs.createReadStream</code>（文件读）/ HTTP 请求的 <code>req</code>（请求 body）/ <code>process.stdin</code>（标准输入）/ <code>net.Socket</code>（TCP 收数据时）</li>
+          <li><strong>Writable</strong>（数据汇）：接收数据的 stream。例：<code>fs.createWriteStream</code>（文件写）/ HTTP 响应的 <code>res</code>（响应 body）/ <code>process.stdout</code>（标准输出）</li>
+          <li><strong>Duplex</strong>（双向）：既是 Readable 又是 Writable。例：<code>net.Socket</code>（TCP socket，能读能写）/ Web Worker 通信</li>
+          <li><strong>Transform</strong>（变换器，Duplex 的特化）：写入一个数据，处理后从读端出来。例：<code>zlib.createGzip()</code>（写明文出 gzip）/ <code>crypto.createCipher()</code>（写明文出密文）</li>
         </ul>
+        <p>
+          这套抽象让"<em>读文件 → gzip 压缩 → 写网络</em>" 这种链式处理可以用<strong>纯 stream pipeline</strong> 表达 —— 中间不需要把整个文件加载到内存。
+        </p>
 
-        <h3>两种模式：flowing vs paused</h3>
-        <p><em>正文待写。</em></p>
+        <h3>两种模式：flowing vs paused（最难懂的部分）</h3>
+        <p>
+          Readable stream 有两种<strong>消费模式</strong>，新手最常踩坑的就是混用两者：
+        </p>
         <ul>
-          <li><strong>Flowing (push)</strong>：数据自动流，监听 'data' event 处理；数据来不及处理会丢失</li>
-          <li><strong>Paused (pull)</strong>：调用 .read() 主动拉数据；不丢失但需要主动循环</li>
-          <li><strong>切换</strong>：监听 'data' / .pipe() / .resume() → flowing；.pause() → paused</li>
-          <li>理解这俩是 stream 心智模型的关键</li>
+          <li><strong>Flowing（push）模式</strong>：数据自动流向消费者。<strong>监听 'data' 事件</strong>触发 → 默认进入 flowing。如果监听器处理速度跟不上，<strong>数据会被丢失</strong>（事件不缓存）</li>
+          <li><strong>Paused（pull）模式</strong>：消费者主动调 <code>.read()</code> 拉数据。stream 内部缓存数据，<strong>不丢</strong>但需要主动循环</li>
         </ul>
+        <p>
+          模式切换：<code>监听 'data'</code> / <code>.pipe()</code> / <code>.resume()</code> → flowing；<code>.pause()</code> → paused。<strong>新代码不需要知道这个区分</strong>—— 用 async iterator（<code>for await</code>）或 <code>pipeline</code> 自动管理。但读老代码会遇到 <code>'data'</code> 事件 + <code>.pause()</code> 这套手动管理。
+        </p>
 
         <h3>highWaterMark：内部 buffer 阈值</h3>
-        <p><em>正文待写。</em></p>
+        <p>
+          每个 stream 有内部 buffer。<strong>highWaterMark</strong> 是这个 buffer 的<strong>满载阈值</strong>—— 决定何时触发 backpressure：
+        </p>
         <ul>
-          <li>默认 <strong>16KB</strong>（字节流）或 <strong>16</strong>（object mode）</li>
-          <li>Duplex / Transform 有<strong>独立的 readableHighWaterMark / writableHighWaterMark</strong>（Node 8+）</li>
-          <li>调大可减少 read 次数（吞吐增加）；调小可减少内存占用</li>
+          <li><strong>默认值</strong>：字节流 <strong>16 KB</strong>（16384 字节）；object mode <strong>16 个对象</strong></li>
+          <li><strong>Duplex / Transform</strong> 有独立的 <code>readableHighWaterMark</code> / <code>writableHighWaterMark</code>（Node 8+）—— 读端和写端可以不同阈值</li>
+          <li><strong>调大</strong>（如 64KB / 1MB）：减少 read 次数 → 吞吐增加，但内存占用也增加</li>
+          <li><strong>调小</strong>：减少内存占用，但增加 syscall 次数</li>
         </ul>
+        <p>
+          实践：<strong>默认 16KB 几乎适合所有场景</strong>。除非你做特别的吞吐 / 内存优化，不要改这个值——改大可能让 backpressure 反应慢，改小可能让 EventLoop 太忙处理 read。
+        </p>
 
         <h3>Backpressure：让 Node 不爆内存的核心机制</h3>
-        <p><em>正文待写。</em></p>
+        <p>
+          Backpressure 是 Streams 最重要的设计——让 Node 处理 10GB 文件时<strong>内存只占 16KB</strong>，而不是全加载。
+        </p>
+        <p>
+          机制：<code>writable.write(chunk)</code> 返回 boolean——
+        </p>
         <ul>
-          <li><code>writable.write(chunk)</code> 返回 <strong>true</strong>：buffer 还没满，继续写</li>
-          <li><code>writable.write(chunk)</code> 返回 <strong>false</strong>：buffer 满了，暂停 source 等 'drain' event</li>
-          <li>'drain' 触发后恢复</li>
-          <li>这套机制让 Node 即使处理 10GB 文件也不会爆 16KB 内存</li>
+          <li><strong>true</strong>：buffer 还没满，可以继续 write</li>
+          <li><strong>false</strong>：buffer 已超过 highWaterMark，<strong>消费者跟不上</strong>—— 必须暂停 source 等 <strong>'drain' 事件</strong>触发后再继续</li>
         </ul>
+        <p>
+          这就是为什么<strong>正确处理 backpressure</strong> 的代码看起来很罗嗦——必须监听返回值 + 'drain' 事件。<strong>修法</strong>：用 <code>pipeline</code> 或 async iterator，它们自动处理 backpressure，不需要手动管理。
+        </p>
 
-        <h3>pipeline vs .pipe()</h3>
-        <p><em>正文待写。</em></p>
+        <h3>pipeline vs .pipe()：现代 vs 传统</h3>
+        <p>
+          连接多个 stream 有两种 API：
+        </p>
         <ul>
-          <li><strong>.pipe()</strong>：传统写法；错误传播不全（一个 stream 错另一个不会清理）</li>
-          <li><strong>stream.pipeline()</strong>：现代写法；自动处理错误传播 + 资源释放</li>
-          <li><strong>stream.promises.pipeline()</strong>：Promise 版本</li>
+          <li><strong><code>.pipe()</code></strong>（2009 起）：<strong>传统写法</strong>。<code>readable.pipe(writable)</code> 把数据自动从 source 流到 destination。<strong>致命缺陷：错误传播不全</strong>—— 一个 stream 出错时，链上其他 stream 不会被自动清理（资源泄漏）</li>
+          <li><strong><code>stream.pipeline()</code></strong>（Node 10+，<strong>现代推荐</strong>）：<code>pipeline(readable, transform, writable, callback)</code>。<strong>自动处理错误传播 + 资源释放</strong>—— 任何一环出错，所有 stream 都被清理</li>
+          <li><strong><code>stream/promises.pipeline()</code></strong>（Promise 版本）：<code>await pipeline(...)</code>，最现代写法</li>
         </ul>
+        <p>
+          实践规则：<strong>新代码永远用 <code>pipeline</code></strong>，不用 <code>.pipe()</code>。老代码逐步迁移。"<em>不就是一个数据流向</em>"看似差不多，但生产环境 <code>.pipe()</code> 的资源泄漏 bug 会让你某天突然 OOM。
+        </p>
 
-        <h3>Async iterator</h3>
-        <p><em>正文待写。</em><code>for await (const chunk of readable) { ... }</code> ——现代 stream 消费方式（Node 10+）。比 'data' 事件更易写、易读、错误处理自然。</p>
+        <h3>Async iterator：现代消费方式</h3>
+        <p>
+          Node 10+ 起，所有 Readable stream 都实现了 <code>Symbol.asyncIterator</code>—— 可以用 <code>for await</code> 消费：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">async function processLogs(filePath) {
+  const stream = createReadStream(filePath, 'utf-8');
+  for await (const chunk of stream) {
+    // 每个 chunk 自动处理 backpressure
+    await sendToService(chunk);
+  }
+}</code></pre>
+        </div>
+        <p>
+          这种写法比 <code>'data'</code> 事件 + 手动 backpressure <strong>简洁得多</strong>—— async iterator 内部处理了 pause / resume。<strong>错误处理</strong>：直接 try/catch 包住即可。<strong>对新写的 stream 消费代码，async iterator 是默认选择</strong>。
+        </p>
 
-        <h3>WHATWG Streams（stream/web）</h3>
-        <p><em>正文待写。</em>Node 16+ 加的<strong>web 标准 stream API</strong>（ReadableStream / WritableStream / TransformStream）——与传统 Node Streams<strong>不兼容</strong>但正在融合。<code>fetch</code> 返回的 body 就是 web stream。</p>
+        <h3>WHATWG Streams（<code>stream/web</code>）：与 Web 标准融合</h3>
+        <p>
+          Node 16+ 起加了一套<strong>独立的 web 标准 stream API</strong>——<code>ReadableStream</code> / <code>WritableStream</code> / <code>TransformStream</code>，住在 <code>node:stream/web</code> 模块。这套是 WHATWG（Web Hypertext Application Technology Working Group）规范，<strong>浏览器与 Node 同名同义</strong>。
+        </p>
+        <p>
+          关键事实：<strong>这是新一套 API，不是包装传统 Node Streams</strong>—— 两者<strong>不直接兼容</strong>。<code>fetch()</code> 返回的 <code>response.body</code> 是 web stream，不是 Node Readable。<strong>互转</strong>：<code>Readable.fromWeb(webStream)</code> / <code>Readable.toWeb(nodeStream)</code>。
+        </p>
+        <p>
+          使用建议：<strong>新代码优先 web streams</strong>—— 跨 Node / 浏览器 / Edge / Deno / Bun 兼容好，是未来标准。但 Node 生态大多数库（fs / http / zlib）仍是传统 Node Streams—— 短期内两套并存。
+        </p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A · 大文件处理用 stream 不爆内存</h3>
-          <p><em>正文待写。</em>10GB 文件读 + gzip + 写——pipeline 链式处理，内存占用稳定 16KB。</p>
+          <h3 class="scenario-title">场景 A · 大文件处理用 pipeline 不爆内存</h3>
+          <p>
+            10GB 文件 + gzip 压缩 + 写到目标：用 pipeline 链式处理，内存稳定 16KB。<strong>关键点</strong>：(1) 用 <code>pipeline</code> 而非 <code>.pipe()</code>；(2) 用 <code>stream/promises</code> 版本配 <code>await</code>；(3) try/catch 处理任意一环错误。和传统"<em>readFile + 处理 + writeFile</em>"对比——后者会爆 10GB 内存。
+          </p>
         </div>
         <div class="scenario">
           <h3 class="scenario-title">场景 B · backpressure 调试</h3>
-          <p><em>正文待写。</em>看 'drain' 事件触发频率；如果从不触发可能 source 太慢；触发太频繁可能 highWaterMark 太小。</p>
+          <p>
+            生产服务突然 OOM——可能是<strong>source 太快、destination 太慢、没正确处理 backpressure</strong>。诊断方法：(1) 看 <code>writable.writableLength</code> 是否长期接近 / 超 highWaterMark；(2) 监听 <code>'drain'</code> 事件触发频率——从不触发 = source 太慢；超频触发 = highWaterMark 太小。<strong>修法</strong>：换 <code>pipeline</code> 写法（自动管理）；或显式监听返回值 + 'drain'。
+          </p>
         </div>
         <div class="scenario">
           <h3 class="scenario-title">场景 C · web 与 node streams 互转</h3>
-          <p><em>正文待写。</em>Readable.fromWeb() / Readable.toWeb() 桥接（Node 17+）。</p>
+          <p>
+            <code>fetch()</code> 给 web stream，但你想传给 Node 的 fs / zlib（传统 Node Streams）—— 用 <code>Readable.fromWeb(response.body)</code> 转换。反向：把 Node stream 给 fetch 上传 body，用 <code>Readable.toWeb(nodeStream)</code>。Node 17+ 起稳定。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 写自定义 Transform stream</h3>
+          <p>
+            自定义数据变换处理（如 CSV 解析、protobuf 解码、自定义压缩）：<strong>继承 <code>Transform</code> 类</strong>实现 <code>_transform(chunk, encoding, callback)</code>。<strong>关键点</strong>：(1) 处理完一个 chunk 调 <code>callback(err, output)</code>；(2) 不要在 _transform 里做 CPU 密集计算（会阻塞）；(3) 用 <code>this.push(data)</code> 输出多份数据。
+          </p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
