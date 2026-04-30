@@ -56,11 +56,6 @@
           <span><strong>主要来源</strong> nodejs.org/learn/event-loop · V8 Microtask Hook 文档</span>
         </div>
 
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>骨架版本。对照大纲 <code>node/outline.md § P2.2</code>。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>V8 不拥有 Event Loop（详见 V8 P5.1）</strong>——V8 提供 microtask 原语，Node 决定每个 phase 之间调用 <code>PerformMicrotaskCheckpoint</code>。</li>
@@ -71,7 +66,12 @@
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
 
         <h3>Node 的 6 phase 与 V8 microtask 协作</h3>
-        <p><em>正文待写。</em>每个 phase 之间 + nextTick queue + Promise.then 都要 drain microtask。</p>
+        <p>
+          P2.1 讲了 libuv 的 6 phase 是<strong>EventLoop 的骨架</strong>。但 Node 在这骨架之上又叠了几层运行时语义——<strong>nextTick queue + V8 microtask queue + unhandled rejection 监测</strong>等。理解这三者怎么协作是搞清楚 Node 异步行为的关键。
+        </p>
+        <p>
+          核心规则：<strong>每次 phase 切换前 + 每次 macrotask 完成后</strong>，Node 都要 drain（清空）两个队列：先 drain <strong>nextTick queue</strong>，再 drain <strong>microtask queue</strong>。也就是说所有 <code>process.nextTick(fn)</code> + <code>Promise.then(fn)</code> + <code>queueMicrotask(fn)</code> 都会"<em>插入</em>"到下一个 phase 之前跑完。
+        </p>
         <div class="code-block">
           <span class="code-label">flow</span>
 <pre class="code"><code>┌──── timers phase ────┐
@@ -94,16 +94,31 @@
 └─────────────────────┘</code></pre>
         </div>
 
-        <h3>process.nextTick vs setImmediate vs Promise.then</h3>
-        <p><em>正文待写。</em>三者执行时机的精确差异：</p>
+        <h3>process.nextTick vs setImmediate vs Promise.then：精确时序</h3>
+        <p>
+          这三个看似类似但语义完全不同。精确顺序：
+        </p>
         <ul>
-          <li><strong>process.nextTick</strong>：在<strong>当前操作完成后</strong>立即执行（在任何 phase 切换前）—— 最高优先级</li>
-          <li><strong>Promise.then / queueMicrotask</strong>：V8 microtask queue，在 nextTick queue 之后 drain（仍是 phase 切换前）</li>
-          <li><strong>setImmediate</strong>：check phase 才执行——慢一个完整 phase</li>
+          <li><strong><code>process.nextTick(fn)</code></strong>：<strong>最高优先级</strong>—— 当前操作完成后立即执行，<strong>在任何 phase 切换前</strong>。<strong>Node 特有，不是 ES 标准</strong>。比 microtask 还早 drain。</li>
+          <li><strong><code>Promise.then(fn)</code> / <code>queueMicrotask(fn)</code></strong>：V8 microtask queue，<strong>在 nextTick queue 之后</strong> drain。仍在 phase 切换前。</li>
+          <li><strong><code>setImmediate(fn)</code></strong>：到下一轮 EventLoop 的 <strong>check phase</strong> 才跑——慢一个完整 phase。Node 特有，不是浏览器标准。</li>
         </ul>
+        <p>
+          验证顺序的实验：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">setImmediate(() =&gt; console.log(4));     // check phase 跑
+Promise.resolve().then(() =&gt; console.log(3));  // microtask 后跑
+process.nextTick(() =&gt; console.log(2));         // nextTick 先跑
+console.log(1);                                  // 同步代码立即跑
+
+// 输出顺序：1 → 2 → 3 → 4</code></pre>
+        </div>
 
         <h3>process.nextTick 反模式：递归饿死后续 phase</h3>
-        <p><em>正文待写。</em>因为 microtask 在每次 phase 切换前 drain 不让出 CPU，递归 nextTick 会让 EventLoop 永远 drain 不完。</p>
+        <p>
+          因为 microtask + nextTick 在 phase 切换前 drain 时<strong>不让出控制权</strong>，递归 nextTick 会让 EventLoop 永远卡在"<em>drain nextTick</em>"阶段——后续 phase（包括 timers / I/O / setImmediate）永远跑不到。这是 Node 最隐蔽的性能 bug 之一：</p>
         <div class="code-block">
           <span class="code-label">javascript</span>
 <pre class="code"><code class="lang-js">// ❌ 灾难：会永远不到 setTimeout 回调
@@ -115,31 +130,110 @@ setTimeout(() =&gt; console.log('starved'), 0);  // 永远不执行</code></pre>
         </div>
 
         <h3>setTimeout vs setImmediate 的微妙差异</h3>
-        <p><em>正文待写。</em></p>
+        <p>
+          这是 Node 异步模型最常被搞错的点。两者看起来都是"<em>立即异步执行</em>"，但精确时序差很多：
+        </p>
         <ul>
-          <li><strong>I/O 回调内部</strong>：setImmediate <strong>一定</strong>先于 setTimeout(0)</li>
-          <li><strong>其他场景</strong>：顺序不定（取决于 EventLoop 进入时间精度）</li>
-          <li>这是 Node 异步模型最坑的一个细节</li>
+          <li><strong>I/O 回调内部</strong>（如在 <code>fs.readFile(...).then(...)</code> 内调用）：<code>setImmediate</code> <strong>一定</strong>先于 <code>setTimeout(fn, 0)</code>。原因：I/O 回调在 poll phase 跑，<strong>下一个 phase 是 check（setImmediate）</strong>，再下一轮才到 timers（setTimeout）。</li>
+          <li><strong>脚本顶层 / 非 I/O 上下文</strong>：顺序<strong>不定</strong>。取决于"<em>EventLoop 启动到第一次 timers phase 用了多少时间</em>"——如果不到 1ms，<code>setTimeout(fn, 0)</code> 会被本轮 timers 处理；超过 1ms，会延后。</li>
         </ul>
+        <p>
+          实践规则：<strong>需要"下一轮异步执行"用 setImmediate</strong>（语义更明确）；<strong>需要"延迟 N 毫秒"用 setTimeout</strong>（这才是它的本意）。<strong>不要</strong>用 <code>setTimeout(fn, 0)</code> 当"<em>下个 tick</em>"——那是浏览器历史用法，Node 应该用 <code>setImmediate</code> 或 <code>queueMicrotask</code>。
+        </p>
 
-        <h3>AbortController / AbortSignal 集成</h3>
-        <p><em>正文待写。</em>Node 14+ 的取消机制；async API 普遍支持（fetch / fs.readFile / setTimeout 都接受 signal 参数）。</p>
+        <h3>AbortController / AbortSignal：现代取消机制</h3>
+        <p>
+          Node 14+ 全面支持 <code>AbortController</code>（Web 标准 API，浏览器同名）。这是 Node 异步取消的<strong>新标准</strong>——比传统的 <code>Promise.race + setTimeout</code> 干净得多。
+        </p>
+        <p>
+          支持 AbortSignal 的 Node API（不完全列表）：<code>fetch</code> / <code>fs.readFile / writeFile</code> / <code>fs.promises.*</code> / <code>net.connect</code> / <code>http.request</code> / <code>setTimeout(fn, ms, { signal })</code> / <code>events.on(..., { signal })</code>。<strong>新写的异步代码默认应该接受 signal 参数</strong>—— 这是 Node 异步 API 的现代规范。
+        </p>
 
-        <h3>--unhandled-rejections=strict 行为</h3>
-        <p><em>正文待写。</em>从 Node 15 起 unhandled rejection 默认 crash；服务端调试时要注意。</p>
+        <h3><code>--unhandled-rejections=strict</code>：默认 crash</h3>
+        <p>
+          Node 15+ 起，未捕获的 Promise rejection <strong>默认让进程 crash</strong>（之前是 warning + 继续运行）。这条改动是 Node 团队的安全决策——未捕获的 rejection 通常意味着代码有 bug，继续跑可能造成数据损坏。
+        </p>
+        <p>
+          生产应用应该在<strong>顶层装 handler</strong>：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// 优雅处理未捕获 rejection（生产推荐）
+process.on('unhandledRejection', (reason, promise) =&gt; {
+  console.error('Unhandled rejection:', reason);
+  // 记日志、发告警、执行清理
+  // 然后让进程优雅退出（让 process manager 重启）
+  process.exitCode = 1;
+});</code></pre>
+        </div>
+        <p>
+          注意 <strong>不要在 handler 里继续业务逻辑</strong>——进程已不可信，应该尽快退出让 systemd / pm2 / k8s 重启。
+        </p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A · 用 setImmediate 让出 CPU</h3>
-          <p><em>正文待写。</em>长循环里嵌入 <code>await new Promise(r =&gt; setImmediate(r))</code> 让 EventLoop 进 poll phase 处理 I/O。</p>
+          <h3 class="scenario-title">场景 A · 长循环让出 CPU 防 EventLoop 卡顿</h3>
+          <p>
+            处理大数组 / 长计算时，主线程被占住会让 web server 拒绝新请求。修法：每 N 次循环让出一下：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">async function processHugeArray(arr) {
+  for (let i = 0; i &lt; arr.length; i++) {
+    process(arr[i]);
+    if (i % 1000 === 0) await new Promise(r =&gt; setImmediate(r));
+  }
+}</code></pre>
+          </div>
+          <p>
+            <code>setImmediate</code> 让 EventLoop 进入 check phase——意味着 poll phase 的 I/O 回调能跑（处理 web 请求）。比 <code>setTimeout(fn, 0)</code> 更明确。
+          </p>
         </div>
         <div class="scenario">
           <h3 class="scenario-title">场景 B · 用 AbortController 实现超时取消</h3>
-          <p><em>正文待写。</em>现代 Node 的取消机制，比 Promise.race 干净。</p>
+          <p>
+            现代 Node 的取消机制，比 <code>Promise.race</code> 干净——<strong>取消传到底层</strong>（fetch 真断开连接，不只是丢弃响应）：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">async function fetchWithTimeout(url, ms) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() =&gt; ctrl.abort(), ms);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}</code></pre>
+          </div>
         </div>
         <div class="scenario">
           <h3 class="scenario-title">场景 C · 排查 EventLoop 卡顿</h3>
-          <p><em>正文待写。</em>用 <code>perf_hooks.monitorEventLoopDelay()</code> 监控；超过 100ms 是问题。</p>
+          <p>
+            生产环境监控 EventLoop 阻塞——任何主线程长时间不让出都会让所有 web 请求 timeout。用 <code>perf_hooks.monitorEventLoopDelay()</code>：
+          </p>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">import { monitorEventLoopDelay } from 'node:perf_hooks';
+const histogram = monitorEventLoopDelay({ resolution: 20 });
+histogram.enable();
+setInterval(() =&gt; {
+  if (histogram.max &gt; 100_000_000) {  // 100ms in ns
+    logger.warn('EventLoop blocked', { p99: histogram.percentile(99) });
+  }
+  histogram.reset();
+}, 5000);</code></pre>
+          </div>
+          <p>
+            EventLoop 延迟 p99 &gt; 100ms 是问题信号——某处有同步 CPU 密集 / 大同步 fs 读 / 大同步 JSON.parse。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 不要用 process.nextTick 做"异步初始化"</h3>
+          <p>
+            常见误用：用 <code>process.nextTick</code> 把"<em>同步代码</em>"挪到下一 tick 让初始化排序。这是 Node 反模式——nextTick 容易引入饿死 bug。<strong>用 <code>queueMicrotask</code> 或 <code>Promise.resolve().then</code></strong>——它们走 V8 microtask 队列，行为更可预测。
+          </p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>

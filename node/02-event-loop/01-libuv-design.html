@@ -56,11 +56,6 @@
           <span><strong>主要来源</strong> docs.libuv.org</span>
         </div>
 
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>骨架版本。对照大纲 <code>node/outline.md § P2.1</code>。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>libuv 是 Node 异步行为的来源</strong>——所有 fs / net / http 的"异步"都是 libuv 在底下做。</li>
@@ -71,69 +66,124 @@
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
 
         <h3>libuv 起源与定位</h3>
-        <p><em>正文待写。</em>2011 从 Node ev/eio 抽离，2013 独立项目；后 Microsoft / Apple / 多家贡献者参与；现在是跨平台异步 I/O 的"事实标准"——Julia 编程语言、Luvit 等也用 libuv。</p>
+        <p>
+          2011 年 Ryan Dahl 决定把 Node 内部的 <code>libev</code>（Linux 异步 I/O）+ <code>libeio</code>（文件 I/O 模拟）抽离出来，重写成一个独立的跨平台异步 I/O 库——<strong>libuv</strong>。动机有两层：(1) Node 当时只支持 Linux / macOS（依赖 libev），<strong>Windows 支持差</strong>，需要原生 IOCP 实现；(2) 团队意识到这套异步 I/O 抽象<strong>本身有独立价值</strong>——其他语言 / 项目也能用。
+        </p>
+        <p>
+          libuv 2013 年正式独立成项目（之前住在 Node 仓库内）。后来 Microsoft（赞助 Windows IOCP 部分）/ Apple / Indutny 等多家贡献者参与。今天 libuv 是<strong>跨平台异步 I/O 的事实标准</strong>——除了 Node，Julia 编程语言、Luvit、neovim 等都用 libuv 做底层 I/O。<strong>"用 C 写一份跨平台异步 I/O，让 N 个项目共享"</strong>这条路径被 libuv 走通了。
+        </p>
 
-        <h3>核心抽象 1 · Handle</h3>
-        <p><em>正文待写。</em>长寿对象，能反复触发回调：</p>
+        <h3>核心抽象 1 · Handle（长寿对象）</h3>
+        <p>
+          libuv 把所有 I/O 资源分两类。<strong>Handle</strong> 是"<em>长寿对象</em>"——能反复触发回调，存活到显式 <code>uv_close</code>：
+        </p>
         <ul>
-          <li><strong>uv_timer_t</strong>：定时器（Node 的 setInterval 在底下）</li>
-          <li><strong>uv_tcp_t</strong>：TCP socket（Node 的 net.Server / net.Socket）</li>
-          <li><strong>uv_fs_event_t</strong>：文件 watcher（Node 的 fs.watch）</li>
-          <li><strong>uv_signal_t</strong>：信号处理（Node 的 process.on('SIGTERM')）</li>
+          <li><strong><code>uv_timer_t</code></strong>：定时器。Node 的 <code>setInterval</code> / <code>setTimeout</code> 底层用这个</li>
+          <li><strong><code>uv_tcp_t</code></strong>：TCP socket。Node 的 <code>net.Server</code> / <code>net.Socket</code> / HTTP server 都建在这之上</li>
+          <li><strong><code>uv_fs_event_t</code></strong>：文件系统 watcher。Node 的 <code>fs.watch</code></li>
+          <li><strong><code>uv_signal_t</code></strong>：信号处理。Node 的 <code>process.on('SIGTERM')</code></li>
+          <li><strong><code>uv_async_t</code></strong>：用于线程间唤醒主循环（Worker Threads 给主线程发消息用这个）</li>
+        </ul>
+        <p>
+          Handle 在 libuv 内部用<strong>双向链表</strong>挂在 EventLoop 上——loop 每次迭代检查所有 active handle，看哪个有事件触发。
+        </p>
+
+        <h3>核心抽象 2 · Request（短期一次性操作）</h3>
+        <p>
+          <strong>Request</strong> 是"<em>一次性操作</em>"——发起 → 完成 → 自动清理：
+        </p>
+        <ul>
+          <li><strong><code>uv_write_t</code></strong>：写入操作（写完触发 callback 然后销毁）</li>
+          <li><strong><code>uv_getaddrinfo_t</code></strong>：DNS 查询</li>
+          <li><strong><code>uv_fs_t</code></strong>：文件读写。虽然名字是 fs 但实际是 request——每次 <code>fs.readFile</code> 创建一个 request，完成后销毁</li>
+          <li><strong><code>uv_work_t</code></strong>：用户自定义异步任务（在 Worker Pool 跑）</li>
+        </ul>
+        <p>
+          Handle vs Request 的区别本质是<strong>生命周期</strong>：Handle 是"<em>资源</em>"（如 socket、timer），Request 是"<em>动作</em>"（如写一次、查询一次）。同一个 socket（Handle）可以发起多次写（多个 Request）。
+        </p>
+
+        <h3>跨平台 I/O 多路复用：3 个底层 OS 机制</h3>
+        <p>
+          libuv 最大价值是<strong>掩盖 OS 平台差异</strong>。三大主流操作系统的异步 I/O 机制完全不同：
+        </p>
+        <ul>
+          <li><strong>Linux · epoll</strong>（Linux 2.5.44+，2002）—— <strong>readiness model</strong>：内核告知"文件描述符已就绪可读 / 可写"，应用主动调 <code>read()</code> / <code>write()</code>。是 Linux 高并发服务器的标准（Nginx / Redis 都用）</li>
+          <li><strong>macOS / BSD · kqueue</strong>（FreeBSD 4.1，2000）—— readiness model 类似 epoll，但能监听<strong>更多事件类型</strong>（文件变化、信号、子进程退出等）。Apple 平台默认</li>
+          <li><strong>Windows · IOCP</strong>（I/O Completion Port，Win NT）—— <strong>completion model</strong>：应用直接发 <code>WriteFile()</code>，I/O 完成时内核通知。<strong>语义和前两个相反</strong>——前两个告知"<em>可以做</em>"，IOCP 告知"<em>已经做完</em>"</li>
+        </ul>
+        <p>
+          libuv 把这两种相反的语义统一成<strong>completion 风格的 API</strong>——所有操作"<em>发起 → 等待回调通知完成</em>"。在 Linux / macOS 上 libuv 内部把 readiness 转换成 completion（监听 readiness → 立刻执行 read/write → 触发 callback），让上层 API 一致。这就是为什么 Node 异步 API 在三个平台行为相同。
+        </p>
+
+        <h3>Worker Pool（默认 4 线程）：处理无原生异步的操作</h3>
+        <p>
+          有些操作<strong>OS 没有原生异步接口</strong>。最典型的是<strong>文件 I/O</strong>——POSIX 的 <code>read()</code> / <code>write()</code> 是阻塞的，没有 epoll-like 异步版本（2018 年 Linux 5.1 加的 io_uring 是新选择，但 libuv 直到 2024 才开始支持）。
+        </p>
+        <p>
+          libuv 解决方案：<strong>Worker Pool</strong>——一个线程池在后台跑这些操作。当应用调 <code>fs.readFile</code>，libuv：(1) 把 read 请求扔进 Worker Pool 队列；(2) 主线程继续跑别的；(3) 某个 worker 线程执行<strong>阻塞</strong>的 <code>read()</code>，完成后；(4) 通知主线程通过 callback 处理结果。
+        </p>
+        <p>
+          <strong>Worker Pool 默认 4 线程</strong>。通过 <code>UV_THREADPOOL_SIZE</code> 环境变量调整（最大 1024）。除了文件 I/O，还有几类操作走 Worker Pool：
+        </p>
+        <ul>
+          <li><strong>DNS 查询</strong>（<code>dns.lookup</code> 用阻塞的 <code>getaddrinfo</code>；<code>dns.resolve*</code> 用真异步 UDP）</li>
+          <li><strong>crypto 重计算</strong>（<code>pbkdf2</code> / <code>scrypt</code> / <code>randomBytes(big)</code>）</li>
+          <li><strong>zlib 压缩</strong>（<code>gzip</code> / <code>deflate</code>）</li>
+          <li><strong>用户的 <code>uv_work_t</code></strong>（native module 提交的异步工作）</li>
         </ul>
 
-        <h3>核心抽象 2 · Request</h3>
-        <p><em>正文待写。</em>短期一次性操作，完成后自动清理：</p>
-        <ul>
-          <li><strong>uv_write_t</strong>：写入操作</li>
-          <li><strong>uv_getaddrinfo_t</strong>：DNS 查询</li>
-          <li><strong>uv_fs_t</strong>：文件读写（虽然名字是 fs 但实际是 request）</li>
-        </ul>
-
-        <h3>跨平台 I/O 多路复用</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li><strong>Linux</strong>：epoll（Linux 2.5.44+）—— readiness model，文件描述符可读 / 可写时通知</li>
-          <li><strong>macOS / BSD</strong>：kqueue —— 类似 epoll 但能听更多事件类型</li>
-          <li><strong>Windows</strong>：IOCP（I/O Completion Port）—— completion model，I/O 完成时通知</li>
-          <li>libuv 把三种不同模型抽象成统一 API</li>
-        </ul>
-
-        <h3>Worker Pool（默认 4 线程）</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li><strong>处理"无原生异步"的操作</strong>：文件 I/O（POSIX 没有真异步文件 API）/ DNS / 用户 work（如 crypto 重计算）</li>
-          <li>默认 4 线程；通过 <code>UV_THREADPOOL_SIZE</code> 环境变量调整（最多 1024）</li>
-          <li><strong>隐藏限制</strong>：4 线程意味着 4 个并发文件读会"卡住"其他操作</li>
-          <li>大文件密集服务必须调大</li>
-        </ul>
+        <div class="callout warn">
+          <div class="callout-title">⚠️ Worker Pool 隐藏限制：4 线程默认值</div>
+          <p>
+            4 线程意味着<strong>同时只能有 4 个文件 I/O / DNS / crypto 并发</strong>——第 5 个开始排队等。生产环境如果发现"<em>大量并发文件操作时延迟陡升</em>"，几乎就是这个原因。<strong>修法</strong>：<code>UV_THREADPOOL_SIZE=64 node app.js</code> 调大。注意调到太大反而 thrashing——经验值 16-128。
+          </p>
+        </div>
 
         <h3>6 个 Event Loop phase</h3>
-        <p><em>正文待写。</em>顺序：</p>
+        <p>
+          libuv 的核心是 EventLoop——一个 while 循环，每次迭代按固定顺序经过 6 个 phase 处理对应类型的回调。每个 phase 有自己的 <strong>FIFO 队列</strong>：
+        </p>
         <ol>
-          <li><strong>timers</strong>：执行 setTimeout / setInterval 到期回调</li>
-          <li><strong>pending callbacks</strong>：执行某些 I/O 回调（如 TCP error 延迟回调）</li>
-          <li><strong>idle, prepare</strong>：内部使用</li>
-          <li><strong>poll</strong>：检索新 I/O 事件 + 执行 I/O 回调；Node 在这里阻塞等 I/O（如果其他 phase 都空闲）</li>
-          <li><strong>check</strong>：执行 setImmediate 回调</li>
-          <li><strong>close</strong>：执行 close 回调（如 socket.on('close')）</li>
+          <li><strong>timers</strong>：到期的 <code>setTimeout</code> / <code>setInterval</code> 回调</li>
+          <li><strong>pending callbacks</strong>：上一轮延迟到本轮执行的某些 I/O 回调（如 TCP error 延迟）</li>
+          <li><strong>idle, prepare</strong>：内部使用，Node 用户基本看不到</li>
+          <li><strong>poll</strong>：<strong>核心阶段</strong>——检索新 I/O 事件（epoll_wait / kqueue / GetQueuedCompletionStatus）+ 执行 I/O 回调。如果其他 phase 都空闲，Node 在这里<strong>阻塞</strong>等 I/O 来</li>
+          <li><strong>check</strong>：<code>setImmediate</code> 回调（与 setTimeout 主要差异在这——setImmediate 一定在 I/O 回调之后跑，setTimeout 在下一轮 timers phase 跑）</li>
+          <li><strong>close</strong>：close 回调（<code>socket.on('close')</code> 等）</li>
         </ol>
+        <p>
+          <strong>关键点</strong>：每次 phase 切换前，Node（不是 libuv 自己）会插入 <strong>microtask checkpoint</strong>—— drain V8 microtask queue（详见 <a href="../../v8/05-embedding/01-embedder-api.html">V8 P5.1</a> + 下一章 P2.2）。这就是为什么 <code>setTimeout(fn1)</code> + <code>Promise.resolve().then(fn2)</code> 的 fn2 比 fn1 早跑——microtask 在 phase 之间 drain。
+        </p>
 
-        <h3>Node 20 (libuv 1.45) 的变化</h3>
-        <p><em>正文待写。</em>Timer 现在只在 poll 后跑，而非两次（更符合用户预期）。</p>
+        <h3>Node 20 (libuv 1.45+) 的变化</h3>
+        <p>
+          libuv 1.45（2023，对应 Node 20+）做了一个用户可见改动：<strong>timer 现在只在 poll 后跑</strong>，而非"<em>poll 前后各一次</em>"。这修复了 Node 18 之前的一个微妙时序——某些 timer + I/O 组合行为不可预测。Node 20 之后行为更符合<strong>"<em>每个 EventLoop 迭代一轮 timer</em>"</strong>的直觉。
+        </p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
           <h3 class="scenario-title">场景 A · 文件 I/O 密集场景调大 Worker Pool</h3>
-          <p><em>正文待写。</em>批处理大量文件时 <code>UV_THREADPOOL_SIZE=128 node app.js</code>。</p>
+          <p>
+            批处理大量文件（日志分析、图像处理、数据迁移）时遇到延迟瓶颈，先用 <code>UV_THREADPOOL_SIZE=64 node app.js</code> 调大。判断是不是 Worker Pool 满：用 <code>process.nextTick</code> 测量 EventLoop 阻塞时间——如果文件操作期间 EventLoop 没卡但<strong>文件操作自身延迟陡增</strong>，就是 Worker Pool 满了。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B · 理解为什么"网络高并发不卡，文件读卡"</h3>
-          <p><em>正文待写。</em>网络走 epoll/kqueue 真异步，文件走 Worker Pool 4 线程。</p>
+          <h3 class="scenario-title">场景 B · 理解"网络 1 万并发不卡，10 文件读卡"</h3>
+          <p>
+            常见困惑：Node 服务能扛 1 万 WebSocket 连接，但 10 个并发 <code>fs.readFile</code> 就延迟陡增。原因：<strong>网络走 epoll/kqueue 真异步</strong>（OS 内核帮你管，可以挂几万 socket）；<strong>文件走 Worker Pool 4 线程</strong>（用线程池模拟异步，10 个并发就排队）。这是 Node 性能调优最常踩的坑——网络瓶颈和文件 I/O 瓶颈本质完全不同。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C · 跨平台 watcher 行为差异</h3>
-          <p><em>正文待写。</em>Linux inotify / macOS FSEvents / Windows ReadDirectoryChangesW 行为不同。</p>
+          <h3 class="scenario-title">场景 C · 跨平台 fs.watch 行为差异</h3>
+          <p>
+            <code>fs.watch</code> 在三个平台行为有差：<strong>Linux inotify</strong>（限制 watcher 数量，监视大目录会 EMFILE 错误）/ <strong>macOS FSEvents</strong>（事件聚合延迟数百 ms，看到变化"<em>慢半拍</em>"）/ <strong>Windows ReadDirectoryChangesW</strong>（递归 watch 行为不同）。跨平台一致需求建议用 <code>chokidar</code> npm 包包一层。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · setTimeout vs setImmediate 时序</h3>
+          <p>
+            微妙差异：在<strong>I/O 回调内部</strong> <code>setImmediate</code> 一定先于 <code>setTimeout(fn, 0)</code>（前者本轮 check phase 跑，后者下轮 timers phase 跑）。其他场景（如脚本顶层）顺序不定（取决于 EventLoop 启动到 timers phase 的时间）。需要"<em>下个 tick 执行</em>"用 <code>setImmediate</code> 或 <code>queueMicrotask</code>，不要用 <code>setTimeout(fn, 0)</code>。
+          </p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
