@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>P5 · 高级与生产决策 · Bun 深度学习</title>
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23fbf0df'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23000'%3EB%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Bun 深度学习</span><span class="site-title-badge" style="background: oklch(0.95 0.05 80); color: #000">Bun</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">Bun 首页</a>
+          <a href="https://bun.com/docs/api/ffi" target="_blank" rel="noopener">Bun FFI 文档</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · 高级与生产决策</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-ffi-macros-db.html">01 · FFI / Macros / 内置 SQLite + Redis</a></li>
+          <li><a href="02-when-to-bun.html">02 · 何时切 Bun / 何时仍用 Node</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../01-overview/index.html">P1 · Bun 是谁</a></li>
+          <li><a href="../02-internals/index.html">P2 · JavaScriptCore + Zig</a></li>
+          <li><a href="../03-runtime/index.html">P3 · "内置一等公民" 哲学</a></li>
+          <li><a href="../04-toolchain/index.html">P4 · 一体化工具链</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../index.html">Bun 首页</a><span class="breadcrumb-sep">/</span>
+          <span>P5 · 高级与生产决策</span>
+        </nav>
+        <h1>P5 · 高级与生产决策</h1>
+        <p class="lead">
+          <strong>FFI / Macros / 内置 SQLite + Postgres + Redis</strong>（非入门必须，但能在某些「超 Node 范畴」场景胜出）+ <strong>何时切 Bun 何时仍用 Node 决策树</strong>（5 维度 + 7 典型场景 verdict + 风险评估）。把前 4 阶段所有内容收束到 production 决策。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>章节数</strong> 2</span>
+          <span><strong>主要来源</strong> Bun FFI 文档</span>
+          <span><strong>状态</strong> ⏳ 待撰写</span>
+        </div>
+
+        <h2>本阶段覆盖</h2>
+        <ul>
+          <li><strong>bun:ffi</strong> —— dlopen 风格调 .so/.dylib/.dll；声明类型自动 marshal；写法比 N-API 简单，调用比 N-API 慢</li>
+          <li><strong>使用场景</strong> —— 调系统库（OpenSSL/sqlite3/libcurl）/ 调 Rust/Zig/C 写的高性能函数 / 快速试验 native 集成</li>
+          <li><strong>Macros</strong> —— 编译期代码执行；with { type: "macro" } import attribute；JS 表达力有限——主要 build 时嵌入数据</li>
+          <li><strong>bun:sqlite</strong> —— 内置 SQLite；与 better-sqlite3 同等速度但不需 native 编译</li>
+          <li><strong>Bun.sql / Bun.redis</strong> —— Postgres / Redis 一等公民客户端；连接池内置</li>
+          <li><strong>HTML imports</strong> —— Bun 1.2+ 把 HTML 当模块；集成 Bun.serve fullstack 路径</li>
+          <li><strong>FFI vs N-API 取舍</strong> —— FFI 灵活不需编译 / N-API 兼容 Node 生态</li>
+          <li><strong>决策维度 1 · 启动速度敏感性</strong> —— Lambda/Serverless/CLI ✅ Bun 决定性 / 长跑服务 ⚠️ 差异不重要</li>
+          <li><strong>决策维度 2 · npm 生态依赖</strong> —— native module 多 ⚠️ 验证 N-API 兼容；纯 JS 依赖 ✅ 风险低</li>
+          <li><strong>决策维度 3 · 工具链一体化收益</strong> —— 单一服务 / 库 ⚠️ 收益小；大 monorepo ✅ 收益最大</li>
+          <li><strong>决策维度 4 · 团队工程化能力</strong> —— Bun 兼容性边界需要排查；保守团队选 Node</li>
+          <li><strong>决策维度 5 · 部署目标</strong> —— Cloudflare Workers / Vercel Edge ❌ 仍 V8 Isolate；Lambda / Docker ✅</li>
+          <li><strong>典型场景 verdict</strong> —— CI 加速 ✅ / monorepo dev ✅ / Web API（Docker）✅ / Lambda ✅ / Edge ❌ / 遗留 Node 项目 ⚠️ 渐进切换 / npm 库 ⚠️ Bun dev / tsup 发布</li>
+          <li><strong>风险评估</strong> —— bus factor / bug 率 / Oven 商业化进展决定可持续性</li>
+        </ul>
+
+        <h2>章节清单</h2>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 60px">序号</th>
+              <th>标题</th>
+              <th>关键词</th>
+              <th style="width: 80px">状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>01</td>
+              <td><a href="01-ffi-macros-db.html">FFI / Macros / 内置 SQLite + Redis</a></td>
+              <td>bun:ffi · dlopen 风格 · Macros · bun:sqlite · Bun.sql · Bun.redis · HTML imports · FFI vs N-API 取舍</td>
+              <td>⏳</td>
+            </tr>
+            <tr>
+              <td>02</td>
+              <td><a href="02-when-to-bun.html">何时切 Bun / 何时仍用 Node</a></td>
+              <td>5 决策维度 · 7 场景 verdict · 启动速度敏感性 · 部署目标 · 渐进切换 · 风险评估 · bus factor</td>
+              <td>⏳</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout info">
+          <div class="callout-title">💡 阅读建议</div>
+          <p>P5.1 与 P5.2 互为前提，建议顺序读。</p>
+        </div>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
