@@ -56,11 +56,6 @@
           <span><strong>主要来源</strong> Ryan Dahl 演讲 · OpenJS 治理文档</span>
         </div>
 
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>本章为<strong>骨架版本</strong> —— 大纲已通过，正文待逐节细化撰写。对照大纲文件 <code>node/outline.md § P1.1</code>。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>Node 是 Ryan Dahl 2009 年发布的服务端 JS 运行时</strong>——动机是"Apache 处理高并发的方式（线程 per 请求）有问题，需要事件驱动"。</li>
@@ -69,67 +64,179 @@
         </ol>
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
-        <h3>史前史：Ryan Dahl 与"事件驱动服务端"想法</h3>
-        <p><em>正文待写。</em>关键点：Ryan Dahl 看到 Apache 用线程 per 请求处理高并发的问题；想用 JS（语言习惯异步回调）+ V8（Google 2008 刚开源）+ 跨平台 I/O 库做一个事件驱动服务端运行时。</p>
+        <h3>史前史（2008-2009）：Apache 模型的问题与 Ryan Dahl 的灵感</h3>
+        <p>
+          要理解 Node 为什么这样设计，得先看 2008 年的服务端世界。当时主流 web server 是 <strong>Apache</strong>（C 写的，进程 / 线程 per 请求）。每来一个 HTTP 连接，Apache fork 一个进程或起一个线程处理。这套模型在低并发场景没问题，但<strong>面对 1000+ 并发连接</strong>就出问题——线程切换开销、每个线程的 8MB 栈内存、共享状态的锁竞争 —— 服务器很快被压垮。
+        </p>
+        <p>
+          2008 年 Ryan Dahl（当时是 Joyent 工程师）观察到这个问题，思考能不能<strong>用一个进程 + 事件驱动 + 异步 I/O 处理所有连接</strong>。这思路本身不新（Nginx 2004 起就这么做），但 Ryan 的洞察是：<strong>JS 这门语言天生异步</strong>——所有浏览器 API 都是回调风格，开发者已经习惯写 <code>fs.read(callback)</code> 这种代码。如果给 JS 配一个高性能引擎 + 跨平台 I/O 库，就能让"<em>异步服务端</em>"变得自然可写。
+        </p>
+        <p>
+          天时地利：<strong>2008 年 9 月 Chrome + V8 发布</strong>—— 让 JS 性能首次能跑服务端负载（详见 <a href="../../v8/01-overview/01-history.html">V8 P1.1</a>）。Ryan 拿 V8 + 自己写的 <code>libev</code>（Linux epoll）+ <code>libeio</code>（线程池模拟文件 I/O 异步）拼出了原型。
+        </p>
 
         <h3>第一阶段 · 2009-2014 · 早期生态爆发</h3>
-        <p><em>正文待写。</em>关键节点：</p>
-        <ul>
-          <li><strong>2009-05</strong>：Ryan Dahl JSConf EU 演讲，发布 Node 0.1.0</li>
-          <li><strong>2010</strong>：npm 发布；Express 发布；Socket.IO 发布</li>
-          <li><strong>2011</strong>：Node 0.5 引入 libuv 取代 ev/eio</li>
-          <li><strong>2012</strong>：Ryan Dahl 离开 Node 团队；Isaac Schlueter（npm 作者）接手</li>
-          <li><strong>2013</strong>：Node 0.10；Streams2 重写</li>
-          <li><strong>2014</strong>：Joyent 持续控制治理；社区不满累积</li>
-        </ul>
+        <p>
+          这 5 年的故事核心是：<strong>Node 从一个个人项目变成有完整生态的服务端 JS 平台</strong>—— 但同时治理隐患在累积。
+        </p>
+        <p>
+          <strong>2009-05-08</strong>：Ryan Dahl 在柏林 <strong>JSConf EU</strong> 公开演讲发布 Node 0.1.0。这场 45 分钟的演讲是 Node 的"创世时刻"——Ryan 现场演示了一个用 Node 写的 chat server，处理 1 万并发连接、单进程 / 单线程，CPU 占用极低。观众一片惊叹——之前 JS 只跑在浏览器里玩 form validation，突然能写高并发服务端，是范式级的转变。
+        </p>
+        <p>
+          <strong>2010 年</strong>三个关键 npm 包诞生：<strong>npm</strong>（Isaac Schlueter，2010-01）—— 包管理器；<strong>Express</strong>（TJ Holowaychuk，2010-11）—— web 框架；<strong>Socket.IO</strong>（2010）—— 实时通信。这"三件套"奠定了 Node 生态的基础——任何 web 工程师能用 Node + Express 几小时搭一个 web server，用 Socket.IO 加实时功能。
+        </p>
+        <p>
+          <strong>2011-09 · Node 0.5</strong>：用 <strong>libuv</strong>（Node 团队自研）替换原来的 <code>libev + libeio</code>，统一跨平台 I/O 抽象 —— Linux epoll / macOS kqueue / Windows IOCP。这是 Node 内部最大的一次架构升级（详见 <a href="../02-event-loop/01-libuv-design.html">P2.1 libuv 设计</a>）。
+        </p>
+        <p>
+          <strong>2012-01 · Ryan Dahl 离开 Node 团队</strong>。把项目交给 Isaac Schlueter（npm 作者）继续维护。Ryan 公开理由是"<em>Node 已经做到了我想做的事</em>"，但更深层原因是他对项目走向有不同看法——这后面 6 年酝酿出 2018 的 Deno。
+        </p>
+        <p>
+          <strong>2013-03 · Node 0.10</strong>：<strong>Streams2 重写</strong>—— 解决 Streams1 的 backpressure 设计缺陷（详见 <a href="../04-streams-network/01-streams.html">P4.1 Streams 全谱</a>）。这次重构是 Node 历史上最痛的破坏性变更之一——所有 Streams1 代码都要改。
+        </p>
+        <p>
+          <strong>2014 年</strong>是治理压力累积的一年。Node 由 <strong>Joyent</strong>（一家云服务公司）控制，拥有商标 + 主导 release。但社区贡献者觉得 Joyent 决策太慢、对外部不开放。具体导火索是 <strong>Code of Conduct 争议</strong>—— 一位贡献者因 PR 中"性别中立 pronoun"问题被 Joyent 处理方式不当 —— 让长期累积的不满爆发。
+        </p>
 
-        <h3>第二阶段 · 2014-2015 · io.js 分裂</h3>
-        <p><em>正文待写。</em>关键节点：</p>
-        <ul>
-          <li><strong>2014-12</strong>：贡献者对 Joyent 治理不满 fork 出 io.js，独立社区</li>
-          <li><strong>2015-01-13</strong>：io.js 1.0.0 发布；引入更新的 V8、ES6 特性</li>
-          <li><strong>2015-09</strong>：io.js 与 Node 合并；<strong>Node Foundation 成立 + Node 4.0 发布</strong>；语义版本号 + LTS 模型；Linux Foundation 托管</li>
-        </ul>
+        <div class="callout info">
+          <div class="callout-title">💡 Ryan Dahl 设计 Node 的 3 个原则</div>
+          <p>
+            从 2009 JSConf 演讲整理：(1) <strong>不要让 JS 程序员管理线程</strong> —— 单线程 + Event Loop 简化心智；(2) <strong>所有 I/O 必须异步</strong> —— 不允许同步阻塞；(3) <strong>底层用 C++，上层用 JS</strong> —— V8 + libuv 都是 C++，业务用 JS。这 3 条原则定义了 Node 至今的基因。
+          </p>
+        </div>
 
-        <h3>第三阶段 · 2015-2019 · Foundation 时期</h3>
-        <p><em>正文待写。</em>关键节点：</p>
-        <ul>
-          <li><strong>2017-10</strong>：Node Foundation + JS Foundation 合并为 OpenJS Foundation</li>
-          <li><strong>2018-06</strong>：Ryan Dahl 公开"<strong>10 things I regret about Node.js</strong>"演讲——批评 Node 的模块系统、package.json 复杂性、安全等</li>
-          <li><strong>2018-11</strong>：Ryan Dahl 发布 Deno（V8 + Rust）—— 把对 Node 的批评做成产品</li>
-          <li><strong>2019</strong>：Node 12 实验 ESM；2020 Node 14 稳定 ESM</li>
-        </ul>
+        <h3>第二阶段 · 2014-2015 · io.js 分裂与 Foundation 重组</h3>
+        <p>
+          这 9 个月是 Node 历史上最戏剧性的时期 —— 也是<strong>开源治理史</strong>的经典案例。
+        </p>
+        <p>
+          <strong>2014-12-10 · io.js fork</strong>：以 Mikeal Rogers / Fedor Indutny 等为首的核心贡献者宣布 fork Node.js，命名 <strong>io.js</strong>。fork 不是技术分裂——技术上 io.js 跟 Node 几乎一样——是<strong>治理分裂</strong>。io.js 立刻引入 5 大改变：(1) 开放治理（Technical Steering Committee）+ (2) 月度发布 + (3) 跟最新 V8（Node 当时还在用旧 V8）+ (4) 默认启用 ES6 特性 + (5) Code of Conduct 明确化。
+        </p>
+        <p>
+          <strong>2015-01-13 · io.js 1.0.0 发布</strong>。比 Node 主线发布快很多——3 个月内已经到 2.x 版本，加入了大量 ES6 特性（class / let-const / arrow function）和最新 V8。<strong>社区用脚投票</strong>—— 大量项目迁到 io.js。Node 主线压力巨大。
+        </p>
+        <p>
+          <strong>2015-09 · 妥协与合并</strong>：Joyent 同意成立 <strong>Node.js Foundation</strong>（Linux Foundation 托管）—— 把项目治理从单一公司控制变成基金会模式。io.js 同意合并回来，io.js 团队的开放治理实践成为新 Node 的官方流程。<strong>2015-09-08 · Node 4.0 发布</strong>—— 版本号直接从 0.12 跳到 4（同步 io.js 3.x 的下一版），代表"<em>合并后的新起点</em>"，并确立了<strong>"偶数版本是 LTS（每 30 个月支持），奇数版本是 current（6 个月）"</strong>的发布模型——这套模型沿用至今。
+        </p>
+        <p>
+          io.js 分裂事件的影响远超 Node 自己——它成了开源社区<strong>"如何用治理压力推动单一公司放权"</strong>的经典案例。后来 Docker / Elastic 等项目的治理变化都受这次启发。
+        </p>
 
-        <h3>第四阶段 · 2020-2025 · Bun 挑战与 Node 内置化</h3>
-        <p><em>正文待写。</em>关键节点：</p>
+        <h3>第三阶段 · 2015-2019 · Foundation 时期与 Ryan Dahl 反思</h3>
+        <p>
+          合并后的 Node 进入稳定期——版本号按时发布、生态持续扩大、企业大规模采用（Netflix / Uber / LinkedIn / PayPal 等）。但<strong>语言 / 平台层面没有大革新</strong>——这 4 年 Node 主要做"<em>把现有 ES 标准跟上、把 V8 升级跟上、把 LTS 模型跑顺</em>"。
+        </p>
+        <p>
+          <strong>2017-10</strong>：<strong>Node.js Foundation + JS Foundation 合并为 OpenJS Foundation</strong>—— 治理拓宽到整个 JS 生态（除了 Node 还包括 jQuery / ESLint / Webpack 等多个 JS 项目）。Linux Foundation 仍是托管方。
+        </p>
+        <p>
+          <strong>2018-06</strong>：Ryan Dahl 在 JSConf EU 公开演讲 <strong>"10 Things I Regret About Node.js"</strong>。这是个戏剧性时刻——Node 创始人公开批评自己的项目。Ryan 列出的 10 条遗憾包括：
+        </p>
         <ul>
-          <li><strong>2022-07</strong>：Bun 1.0 发布（JSC + Zig）—— 启动速度 + 工具链一体化挑战</li>
-          <li><strong>2023-04</strong>：Node 20 加入实验性 Permission Model（仿 Deno）+ node:test 稳定</li>
-          <li><strong>2023-2024</strong>：Node 内置 fetch、watch mode、SEA、async_hooks 改进——"内置工具"思路应对 Bun</li>
-          <li><strong>2024-10</strong>：Node 22 LTS 活跃</li>
-          <li><strong>2025-04</strong>：Node 24 当前；融合更多内置工具</li>
+          <li>没用 Promise（Node 早期全用 callback——后来 Promise 成 ES 标准但 Node API 已经定型）</li>
+          <li>安全模型缺失（Node 程序默认全权访问 fs / net / 子进程）</li>
+          <li><code>node_modules</code> 混乱（嵌套深、磁盘占用大、依赖地狱）</li>
+          <li><code>package.json</code> 设计问题（混合发布元数据 + 运行配置）</li>
+          <li>不区分本地 / 远程模块（require 既能加载文件也能加载 npm 包）</li>
+          <li>不支持 TypeScript 直接运行</li>
+          <li>构建系统选 GYP（Google 已弃用）</li>
         </ul>
+        <p>
+          这场演讲不只是反思——它是 Ryan 给即将公布的<strong>下一个项目</strong>做铺垫。<strong>2018-11 Deno 发布</strong>（V8 + Rust + Tokio）—— Ryan 把对 Node 的所有批评<strong>做成产品</strong>：默认 Promise、显式权限模型、URL 导入、TypeScript 内置、Web 标准 API。Deno 一发布就吸引大量关注——但因为放弃 npm 生态，<strong>实际采用率有限</strong>。
+        </p>
+        <p>
+          有意思的是 Ryan Dahl 的批评<strong>反过来推动了 Node 改进</strong>—— 后续 5 年 Node 加入的几乎所有"内置工具"特性（test runner / Permission Model / 内置 fetch / watch mode / SEA）都能在 Ryan 的 10 条遗憾里找到对应。这是 OSS 生态里"<em>分叉项目反向影响母项目</em>"的精彩案例。
+        </p>
+        <p>
+          <strong>2019-04 · Node 12</strong>：实验性 ESM 支持（默认关闭，需 <code>--experimental-modules</code>）。<strong>2020-04 · Node 14</strong>：ESM 稳定（无需 flag）。CJS 与 ESM 双系统时代正式开启——但带来 <strong>Dual Package Hazard</strong>（详见 <a href="../03-modules/02-dual-package-hazard.html">P3.2</a>）等工程现实。
+        </p>
+
+        <h3>第四阶段 · 2020-2025 · Bun 挑战与 Node 内置化回应</h3>
+        <p>
+          这 5 年 Node 面对<strong>双重压力</strong>—— 一边是 Deno（理念派 + Web 标准），另一边是 Bun（性能派 + 工具一体化）。Node 的应对策略是<strong>"内置化"</strong>——把生态里的 npm 工具拿进 Node 核心。
+        </p>
+        <p>
+          <strong>2022-07-08 · Bun 1.0 发布</strong>：Jarred Sumner（前 Stripe 工程师）做的 Node 兼容运行时，用 <strong>JSC + Zig</strong> 替代 V8 + libuv。比 Node 启动快 4-5×、内置 bundler / test runner / package manager。Bun 不喊"取代 Node"——它<strong>声明 Node-compatible</strong>，让用户可以用同样代码跑得更快。这种"兼容 + 加速"路径比 Deno 的"另起炉灶"务实得多——直接抢走 Node 用户。
+        </p>
+        <p>
+          <strong>2023-04 · Node 20</strong> 是 Node 应对压力的第一波回应：(1) 实验性 <strong>Permission Model</strong>（仿 Deno，<code>--allow-fs-read</code> / <code>--allow-net</code>）；(2) <strong><code>node:test</code> 稳定</strong>（仿 Deno test，竞争 Vitest / Jest）；(3) 改进 ESM。
+        </p>
+        <p>
+          <strong>2023-2024 · 内置工具继续扩张</strong>：内置 <code>fetch</code>（基于 undici，详见 <a href="../04-streams-network/02-http-server.html">P4.2</a>）/ <code>--watch</code> mode（仿 nodemon）/ <strong>Single Executable Application (SEA)</strong>（仿 Bun bundle / Deno compile）/ 改进 <code>async_hooks</code>。每一项都是"<em>把 npm 工具变成 Node 内置</em>"。
+        </p>
+        <p>
+          <strong>2024-10 · Node 22 LTS</strong>：当前活跃 LTS。fetch 稳定 / Permission Model 接近稳定 / require ESM 实验支持（让 CJS 直接 require ESM 模块——Dual Package Hazard 缓解）。
+        </p>
+        <p>
+          <strong>2025-04 · Node 24（current）</strong>：进一步加内置工具 + ESM 兼容性改进。Node 24 将在 2025-10 进入 LTS。
+        </p>
+
+        <div class="callout success">
+          <div class="callout-title">📊 Node 16 年节奏总结</div>
+          <p>
+            <strong>2009-2014</strong> 一人项目 → 服务端 JS 主流 → 治理隐患累积<br>
+            <strong>2014-2015</strong> io.js 分裂 → 治理重组（Foundation 模式）<br>
+            <strong>2015-2018</strong> 稳定期 → 同时酝酿 Ryan 的不满<br>
+            <strong>2018</strong> Ryan "10 regrets" + Deno → 生态注入新理念<br>
+            <strong>2022-2025</strong> Bun 直接竞争 → Node 内置化回应<br>
+            每个阶段都对应一次外部压力 → Node 内部调整。这种被动演化是 OSS 项目走过 16 年仍主流的常态——<strong>没有压力就没有改变的动力</strong>。
+          </p>
+        </div>
 
         <h3>三条底层逻辑</h3>
-        <p><em>正文待写。</em></p>
+
+        <h4>io.js 分裂是 OSS 治理史的经典教训</h4>
+        <p>
+          io.js fork 的根本原因不是技术分歧，是<strong>单一公司控制开源项目的结构性矛盾</strong>。Joyent 拥有 Node 商标 + 主导 release，这意味着所有外部贡献者都在为 Joyent 商业利益打工——一旦 Joyent 决策不透明，社区只剩"<em>fork 或离开</em>"两个选项。io.js 分裂的"<em>结果</em>"是 Foundation 模式被建立成 OSS 大型项目的标配——后来 Docker 转 Moby、Elastic 重组、Terraform 转 OpenTofu 都参考这次。<strong>OSS 项目走过一定规模后，单一公司治理几乎不可持续——这是 io.js 留给业界的永久教训</strong>。
+        </p>
+
+        <h4>Ryan Dahl 自我批评是 Node 改进的隐性 driver</h4>
+        <p>
+          一个反直觉的事实：Node 后续 7 年（2018-2025）的几乎所有重大特性都能在 Ryan 的"10 regrets"里找到对应。Permission Model 对应"安全模型缺失"、内置 fetch / test 对应"生态工具应该内置"、SEA 对应"分发体验差"、ESM 支持对应"CJS 不是标准"。<strong>Deno 没真的取代 Node，但 Deno 设计成了 Node 的"未来路线图"</strong>。这是 OSS 生态里"<em>分叉项目反向影响母项目</em>"的最强案例——Ryan 用一个失败的替代品逼母项目改进，结果两边都受益。
+        </p>
+
+        <h4>"内置化"是 Node 应对工具一体化趋势的策略</h4>
+        <p>
+          Bun 给 Node 带来的真正威胁不是性能（Node 还能优化），是<strong>"开箱即用的工具链"</strong>—— 装一个 Bun 就有 runtime + bundler + test + package manager。开发者不用学 Webpack / Vitest / npm 的各自配置。Node 22+ 的"内置 fetch / test / watch / SEA / Permission"是直接学这套打法——<strong>把生态最常用的 npm 工具吸进核心</strong>，让"<em>装一个 Node 就能写 web 服务</em>"重新成立。这条路径未来几年会继续——可以预期 Node 26 / 28 还会内置更多东西（typescript 直接运行 / bundler / SQL 客户端等）。
+        </p>
+
+        <h3>Node 史与 V8 / JS 史的关系</h3>
+        <p>
+          Node 史与 V8 史紧密交织——2008 V8 发布让 Node 成为可能；Node 2009 发布反过来让 V8 成为<strong>世界上最重要的 JS 引擎之一</strong>（V8 60% 服务端使用来自 Node）。Node 也是 JS 主题"多元运行时"故事的关键节点——把 JS 从浏览器拉到服务端。建议读完本章后对照：
+        </p>
         <ul>
-          <li><strong>io.js 分裂教训</strong>：单一公司控制 OSS 的治理风险——后续 Foundation 模式成为标配</li>
-          <li><strong>Ryan 自我批评是 Node 改进的隐性 driver</strong>：很多后期决策是对 Deno 设计的回应</li>
-          <li><strong>Bun 是"替代"vs"补充"的张力</strong>：Node 22 加入很多 Bun 启发特性试图守住生态</li>
+          <li><a href="../../v8/01-overview/01-history.html">V8 P1.1 · V8 项目史</a> · 引擎层视角</li>
+          <li><a href="../../javascript/01-overview/01-history.html">JS P1.1 · JavaScript 项目史</a> · 语言层视角（特别"2008 后 V8 + Node 爆发"段）</li>
+          <li><a href="../../ecma/01-standards/01-history.html">ECMA P1.1 · 标准发展史</a> · 规范层视角</li>
         </ul>
+        <p>
+          四条线交织起来才能完整理解 2008-2025 服务端 JS 演化。
+        </p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A · 解释为什么 Node 22 突然加了这么多内置工具</h3>
-          <p><em>正文待写。</em>fetch / test / watch / Permission 都是回应 Bun / Deno。</p>
+          <h3 class="scenario-title">场景 A · 解释 Node 22+ 为什么加了这么多内置工具</h3>
+          <p>
+            团队成员问"<em>为什么 Node 突然内置 fetch / test / watch / Permission，这些以前都是 npm 包啊</em>"。回答：这是 Node 应对 Bun 工具一体化趋势的策略。Bun 装一个就有 runtime + bundler + test + package manager；Node 不能完全照抄但可以把<strong>最常用的</strong> npm 工具吸进核心。理解这层背景后，对未来 Node 还会内置什么也有预期——<strong>typescript 直接运行 / 内置 bundler / SQL 客户端</strong>都是可能方向。
+          </p>
         </div>
         <div class="scenario">
           <h3 class="scenario-title">场景 B · 选 Node LTS 版本</h3>
-          <p><em>正文待写。</em>偶数版本是 LTS，每 2 年新版本上线 30 个月支持。</p>
+          <p>
+            生产应用选 LTS 版本——<strong>偶数版本</strong>（22 / 24 / 26 ...）每 2 年发布，<strong>30 个月支持周期</strong>（前 12 个月 active LTS + 后 18 个月 maintenance）。奇数版本（21 / 23 / 25）是 current，6 个月就 EOL，仅适合实验。<strong>2025-04 推荐选择</strong>：稳健项目 Node 22 LTS（活跃中），愿尝鲜 Node 24（10 月转 LTS）。
+          </p>
         </div>
         <div class="scenario">
           <h3 class="scenario-title">场景 C · 给新人讲"为什么 Node 这样设计"</h3>
-          <p><em>正文待写。</em>每个奇怪的 API 都对应一段历史。</p>
+          <p>
+            新人入职常困惑"<em>为什么 Node API 这么混乱（callback + Promise + EventEmitter 三套并存）</em>"。讲历史让答案有根因——Promise 是 ES2015 才进标准，Node 已经定型 callback API；保留 callback 是<strong>向后兼容</strong>不是设计选择。同样 <code>require</code> vs <code>import</code> 双系统、Streams1 vs Streams2/3 残留——都是<strong>16 年累积的兼容包袱</strong>。这种背景比死记 API 让新人理解快得多。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 评估 Node 漏洞 / CVE 影响</h3>
+          <p>
+            Node 每年公告 ~10-20 个 CVE（很多是 V8 透传）。判断生产影响：(1) 你用的是 LTS 吗？非 LTS 不在长期 patch 范围内（必须升级到 LTS）；(2) 漏洞在 V8 还是 Node 自身？V8 漏洞通常 1-2 周打补丁；(3) 你跑用户输入吗？跑评测 / 沙箱场景是高风险，跑自己代码风险低。
+          </p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
