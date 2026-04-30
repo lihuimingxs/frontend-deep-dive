@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Bun vs Node vs Deno vs Edge runtime（从 Bun 视角） · P1 · Bun 深度学习</title>
-    <meta name="description" content="横向对照章。从 <strong>Bun 视角</strong>讲 Node / Deno / Edge runtime 各自的设计选择（与 Node P1.2 互补：那一章是从 Node 视角讲）。讲清 Bun 的护城河（工具链一体化）+ 弱点（Edge runtime 不能跑）+ Deno 为什么受挫。" />
+    <title>Bun 在 JS 服务端生态的位置：vs Node / Deno / Edge runtime · P1.2 · Bun 深度学习</title>
+    <meta name="description" content="从 Bun 视角横评 Node / Deno / Edge runtime 各自不同的设计选择。8 维度对照矩阵 + Bun 护城河（工具链一体化）+ Bun 弱点（Edge runtime 不能跑）+ Deno 路线为什么受挫。" />
     <link rel="stylesheet" href="../../assets/styles.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23fbf0df'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23000'%3EB%3C/text%3E%3C/svg%3E" />
   </head>
@@ -45,68 +45,255 @@
           <a href="index.html">P1 · Bun 是谁</a><span class="breadcrumb-sep">/</span>
           <span>02 · Bun 在 JS 服务端生态的位置</span>
         </nav>
-        <h1>Bun vs Node vs Deno vs Edge runtime（从 Bun 视角）</h1>
+        <h1>Bun 在 JS 服务端生态的位置：vs Node / Deno / Edge runtime</h1>
         <p class="lead">
-          横向对照章。从 <strong>Bun 视角</strong>讲 Node / Deno / Edge runtime 各自的设计选择（与 Node P1.2 互补：那一章是从 Node 视角讲）。讲清 Bun 的护城河（工具链一体化）+ 弱点（Edge runtime 不能跑）+ Deno 为什么受挫。
+          横向对照章。从 <strong>Bun 视角</strong>讲 Node / Deno / Edge runtime 各自的设计选择——与 <a href="../../node/01-overview/02-runtime-landscape.html">Node P1.2</a> 互补：那一章是从 Node 视角看周边，本章是从 Bun 视角看自己在生态的位置。讲清三件事：<strong>(1) Bun 的护城河是工具链一体化</strong>（不是单纯"启动快"）；<strong>(2) Bun 的弱点是 Edge runtime</strong>（V8 Isolate 多租户模型 Bun 暂时填不上）；<strong>(3) Deno 路线为什么受挫</strong>（理想路线 vs 务实路线的分野）。
         </p>
         <div class="chapter-meta">
           <span><strong>阅读时长</strong> ~30 分钟</span>
-          <span><strong>前置</strong> P1.1 + Node P1.2</span>
-          <span><strong>主要来源</strong> bun.com/docs · deno.com/blog · Cloudflare Workers docs</span>
-        </div>
-
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>本章为<strong>骨架</strong>。已完成大纲与关键知识点列表（见各段标题下的 bullet），正文撰写中。可参考 <a href="../../bun/outline.md">outline.md</a> 了解完整覆盖范围。</p>
+          <span><strong>前置</strong> P1.1 + <a href="../../node/01-overview/02-runtime-landscape.html">Node P1.2</a></span>
+          <span><strong>主要来源</strong> bun.com/docs · deno.com/blog · Cloudflare Workers / Vercel Edge docs</span>
         </div>
 
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
-          <li><em>正文待写。</em></li>
+          <li><strong>Bun 不是"另一个 Node"——是 Node + 工具链一体化</strong>。同维度对比 Node 时单论 runtime 速度差距没有想象大；真正差距在 install + run + build + test 的总时间。</li>
+          <li><strong>Bun 不能跑 Edge runtime</strong>——Cloudflare Workers / Vercel Edge / Deno Deploy 都基于 V8 Isolate 多租户模型。Bun 用 JSC 不支持这种模型，Edge 部署仍要用 Node-compat 子集。</li>
+          <li><strong>Deno 2.0 (2024) 转向 npm 兼容是路线妥协</strong>——和 Bun 殊途同归。这反向证明了"务实路线（兼容 + 加速）"比"理想路线（另起炉灶）"更适合开源生态扩张。</li>
         </ol>
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
-        <p><em>正文待写。本章覆盖：Bun vs Node vs Deno · Edge runtime · 设计选择 8 维 · Deno 2.0 转向 · Edge runtime 限制</em></p>
+
+        <h3>四个候选人：Node / Deno / Bun / Edge runtime</h3>
+        <p>2026 年的 JS 服务端生态有四个不同形态的 runtime，每个都解决不同的核心问题。<strong>Node</strong>（2009+）是通用服务端 JS 运行时，护城河是 npm + 17 年积累的生态成熟度；<strong>Deno</strong>（2018+）是"修正 Node 错误"的尝试，2024 年 2.0 转向 npm 兼容；<strong>Bun</strong>（2021+）是 Node 加速器 + 工具链一体化；<strong>Edge runtime</strong>（Cloudflare Workers 2017+ / Vercel Edge 2021+ / Deno Deploy 2021+）是 V8 Isolate 多租户模型，跑 JS 但只支持 Node API 子集。</p>
+        <p>这四个不是一字排开"谁取代谁"的关系——<strong>它们解决的是不同的问题</strong>。Node 是"通用主力"；Deno 是"修正错误"；Bun 是"提速 + 工具一体化"；Edge runtime 是"多租户隔离 + 全球分发"。把它们硬比"谁更好"会得不出答案，要分维度看每个项目的设计意图。</p>
+
+        <h3>8 维度对照矩阵</h3>
+        <p>用一张表对齐四个 runtime 的关键设计选择：</p>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 14%">维度</th>
+              <th style="width: 21.5%">Bun</th>
+              <th style="width: 21.5%">Node</th>
+              <th style="width: 21.5%">Deno (2.0)</th>
+              <th style="width: 21.5%">Edge runtime</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>引擎</strong></td>
+              <td>JavaScriptCore</td>
+              <td>V8</td>
+              <td>V8</td>
+              <td>V8 (多租户 Isolate)</td>
+            </tr>
+            <tr>
+              <td><strong>异步 I/O</strong></td>
+              <td>uSockets + Zig</td>
+              <td>libuv</td>
+              <td>Tokio (Rust)</td>
+              <td>V8-only event loop</td>
+            </tr>
+            <tr>
+              <td><strong>包管理</strong></td>
+              <td>bun install (npm 兼容)</td>
+              <td>npm</td>
+              <td>URL imports + npm 兼容</td>
+              <td>npm 子集 + 预编译</td>
+            </tr>
+            <tr>
+              <td><strong>TS 支持</strong></td>
+              <td>内置 (transpile)</td>
+              <td>外部 (tsc/swc) 或 22+ strip-types</td>
+              <td>内置 (tsc)</td>
+              <td>多数靠预编译</td>
+            </tr>
+            <tr>
+              <td><strong>默认安全</strong></td>
+              <td>无</td>
+              <td>无</td>
+              <td>权限白名单</td>
+              <td>沙箱隔离 (V8 Isolate)</td>
+            </tr>
+            <tr>
+              <td><strong>工具链</strong></td>
+              <td>一体化 (install/run/build/test)</td>
+              <td>分散 (外部工具)</td>
+              <td>部分一体化 (deno run/test/lint)</td>
+              <td>N/A (不是开发工具)</td>
+            </tr>
+            <tr>
+              <td><strong>启动时间</strong></td>
+              <td>~5-10ms</td>
+              <td>~30-50ms</td>
+              <td>~30ms</td>
+              <td>~5ms (Isolate reuse)</td>
+            </tr>
+            <tr>
+              <td><strong>生态成熟度</strong></td>
+              <td>增长中 (2026)</td>
+              <td>极高</td>
+              <td>中</td>
+              <td>受限子集</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>这张表里几个值得放大的差异：</p>
+        <p><strong>引擎 + 异步 I/O 组合</strong>是底层差异最大的维度。Node + V8 + libuv 是 12 年沉淀的组合，文档 / 工具 / 排错全有；Deno 选 V8 + Tokio（Rust 异步）是想要 Rust 安全性 + V8 兼容性的双赢，结果 Tokio 的复杂度反过来拖累了性能；Bun 选 JSC + uSockets + Zig 是少数派但每件都有理由——JSC 启动快，uSockets 比 libuv 轻，Zig 让 hot path 内联。Edge runtime 没有传统意义上的 I/O 库，因为多租户场景每个请求都是短期的，Isolate 之间不共享 I/O 状态。</p>
+        <p><strong>包管理</strong>差异最关键。Bun / Node 都是<strong>npm 兼容</strong>——这是生态护城河；Deno 1.x 选 URL imports（<code>import { x } from "https://deno.land/std/..."</code>），意图是"模块按 URL 寻址，不需要 package.json 中心化"，但企业 git monorepo 场景里 URL imports 不能 lock、不能离线、不能私有镜像——这些是企业级阻断。Deno 2.0 (2024) 默认兼容 npm 是<strong>路线妥协</strong>，本质上承认了 URL imports 没法承接现有 JS 生态。Edge runtime 的 npm 是受限子集——很多 native module / Node 内部 API 不能用。</p>
+        <p><strong>启动时间</strong>是 Bun 最 viral 的卖点，但要看场景。<strong>对长跑服务（24/7 web server）</strong>启动时间一个月只发生一次，差 50ms 还是 5ms 几乎不影响 UX；<strong>对 Lambda / CLI / CI 任务</strong>每次调用都启动一次，启动时间直接转化为 P50 延迟和按时长计费——Bun 在这种场景下省下来的是真金白银。Edge runtime 的"启动 ~5ms"是另一个维度——它通过 Isolate reuse（同一个 V8 进程跑多个用户的代码）压低 amortized 启动时间，单次冷启 V8 进程仍然要 ~50ms，但因为多租户模型可以共享。</p>
+
+        <h3>Bun 的护城河：工具链一体化</h3>
+        <p>很多人评估 Bun 时只盯着<strong>"runtime 速度"</strong>，得到的结论往往是"Node 22 + undici 也快、差不了多少"。这是 Bun 的护城河被低估的典型场景——<strong>Bun 真正的差异化不在 runtime，在于 install + run + build + test 的总时间</strong>。</p>
+        <p>具体看：一次完整的 dev 流程在大型 monorepo 里是 <code>bun install</code>（或 pnpm/npm install）→ <code>bun run dev</code>（或 vite/next dev）→ 改代码 → <code>bun test</code>（或 vitest/jest）→ <code>bun build</code>（或 vite build）→ deploy。Node 工具链里这 5 步是 5 个独立工具，每个都要冷启动、加载自己的 parser、解析自己的配置——一共启动 5 次 Node + 5 次 parser。Bun 工具链里这 5 步是<strong>同一个二进制的不同子命令</strong>，启动 1 次 Bun + 1 次 Zig parser，每个工具的 parser 加载成本被 5 个工具摊薄。</p>
+        <p>这种"共享 parser"的红利在<strong>大型 monorepo</strong>里特别明显——install 1000 个包、CI 跑 2000 个测试、build 50 个 entry。在这个量级下 Bun 比 Node 工具链快 3-5 倍是常态。在小项目（单个服务、依赖 50 个包）里差异不明显，因为各自启动开销都很小，绝对差只有几秒。</p>
+        <p>护城河的另一面是"产品体验一致性"。Node 工具链里 vite / vitest / npm / tsc 来自不同团队，错误信息格式 / 配置文件语法 / CLI 习惯都不一致——你 setup 一个新项目要学 5 套不同的心智模型。Bun 整套都是 Oven 团队设计，<code>bunfig.toml</code> 是唯一配置文件，所有子命令的错误信息格式 / 颜色风格统一。这种<strong>"一致性"是工具链一体化最容易被低估的红利</strong>——直到你切了之后回头看分散工具链才发现"原来不一致这么累"。</p>
+
+        <h3>Bun 的弱点：Edge runtime 暂时不能跑</h3>
+        <p>Bun 不能跑 <strong>Edge runtime 多租户场景</strong>——这是 Bun 当前最大的边界限制。Cloudflare Workers / Vercel Edge Functions / Deno Deploy 这些"边缘"平台的核心架构是<strong>V8 Isolate-per-tenant</strong>：一个 V8 进程跑 100+ 用户的代码，每个用户一个 Isolate（V8 内的隔离单元，详见 <a href="../../v8/05-embedding/01-embedder-api.html">V8 P5.1 嵌入 V8</a>），共享 V8 进程但隔离 JS 状态。</p>
+        <p>这个模型的好处是：<strong>启动开销摊薄</strong>（V8 进程启动一次跑很久，每个 Isolate 创建只要 ~5ms）+ <strong>内存效率</strong>（一个用户冷代码占 ~10MB Isolate，冷启免去整个 V8 进程的 ~50MB 基线）+ <strong>全球部署</strong>（一台边缘机器能跑数千用户的代码）。这是 Cloudflare Workers / Vercel Edge 商业模式的基础——按请求计费比按时长 + 每秒峰值便宜。</p>
+        <p>Bun 用 JSC 不支持这种模型——<strong>JSC 没有 Isolate-per-tenant 的设计</strong>。JSC 历史上是 Safari 的引擎，每个浏览器 tab 是一个独立进程（更彻底的隔离），不需要 Isolate 抽象。Bun 现在的部署模型是"一个 Bun 进程一个用户"——这适合传统 Lambda / Docker / VPS，但不适合边缘多租户。所以 Cloudflare Workers / Vercel Edge 至今只支持 V8 Isolate 上跑的代码，Bun 不能直接部署。</p>
+        <p>这个限制对<strong>个人 / 中小项目</strong>不是大问题——你可以选 Lambda（Bun ✅）或 EC2（Bun ✅）作为部署目标。但对<strong>大型 SaaS</strong>（用户函数 / Webhook / API gateway）想用边缘多租户压低成本时，Bun 暂时填不上这个生态位。Oven 团队公开讨论过<strong>"未来支持 Isolate 多租户"</strong>的可能性，但 2026 年还没有具体路线图——这是一个潜在的长期方向。</p>
+
+        <h3>Deno 路线为什么受挫</h3>
+        <p>Deno 2018 立项时由 Ryan Dahl 主导——Node 的发明人。Ryan 在 2018 年 JSConf EU 演讲<strong>"10 Things I Regret About Node.js"</strong>里列了 Node 的 10 个设计错误：模块系统（CommonJS）、package.json 复杂性、不安全（默认无权限）、node_modules 黑洞、TypeScript 不一等公民等。Deno 几乎每个决策都是对那份清单的修正：</p>
+        <p><strong>修正 1 · TypeScript 内置</strong>——Deno 直接支持 <code>.ts</code> 文件，不需要 tsc。<strong>修正 2 · URL imports</strong>——<code>import { x } from "https://deno.land/std/path/mod.ts"</code>，模块按 URL 寻址，不需要 package.json + node_modules。<strong>修正 3 · 默认权限白名单</strong>——<code>deno run app.ts</code> 不能读文件、不能联网、不能起子进程，要 <code>--allow-read</code> 等显式 allow。<strong>修正 4 · Web 标准 API</strong>——fetch / Request / Response 是一等公民，没有 require / Buffer 这些 Node-only 抽象。</p>
+        <p>这套设计在<strong>个人 / 学习</strong>场景里很优雅——一个文件 + URL 导入 + 默认安全，没有 npm install 黑洞。但<strong>企业级生产场景</strong>暴露了 4 个核心问题：</p>
+        <p><strong>(1) URL imports 不能 lock + 不能离线 + 不能私有镜像</strong>——企业 monorepo 一般要求所有依赖可审计、可缓存、可不联网构建，URL imports 直接撞墙。<strong>(2) npm 生态 100 万+ 包不能直接用</strong>——你的项目想用 React 怎么办？Express？Prisma？Deno 1.x 用 esm.sh / unpkg 这种 npm-to-ESM 代理勉强能用，但缺包 / 兼容性差 / 更新慢。<strong>(3) TS 编译比 Node 慢</strong>——Deno 内置的是 tsc（和 Node 22+ strip-types 用的不是一回事），冷启编译大型项目要 10s+。<strong>(4) 默认权限白名单在 dev 阶段烦</strong>——每加一个新功能要加 <code>--allow-X</code>，ergonomic 不好。</p>
+        <p>这些问题在 Deno 1.x 期间逐步爆发——2020-2023 期间生态没怎么扩张，企业用户基本不切。<strong>2024 Deno 2.0 发布是路线大转弯</strong>：默认兼容 npm（<code>import express from "npm:express"</code>），兼容大部分 Node API（<code>node:fs</code> / <code>node:http</code> 都能用），TS 编译换成更快的实现。Deno 2.0 之后，Deno 在产品形态上和 Bun 越来越像——都是"npm 兼容的 V8/JSC runtime"。</p>
+        <p>Deno 路线给 Bun 的<strong>反面教材</strong>非常清晰：开源生态<strong>颠覆比改良难一个数量级</strong>。Ryan Dahl 是 Node 的发明人，对 Node 痛点的理解最深，但 Deno 用 6 年的"修正 Node 错误"还没追上 Bun 用 3 年的"兼容 Node + 加速"。这是<strong>务实路线 vs 理想路线</strong>的分野——Bun 选择尊重既有生态、让用户切换成本接近 0；Deno 选择推翻重来、让用户改代码也改习惯。市场用 5 年时间投票了：Bun 1.0 用户量 2024 已经超过 Deno 6 年累积的用户。</p>
+
+        <h3>「能跑 Node API」不是免费的——兼容层的代价</h3>
+        <p>Bun 100% Node 兼容听起来美好，但<strong>这是有代价的</strong>。Bun 团队要持续追踪 Node 每个版本的 API 变化、每个内部行为细节、每个 corner case——Node 22 改了 fs.watch 行为、Node 23 在 stream 上加了新 API、N-API v9 增加了 ABI——Bun 都要跟。这是一个<strong>无法封顶的工程负担</strong>，Oven 团队的相当部分精力都消耗在这。</p>
+        <p>对照 Deno 1.x 时代——Deno 不兼容 Node，所以 Deno 团队不需要追 Node 的 API 变化。这<strong>看起来是 Deno 的优势</strong>（团队精力可以投到自己的设计上），但实际上是劣势——没有兼容层意味着 Deno 自己要重新提供所有 API，团队负担没减反增，而且每个 API 都要从零设计 ergonomic / 文档 / 测试。Bun 的"100% 兼容"反而<strong>把"API 设计"这部分工作 outsource 给 Node 社区了</strong>——Node 已经有 17 年沉淀的标准库 + 生态，Bun 只要保证行为对齐就好。</p>
+        <p>所以 Bun 兼容 Node 的代价 < 不兼容 Node 的代价——这是 Bun 路线的另一个隐性优势。<strong>Edge runtime 走的是第三条路</strong>：兼容 Node API 子集——选最常用的 50% API 兼容，剩下 50% 不实现。这是工程性能 / 生态可用性的折中，对边缘场景适合。</p>
+
+        <h3>谁会赢：未来 5 年的预判</h3>
+        <p>2026 年的状态是：<strong>Node 仍然是绝对主力</strong>（占 80%+ 服务端 JS 部署）；<strong>Bun 是高速增长的挑战者</strong>（占 5-10%，主要是新项目和 CI 场景）；<strong>Deno 是小众选择</strong>（占 1-3%，主要是 Deno Deploy 上的项目和 Ryan Dahl 早期粉丝）；<strong>Edge runtime 是高速增长的边缘场景</strong>（占边缘部署的 60%+）。</p>
+        <p>未来 5 年的预判（2026-2031）：</p>
+        <p><strong>Node 不会消失</strong>——17 年沉淀的生态 + LTS 模型 + 大公司技术债决定了它会长期是默认选择。Node 团队也在加速吸收 Bun 启发的特性（fetch、watch mode、test runner、SEA、permission model 都是 Bun 出来后 Node 跟进的）。Node 22 LTS 开始覆盖到 2027 年，Node 24 LTS 会延续到 2030+。</p>
+        <p><strong>Bun 会持续蚕食 Node 的份额</strong>——特别是新项目 / monorepo / CI / Lambda 场景。如果 Oven 商业化成功（Bun Cloud / Enterprise），2030 年 Bun 占 20-30% 是可能的；如果 Oven 商业化失败，Bun 仍然能以社区维护模式继续，但增长会放缓。</p>
+        <p><strong>Deno 会进一步收缩或转型</strong>——Deno 2.0 转向 npm 兼容是被迫，Deno 4.0/5.0 可能进一步妥协（如完全 npm 兼容、放弃 URL imports 默认）。也可能 Deno 团队把重心转到 Deno Deploy 这个边缘平台上，runtime 本身变成产品的引流入口。</p>
+        <p><strong>Edge runtime 会成为"前端工程师写后端"的默认选择</strong>——Vercel / Cloudflare 已经把这个心智模型推得很广，2030 年大部分新创项目可能直接从 Edge 起步。Bun 如果不能填上 Isolate 多租户的能力，会和 Edge 平台错位竞争——这是 Bun 长期的潜在风险。</p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 A · 给团队选 runtime 时的「四象限决策法」</h3>
+          <p>团队负责一个新项目，要选 runtime——按"启动时间敏感 vs 不敏感" × "Edge 部署 vs 传统部署"画 2x2 矩阵：<strong>(1) 启动时间敏感 + 传统部署</strong>（Lambda / CI / CLI）→ Bun 是最强候选，启动 5-10ms 直接转化为成本和延迟；<strong>(2) 启动时间敏感 + Edge 部署</strong>（Webhook / API gateway / Workers）→ Edge runtime（Cloudflare / Vercel），Bun 不能跑；<strong>(3) 不敏感 + 传统部署</strong>（24/7 web server / 后台 worker）→ Node 仍然是最稳的选择，Bun 优势不明显；<strong>(4) 不敏感 + Edge 部署</strong>（静态生成 / 内容渲染）→ Edge runtime 或 Next.js 这种全栈框架。这套四象限法对 90%+ 项目能给出明确答案，剩下 10% 是"两种维度都中等"——这种通常选 Node 兜底（生态最深、最不会踩坑）。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 B · 评估「我们公司能不能整体切 Bun」</h3>
+          <p>公司有 50+ Node 服务，CTO 问能不能整体切 Bun——这不是单个项目决策，是平台级决策。从生态位置看 4 个 blocker：(1) <strong>Edge 部署的服务暂时不能切</strong>（Bun 不能跑 Cloudflare/Vercel Edge）——先列出哪些服务依赖 Edge runtime，这些保持 Node。(2) <strong>有特殊 native module 依赖的服务谨慎评估</strong>——查 N-API 兼容矩阵，corner case 可能要单独适配。(3) <strong>Worker Threads 重度使用的服务先做 spike</strong>——Bun worker_threads 实现兼容但底层不同，复杂场景可能踩 corner case。(4) <strong>团队工程文化</strong>——开发者要愿意在 issue 上提 bug 给 Bun 团队（Bun 兼容性边界仍在收敛），保守团队维持 Node。综合后通常的结论是：可以切 70-80% 服务，剩 20-30% 留 Node。这种"渐进式切换"也是 Bun 路线最大的优势——不是 all or nothing。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 C · 给写 npm 库的人：兼容性矩阵设计</h3>
+          <p>维护一个被广泛使用的 npm 库，要在 README 上声明"支持哪些 runtime"——2026 年的标准做法是<strong>"Node 18+ / Bun 1.1+ / Deno 2.0+"三栏并列</strong>，但要在 CI 上真的跑这三个矩阵。具体配置：GitHub Actions 用 matrix 跑 <code>node-version: [18, 20, 22]</code> + <code>bun-version: [latest]</code> + <code>deno-version: [latest]</code>，每个 cell 跑你的测试套件。<strong>不需要</strong>给每个 runtime 单独写测试——你的测试是 JS / TS，三个 runtime 都能跑。<strong>需要</strong>注意 corner case：Bun 的 <code>process.nextTick</code> 与 Node 微妙差异、Deno 的 npm 包装层延迟、不同 runtime 的 timer 精度差。这些一般你的测试就能 catch；catch 不到的就发布几个 alpha 版本征集 bug。这个流程在 GitHub Actions 上额外开销大约 +5 分钟 CI 时间，相比"突然有用户来报 Bun 上不能跑"省下的 issue 来回，性价比极高。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 D</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 D · 给做技术选型决策的 PM：Bun vs Deno 的判据</h3>
+          <p>遇到团队同时考虑 Bun 和 Deno（"都是 Node 替代品"）——这是<strong>历史误判</strong>，从生态位置看两者已经分化。判据：(1) <strong>npm 兼容</strong>——Bun 100%，Deno 2.0 大部分；想直接用 Top 100 npm 包没有惊喜的，Bun 更稳。(2) <strong>启动时间</strong>——Bun 5-10ms，Deno ~30ms（V8 启动开销）；Lambda / CLI 场景 Bun 优势明显。(3) <strong>边缘部署</strong>——Bun ❌，Deno Deploy ✅（Deno 2.0 + Deno Deploy 是个组合优势）；如果你的部署目标是 Deno Deploy，那选 Deno。(4) <strong>团队风格</strong>——Bun 是"工具链一体化"叙事，Deno 是"安全 + Web 标准"叙事；偏好不同。(5) <strong>商业可持续性</strong>——Oven 和 Deno Land 都在融资烧钱阶段，谁先盈利不确定；都不是稳定基石。综合后大部分场景选 Bun（npm 兼容深 + 启动快 + 工具链好），少数边缘部署场景选 Deno。让团队明确"这不是二选一谁好谁坏，是不同生态位置的工具"。</p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <p>横评章不展开 API 用法，重点是"<strong>同一段代码在不同 runtime 跑的差异</strong>"——给读者一个直观的可移植性参照。</p>
         <div class="code-block">
           <span class="code-label">javascript</span>
-<pre class="code"><code class="lang-js">// 正文待写</code></pre>
+<pre class="code"><code class="lang-js">// Web 标准 API（fetch / Request / Response / Blob）
+// 在所有 4 个 runtime 都能跑——这是写"可移植代码"的基础
+async function handler(req) {
+  const url = new URL(req.url);
+  if (url.pathname === '/health') {
+    return new Response(JSON.stringify({ ok: true }), {
+      headers: { 'content-type': 'application/json' }
+    });
+  }
+  return new Response('Not Found', { status: 404 });
+}
+
+// Bun: Bun.serve({ fetch: handler })
+// Node 22+: import { createServer } from 'node:http'; ... 走 fetch handler
+// Deno 2.0+: Deno.serve({ handler })
+// Cloudflare Workers: export default { fetch: handler }
+// 同一个 handler 函数 4 个 runtime 都能跑——这是"Web 标准 API"的红利</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// 检测当前 runtime（写跨 runtime 库时常用）
+function detectRuntime() {
+  if (typeof Bun !== 'undefined') return 'bun';
+  if (typeof Deno !== 'undefined') return 'deno';
+  if (typeof Netlify !== 'undefined') return 'netlify-edge';
+  if (typeof EdgeRuntime !== 'undefined') return 'vercel-edge';
+  if (typeof globalThis.WebSocketPair !== 'undefined') return 'cloudflare-workers';
+  if (typeof process !== 'undefined' &amp;&amp; process.versions?.node) return 'node';
+  return 'unknown';
+}
+
+// 用法：根据 runtime 走不同分支
+const rt = detectRuntime();
+if (rt === 'bun') {
+  // 用 Bun.sql 替代 pg
+} else if (rt === 'cloudflare-workers') {
+  // 不能用 fs / 长连接，要走 KV / D1
+} else {
+  // Node 默认路径
+}</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+<pre class="code"><code class="lang-bash"># 实测同一个 npm 包在 4 个 runtime 的兼容性
+# 先准备一个 React + Express 项目作为 baseline
+
+# Node
+node app.js
+# 一定能跑（baseline）
+
+# Bun
+bun app.js
+# 大部分能跑；遇到 Node 内部 API 可能 fallback
+
+# Deno 2.0
+deno run --allow-all --node-modules-dir app.js
+# 需要显式 allow + 显式启用 npm 兼容；可能比 Bun 慢
+
+# Cloudflare Workers
+# 不能直接跑 Express（Workers 是 fetch handler 模型）；要重写</code></pre>
         </div>
 
         <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
         <div class="pitfall">
-          <div class="pitfall-title">陷阱标题</div>
-          <p><em>正文待写。</em></p>
+          <div class="pitfall-title">把 Bun / Deno / Node 当成「同维度可比」</div>
+          <p>媒体经常把这三个并列做 benchmark——"Bun 比 Node 快 3x"、"Deno 比 Bun 慢 2x"——这是<strong>简化到失真</strong>的对比。实际上每个 runtime 解决的是不同维度的问题：Node 是"通用主力 + 生态深"；Bun 是"启动快 + 工具一体"；Deno 是"安全 + Web 标准"。同一个 micro benchmark 可能让不同维度都赢，关键看你的场景需要哪个维度。<strong>选 runtime 的正确做法是先确认你的场景需求（启动敏感？Edge 部署？团队风格？npm 包多？），再决定哪个 runtime 最匹配，而不是看通用 benchmark</strong>。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">假设「Bun 能在所有 Edge 平台跑」</div>
+          <p>Cloudflare Workers / Vercel Edge / AWS Lambda@Edge 这些边缘平台都<strong>不支持 Bun runtime</strong>，要靠 V8 Isolate 模型——你写的代码在那些平台上跑的是 V8 跑出来的 Node-compat 子集，<strong>不是</strong> Bun。如果你的项目需要部署到边缘，要按 Node-compat 子集写代码（不能用 Bun.serve、不能 import fs、不能用很多 Node API）。Bun 的 <code>Bun.serve</code> 在传统部署上是杀手 API，在边缘上完全不可用——这种"看起来在 Bun 项目里能写但 deploy 到 Edge 就报错"的踩坑很常见。最佳实践：边缘项目用 Web 标准 API（fetch handler 模型）写，能在 Bun + Edge 都跑。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">误读「Deno 衰退」推论 Bun 也会失败</div>
+          <p>Deno 6 年没起来，所以 Bun 5 年也快了——这是错的归因。Deno 失败的具体原因是<strong>路线选择</strong>（不兼容 npm + URL imports + 默认权限）；Bun 路线相反（100% 兼容 npm）。两个项目<strong>不在同一条曲线上</strong>。从开源生态学看，Bun 路线的成功概率本来就比 Deno 路线高一个数量级——它的"切换成本"接近 0，不需要让用户放弃任何东西。当然 Bun 仍可能因为别的原因失败（Oven 商业化失败、Jarred 离开、bug 集中爆发），但不会因为"Deno 路线不行" be relevant。评估两个项目要分别评估。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">高估 Bun 的「runtime 速度」、低估「工具链一体化」</div>
+          <p>很多人评估 Bun 时把"runtime 速度（vs Node）"作为主要 metric——这是<strong>把焦点放错了</strong>。Bun runtime 在长跑服务上比 Node 快 1.5-2x，差距明显但不是数量级；Bun 的真正差异化在 install + run + build + test 的<strong>总时间</strong>——大型 monorepo 上 Bun 比对应 Node 工具链快 3-5x。如果你的项目场景以"长跑服务"为主，Bun 的 ROI 不如想象高；如果场景以"频繁迭代 / CI 跑测试 / install 多包"为主，Bun 的 ROI 远超想象。判断 Bun 是否值得切的标准应该是<strong>"我们花在工具链上的时间占比"</strong>——这个数字越高 Bun 越值得。</p>
         </div>
 
         <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
         <ul>
-          <li><a href="https://bun.com/docs" target="_blank" rel="noopener">bun.com/docs</a></li>
-          <li><a href="https://github.com/oven-sh/bun" target="_blank" rel="noopener">oven-sh/bun GitHub</a></li>
-          <li>回到主题首页 → <a href="../index.html">Bun 深度学习</a></li>
+          <li><a href="https://bun.com/docs/runtime/nodejs-apis" target="_blank" rel="noopener">Bun Node.js API 兼容文档</a> · 完整的兼容矩阵</li>
+          <li><a href="https://deno.com/blog/v2.0" target="_blank" rel="noopener">Deno 2.0 launch (2024)</a> · npm 兼容路线妥协</li>
+          <li><a href="https://developers.cloudflare.com/workers/runtime-apis/" target="_blank" rel="noopener">Cloudflare Workers Runtime APIs</a> · Edge runtime 子集</li>
+          <li><a href="https://vercel.com/docs/functions/runtimes/edge" target="_blank" rel="noopener">Vercel Edge Runtime docs</a> · 另一个 V8 Isolate 多租户</li>
+          <li><a href="https://www.youtube.com/watch?v=M3BM9TB-8yA" target="_blank" rel="noopener">Ryan Dahl: 10 Things I Regret About Node.js (2018)</a> · Deno 设计动机</li>
+          <li>对照 Node 视角 → <a href="../../node/01-overview/02-runtime-landscape.html">Node P1.2 · Node 与同代人</a> · 互补阅读</li>
+          <li>引擎层视角 → <a href="../../v8/01-overview/02-engine-landscape.html">V8 P1.2 · 引擎分身史</a> · JSC vs V8 vs Hermes</li>
+          <li>多租户 Isolate → <a href="../../v8/05-embedding/01-embedder-api.html">V8 P5.1 · 嵌入 V8</a> · Isolate-per-tenant 机制</li>
+          <li>下一章 → <a href="../02-internals/01-javascriptcore.html">P2.1 · JavaScriptCore：为什么不是 V8</a></li>
         </ul>
 
         <nav class="chapter-nav" aria-label="章节翻页">
-          <a class="prev" href="01-history.html"><span class="label">← 上一章</span><span class="title">P1.1 · Bun 项目史</span></a>
+          <a class="prev" href="01-history.html"><span class="label">← 上一章</span><span class="title">P1.1 · Bun 项目史（2021-2026）</span></a>
           <a class="next" href="../02-internals/01-javascriptcore.html"><span class="label">下一章 →</span><span class="title">P2.1 · JavaScriptCore：为什么不是 V8</span></a>
         </nav>
       </article>
