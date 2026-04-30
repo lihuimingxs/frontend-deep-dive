@@ -56,11 +56,6 @@
           <span><strong>主要来源</strong> nodejs.org/api/worker_threads · cluster · child_process</span>
         </div>
 
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>骨架版本。对照大纲 <code>node/outline.md § P5.1</code>。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>三者选型判据</strong>：CPU 密集 → Worker Threads；多 web server 实例 → Cluster；调外部程序 → Child Process。</li>
@@ -70,34 +65,46 @@
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
 
-        <h3>worker_threads（Node 10.5+）</h3>
-        <p><em>正文待写。</em></p>
+        <h3>worker_threads（Node 10.5+）：进程内多 Isolate</h3>
+        <p>
+          <strong>worker_threads</strong> 是 Node 10.5（2018 实验）/ Node 12（稳定）加入的多线程模型。"<em>多线程</em>"在这里有特殊含义：
+        </p>
         <ul>
-          <li>进程内多 V8 Isolate；每 Worker 自己的堆 / GC / Event Loop</li>
-          <li>postMessage 走 structured clone 算法（与浏览器一致）</li>
-          <li>SharedArrayBuffer 共享内存；其他对象都拷贝</li>
-          <li>适合 CPU 密集 JS（图像处理、加密、AI 推理）</li>
-          <li><strong>不</strong>适合 I/O 密集——Node 主线程的 EventLoop 已经够 I/O 并发</li>
+          <li><strong>进程内多 V8 Isolate</strong>—— 每个 Worker 是独立的 V8 Isolate（详见 <a href="../../v8/05-embedding/01-embedder-api.html">V8 P5.1</a>），自己的堆 / GC / EventLoop。<strong>不是</strong> POSIX 线程</li>
+          <li><strong>主线程 ↔ Worker 通信走 <code>postMessage</code></strong>—— 用 <strong>structured clone 算法</strong>（与浏览器 Web Worker 一致）。<strong>不能直接传函数 / Promise</strong>—— 序列化不支持</li>
+          <li><strong>SharedArrayBuffer 是真正共享内存的唯一方式</strong>—— 其他对象都是拷贝</li>
+          <li><strong>适合 CPU 密集 JS</strong>：图像处理 / 加密 / AI 推理 / 数据解析。把这些任务从主线程搬到 Worker，主线程 EventLoop 不被阻塞，仍能服务其他请求</li>
+          <li><strong>不适合 I/O 密集</strong>—— Node 主线程 EventLoop 本身就足够 I/O 并发，开 Worker 反而增加 postMessage 开销</li>
         </ul>
 
-        <h3>cluster 模块</h3>
-        <p><em>正文待写。</em></p>
+        <h3>cluster 模块：fork 多进程跑同一代码</h3>
+        <p>
+          <strong>cluster</strong> 是更早就有的多核模型（Node 0.6+）—— <strong>fork 多个 Node 进程</strong>跑<strong>同一段代码</strong>，OS 内核做请求负载均衡：
+        </p>
         <ul>
-          <li>fork 多进程跑同一段代码</li>
-          <li>master 进程 listen 端口；worker 进程通过<strong>共享 socket</strong>处理请求</li>
-          <li>OS 内核做负载均衡（Linux 3.9+ SO_REUSEPORT）</li>
-          <li>适合 I/O 密集 web server 多核扩展</li>
-          <li>每个 worker 是独立进程——崩溃互不影响</li>
+          <li><strong>master 进程 <code>listen</code> 端口</strong>，fork N 个 worker 进程；<strong>worker 进程通过共享 socket file descriptor</strong> 处理请求</li>
+          <li><strong>OS 内核做负载均衡</strong>—— Linux 3.9+ 的 SO_REUSEPORT（多个 socket 监听同一端口，内核轮转分配新连接）</li>
+          <li><strong>每个 worker 是独立进程</strong>—— 崩溃互不影响。一个 worker OOM 不会拖垮全部</li>
+          <li><strong>适合 web server 多核扩展</strong>—— Node 单线程不能用多核 CPU，cluster 起 N 个 worker（N = CPU 核数）</li>
+          <li><strong>不</strong>适合 worker 之间需要共享状态的场景—— 进程隔离意味着没有共享内存</li>
         </ul>
+        <p>
+          <strong>2025 年实践</strong>：cluster 仍能用，但<strong>大多数生产部署不直接用 cluster</strong>—— 而是把"<em>多进程</em>"交给容器编排（k8s 起多 pod）或 process manager（PM2 提供更好的监控 / 重启策略）。cluster 直接用主要在<strong>简单单机部署</strong>。
+        </p>
 
-        <h3>child_process</h3>
-        <p><em>正文待写。</em></p>
+        <h3>child_process：调外部程序或子 Node</h3>
+        <p>
+          <strong>child_process</strong> 是 Node 与外部程序交互的接口。和前两个不同—— child_process 子进程<strong>不必是 Node</strong>，可以是任意可执行程序（ffmpeg / git / python / shell 脚本）。
+        </p>
         <ul>
-          <li><strong>spawn</strong>：低层 API，返回 streaming I/O</li>
-          <li><strong>fork</strong>：spawn 的 Node 特化版，子进程也是 Node + 自带 IPC</li>
-          <li><strong>exec</strong>：buffer 整个输出；适合短命令</li>
-          <li>适合调非 JS 程序（ffmpeg、git、python 脚本）</li>
+          <li><strong><code>spawn</code></strong>：低层 API，返回 streaming I/O（stdin / stdout / stderr 都是 stream）。<strong>大输出场景必用</strong>——避免 buffer 爆内存</li>
+          <li><strong><code>fork</code></strong>：spawn 的 Node 特化版—— 子进程<strong>也是 Node</strong>，自带 IPC channel（<code>process.send()</code> / <code>'message'</code> 事件）。Node 多进程间通信用这个</li>
+          <li><strong><code>exec</code></strong>：buffer 整个输出。<strong>仅适合短命令</strong>（&lt; 200KB 输出）—— 大输出会爆内存或 hang</li>
+          <li><strong><code>execFile</code></strong>：exec 但直接 spawn 程序不走 shell（更安全 / 更快）—— 注入风险低</li>
         </ul>
+        <p>
+          <strong>安全提醒</strong>：如果命令字符串包含<strong>用户输入</strong>，绝对不要用 <code>exec</code>—— 用 <code>execFile</code> 或 <code>spawn</code> + 参数数组形式（避免 shell injection）。
+        </p>
 
         <h3>三者对比表</h3>
         <table>
@@ -118,35 +125,59 @@
           </tbody>
         </table>
 
-        <h3>SharedArrayBuffer + Atomics</h3>
-        <p><em>正文待写。</em></p>
+        <h3>SharedArrayBuffer + Atomics：真正共享内存</h3>
+        <p>
+          Worker Threads 之间默认<strong>所有数据都拷贝</strong>—— postMessage 走 structured clone。这对小数据 OK 但<strong>大数据（几十 MB 图像 / 视频帧）拷贝开销巨大</strong>。
+        </p>
+        <p>
+          <strong>SharedArrayBuffer</strong>（SAB）是 ES2017 标准 + Node Worker Threads 内置——多个 Worker 真正<strong>共享同一块内存</strong>，零拷贝。代价是必须用 <strong>Atomics</strong> 原子操作避免 race condition：
+        </p>
         <ul>
-          <li>Workers 之间真正共享内存的唯一方式</li>
-          <li>必须用 Atomics 原子操作避免 race condition</li>
-          <li>详见 <a href="../../ecma/07-execution/05-memory-model.html">ECMA P7.5 · §24 Memory Model</a></li>
-          <li>用例：worker 之间共享配置 / 共享 image buffer / lock-free queue</li>
+          <li>Workers 之间真正共享内存的<strong>唯一方式</strong></li>
+          <li>必须用 <code>Atomics.add</code> / <code>Atomics.compareExchange</code> / <code>Atomics.wait</code> 等避免数据竞争</li>
+          <li>详细规范见 <a href="../../ecma/07-execution/05-memory-model.html">ECMA P7.5 · §24 Memory Model</a></li>
         </ul>
+        <p>
+          <strong>典型用例</strong>：(1) 多 Worker 共享配置 / 状态（避免重复 deserialize）；(2) 大 image buffer 多 Worker 协同处理（每个 Worker 处理图像一部分）；(3) 实现 lock-free queue / ring buffer 在 Worker 间传消息。
+        </p>
 
-        <h3>MessageChannel / MessagePort</h3>
-        <p><em>正文待写。</em></p>
+        <h3>MessageChannel / MessagePort：双向通信原语</h3>
+        <p>
+          除了 postMessage 主线程 ↔ Worker 通信，Node 还支持 <strong>MessageChannel</strong> 让<strong>任意两个 Worker 直接对话</strong>—— 不需要主线程中转：
+        </p>
         <ul>
-          <li>双向通信原语</li>
-          <li>可以跨 worker 转移（transfer）—— transferList 参数</li>
-          <li>用于建立 worker 之间的<strong>直接通信</strong>而不通过主线程中转</li>
+          <li><code>const { port1, port2 } = new MessageChannel()</code> 创建一对端口</li>
+          <li>把 port1 给 Worker A，port2 给 Worker B（用 transferList 转移所有权）</li>
+          <li>之后 Worker A.postMessage(...) → Worker B 直接收</li>
+          <li>主线程不参与，零额外开销</li>
         </ul>
+        <p>
+          <strong>典型用例</strong>：worker pool 之间任务分发 / 多 Worker 协同（如 web server worker 之间共享 cache invalidation 消息）/ Web Worker 风格的 actor 模型。</p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A · 图像处理用 Worker Threads</h3>
-          <p><em>正文待写。</em>用 sharp 处理图片到主线程会卡 EventLoop；放进 Worker Pool 里跑。</p>
+          <h3 class="scenario-title">场景 A · CPU 密集任务用 Worker Threads</h3>
+          <p>
+            web server 接到一个图像处理请求——不能直接在主线程跑 sharp（会卡 EventLoop，所有其他请求等几百 ms）。<strong>修法</strong>：维护 worker pool（用 <code>piscina</code> npm 包封装），把图像处理任务发到 pool。主线程 EventLoop 不被阻塞，仍能服务其他请求。worker 数量 = CPU 核数。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B · web server 用 Cluster 还是 PM2</h3>
-          <p><em>正文待写。</em>简单场景用 Cluster；生产推荐 PM2（更好的 monitor / restart 策略）。</p>
+          <h3 class="scenario-title">场景 B · web server 用 Cluster 还是 PM2 还是容器</h3>
+          <p>
+            判据：(1) <strong>本地 dev / 简单部署</strong>：cluster 直接用；(2) <strong>VM / 单机生产</strong>：PM2（自带监控 / 自动重启 / 日志聚合）；(3) <strong>容器化部署（k8s / Docker Swarm）</strong>：<strong>不用 cluster 也不用 PM2</strong>—— 让容器编排起多 pod / replica，每个容器跑单进程 Node。这是 2025 年大多数生产部署的现状。
+          </p>
         </div>
         <div class="scenario">
           <h3 class="scenario-title">场景 C · 调 ffmpeg 用 spawn 不用 exec</h3>
-          <p><em>正文待写。</em>大输出用 spawn 的 streaming，避免 exec 的 buffer 爆内存。</p>
+          <p>
+            ffmpeg 转码大文件输出到 stdout——<strong>必须 spawn</strong>，把 stdout 当 Readable stream 读 / pipe 到目标。如果用 <code>exec</code>，整个 ffmpeg 输出会被 buffer 在 Node 进程里——视频文件可能几 GB 直接爆内存。<strong>规则</strong>：任何<strong>大输出 / 流式</strong>命令用 spawn；<strong>短输出</strong>（如 <code>git rev-parse HEAD</code>）才用 exec。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 三件套选型快速判据</h3>
+          <p>
+            <strong>"什么场景用什么"</strong>: (1) <strong>CPU 密集 JS</strong>（图像处理、加密、AI 推理）→ Worker Threads；(2) <strong>多核 web server</strong>（生产部署）→ <strong>容器编排起多实例</strong>，cluster 仅 dev 用；(3) <strong>调用外部程序</strong>（ffmpeg / git / python / 编译器）→ child_process（首选 spawn）；(4) <strong>I/O 密集</strong>（数据库 / 网络）→ <strong>不需要任何多核扩展</strong>—— Node 单线程 EventLoop 已经能扛几万并发。
+          </p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>

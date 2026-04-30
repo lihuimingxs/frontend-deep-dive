@@ -55,11 +55,6 @@
           <span><strong>主要来源</strong> nodejs.org/api/test · permissions · async_hooks</span>
         </div>
 
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>骨架版本。对照大纲 <code>node/outline.md § P6.1</code>。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>Node 22+ 加大量内置工具</strong>——是对 Bun / Deno 工具一体化趋势的回应。</li>
@@ -70,84 +65,63 @@
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
 
         <h3>node:test（Node 18+ 实验，20 稳定）</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li>内置测试 runner —— 零依赖、启动快</li>
-          <li>TAP 输出格式</li>
-          <li>现代特性：mock / subtests / 并行执行 / fixture</li>
-          <li>API 与 vitest / Jest 不完全兼容（更接近 deno test）</li>
-          <li><strong>竞争 vitest / Jest</strong>——目前还差 watch mode / coverage UI 等高级功能</li>
-        </ul>
+        <p>node:test 是 Node 内置的测试 runner，2022 年 Node 18 以实验形式引入，2023 年 Node 20 标记稳定。它不是要"取代" Jest / Vitest，而是给 CLI 工具、库、小服务一个<strong>零依赖的起点</strong>——以前一个 50 行的 utility 库要装 Jest + 配置 babel + 写 jest.config.js 才能跑测试，现在 <code>node --test</code> 就够。这是 Node 22+ 时代"内置工具一体化"的标志性产物。</p>
+        <p>核心 API 和主流框架基本一致：<code>test</code> / <code>describe</code> / <code>before</code> / <code>after</code> / <code>beforeEach</code> / <code>afterEach</code>，但导入路径是 <code>node:test</code>。<strong>断言</strong>用 <code>node:assert/strict</code> 而不是 <code>expect</code>——这一点就让大量 Jest 测试无法直接复用。运行模式是<strong>每个测试文件起一个独立子进程</strong>，文件之间天然并行隔离；文件内的 <code>test()</code> 默认串行，加 <code>{ concurrency: true }</code> 则并行。</p>
+        <p>输出格式是 <strong>TAP（Test Anything Protocol）</strong>——一个 1990 年代 Perl 社区流出来的纯文本协议，CI 工具普遍支持。<code>--test-reporter=spec</code> 切到人类友好的 spec 格式，<code>--test-reporter=tap</code> / <code>junit</code> / <code>dot</code> 各有用途。Node 20.11+ 还内置了 <code>--experimental-test-coverage</code>——基于 V8 的 coverage（参见 <a href="../../v8/05-embedding/02-diagnostics-sandbox.html">V8 P5.2 · 诊断工具</a>），不需要 c8 / nyc。</p>
+        <p>Mock API 是个亮点：<code>t.mock.fn()</code> / <code>t.mock.method()</code> / <code>t.mock.timers.enable()</code>，自动在测试结束时 restore。和 Jest 的全局 <code>jest.fn()</code> 不同，node:test 的 mock 挂在 <strong>TestContext</strong> 上——更显式、更不容易污染。</p>
+        <p>不能用的场景：<strong>DOM 测试</strong>（要 jsdom + 配套），<strong>snapshot 测试</strong>（实验，UX 一般），<strong>watch mode UI</strong>（Vitest 的 dashboard / coverage UI 是杀手锏）。前端项目仍然 Vitest 的天下；Node 后端 / lib / CLI 是 node:test 的主战场。</p>
 
         <h3>node:assert</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li>内置断言库</li>
-          <li>strict mode 与 web 标准 deepEqual 对齐</li>
-          <li>常用 API：assert.strictEqual / deepStrictEqual / throws / rejects</li>
-        </ul>
+        <p>node:assert 是 Node 最古老的内置模块之一（v0.1 就有），但十几年来一直被 Jest 的 <code>expect</code> 边缘化。node:test 兴起后它重新成为主角，因为 node:test 默认建议<strong>用 assert 而不是 expect</strong>——避免引入 chai / expect 等额外依赖。</p>
+        <p>关键的 API 分两套：<strong>legacy</strong>（<code>assert.equal</code>，==）和 <strong>strict</strong>（<code>assert.strictEqual</code>，===）。生产代码必须用 strict——legacy 在 <code>{} == ""</code> 这种边界返回 true，遗留几代的坑。推荐写法：<code>import assert from 'node:assert/strict'</code>，这样所有 API 自动走 strict 路径，连 <code>assert.equal</code> 都等价于 <code>strictEqual</code>。</p>
+        <p>常用 API：<code>strictEqual</code>（值相等）、<code>deepStrictEqual</code>（结构深相等，对齐 ECMA <a href="../../ecma/04-objects/02-keys-symbols.html">SameValue 算法</a>）、<code>throws</code>（同步抛错）、<code>rejects</code>（async 拒绝）、<code>match</code>（正则）、<code>partialDeepStrictEqual</code>（Node 22+，子集匹配）。和 Jest 比少了 <code>toBeTruthy</code> / <code>toContain</code> / <code>toMatchObject</code> 等糖衣，但够用——node:assert 的设计哲学就是"够用且零依赖"。</p>
+        <p>失败时的诊断信息也升级过：deep 比较失败会输出彩色 diff（类似 Jest），不是早年那种"undefined !== {a:1}"的尴尬。错误对象是 <code>AssertionError</code>，带 <code>actual</code> / <code>expected</code> / <code>operator</code> 字段，CI 工具能精确定位。</p>
 
         <h3>Permission Model（Node 20+ 实验，22+ 稳定化）</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li><code>node --permission --allow-fs-read=./data --allow-net=api.example.com server.js</code></li>
-          <li>仿 Deno 权限模型</li>
-          <li>flag 从 <code>--experimental-permission</code> 改为 <code>--permission</code>（22+ 稳定化）</li>
-          <li>对受信任代码 + 第三方代码混跑场景有用（沙箱 / 评测系统）</li>
-        </ul>
+        <p>Permission Model 是 Node 对 <strong>Deno 安全模型</strong>的回应。Deno 2018 年立项时把"默认无权限、需要显式 allow"作为核心卖点，戳中了 Node 生态最大的痛——一个 <code>npm install</code> 拉进来的 transitive dep 可以读 SSH key、发请求到任意域名、起子进程。Ryan Dahl 创立 Deno 就是因为 Node "不能不让脚本访问任意系统资源"是他公开承认的设计错误之一。</p>
+        <p>Node 20 引入 <code>--experimental-permission</code>，22 LTS 改名为 <code>--permission</code> 并标记稳定化。基本用法：<code>node --permission --allow-fs-read=./data --allow-net=api.example.com server.js</code>。颗粒度覆盖 fs（read / write 分开）、net（按域名 / IP / 端口）、child_process、worker、addons。<strong>没显式 allow 的 API 调用会抛 <code>ERR_ACCESS_DENIED</code></strong>——和 Deno 的 <code>PermissionDenied</code> 异曲同工。</p>
+        <p>但 Node 的实现比 Deno 起步晚——Deno 是从 V8 isolate 的 host 层就嵌入了权限检查；Node 是在 JS 标准库各 API 入口加 if 判断。结果是<strong>原生模块（C++ addon）和 native binding 不在 Permission Model 管控范围</strong>——你可以禁掉 fs，但 <code>require('better-sqlite3')</code> 的 C++ 代码照样能 open() 文件。这是 Node 生态历史包袱的体现。</p>
+        <p>核心使用场景是<strong>受信代码 + 第三方代码混跑</strong>：评测系统（学生提交的代码）、Serverless 平台（用户函数）、CI 沙箱（开源 PR 跑测试）。比起容器（Docker / firecracker）启动快、内存开销小，但不能完全替代——见后面"常见陷阱"。日常 CLI / 业务后端反而不需要开，开了反而限制工程能力。</p>
 
         <h3>Single Executable Application (SEA)</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li>把 Node + 用户脚本打包成<strong>单文件可执行程序</strong></li>
-          <li>类似 Bun bundle / Deno compile</li>
-          <li>用例：CLI 工具分发不要求用户装 Node</li>
-          <li>当前仍是实验性 —— Bun 这块更成熟</li>
-        </ul>
+        <p>SEA 把 <strong>Node 二进制 + 用户脚本</strong>打包成单文件可执行程序——用户拿到一个 <code>my-cli</code> 就能直接跑，不需要装 Node、不需要 npm install。这是对 Bun 的 <code>bun build --compile</code> 和 Deno 的 <code>deno compile</code> 的回应。在 Bun 出现前，Node 社区靠 <code>pkg</code> / <code>nexe</code> 这些第三方工具凑活，体验一直不好。</p>
+        <p>底层机制：把 JS 代码序列化成一个 blob，用 <code>postject</code> 工具<strong>注入到 Node 二进制的特定 section</strong>（macOS Mach-O / Linux ELF / Windows PE 都有专门约定）。运行时 Node 启动时检测到 SEA blob 就直接加载执行，跳过 require resolution。Node 20+ 还支持嵌入 <strong>V8 startup snapshot</strong>，让冷启动时间从几百 ms 压到 50 ms 内（参见 <a href="../../v8/05-embedding/01-runtime-tour.html">V8 P5.1 · 嵌入 V8</a>）。</p>
+        <p>当前限制：SEA 目前只支持<strong>单一入口的 CommonJS 文件</strong>（Node 22 才开始支持 ESM 入口和 require 多文件，且仍标记实验）；产物体积大（包含整个 Node 二进制，~80MB）；不能跨平台编译——Linux 上只能产出 Linux 二进制。Bun 的 <code>--compile</code> 这块明显更成熟：交叉编译、产物 ~50MB、ESM 默认。</p>
+        <p>典型场景是<strong>分发独立 CLI 工具</strong>：内部团队做 deploy / migrate / lint 工具，给运维同事用——不需要他们先装 nvm。但如果用户本来就有 Node 环境，<code>npx my-tool</code> 比下载 100MB 二进制划算。这是 SEA 的核心定位：runtime-less 分发的最后一公里。</p>
 
         <h3>async_hooks + AsyncLocalStorage</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li>追踪 async 资源的生命周期（init / before / after / destroy）</li>
-          <li><strong>AsyncLocalStorage</strong>：跨 async boundary 传递 context</li>
-          <li>OpenTelemetry / 分布式追踪 / 请求级 logging 的基础</li>
-          <li>例：每个 HTTP 请求生成 trace ID，所有内部调用都能拿到</li>
-          <li>性能：async_hooks 默认开销不小（每个 Promise 都额外回调）；生产仅在需要时启用</li>
-        </ul>
+        <p>async_hooks 是 Node 8+ 引入的<strong>异步资源追踪机制</strong>：每个异步操作（Promise / setTimeout / IO）创建时都有一个 asyncId，async_hooks 让你在它的 init / before / after / destroy 四个生命周期点注入回调。这是 Node 对"<strong>跨 async boundary 传递上下文</strong>"这个核心难题的内核级答案——其他语言用线程本地存储（TLS）解决，Node 因为单线程 + 异步只能从 Promise 链路里追上下文。</p>
+        <p>AsyncLocalStorage（ALS）是 async_hooks 之上的高层封装，Node 12+ 稳定。语义上等价于<strong>"async 版的 ThreadLocal"</strong>：<code>als.run(value, fn)</code> 之后，<code>fn</code> 内部所有同步 + 异步代码（无论嵌套多深、跨多少 await / setTimeout / 回调）都能通过 <code>als.getStore()</code> 拿到 value。Node 内部用 <strong>AsyncContextFrame</strong> 在每个异步 hop 时复制 context 引用——开销仅一个指针。</p>
+        <p>这是<strong>整个 OpenTelemetry / 分布式追踪 / APM 生态的 V8 端基础</strong>。HTTP 请求一进来 middleware 就 <code>als.run({ traceId, userId, requestId }, ...)</code>，后面的 logger / DB query / 下游 HTTP 调用<strong>不需要把 traceId 一路手动传</strong>——所有需要它的代码就 <code>als.getStore()</code>。Datadog / New Relic / Sentry 的 Node SDK 都是这么实现的。从 React 视角看，这相当于 <a href="../../react/03-architecture/02-fiber-tree.html">React Context</a> 的 async 版——<strong>同样是"避免 prop drilling"，但传递的是请求级运行时状态</strong>。</p>
+        <p>性能成本：早期 async_hooks（Node 12 之前）开销显著——每个 Promise 都触发 4 个 hook 回调，热路径上能让 RPS 降 20%。Node 16+ 之后大幅优化，特别是 Node 20 引入的 <strong>AsyncContextFrame</strong>（不再依赖 PromiseHook，直接走 V8 的 ContinuationPreservedEmbedderData），ALS 单独使用的 overhead 降到 1-3%。但 <strong>启用 async_hooks 全套监听</strong>（init/before/after/destroy）的开销仍然不容忽视，5-10% 量级——生产只在需要诊断时打开。</p>
 
         <h3>Inspector Protocol</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li><code>--inspect</code> / <code>--inspect-brk</code> 启动</li>
-          <li>9229 端口起 WebSocket server</li>
-          <li>DevTools / VSCode / WebStorm 通过协议透传调试</li>
-          <li>详见 <a href="../../v8/05-embedding/02-diagnostics-sandbox.html">V8 P5.2 · Inspector Protocol</a></li>
-        </ul>
+        <p>Inspector Protocol 是 V8 提供的<strong>统一调试 / 性能分析协议</strong>——本质上 Chrome DevTools Protocol（CDP）的 V8 子集。Node 6+ 弃用了老的 V8 Debugger Protocol（v8-debug），转向和 Chrome 共享 CDP，意义在于<strong>同一套协议能调 Chrome 也能调 Node</strong>，工具生态不需要分裂。详细实现见 <a href="../../v8/05-embedding/02-diagnostics-sandbox.html">V8 P5.2 · 诊断与沙箱</a>，本节聚焦 Node 侧用法。</p>
+        <p>启动方式：<code>node --inspect app.js</code>（不阻塞启动）或 <code>node --inspect-brk app.js</code>（在第一行断住，等调试器接入）。Node 在默认 <code>127.0.0.1:9229</code> 起一个 WebSocket server，DevTools / VSCode / WebStorm 通过 CDP 接入——发送 <code>Debugger.setBreakpoint</code>、<code>Profiler.start</code>、<code>HeapProfiler.takeHeapSnapshot</code> 等 JSON 命令。</p>
+        <p>实战价值远超"打断点":CPU profile（<code>--cpu-prof</code> 一行启动，跑完产出 <code>.cpuprofile</code> 文件，DevTools 直接打开看火焰图）、heap snapshot（<code>--heap-prof</code> 或运行时 <code>v8.writeHeapSnapshot()</code>，定位内存泄漏）、heap timeline（连续抓多个 snapshot 看 retained 增长）。生产排查 OOM 的标准流程就是 <code>node --heap-prof app.js</code> 跑一段时间，再用 DevTools 分析。</p>
+        <p>安全提醒：<code>--inspect=0.0.0.0</code> 暴露到公网等于<strong>给攻击者远程任意代码执行</strong>——Inspector Protocol 没有 auth。生产开调试只在 localhost 上开，再用 SSH 端口转发到本地。这是 Node 上经常翻车的小坑。</p>
 
         <h3>Watch mode（Node 18+）</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li><code>node --watch app.js</code> 自动重启 —— 减少 nodemon 依赖</li>
-          <li>同样 <code>--watch-path</code> 指定 watch 路径</li>
-          <li>简单场景够用；复杂 dev server（如 Next.js）仍需自家工具</li>
-        </ul>
+        <p>Watch mode 用一个 flag 替代了 <strong>nodemon</strong> 这个用了十多年的 dev 工具。<code>node --watch app.js</code> 启动后会监视文件变更，改到就自动重启进程。<code>--watch-path=./src</code> 指定 watch 路径，<code>--watch --test</code> 还能让 node:test 在文件变化时自动跑测试。</p>
+        <p>底层基于 <strong>fs.watch</strong>（<a href="../04-streams-network/03-fs-process.html">P4.3 · fs / Buffer / process</a> 提到过），不同平台借助 inotify / FSEvents / ReadDirectoryChangesW。和 nodemon 比，Watch mode <strong>不依赖 chokidar</strong>，启动更快、依赖更少；但缺少 nodemon 的 ignore 规则、debounce 时间、--exec 灵活配置——简单 dev server / lib 开发够用，复杂前端 dev server（Next.js / Remix）仍然要用框架自带的 hot reload，因为 Watch mode 只能"重启"，不能模块级 HMR。</p>
+        <p>Bun 的 <code>bun --watch</code> 和 Deno 的 <code>deno run --watch</code> 都做了同样的事——这是 runtime 级标准化的体现：基础工具不再是社区包，而是 runtime 内置。Node 跟进得不算晚。</p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
           <h3 class="scenario-title">场景 A · 小项目用 node:test 替代 vitest / Jest</h3>
-          <p><em>正文待写。</em>零依赖 + 启动快；适合 CLI / lib / 小服务。复杂前端项目仍用 vitest（DOM 测试、UI 报告等）。</p>
+          <p>一个 50 行的 utility 库、一个内部 CLI 工具、一个胶水脚本——这些场景以前为了写测试要先 npm install jest @types/jest ts-jest，再写 jest.config.js + tsconfig.test.json。Node 22+ 直接 <code>node --test --experimental-strip-types test/*.test.ts</code> 就能跑 TS 测试。零依赖、启动 < 100ms、CI 配置一行 <code>node --test --test-reporter=spec</code>。但前端项目（React / Vue 组件测试）还是 Vitest——它的 jsdom 集成、UI dashboard、HMR-style watch 模式短期内 node:test 追不上。判断标准：<strong>有没有 DOM？有就 Vitest，没有就 node:test</strong>。</p>
         </div>
         <div class="scenario">
           <h3 class="scenario-title">场景 B · 用 AsyncLocalStorage 实现请求级 trace ID</h3>
-          <p><em>正文待写。</em>HTTP middleware 设 store；后续 logger / DB 客户端从 store 取 trace ID 自动 attach。</p>
+          <p>HTTP server 入口的 middleware 中 <code>als.run({ traceId: req.headers['x-trace-id'] ?? crypto.randomUUID() }, () =&gt; next())</code>。后续 logger（pino / winston）的 hook 函数里 <code>const { traceId } = als.getStore()</code> 自动 attach 到日志；下游 HTTP 客户端的拦截器也从 store 取 traceId 写入 <code>x-trace-id</code> header 透传给微服务；DB 慢查询日志带上 traceId 直接关联到具体请求。这是<strong>每个生产 Node 后端都该有的能力</strong>。OpenTelemetry 的 Node SDK 已经把这套自动化——但理解底层 ALS 的人才知道为什么 instrumentation 偶尔会"丢 context"（嵌套 worker / 自定义 thenable / native callback 都是常见 corner case）。</p>
         </div>
         <div class="scenario">
           <h3 class="scenario-title">场景 C · CLI 工具用 SEA 打包分发</h3>
-          <p><em>正文待写。</em>不要求用户装 Node 即可用——目前 SEA 仍受限，简单 CLI 可行；复杂场景 Bun bundle 更成熟。</p>
+          <p>团队内部做了个 deploy CLI，依赖 30 个 npm 包。给运维 / 非前端同事用时——每次说"先装 nvm，再 nvm install 20，再 npm install -g @yourcorp/deploy-cli"——成本太高，更别说生产环境的离线服务器。SEA 把这一切打包成一个 <code>deploy-cli</code> 二进制，scp 上去就能跑。但实战中 Bun 的 <code>bun build --compile</code> 体验明显更好——产物小、支持 ESM、可交叉编译，Node SEA 还在追赶。<strong>真要分发独立 CLI，目前优先选 Bun 编译；只有强依赖 Node 特定 API（特定版本的 quirks、native module 兼容）时才用 SEA</strong>。</p>
         </div>
         <div class="scenario">
           <h3 class="scenario-title">场景 D · 评测系统 / 沙箱用 Permission Model</h3>
-          <p><em>正文待写。</em>跑用户提交代码时限制 fs / net 访问。比起进程沙箱（容器）启动快、开销小。</p>
+          <p>在线编程评测系统跑学生提交的 JS 代码——传统方案是 Docker 容器 + seccomp，启动 200-500ms、内存基线 ~30MB。改用 <code>node --permission --allow-fs-read=/sandbox/in --allow-fs-write=/sandbox/out user.js</code> 跑，启动 < 50ms、内存基线 ~12MB——批量并发评测时省的资源很可观。但<strong>不能完全替代容器</strong>：native addon、V8 自身漏洞（CVE）、prototype pollution 引发的逻辑越权都不在 Permission Model 管控内。生产敏感场景的标准做法是<strong>双层沙箱</strong>——容器外层做强隔离，容器内 Node 开 Permission Model 做内层防护。</p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>

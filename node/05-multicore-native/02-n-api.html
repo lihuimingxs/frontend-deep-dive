@@ -56,11 +56,6 @@
           <span><strong>主要来源</strong> nodejs.org/api/n-api · node-addon-api 文档</span>
         </div>
 
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>骨架版本。对照大纲 <code>node/outline.md § P5.2</code>。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>三种 native module 写法</strong>：raw V8（最灵活）/ N-API（C 接口稳定 ABI）/ node-addon-api（C++ 包装，95% 现代库选择）。</li>
@@ -71,70 +66,126 @@
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
 
         <h3>三种 native module 写法</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li><strong>raw V8</strong>：直接调 V8 C++ API；最灵活、最快、最严绑定 V8 版本</li>
-          <li><strong>N-API</strong>（C 接口）：跨 Node 版本二进制兼容；C 风格写法 verbose</li>
-          <li><strong>node-addon-api</strong>（C++ 包装）：N-API 之上的 C++ 类包装；写法接近 raw V8 但保持 N-API 兼容性；<strong>95% 现代 native module 的选择</strong></li>
-        </ul>
+        <p>
+          需要在 Node 里调 C / C++ 代码（绑定数据库、调系统库、性能极致优化）有 3 条路径，<strong>选错了会让用户非常痛苦</strong>：
+        </p>
 
-        <h3>N-API ABI 稳定性承诺</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li>N-API v8 / v9 是<strong>版本化的 stable ABI</strong></li>
-          <li>承诺：用 N-API v8 写的 native module 二进制，<strong>从此后 Node 版本编译的都能跑</strong>，不需重新编译</li>
-          <li>对比直接用 V8：V8 升级会破坏二进制兼容性</li>
-          <li>这套机制让 Node 生态的 native module 不再需要"针对每个 Node 版本编译一份"</li>
-        </ul>
+        <h4>路径 1 · raw V8（不推荐）</h4>
+        <p>
+          直接调 V8 C++ API（详见 <a href="../../v8/05-embedding/01-embedder-api.html">V8 P5.1 Embedder API</a>）。<strong>优势</strong>：最灵活、最快、能用任意 V8 特性。<strong>致命缺陷</strong>：<strong>严格绑定 V8 版本</strong>—— Node 升级 V8（每个 LTS 都升）会破坏二进制兼容，需要重新编译。<strong>Node 14 / 16 / 18 / 20 / 22 各自要编一份二进制</strong>—— 维护噩梦。<strong>2025 年仅在写 V8 自家工具或 Chrome 内部</strong>会用 raw V8。
+        </p>
 
-        <h3>典型 native module</h3>
-        <p><em>正文待写。</em></p>
+        <h4>路径 2 · N-API（推荐）</h4>
+        <p>
+          <strong>Node-API（N-API）</strong> 是 Node 8+ 提供的 C 接口层 ——<strong>抽象掉了 V8 的版本差异</strong>。Node 团队<strong>承诺 ABI 稳定</strong>：用 N-API v8 写的 native module，编译一次后能在所有 Node 18+ 跑（无需重新编译）。这是 native module 生态最重要的工程进步。代价：N-API 是 C 接口（非 C++），写法 verbose——每个 V8 操作要做错误码检查 + 类型转换。
+        </p>
+
+        <h4>路径 3 · node-addon-api（最推荐 · 现代默认）</h4>
+        <p>
+          <strong>node-addon-api</strong> 是 N-API 之上的<strong>C++ 类包装</strong>—— 提供更友好的 C++ API，但底层走 N-API 保持 ABI 稳定。<strong>2025 年 95% 现代 native module 都用这个</strong>。写法接近 raw V8 但保留 N-API 的跨版本兼容承诺。
+        </p>
+
+        <h3>N-API ABI 稳定性承诺：native module 生态的工程基石</h3>
+        <p>
+          <strong>N-API 版本化的 stable ABI</strong>—— Node 18+ 主要是 N-API v8 / v9。承诺一次：<strong>用 N-API v8 写的 native module 二进制，从此后 Node 版本编译的都能跑</strong>，不需重新编译。
+        </p>
+        <p>
+          对比直接用 V8 的痛苦：每次 Node LTS 升级（V8 大版本变化）就要重新编译 + 测试 + 发布所有平台 / 架构组合的二进制。<strong>N-API 把这个矩阵从 N×M 降到 M</strong>（M = 平台 / 架构数，N = Node 版本数）。
+        </p>
+        <p>
+          这套机制让 Node 生态的 native module 不再需要"<em>针对每个 Node 版本编译一份</em>"—— 是 npm 上 native 包能成熟的根本前提。
+        </p>
+
+        <h3>典型 native module 与适用场景</h3>
+        <p>
+          npm 上几个最知名的 native module，看它们解决什么问题：
+        </p>
         <ul>
-          <li><strong>better-sqlite3</strong>：同步 SQLite 绑定；性能比 node-sqlite3 快几倍</li>
-          <li><strong>bcrypt</strong>：密码哈希原生实现</li>
-          <li><strong>sharp</strong>：图像处理，绑定 libvips</li>
-          <li><strong>node-gyp / node-pre-gyp / better-call</strong>：FFI 工具</li>
+          <li><strong>better-sqlite3</strong>：SQLite C 库的同步绑定。性能比纯 JS sqlite 包快几倍——SQLite 已经是单线程、Node 也单线程，做同步反而避免 callback 开销</li>
+          <li><strong>bcrypt</strong> / <strong>argon2</strong>：密码哈希原生实现。CPU 密集 + 高频调用，必须 native</li>
+          <li><strong>sharp</strong>：图像处理（绑定 libvips C 库）。比 ImageMagick 快、内存少。Vercel / Cloudinary 等大量用</li>
+          <li><strong>better-call</strong> / <strong>ffi-napi</strong>：FFI 工具——直接从 JS 调任意动态库（.so / .dll / .dylib）</li>
+          <li><strong>node-rdkafka</strong>：Kafka 客户端绑定 librdkafka</li>
         </ul>
 
         <h3>node-gyp 构建系统</h3>
-        <p><em>正文待写。</em></p>
+        <p>
+          <strong>node-gyp</strong> 是 Node 的 native module 构建工具——基于 Google 的 GYP（Generate Your Projects）fork 而来。用 <code>binding.gyp</code> 文件定义编译选项：
+        </p>
         <ul>
-          <li>基于 GYP（Google）的 fork</li>
-          <li>用 <strong>binding.gyp</strong> 文件定义编译选项（include 目录、链接库、平台条件等）</li>
-          <li>跨平台编译（Linux gcc / macOS clang / Windows MSVC）</li>
-          <li>用户安装 npm 包时<strong>本地编译</strong>——这是 native module 安装慢 / 失败的主要原因</li>
+          <li><strong>跨平台编译</strong>：Linux gcc / macOS clang / Windows MSVC—— node-gyp 把统一的 binding.gyp 翻译成对应平台的 Makefile / Xcode project / VS solution</li>
+          <li><strong>binding.gyp 字段</strong>：include 目录 / 链接库 / 编译标志 / 平台条件分支 / 源文件列表</li>
+          <li><strong>用户安装时本地编译</strong>—— 这是 native module 安装<strong>慢且容易失败</strong>的主要原因。需要本地有 C++ 编译器 + Python（GYP 用 Python 写）+ Node 头文件</li>
         </ul>
+        <p>
+          常见安装失败：Windows 没装 Visual Studio Build Tools / macOS 没装 Xcode CLI / Linux 没装 build-essential。这就是为什么用 native package 的项目会有"<em>npm install 卡住或报错</em>"的问题。
+        </p>
 
-        <h3>prebuild-install</h3>
-        <p><em>正文待写。</em></p>
-        <ul>
-          <li>避免用户安装时编译——<strong>下载预编译二进制</strong></li>
-          <li>开发者 publish 时用 <strong>prebuild</strong> 工具上传所有平台 / 架构 / Node 版本组合的二进制</li>
-          <li>用户 npm install 时尝试匹配 prebuild 二进制；匹配失败才回退到 node-gyp 编译</li>
-          <li><strong>实际生产 native module 几乎都用这套</strong>——没有预编译的库口碑会很差（安装慢 / 失败率高）</li>
-        </ul>
+        <h3>prebuild-install：避开本地编译噩梦</h3>
+        <p>
+          <strong>解决用户安装慢 / 失败的方案</strong>：库作者发布时用 <strong>prebuild</strong> 工具上传所有平台 / 架构 / Node 版本组合的预编译二进制。用户 <code>npm install</code> 时尝试匹配 prebuild 二进制；匹配失败才回退到 node-gyp 本地编译。
+        </p>
+        <p>
+          典型矩阵：3 平台（Linux / macOS / Windows）× 2 架构（x64 / arm64）× 1-3 Node N-API 版本 = ~10-20 个二进制文件。库发布时一次上传，所有用户受益。
+        </p>
+        <p>
+          <strong>2025 年现状</strong>：<strong>实际生产 native module 几乎都用 prebuild-install</strong>—— 没有预编译的库口碑会很差（安装慢 / 失败率高 / CI 难配）。新项目第一天就要配好 prebuild。
+        </p>
 
-        <h3>WASM 替代方案</h3>
-        <p><em>正文待写。</em></p>
+        <h3>WASM 替代方案：越来越多场景的更优选</h3>
+        <p>
+          2020+ 起越来越多原本是 native module 的场景<strong>改用 WASM</strong>：
+        </p>
         <ul>
-          <li>越来越多 native 需求改用 wasm（如 esbuild 用 Go + wasm，parcel-css 用 Rust + wasm）</li>
-          <li>优势：<strong>部署简单</strong>（一份 .wasm 文件全平台跑）/ 跨平台 / 无需 node-gyp 痛苦</li>
-          <li>劣势：性能略弱于 native（跨边界税）/ 不能调 OS 级 API</li>
-          <li>选型：纯计算用 wasm；要调系统库（如 libvips / libsqlite）仍用 native module</li>
+          <li><strong>esbuild</strong>：Go 写，编译到 wasm（也有 native binary 模式）</li>
+          <li><strong>swc</strong>：Rust 写，编译到 wasm（编译器 / minifier）</li>
+          <li><strong>parcel-css / lightningcss</strong>：Rust → wasm</li>
+          <li><strong>biome / oxc</strong>：Rust → wasm 的 linter / formatter</li>
         </ul>
+        <p>
+          <strong>WASM 优势</strong>：
+        </p>
+        <ul>
+          <li><strong>部署简单</strong>：一份 .wasm 文件全平台跑——不需要 prebuild 上传 N×M 二进制</li>
+          <li><strong>跨平台</strong>：Linux / macOS / Windows / x64 / arm64 都能跑</li>
+          <li><strong>无 node-gyp 痛苦</strong>：用户不需要本地编译器</li>
+          <li><strong>跨 runtime</strong>：能跑 Node / Deno / Bun / Browser / Edge</li>
+        </ul>
+        <p>
+          <strong>WASM 劣势</strong>：
+        </p>
+        <ul>
+          <li><strong>性能略弱于 native</strong>：跨 JS-WASM 边界有税（10-50ns），数据 marshalling 开销</li>
+          <li><strong>不能调 OS 级 API</strong>：WASM 没有直接 syscall 能力（WASI 在解决但还不成熟）</li>
+        </ul>
+        <p>
+          <strong>2025 年选型规则</strong>：纯计算 / 文本处理 / 编译器 / 解析器 → 优先 WASM；要调系统库（libvips / libsqlite / libcurl）或硬件加速（GPU / SIMD 不通过 wasm-simd）→ 仍用 native module。
+        </p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A · 写一个新的 native 库</h3>
-          <p><em>正文待写。</em>用 node-addon-api + node-gyp 起手 + 配 prebuild-install；模板项目用 cargo-cp-artifact 之类的工具脚手架。</p>
+          <h3 class="scenario-title">场景 A · 写一个新的 native 库（2025 推荐起步）</h3>
+          <p>
+            模板：(1) 用 <strong>node-addon-api</strong>（C++ 写）；(2) <strong>node-gyp</strong> + binding.gyp 配置编译；(3) <strong>必配 prebuild-install + prebuildify</strong>—— 自动 CI 构建多平台二进制并发布到 GitHub Releases。如果是 Rust 写底层用 <strong>napi-rs</strong>（Rust 的 N-API 绑定），也是务实选择 + 直接编译。<strong>不要自己折腾 raw V8</strong>。
+          </p>
         </div>
         <div class="scenario">
           <h3 class="scenario-title">场景 B · 评估某个 npm 库是否 native</h3>
-          <p><em>正文待写。</em>查 package.json 的 binding.gyp / install scripts / dependencies 里的 node-addon-api。native 包安装慢但生产性能好。</p>
+          <p>
+            如何判断一个 npm 包是不是 native module：(1) 看 package.json 是否有 <code>binding.gyp</code> 或 install scripts；(2) 看 dependencies 是否含 <code>node-addon-api</code> / <code>napi-rs</code> / <code>node-gyp</code>；(3) 看 npm 详情是否提到 prebuild。<strong>影响</strong>：native 包通常<strong>安装慢但运行时性能好</strong>—— 选型时权衡 CI 时间和性能收益。如果选 wasm 替代品（如 sharp 的 wasm 替代 jimp）能避免 native 痛点。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C · 选 wasm 还是 native</h3>
-          <p><em>正文待写。</em>跨平台分发优先 wasm；要调系统库（图像、数据库、加密硬件）仍用 native。</p>
+          <h3 class="scenario-title">场景 C · 选 wasm 还是 native（2025 决策树）</h3>
+          <p>
+            (1) <strong>纯计算 / 编译器 / 解析器</strong>（lint / format / minify / 文本处理）→ <strong>WASM 优先</strong>（部署简单 / 跨 runtime）；(2) <strong>要调系统库</strong>（libvips / libsqlite / libcurl / FFI）→ <strong>native 必选</strong>—— WASM 无法调；(3) <strong>极致 hot path 性能</strong>（数据库 driver / 加密哈希）→ native（避免边界税）；(4) <strong>跨平台分发简单</strong>优先 → WASM。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 用户报"npm install 失败" 排查</h3>
+          <p>
+            用户报"<em>装某个 native 包失败</em>"—— 排查路径：(1) 看错误信息是<strong>编译失败</strong>（缺 build-essential / Xcode / VS）还是<strong>下载预编译失败</strong>（网络问题）；(2) 编译失败：装编译工具链（Linux: <code>apt install build-essential</code> / macOS: <code>xcode-select --install</code> / Windows: <code>npm install --global windows-build-tools</code>—— 老 Windows 用法，新 Windows 装 VS Build Tools）；(3) 预编译下载失败：用 <code>--build-from-source</code> 强制本地编译；(4) 长期改：选有 wasm 替代品的库。
+          </p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
