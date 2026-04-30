@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>JSC 4 层流水线 + Structure + 启动快的真正原因 · P2 · Bun 深度学习</title>
-    <meta name="description" content="JSC 视角。讲清 JSC 的设计选择、与 V8 的差异、对 Bun 启动速度 / 内存的影响。<strong>关键洞察</strong>：Bun 选 JSC 不是因为「全方面优于 V8」——V8 长期跑 hot 代码上 TurboFan 略好；JSC 优势是<strong>冷启动 + 内存占用 + 嵌入开销</strong>，正是服务端 / CLI / 边缘场景核心。" />
+    <title>JavaScriptCore：为什么不是 V8 · P2.1 · Bun 深度学习</title>
+    <meta name="description" content="JSC 4 层编译流水线（LLInt → Baseline → DFG → FTL/B3）+ JSC Structure 与 V8 Hidden Class 对照 + Riptide GC + 启动快的真正原因 + Apple 政治限制下沉淀的 mobile 优化恰好契合服务端。Bun 选 JSC 不是因为「全方面优于 V8」——优势在冷启动 + 内存占用 + 嵌入开销。" />
     <link rel="stylesheet" href="../../assets/styles.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23fbf0df'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23000'%3EB%3C/text%3E%3C/svg%3E" />
   </head>
@@ -45,64 +45,211 @@
           <a href="index.html">P2 · JavaScriptCore + Zig</a><span class="breadcrumb-sep">/</span>
           <span>01 · JavaScriptCore：为什么不是 V8</span>
         </nav>
-        <h1>JSC 4 层流水线 + Structure + 启动快的真正原因</h1>
+        <h1>JavaScriptCore：为什么不是 V8</h1>
         <p class="lead">
-          JSC 视角。讲清 JSC 的设计选择、与 V8 的差异、对 Bun 启动速度 / 内存的影响。<strong>关键洞察</strong>：Bun 选 JSC 不是因为「全方面优于 V8」——V8 长期跑 hot 代码上 TurboFan 略好；JSC 优势是<strong>冷启动 + 内存占用 + 嵌入开销</strong>，正是服务端 / CLI / 边缘场景核心。
+          JSC 视角。讲清 JSC 的设计选择、与 V8 的差异、对 Bun 启动速度 / 内存的影响。<strong>关键洞察</strong>：Bun 选 JSC 不是因为「全方面优于 V8」——V8 长期跑 hot 代码上 TurboFan 仍然略好；JSC 优势是<strong>冷启动 + 内存占用 + 嵌入开销</strong>，正是服务端 / CLI / 边缘场景核心。这一章讲透 JSC 4 层流水线（LLInt → Baseline → DFG → FTL/B3）、JSC Structure（V8 Hidden Class 对应物）、Riptide GC、启动快的真正原因。
         </p>
         <div class="chapter-meta">
           <span><strong>阅读时长</strong> ~30 分钟</span>
-          <span><strong>前置</strong> V8 P2 编译流水线 + V8 P3.1 Hidden Class</span>
+          <span><strong>前置</strong> <a href="../../v8/02-pipeline/index.html">V8 P2 编译流水线</a> + <a href="../../v8/03-speedup/01-hidden-class.html">V8 P3.1 Hidden Class</a></span>
           <span><strong>主要来源</strong> webkit.org/blog/javascriptcore · WebKit 源码 · Bun 团队博客</span>
-        </div>
-
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>本章为<strong>骨架</strong>。已完成大纲与关键知识点列表（见各段标题下的 bullet），正文撰写中。可参考 <a href="../../bun/outline.md">outline.md</a> 了解完整覆盖范围。</p>
         </div>
 
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
-          <li><em>正文待写。</em></li>
+          <li><strong>JSC 不是为服务端设计的——是为 Safari + iOS Web View 设计的</strong>。但 Apple 几年压榨 mobile 启动开销让 JSC 自然变成"启动快 + 内存小"的引擎，恰好契合 Bun 的服务端 / CLI / 边缘场景。这是 Bun 选 JSC 的核心动机。</li>
+          <li><strong>JSC 的 4 层流水线 LLInt → Baseline → DFG → FTL 和 V8 的 4 层 Ignition → Sparkplug → Maglev → TurboFan 形态相似，但 LLInt 层是 JSC 独有的"用 LLVM IR 写的解释器"</strong>——比 V8 的 Ignition（C++ 写的解释器）启动开销低，是 JSC 启动快的核心。</li>
+          <li><strong>JSC 的尴尬是"Bun 之外没有大型 embedder"</strong>——V8 有 Node + Chrome + Cloudflare + Vercel 几十个深度用户；JSC 几乎只有 Apple + Bun，文档少、社区薄、嵌入坑多。这是 Bun 团队额外承担的工程负担。</li>
         </ol>
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
-        <p><em>正文待写。本章覆盖：JSC 起源 · LLInt → Baseline → DFG → FTL/B3 · Structure · Riptide GC · mmap bytecode · 启动快真因</em></p>
+
+        <h3>JSC 起源：KJS → Apple → Safari → iOS → 系统组件</h3>
+        <p>JavaScriptCore 的故事比 V8 还长。2002 年 Apple 启动 Safari 项目时，需要一个 JS 引擎——他们 fork 了 KDE 项目的 <strong>KJS</strong>（Konqueror 浏览器的 JS 引擎，KDE 早期的开源代码），改名为 JavaScriptCore，开始独立演进。当时 Mozilla 的 SpiderMonkey 是更主流的开源 JS 引擎，但 Apple 选 KJS 不选 SpiderMonkey 是因为前者代码更轻量——这个"轻量"基因在后续 20 多年一直保留。</p>
+        <p>2007 年 iPhone 发布，JSC 跟着上了 iOS，开始进入"<strong>移动端启动开销极致优化</strong>"的轨道。Apple 之后几年的工作大部分集中在 mobile 上：让 JS 启动从 ~200ms 降到 ~50ms 再到 ~20ms，让 hot 代码 JIT 后的内存增量降低。这些优化的副作用是 JSC 在<strong>"启动快 + 内存小"维度上比 V8 优势明显</strong>——而 V8 长期围绕 Chrome 的"长跑性能"优化，hot 代码后的 throughput 占优。</p>
+        <p>2020 年 macOS Big Sur 之后，JSC 不再只是 Safari 的私有组件——它成为<strong>系统级共享框架</strong>（位于 <code>/System/Library/Frameworks/JavaScriptCore.framework</code>），任何 macOS 程序可以通过这个 framework 嵌入 JSC。这给 Bun 在 macOS 上的二进制大小留下了空间——Bun 在 macOS 上理论上可以 dynamic link 系统 JSC 而不需要静态打包；但 Bun 实际上选择静态打包<strong>定制版本的 JSC</strong>（带 Bun 团队的 patch），因为 Apple 的系统 JSC 版本和 Bun 需求不完全匹配。</p>
+        <p>2024 年 EU 数字市场法（DMA）生效后，iOS 上第三方浏览器终于<strong>不再被强制必须使用 JSC</strong>——之前 Apple 规定 iOS 上所有浏览器都得用 JSC（理由是安全性）。这个限制让 JSC 在 mobile 上几乎没有竞争对手，Apple 可以独享 mobile JS 优化的收益。从 Bun 的角度看，这个解禁不影响——Bun 不在 iOS 上跑——但它让 JSC 未来的演进方向可能有所变化，因为 Apple 失去了 iOS 强制使用的护城河。</p>
+
+        <h3>JSC 4 层编译流水线</h3>
+        <p>JSC 的执行流水线和 V8 形态非常像——都是 4 层渐进 JIT，从快速启动的"低优化"层 → 长期跑的"高优化"层逐级提升：</p>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 20%">JSC 层</th>
+              <th style="width: 28%">触发时机</th>
+              <th style="width: 26%">类比 V8 的层</th>
+              <th style="width: 26%">关键特征</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>LLInt</strong>（Low Level Interpreter）</td>
+              <td>函数被首次调用</td>
+              <td>Ignition（解释器）</td>
+              <td>用 LLVM IR + 自定义模板写；几乎零启动成本</td>
+            </tr>
+            <tr>
+              <td><strong>Baseline JIT</strong></td>
+              <td>函数调用 ~6 次后</td>
+              <td>Sparkplug（线性 JIT）</td>
+              <td>线性扫描 bytecode 生成 native；不做控制流分析</td>
+            </tr>
+            <tr>
+              <td><strong>DFG</strong>（Data Flow Graph JIT）</td>
+              <td>函数热（loop / 重调用）后</td>
+              <td>Maglev（中层优化 JIT）</td>
+              <td>把 bytecode 转 SSA-like DFG IR；做类型推断 + inline + 常量传播</td>
+            </tr>
+            <tr>
+              <td><strong>FTL</strong>（Faster Than Light）/ B3 后端</td>
+              <td>极热代码（profile 驱动）</td>
+              <td>TurboFan（顶层 JIT）</td>
+              <td>SSA + 高级优化；产物质量接近 LLVM 但编译更快</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>形态相似但<strong>具体实现差异很大</strong>。最关键的是 LLInt 层——这是 JSC 启动快的核心，后面单独展开。其他三层简要点出：</p>
+        <p><strong>Baseline JIT</strong> 的设计目标是"能跑不优化"——bytecode 一对一翻译成 native code，每个 bytecode 对应一段固定的 native code 模板。和 V8 Sparkplug 的设计哲学几乎一样（参见 <a href="../../v8/02-pipeline/index.html">V8 P2 编译流水线</a>）。区别在于 JSC Baseline 集成了 <strong>Polymorphic Inline Cache</strong>——访问对象属性时如果第二次访问看到不同的 Structure（JSC 的 Hidden Class），直接在原地把 IC slot 扩展成多形态查找表，比 V8 的 IC 实现稍微激进。</p>
+        <p><strong>DFG 层</strong>是 JSC 的中坚——大部分 hot 代码在这层就得到很好的优化。DFG 的核心数据结构是 SSA-like Data Flow Graph，每个节点是一个操作（加减、属性读写、函数调用），每个边是一个值流向。优化包括类型 specialization（基于 profile 把动态类型固定）、inline（小函数被内联进 caller）、redundancy elimination（消除重复计算）。和 V8 Maglev 的形态相似，但 DFG 历史更长——JSC 自 2008 年就有 DFG，比 V8 Maglev (2023) 早十几年。</p>
+        <p><strong>FTL / B3</strong> 是 JSC 的顶层 JIT，做激进优化产生质量最高的 native code。这层有个有趣的历史故事：FTL 早年（2014）<strong>用 LLVM</strong> 作为后端——理由是 LLVM 优化器最强、生成质量最高。但 LLVM 编译时间太长，对于"边跑边编译"的场景不合适——JSC 团队 2016 年改用自家写的 <strong>B3 后端</strong>（Bare Bones Backend），优化能力略弱于 LLVM 但编译时间快 5-10 倍。这是<strong>"工程权衡 > 理论最优"</strong>的经典例子——B3 不是因为比 LLVM 强而被选，是因为更适合 JSC 的使用场景。</p>
+
+        <h3>LLInt：启动快的核心</h3>
+        <p>JSC 启动比 V8 快的核心原因是 <strong>LLInt</strong>。要解释清楚这点先看 V8 的 <strong>Ignition</strong>（V8 的解释器层）：Ignition 是用 C++ 写的，把 JS bytecode 解释执行——你跑 <code>node app.js</code>，V8 启动 → 加载 Ignition → Ignition 开始解释 bytecode。这一步的开销主要在 <strong>"加载 Ignition 本身"</strong>——Ignition 是 V8 二进制的一部分（约 30-40MB），启动时要 mmap 进进程地址空间 + 初始化各种 dispatch 表。</p>
+        <p>JSC 的 LLInt 走完全不同的路径。LLInt 是用 <strong>LLVM IR + 自定义汇编模板</strong>写的——本质上每个 bytecode 都对应一段预编译的 native code 片段（类似汇编宏）。JSC 启动时不需要"加载解释器"——LLInt 的 native code 已经是 JSC 二进制的一部分，直接 jump 进去就开始跑。<strong>这砍掉了几十 MB 的解释器加载开销</strong>，让 JSC 启动从 V8 的 30-50ms 降到 5-10ms。</p>
+        <p>更深一层：LLInt 的 dispatch 也比传统解释器快。<strong>传统解释器</strong>（V8 Ignition、CPython、Ruby YARV）核心循环是 <code>switch (opcode) { case ADD: ...; case SUB: ...; }</code>——每个 bytecode 执行结束跳回 switch 头，CPU 分支预测器很难预测下一个 opcode。<strong>LLInt</strong> 用 "computed goto" / "threaded code" 技巧——每个 bytecode 执行结束直接跳到下一个 bytecode 的 native code 地址，分支预测器能预测得很好。Bun 启动快的"魔法"很大一部分来自这个机制。</p>
+        <p>这个设计在<strong>服务端启动时间敏感场景</strong>变得特别有价值。Lambda / CLI / CI 任务每次都要冷启动 runtime——V8 的 Ignition 加载开销每次都付一次，JSC 的 LLInt 因为已经是二进制的一部分而几乎免费。这就是为什么 Bun 在 Lambda 场景里启动比 Node 快接近一个数量级。</p>
+
+        <h3>JSC Structure：V8 Hidden Class 的对应物</h3>
+        <p>对象属性访问加速是所有现代 JS 引擎的核心问题。V8 用 <strong>Hidden Class</strong>（详见 <a href="../../v8/03-speedup/01-hidden-class.html">V8 P3.1 · Hidden Class</a>）——为对象建立"形状描述符"，相同形状的对象共享同一个 Hidden Class，访问 <code>obj.x</code> 就退化为"在固定偏移处读 word"，速度堪比 C++ struct 字段访问。</p>
+        <p>JSC 的对应物叫 <strong>Structure</strong>——同样是"形状描述符"，同样让形状相同的对象共享 Structure 对象，同样让属性访问退化为偏移读取。设计哲学完全一致，名字不同——这是 V8 和 JSC 平行演进的同一个想法。</p>
+        <p>具体差异在<strong>实现细节</strong>：</p>
+        <p><strong>(1) Structure 的「过渡 chain」更显式</strong>——JSC 的 Structure 之间形成一个 transition tree（加属性 → 新 Structure 是当前 Structure 的子节点），整个 tree 在 GC 中是一等公民对象。V8 Hidden Class 的 transition map 也是 tree 但实现更隐式。</p>
+        <p><strong>(2) Polymorphic Inline Cache 设计更激进</strong>——访问 <code>obj.x</code> 时如果第一次看到 Structure A，IC slot 记录 "A → offset 0"；第二次看到 Structure B，IC slot 直接扩展为 "A → offset 0, B → offset 4" 的小表（最多 ~4 项）；超过就 fallback 到通用查找。V8 类似但在 Structure 数 > 1 时切换更早。</p>
+        <p><strong>(3) Structure 自身的内存布局更紧凑</strong>——JSC 在 mobile 内存优化的传统让 Structure 对象比 V8 Hidden Class 小一些，复杂对象图能省下几 MB——这在 mobile / 服务端都有意义。</p>
+        <p>这些差异加起来在 micro benchmark 上看不出来——V8 / JSC 的对象访问速度几乎一样。但在<strong>"很多对象 / 很多 Structure"</strong>的场景下，JSC 的 Structure 内存压力低 5-10%——这对长跑服务的 RSS 内存基线有意义。</p>
+
+        <h3>Riptide GC：Bun 的内存管理基础</h3>
+        <p>JSC 的 GC 叫 <strong>Riptide</strong>——增量 + 并发的 mark-sweep 收集器。增量意思是"暂停 mutator 几 ms 做一小段 mark/sweep，然后继续 mutator，反复直到完成"——避免 stop-the-world 的长暂停。并发意思是"GC 线程和 mutator 线程同时跑"——进一步降低 mutator 的暂停时间。</p>
+        <p>Riptide 的设计目标是<strong>"低暂停 > 高吞吐"</strong>——和 V8 的 Orinoco GC 类似（详见 <a href="../../v8/04-memory/index.html">V8 P4 内存模型</a>）。具体差异：</p>
+        <p><strong>(1) 分代设计相对简单</strong>——Riptide 没有 V8 那么复杂的 New Generation / Old Generation / Code Space / Map Space 多空间结构。Riptide 主要分 Eden（新对象）+ Old（晋升对象），其他空间合并管理。这让 GC 实现简单，但对超大堆（&gt; 4GB）的优化空间小。</p>
+        <p><strong>(2) Bun 大对象不走 JSC 堆</strong>——Bun 内部很多大对象（HTTP request body / Buffer / Stream chunk）用 Zig 直接分配，不通过 JSC 的 GC。这避免了 JSC GC 在面对大对象时的不必要 scan，把内存管理职责切分清晰：JSC 管"小 + 多 + 频繁分配"的 JS 对象；Zig 管"大 + 少 + 长生命周期"的 buffer。这是 Bun 内存性能的隐性优势。</p>
+        <p><strong>(3) 弱引用 / Finalizer 支持</strong>——Riptide 完整支持 ECMAScript 的 WeakRef / FinalizationRegistry，与 V8 持平。</p>
+
+        <h3>JSC 的尴尬：Bun 之外没有大型 embedder</h3>
+        <p>JSC 在工程生态上有一个明显的弱势：<strong>除了 Apple + Bun，几乎没有大型 embedder</strong>。V8 的对照非常明显——V8 有 Chrome、Node.js、Cloudflare Workers、Vercel Edge、Deno、Electron、CEF（Chromium Embedded Framework）等十几个深度用户，每个都是百人团队级别的项目。这给 V8 带来：</p>
+        <p><strong>(1) 文档极厚</strong>——V8 嵌入文档、API 参考、最佳实践、错误诊断指南都很全；JSC 的嵌入文档稀疏，关键问题往往要读 WebKit 源码或查 Apple 内部 wiki。</p>
+        <p><strong>(2) 社区大</strong>——V8 嵌入相关问题在 StackOverflow / GitHub 上能搜到大量解决方案；JSC 嵌入问题搜索结果常常只有几条，且很多过时。</p>
+        <p><strong>(3) 工具链全</strong>——V8 inspector protocol（DevTools 远程调试）支持非常成熟，所有 V8 embedder 都能复用；JSC 的 inspector protocol 支持也有，但与 V8 不完全兼容（虽然两者都基于 Chrome DevTools Protocol，但子集差异微妙）。</p>
+        <p><strong>(4) 关键 PR 和 issue 响应慢</strong>——V8 团队会优先 review 来自 Node / Chrome 团队的 patch；JSC 团队主要响应 Apple 内部需求，外部 patch 往往要等几周。Bun 团队遇到 JSC bug 经常需要自己 fork patch 跑 in-tree，再慢慢推 upstream。</p>
+        <p>这些都是 Bun 团队额外承担的工程负担。从外部用户视角看不见，但从 Bun 团队 GitHub 提交看，相当一部分时间花在 JSC 的对接 / patch / 适配上——这是选 JSC 而非 V8 的隐性成本。但 Bun 团队评估后认为<strong>"启动快 + 内存小 + 嵌入开销小"的核心优势 > 工程负担</strong>，所以选 JSC——这个权衡的合理性要 5 年后看。</p>
+
+        <h3>性能：JSC 不是「全方面优于 V8」</h3>
+        <p>把 V8 / JSC 公平比较：</p>
+        <p><strong>启动时间</strong>：JSC ~5-10ms，V8 ~30-50ms。JSC 大幅领先——LLInt 设计的核心收益。</p>
+        <p><strong>冷启动峰值内存</strong>：JSC ~25MB，V8 ~50MB。JSC 领先约 2x——结合更紧凑的二进制 + 更少的初始化对象图。</p>
+        <p><strong>稳态运行内存</strong>：JSC 略低于 V8（~5-10%）——Structure 紧凑 + 大对象 offload 给 Zig 的优势加起来。</p>
+        <p><strong>解释器吞吐（不 JIT 跑的代码）</strong>：JSC LLInt 比 V8 Ignition 快 1.5-2x——computed goto / threaded code 的红利。</p>
+        <p><strong>baseline JIT 吞吐</strong>：JSC 和 V8 持平。</p>
+        <p><strong>顶层 JIT 吞吐（hot 代码 + 长跑）</strong>：V8 TurboFan 略好于 JSC FTL/B3——V8 优化激进度高 + 优化算法更新更快。差距在 hot benchmark 上是 5-15%。</p>
+        <p><strong>结论</strong>：JSC 在<strong>启动 / 内存 / 冷启场景</strong>大幅领先 V8；在<strong>长跑 hot 性能</strong>上略落后于 V8。Bun 选 JSC 的本质是用"hot 性能略低"换"启动 + 内存大幅领先"——这种权衡<strong>对服务端 / CLI / Lambda 场景非常合适</strong>，但对长跑批处理（Hadoop-style 数据处理）不一定最优。这也是为什么 Bun 在 Lambda 场景的优势比在 24/7 web server 场景大。</p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 A · 给团队解释「为什么 Bun 启动比 Node 快」</h3>
+          <p>团队成员问"Bun 启动快是不是 cherry-pick 数字"——给出技术细节而不是空泛回答。<strong>核心机制</strong>：(1) JSC 用 LLInt（用 LLVM IR + 自定义汇编模板写的解释器）替代 V8 的 Ignition（C++ 写的解释器），LLInt 的 native code 已经在 JSC 二进制里直接 jump 就跑，不用 mmap + 初始化解释器；(2) 这砍掉了 ~30-40MB 的解释器加载开销 + 初始化时间；(3) 实测 <code>time node -e 'console.log("hi")'</code> ~30-50ms vs <code>time bun -e 'console.log("hi")'</code> ~5-10ms 差距数量级。这套解释能让团队理解"Bun 启动快不是 marketing，是引擎层架构差异"，建立技术信任。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 B · 评估「JSC 长期 hot 性能差距对生产是否影响」</h3>
+          <p>团队负责高负载 web 服务（10k+ RPS），考虑切 Bun——担心 JSC FTL/B3 比 V8 TurboFan 在 hot 代码上略慢 5-15% 是否影响 SLA。判断标准：(1) <strong>I/O 密集服务</strong>（数据库 / 调外部 API / Stream 处理）— hot CPU 代码占比小，JSC 性能差距对端到端延迟影响微，启动快和内存小的优势更显著。(2) <strong>CPU 密集服务</strong>（图像处理 / 加密 / 复杂正则 / 数据 transform）— JSC 性能差距会直接转化为更高的 CPU 利用率，可能需要多 5-15% 的实例数。(3) <strong>混合负载</strong>— spike 测试看实际差距，往往比理论小，因为 hot 代码 corner case 在生产里没那么纯。综合后通常的结论：I/O 密集场景 ✅ 切 Bun 收益大；CPU 密集场景 ⚠️ 评估再决定；不要一刀切。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 C · 排查「我们的 Bun 服务比 Node 慢」的反直觉问题</h3>
+          <p>偶尔有团队报"Bun 比 Node 慢"——通常不是 JSC 的问题，是<strong>具体场景的 corner case</strong>。可能性：(1) <strong>Hot loop CPU 密集</strong>——JSC FTL 略不如 V8 TurboFan，集中在 numeric tight loop 的微 benchmark 上 V8 仍然胜出。(2) <strong>大量同步 fs.readFileSync</strong>——Bun 的 fs 走 Zig 直接 syscall，本身比 Node 快；但如果你的代码有 1000 个串行 readFileSync，瓶颈在 syscall 不在引擎。(3) <strong>Native module 在 Bun N-API 走 fallback 路径</strong>——某些 native module 在 Bun 上跑的是兼容层而非原生路径，慢 10-50%；解决：升 Bun 版本或 fallback 第三方包。(4) <strong>process.nextTick 行为差异</strong>——Bun 与 Node 微妙不同，影响特定 event loop 调度敏感的代码（罕见但有）。每个 case 都要单独排查，不是"切回 Node"的理由——通常是 patch 一下代码就好。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 D</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 D · 给做引擎选型的架构师：JSC vs V8 决策框架</h3>
+          <p>设计一个新的 JS 嵌入产品（如某种工作流引擎、自定义脚本平台），要选嵌入 V8 还是 JSC——多数人默认选 V8，但 JSC 在某些场景更合适。判据：(1) <strong>多 isolate 多租户</strong>（你的产品要同时跑 100+ 用户的 JS）→ V8 强制选（JSC 不支持 Isolate-per-tenant，详见 P1.2）。(2) <strong>启动开销敏感</strong>（CLI 工具 / Lambda 场景 / 边缘计算）→ JSC 更好。(3) <strong>嵌入文档与社区资源</strong>（团队想 stack overflow 上能搜到答案）→ V8 强势。(4) <strong>license 兼容</strong>—— V8 BSD-3，JSC LGPL；如果你产品是 closed-source，V8 license 更宽松。(5) <strong>Apple 生态绑定</strong>（产品要嵌入 macOS / iOS）→ JSC 是系统组件，可以 dynamic link 省二进制大小。综合大部分场景 V8 是默认选，但 JSC 在"启动敏感 + 不需要多租户 + 团队愿意承担文档少的代价"场景下值得考虑。Bun 选 JSC 是这种逻辑的代表案例。</p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <p>这一章不展开 API 用法，重点是<strong>能验证 JSC 行为差异的实证代码</strong>。</p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+<pre class="code"><code class="lang-bash"># 1. 启动开销对比（验证 LLInt vs Ignition 差异）
+hyperfine --warmup 3 'node -e "1"' 'bun -e "1"'
+# 典型输出：
+# node -e "1": Time (mean): 32.5 ms
+# bun -e "1":  Time (mean):  4.8 ms
+# Bun 启动比 Node 快 ~7x
+
+# 2. 冷启动峰值内存（验证 JSC 紧凑性）
+/usr/bin/time -l node -e 'process.exit()' 2&gt;&amp;1 | grep "maximum"
+/usr/bin/time -l bun -e 'process.exit()' 2&gt;&amp;1 | grep "maximum"
+# Node: ~50MB; Bun: ~25MB
+
+# 3. 长跑性能对比（hot loop benchmark）
+# 这种场景 V8 TurboFan 略胜 JSC FTL
+cat &gt; /tmp/hot.js &lt;&lt; 'EOF'
+let sum = 0;
+for (let i = 0; i &lt; 1e8; i++) sum += i;
+console.log(sum);
+EOF
+hyperfine --warmup 1 'node /tmp/hot.js' 'bun /tmp/hot.js'
+# Node 可能略快 5-15%——JSC FTL 仍在追 V8 TurboFan</code></pre>
+        </div>
         <div class="code-block">
           <span class="code-label">javascript</span>
-<pre class="code"><code class="lang-js">// 正文待写</code></pre>
+<pre class="code"><code class="lang-js">// 用 V8 / JSC 都支持的 Web 标准 API 写引擎无关代码
+// 不要用 V8 内部 API（如 v8.serialize / v8.deserialize）
+// JSC 没有等价物——这种代码切 Bun 会报错
+
+// ✅ 引擎无关
+const data = JSON.stringify(obj);
+const buf = new TextEncoder().encode(data);
+const back = new TextDecoder().decode(buf);
+
+// ❌ V8-only（Node 上能跑、Bun 不能）
+import { serialize } from 'node:v8';
+const serialized = serialize(obj);  // Bun 抛 ReferenceError
+
+// 检测引擎来分支（库代码常见）
+if (typeof Bun !== 'undefined') {
+  // JSC 路径 — 用 Bun 内置 API
+} else {
+  // V8 路径 — 用 Node 标准库
+}</code></pre>
         </div>
 
         <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
         <div class="pitfall">
-          <div class="pitfall-title">陷阱标题</div>
-          <p><em>正文待写。</em></p>
+          <div class="pitfall-title">误以为「JSC 全方面优于 V8」</div>
+          <p>看到 Bun 启动快 / 内存小，有人推断 JSC 全面胜过 V8。这是<strong>错的</strong>——JSC 优势集中在<strong>启动 + 内存 + 嵌入开销</strong>，劣势在<strong>长跑 hot 性能</strong>（FTL 比 TurboFan 略落后 5-15%）+ <strong>嵌入生态</strong>（文档少、工具弱）。如果你的场景是 CPU 密集长跑服务，V8 的 hot 性能优势可能足以让 Node 总体性能优于 Bun。判断引擎好坏要分维度看，不能用一句"哪个更好"概括。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">用 V8 内部 API 假设 Bun 也支持</div>
+          <p><code>v8</code> 模块（<code>v8.serialize</code> / <code>v8.deserialize</code> / <code>v8.getHeapStatistics</code> 等）是 V8 特有的 API，Bun 完全不支持——JSC 没有等价物。一些库（如 <code>structured-clone</code> 的早期版本）会用 <code>v8.serialize</code> 做对象序列化，这种库在 Bun 上直接报 <code>ReferenceError</code>。规避：写跨 runtime 库时只用 Web 标准 API（<code>JSON</code> / <code>structuredClone</code> / <code>postMessage</code>），不要 import <code>node:v8</code>。结构化克隆的标准做法是用 globalThis.<code>structuredClone()</code>（V8 / JSC 都支持）。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">期待 JSC inspector protocol 与 V8 完全兼容</div>
+          <p>JSC 和 V8 都基于 Chrome DevTools Protocol（CDP），但实现是<strong>子集，且子集略有差异</strong>。Chrome DevTools 连接 Bun（JSC）时大部分功能可用，但少数命令（如 V8 特有的 heap profile 的某些 metadata）会缺失或行为不同。同样，VSCode / WebStorm 的 Node 调试集成对 Bun 的支持不完美——有时断点 hit 不到、有时 source map 解析问题。规避：Bun 推荐用 <strong>Safari Web Inspector</strong>（<code>bun --inspect-wait</code> 然后用 Safari 连接），或用 Bun 自家的 inspector adapter。VSCode 用户优先验证你的调试场景在 Bun 下能跑再切。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">忽视 JSC 二进制升级带来的潜在 corner case</div>
+          <p>Bun 用的是<strong>定制版 JSC</strong>（带 Bun 团队的 patch），版本跟随 Bun release。每次 Bun release 升 JSC 都可能引入 corner case——比如某种特定 regex 的性能、某个新加的语法的支持时机、GC 调度差异。这些通常对应用代码透明，但极端 case 可能让一些库行为微妙变化。规避：Bun production 环境固定 minor 版本（<code>1.2.5</code> 而不是 <code>latest</code>），CI 跑 smoke test 验证关键路径，再升级。这套流程和 Node 升级类似，但 Bun 由于迭代更快需要更频繁验证。</p>
         </div>
 
         <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
         <ul>
-          <li><a href="https://bun.com/docs" target="_blank" rel="noopener">bun.com/docs</a></li>
-          <li><a href="https://github.com/oven-sh/bun" target="_blank" rel="noopener">oven-sh/bun GitHub</a></li>
-          <li>回到主题首页 → <a href="../index.html">Bun 深度学习</a></li>
+          <li><a href="https://webkit.org/blog/category/javascriptcore/" target="_blank" rel="noopener">WebKit JavaScriptCore Blog</a> · JSC 团队的设计文章</li>
+          <li><a href="https://webkit.org/blog/9329/a-new-bytecode-format-for-javascriptcore/" target="_blank" rel="noopener">A New Bytecode Format for JavaScriptCore</a> · LLInt + Bytecode 设计</li>
+          <li><a href="https://webkit.org/blog/10308/speculation-in-javascriptcore/" target="_blank" rel="noopener">Speculation in JavaScriptCore</a> · DFG 优化深度</li>
+          <li><a href="https://github.com/WebKit/WebKit/tree/main/Source/JavaScriptCore" target="_blank" rel="noopener">WebKit/Source/JavaScriptCore</a> · 源码（公开）</li>
+          <li><a href="https://bun.com/docs/runtime/javascriptcore" target="_blank" rel="noopener">Bun docs · JavaScriptCore</a> · Bun 团队对 JSC 的简介</li>
+          <li>对照 V8 流水线 → <a href="../../v8/02-pipeline/index.html">V8 P2 · 编译流水线</a></li>
+          <li>对照 V8 Hidden Class → <a href="../../v8/03-speedup/01-hidden-class.html">V8 P3.1 · Hidden Class</a></li>
+          <li>对照 V8 GC → <a href="../../v8/04-memory/index.html">V8 P4 · 内存模型</a></li>
+          <li>引擎横评 → <a href="../../v8/01-overview/02-engine-landscape.html">V8 P1.2 · 引擎分身史</a></li>
+          <li>下一章 → <a href="02-zig-system-layer.html">P2.2 · Zig 系统层：为什么不是 Rust</a></li>
         </ul>
 
         <nav class="chapter-nav" aria-label="章节翻页">
