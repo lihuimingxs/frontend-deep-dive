@@ -56,11 +56,6 @@
           <span><strong>主要来源</strong> nodejs.org/api/packages · tshy/tsup/unbuild 文档</span>
         </div>
 
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>骨架版本。对照大纲 <code>node/outline.md § P3.2</code>。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>Dual Package Hazard 是双系统兼容的最大风险</strong>——同一个库的两份独立实例破坏单例、instanceof、共享状态。</li>
@@ -71,8 +66,11 @@
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
 
         <h3>Dual Package Hazard 是什么</h3>
-        <p><em>正文待写。</em></p>
-        <p>当一个 package 同时提供 CJS 和 ESM 入口（通过 conditional exports），<strong>不同导入方式会加载不同文件</strong>——module loader 不知道两者是"同一个东西"，独立创建两份实例：</p>
+        <p>
+          P3.1 讲到一个库通过 <code>exports</code> 字段的 conditional exports，可以同时提供 CJS 和 ESM 入口。这听起来很美——<strong>用户不管用 require 还是 import，都能用同一个包</strong>。但实际生产中这种"双格式"会带来一类微妙 bug，叫 <strong>Dual Package Hazard</strong>。
+        </p>
+        <p>
+          根本原因：<strong>当一个 package 同时提供 CJS 和 ESM 入口（通过 conditional exports），不同导入方式会加载不同文件</strong>——module loader（Node 内部）不知道这两个文件是"同一个东西"，<strong>独立创建两份实例</strong>。如果库内部有共享状态（单例、缓存、计数器等），两份实例的状态<strong>互不可见</strong>：</p>
         <div class="code-block">
           <span class="code-label">javascript</span>
 <pre class="code"><code class="lang-js">// CJS 用户
@@ -90,55 +88,119 @@ console.log(a instanceof Klass);  // ← false! 不同 class</code></pre>
         </div>
 
         <h3>3 种规避策略</h3>
-        <p><em>正文待写。</em></p>
-
-        <h4>策略 1 · 纯无状态（推荐）</h4>
         <p>
-          库只导出<strong>纯函数 / 常量 / 无状态 class</strong>——两份独立实例不冲突。这是最简单也最现代的做法，适合 utility 库（lodash、zod、date-fns 等）。
+          库作者面对 Dual Package Hazard 有三种处理路径——按"<em>从最简单到最激进</em>"顺序：
+        </p>
+
+        <h4>策略 1 · 纯无状态（最推荐）</h4>
+        <p>
+          库只导出<strong>纯函数 / 常量 / 无状态 class</strong>——两份独立实例完全不冲突，因为没有共享状态可以"<em>不一致</em>"。这是最简单也最现代的做法，适合<strong>大多数 utility 库</strong>（lodash / zod / date-fns / clsx 等）。这条策略不需要任何特殊配置——直接发双格式，靠"<em>无状态设计</em>"绕过 hazard。
+        </p>
+        <p>
+          实操原则：<strong>不在模块顶层维护可变状态</strong>。如果一定要维护状态（如全局缓存），用 <code>globalThis.__myLibCache</code> 这种<strong>显式跨实例共享</strong>，让两份独立实例都看到同一份。
         </p>
 
         <h4>策略 2 · CJS 设为 ESM wrapper</h4>
         <p>
-          CJS 入口文件实际只是一个 wrapper，运行时<strong>动态 require + re-export</strong> ESM 的内部实现。这样保证只有 ESM 一份实例。代价：CJS 入口变异步（要用 <code>import()</code>），少数同步库不能这样做。
+          CJS 入口文件不是"<em>另一份完整实现</em>"——而是一个<strong>thin wrapper</strong>，运行时动态 import ESM 然后 re-export。本质上保证 ESM 是<strong>唯一真实源</strong>，CJS 只是包装。
         </p>
-
-        <h4>策略 3 · 只发 ESM</h4>
+        <div class="code-block">
+          <span class="code-label">cjs-wrapper</span>
+<pre class="code"><code class="lang-js">// dist/index.cjs（CJS wrapper）
+module.exports = (async () =&gt; {
+  const esm = await import('./index.js');
+  return { ...esm };
+})();
+// 用户必须 await：
+// const lib = await require('my-lib');</code></pre>
+        </div>
         <p>
-          直接放弃 CJS 用户—— Node 22+ 起 ESM 已经足够稳定，新库可以这样选。CJS 用户用 <code>const x = await import('pkg')</code> 也能用。代价：失去一些老项目的兼容性。
+          代价：<strong>CJS 入口变异步</strong>（用户必须 await）。同步库（如 <code>const lib = require('my-lib'); lib.foo()</code>）不能用这条策略。但对纯异步 API 库（HTTP client / 数据库 driver）可行。
         </p>
 
-        <h3>现代库设计模板</h3>
-        <p><em>正文待写。</em>主流构建工具：</p>
+        <h4>策略 3 · 只发 ESM（激进）</h4>
+        <p>
+          直接放弃 CJS 用户。<strong>Node 22+ 起 ESM 已经足够稳定 + Node 23 起 require ESM 实验支持</strong>，新库这条路越来越可行。代表项目：<strong>chalk 5</strong>（2022 起只发 ESM，引发 npm 生态争议但坚持）/ <strong>node-fetch 3</strong>。
+        </p>
+        <p>
+          代价：CJS 用户必须用动态 <code>const lib = await import('my-lib')</code>—— 不能直接 <code>require</code>。这对老项目转型阻力大，但<strong>对纯新项目几乎无感</strong>。
+        </p>
+
+        <div class="callout warn">
+          <div class="callout-title">⚠️ "<em>多发包名解决</em>"是反模式</div>
+          <p>
+            有人会想"<em>那我发两个包：my-lib 和 my-lib-cjs</em>"绕过 hazard。这是反模式——npm 生态会更乱，依赖树双倍。<strong>正确做法是上面 3 种之一</strong>，不要发多个包。
+          </p>
+        </div>
+
+        <h3>现代库设计构建工具</h3>
+        <p>
+          双格式发布需要工具链支持——单独写一份代码，编译出 CJS + ESM + .d.ts 三套产物。主流工具（2025 年现状）：
+        </p>
         <ul>
-          <li><strong>tshy</strong>：TypeScript-native，自动生成双格式 + types</li>
-          <li><strong>tsup</strong>：基于 esbuild，配置简单，常用于现代库</li>
-          <li><strong>unbuild</strong>：UnJS 项目（Vite 生态），多入口友好</li>
+          <li><strong>tshy</strong>（Isaac Schlueter，npm 作者）：TypeScript-native，自动生成双格式 + types。配置极简——只需 <code>"main"</code> + <code>"exports"</code> 几行。<strong>2025 推荐起手项目</strong></li>
+          <li><strong>tsup</strong>（egoist）：基于 esbuild，配置简单，bundler 风格（一个文件一个产物）。常用于现代库</li>
+          <li><strong>unbuild</strong>（UnJS / Vite 生态）：多入口友好，rollup-based。<strong>Nuxt / Nitro 生态默认</strong></li>
+          <li><strong>pkgroll</strong>：极简包装 rollup，适合喜欢 rollup 配置的人</li>
         </ul>
 
-        <h3><code>import.meta.resolve</code> / <code>require.resolve</code></h3>
-        <p><em>正文待写。</em>在 ESM / CJS 各自如何获取模块路径——做插件 loader、动态加载、路径解析时会用到。</p>
-
-        <h3>Top-Level Await 限制</h3>
-        <p><em>正文待写。</em></p>
+        <h3><code>import.meta.resolve</code> / <code>require.resolve</code>：路径查找 API</h3>
+        <p>
+          做<strong>插件 loader</strong> / <strong>动态加载</strong> / <strong>路径解析</strong>时需要在运行时知道某个模块的实际文件路径。两个 API 各自工作：
+        </p>
         <ul>
-          <li>仅 ESM 支持；CJS 不行</li>
-          <li>让 ESM 模块"等待"才完成 evaluation</li>
-          <li>详见 <a href="../../ecma/07-execution/04-modules-tla.html">ECMA P7.4 · Module Records + TLA</a> 死锁场景</li>
-          <li>常见用法：模块顶层 await config 加载</li>
+          <li><strong>CJS</strong>：<code>require.resolve('foo')</code> 返回完整文件路径（同步）</li>
+          <li><strong>ESM</strong>：<code>import.meta.resolve('foo')</code> 返回 file:// URL（Node 20.6+ 稳定）</li>
+        </ul>
+        <p>
+          典型用例：插件系统加载用户指定的扩展（<code>require.resolve(userPluginName)</code>）/ monorepo 工具链定位包（如 nx / lerna）/ 自定义 loader（ts-node / vitest）。
+        </p>
+
+        <h3>Top-Level Await 限制：仅 ESM 支持</h3>
+        <p>
+          ES2022 引入 <strong>Top-Level Await（TLA）</strong>——可以在 ESM 模块顶层直接 <code>await</code>，不需要包在 async function 里。这让"<em>模块加载时等异步操作完成</em>"成为可能：
+        </p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// config.mjs - ESM 模块顶层 await
+const config = await fetch('/api/config').then(r =&gt; r.json());
+export default config;
+
+// 其他模块 import 时，会等 config.mjs 加载完
+import config from './config.mjs';
+console.log(config);  // 已经是 resolved value</code></pre>
+        </div>
+        <ul>
+          <li><strong>仅 ESM 支持</strong>——CJS 不行（require 是同步，不能等 Promise）</li>
+          <li>让 ESM 模块"<em>等待</em>"才完成 evaluation——所有 import 这模块的也会等</li>
+          <li>常见用法：顶层 fetch config / 异步初始化数据库连接 / 加载 native dependency</li>
+          <li><strong>陷阱</strong>：循环依赖 + TLA 可能导致<strong>死锁</strong>—— 详见 <a href="../../ecma/07-execution/04-modules-tla.html">ECMA P7.4 · Module Records + TLA</a></li>
         </ul>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A · 写一个新的 npm 库</h3>
-          <p><em>正文待写。</em>用 tshy / tsup 起手；优先纯无状态设计；同时发 CJS / ESM / types。</p>
+          <h3 class="scenario-title">场景 A · 写一个新的 npm 库（推荐起步）</h3>
+          <p>
+            2025 年新库推荐起步：(1) <strong>用 tshy</strong>（最新 npm 作者出品，配置极简）；(2) <strong>优先纯无状态设计</strong>（function / 常量 / 无状态 class）；(3) <strong>同时发 CJS + ESM + .d.ts</strong>—— exports 字段配置完整。这套组合让用户无论用什么 import 方式都能用，没有 hazard。如果业务必然需要状态（如客户端实例），改用策略 2（CJS wrapper）或 3（只发 ESM）。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B · 诊断 instanceof 失败</h3>
-          <p><em>正文待写。</em>用户报"instanceof 在我的项目里 false"——大概率 dual package hazard，确认 require 和 import 路径是否解析到同一文件。</p>
+          <h3 class="scenario-title">场景 B · 诊断 instanceof 失败 / 单例失效 bug</h3>
+          <p>
+            用户报"<em>instanceof MyClass 在我项目里 false</em>"或"<em>singleton 状态丢了</em>"——大概率是 dual package hazard。诊断步骤：(1) <code>require.resolve('the-lib')</code> 看 CJS 解析路径；(2) 临时加 <code>console.log(import.meta.url)</code> 看 ESM 解析路径；(3) 对比两条路径——如果指向不同文件，hazard 确认。<strong>修法</strong>：让用户全部用 ESM 或全部 CJS，或库换无状态设计。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C · 老库迁现代发布</h3>
-          <p><em>正文待写。</em>从只发 CJS 到双格式，最小改动用 tsup + 加 exports 字段。</p>
+          <h3 class="scenario-title">场景 C · 老库迁现代发布格式</h3>
+          <p>
+            老 CJS-only 库要支持 ESM 用户：最小改动是 <strong>用 tsup 加双格式构建</strong> + <strong>加 exports 字段 + types</strong>。改动通常 30 行配置。如果库有状态（singleton / cache），同时检查是否需要走策略 2 / 3。<strong>2025 年用户期待是双格式</strong>—— 只发 CJS 会失去新项目用户。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 评估"该不该用 Top-Level Await"</h3>
+          <p>
+            模块顶层异步加载（fetch config / DB 连接）时考虑 TLA。<strong>陷阱</strong>：(1) TLA 让模块 import 时<strong>所有 importer 都等</strong>—— 启动慢；(2) 循环依赖 + TLA 可能死锁；(3) CJS 用户不能 require 这种 ESM 模块。<strong>建议</strong>：TLA 适用 entry point（应用入口）或<strong>明确异步初始化的 service 模块</strong>，不要在共享 utility 里用。
+          </p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>

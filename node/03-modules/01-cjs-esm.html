@@ -56,11 +56,6 @@
           <span><strong>主要来源</strong> nodejs.org/api/esm · nodejs.org/api/packages</span>
         </div>
 
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>骨架版本。对照大纲 <code>node/outline.md § P3.1</code>。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
           <li><strong>CJS 是"运行时模块"</strong>：被 require 时执行；同步；可以条件 require。</li>
@@ -71,37 +66,50 @@
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
 
         <h3>CommonJS 解析算法（Node 2009-）</h3>
-        <p><em>正文待写。</em></p>
+        <p>
+          CJS 是 Node 自创的模块系统（2009），<strong>不是 ES 标准</strong>—— ECMAScript 直到 2015 才有 ESM。CJS 设计选择影响深远：
+        </p>
         <ul>
-          <li>同步：<code>require('foo')</code> 阻塞等加载完成</li>
-          <li>Node 自家算法（不是 ES 规范）：先看 core module → 再看 file → 再看 node_modules 向上查找</li>
-          <li>支持省略扩展名（<code>.js</code> / <code>.json</code> / <code>.node</code> 自动加）</li>
-          <li>支持条件 require：<code>if (x) require('./a'); else require('./b')</code></li>
+          <li><strong>同步加载</strong>：<code>require('foo')</code> 阻塞当前执行直到加载完。<strong>这是服务端 OK 的设计</strong>（启动时加载完所有依赖再开始服务），但浏览器不能用——浏览器加载用 HTTP 是异步的。这是 CJS 不能直接搬到浏览器的根本原因，也是 ESM 必须异步的设计动机。</li>
+          <li><strong>Node 自家解析算法</strong>（不是 ES 规范）：先看 core module（fs / http 等内置）→ 再看 file 路径 → 再看 <code>node_modules</code> 从当前目录向上查找。这套算法被 npm 生态采用了 16 年，是<strong>事实标准</strong>但不是规范标准</li>
+          <li><strong>支持省略扩展名</strong>：<code>require('./foo')</code> 自动尝试 <code>foo.js</code> / <code>foo.json</code> / <code>foo.node</code>（native module）/ <code>foo/index.js</code></li>
+          <li><strong>支持条件 require</strong>：可以 <code>if (process.env.NODE_ENV === 'production') require('./prod-config')</code>—— 因为 require 是同步的运行时函数调用</li>
+          <li><strong><code>module.exports</code> 是<strong>动态对象</strong></strong>：可以用 <code>module.exports = function() {}</code> 整体替换，也可以分别 <code>module.exports.foo = ...</code> 加属性</li>
         </ul>
 
-        <h3>ESM 解析（Node 12+）</h3>
-        <p><em>正文待写。</em></p>
+        <h3>ESM 解析（Node 12+）：完全不同的世界</h3>
+        <p>
+          ESM（ECMAScript Modules）是 ES2015 规范定义的模块系统。<strong>设计完全不同</strong>：
+        </p>
         <ul>
-          <li>异步：<code>import</code> 是规范级 async</li>
-          <li>按 ECMA Module Records 规范解析（详见 <a href="../../ecma/07-execution/04-modules-tla.html">ECMA P7.4</a>）</li>
-          <li>HTTP / file URL 都支持</li>
-          <li><strong>必须带扩展名</strong>（<code>.js</code> / <code>.mjs</code>）—— 这是 ESM 与 CJS 最大的解析差异</li>
-          <li>不能条件 import（除非用动态 <code>import()</code>）</li>
+          <li><strong>异步加载</strong>：<code>import</code> 是规范级 async——浏览器和 Node 都能用</li>
+          <li><strong>按 ECMA Module Records 规范解析</strong>（详见 <a href="../../ecma/07-execution/04-modules-tla.html">ECMA P7.4</a>）—— 严格的"<em>parse → link → evaluate</em>"三阶段</li>
+          <li><strong>支持 HTTP / file URL</strong>：<code>import x from "https://cdn.com/foo.js"</code> 浏览器能跑，Node 默认禁用网络 import（安全 + 性能）</li>
+          <li><strong>必须带扩展名</strong>（<code>.js</code> / <code>.mjs</code>）—— 没有"<em>自动尝试</em>"。这是 ESM 与 CJS 最大解析差异，也是<strong>新人最常踩的坑</strong></li>
+          <li><strong>不能条件 import</strong>：<code>import</code> 必须在文件顶层、不能在 if 里。<strong>动态 import()</strong> 才能条件加载（返回 Promise）</li>
+          <li><strong>导出是<strong>静态绑定</strong></strong>：<code>export const foo</code> 之后 foo 不能改赋值——Module Record 锁死</li>
         </ul>
+        <p>
+          ESM 的"<em>静态</em>"特征让 bundler / tree-shaking 等工具能<strong>编译期分析依赖图</strong>——这是 CJS 做不到的（CJS 的条件 require 让静态分析必然不完整）。
+        </p>
 
-        <h3>package.json 字段全谱</h3>
-        <p><em>正文待写。</em></p>
+        <h3>package.json 字段全谱：Node 模块系统的"控制面板"</h3>
+        <p>
+          <code>package.json</code> 决定 Node 怎么解析这个包。关键字段：
+        </p>
         <ul>
-          <li><strong><code>type: "module"</code></strong>：把 .js 文件按 ESM 处理（默认是 CJS）</li>
-          <li><strong><code>main</code></strong>：CJS 入口（旧）</li>
-          <li><strong><code>module</code></strong>：ESM 入口（bundler 约定，非 Node 标准）</li>
-          <li><strong><code>exports</code></strong>：现代标准，覆盖以上字段</li>
-          <li><strong><code>imports</code></strong>：包内导入路径别名（如 <code>#config</code>）</li>
-          <li><strong><code>types</code></strong>：TypeScript 类型入口</li>
+          <li><strong><code>type: "module"</code></strong>：让本包内 <code>.js</code> 文件按 ESM 处理。默认（不写）是 CJS。<strong>选这个 flag 是单向决定</strong>——以后这个包永远是 ESM</li>
+          <li><strong><code>main: "./dist/index.cjs"</code></strong>：CJS 入口（旧字段，2009 起）</li>
+          <li><strong><code>module: "./dist/index.js"</code></strong>：ESM 入口（bundler 约定，<strong>不是 Node 标准</strong>，但所有打包器都看）</li>
+          <li><strong><code>exports</code></strong>：现代标准（Node 12.7+），<strong>覆盖以上 main/module 字段</strong>。复杂场景的唯一正确选择</li>
+          <li><strong><code>imports</code></strong>：包<strong>内</strong>导入别名。如 <code>"imports": {"#config": "./src/config.js"}</code> 让本包文件用 <code>import x from '#config'</code>—— 避免相对路径地狱（<code>../../../config</code>）</li>
+          <li><strong><code>types</code> / <code>typings</code></strong>：TypeScript 类型入口（指向 .d.ts）</li>
         </ul>
 
         <h3>Conditional Exports：key 顺序敏感</h3>
-        <p><em>正文待写。</em></p>
+        <p>
+          <code>exports</code> 字段最重要的能力是 <strong>conditional exports</strong>——给不同 import 方式映射不同入口。<strong>key 顺序敏感</strong>：earlier 优先级更高，Node 找到第一个匹配就停。
+        </p>
         <div class="code-block">
           <span class="code-label">json</span>
 <pre class="code"><code class="lang-json">{
@@ -123,30 +131,61 @@
           <strong>key 顺序敏感</strong>：earlier entries 优先级更高。一般规则"specific → general"——types 在前，import 在后。
         </p>
 
-        <h3>导入时的扩展名问题</h3>
-        <p><em>正文待写。</em></p>
+        <h3>导入时的扩展名问题：TS + ESM 最大踩坑点</h3>
+        <p>
+          扩展名规则在 CJS / ESM / TS 三端不同：
+        </p>
         <ul>
-          <li><strong>ESM</strong>：必须 <code>import x from './foo.js'</code>（带 .js）</li>
-          <li><strong>CJS</strong>：可以 <code>require('./foo')</code>（不带）</li>
-          <li><strong>TypeScript 与 Node 的奇怪交互</strong>：写 <code>import x from './foo.js'</code>（带 .js 而非 .ts）才能让 tsc 输出后 Node ESM 能跑</li>
-          <li>这是 TS + ESM 项目最常见的踩坑点</li>
+          <li><strong>CJS</strong>：<code>require('./foo')</code> 自动加 .js / .json / .node 后缀。可以省扩展名</li>
+          <li><strong>ESM</strong>：<code>import x from './foo.js'</code> <strong>必须带</strong> .js 后缀。不能省</li>
+          <li><strong>TypeScript + ESM 的奇怪交互</strong>：源文件叫 <code>foo.ts</code>，但 import 时写 <code>import x from './foo.js'</code>（带 <strong>.js 不是 .ts</strong>）。tsc 编译后输出 <code>foo.js</code>，import 路径正好匹配</li>
         </ul>
+        <p>
+          为什么 TS 这么诡异？因为 <strong>tsc 默认<strong>不</strong>改 import 路径</strong>—— TS 5 NodeNext 模式要求"<em>路径写运行时实际路径</em>"。所以你在 .ts 源码里写的 .js 后缀，编译时不被改写，Node 跑编译产物时刚好能解析。
+        </p>
+        <p>
+          <strong>这是 TS + ESM 项目最常见的踩坑</strong>——新人想"<em>我在写 .ts，为什么要写 .js</em>"。理解后就清楚——TS 不是"<em>更好的 JS</em>"，是<strong>编译期 + 类型擦除</strong>，运行时跑的是 .js。
+        </p>
 
-        <h3><code>--experimental-vm-modules</code> / <code>--loader</code> hooks</h3>
-        <p><em>正文待写。</em>自定义模块加载器（用于 ts-node、Jest ESM、Vitest 等）；Node 20+ 改名为 <code>--import</code> + register hook API。</p>
+        <h3><code>--loader</code> Hooks：自定义模块加载器</h3>
+        <p>
+          Node 提供 module loader hook 接口，让外部工具能介入模块解析过程。典型用例：<strong>ts-node</strong>（运行 .ts 不预编译）/ <strong>Jest ESM</strong> / <strong>Vitest</strong> / <strong>swc-node</strong>。这些工具注册 loader hook，把 <code>import './foo.ts'</code> 拦截后即时编译成 JS 再返回。
+        </p>
+        <p>
+          API 演化：
+        </p>
+        <ul>
+          <li><strong>Node 12-19</strong>：<code>--experimental-loader</code>（实验性）+ <code>--experimental-vm-modules</code>（Jest 等用）</li>
+          <li><strong>Node 20+</strong>：改成 <code>--import</code> + 内部 <code>module.register()</code> API（更清晰、稳定）</li>
+        </ul>
+        <p>
+          实际项目通常不直接写 loader——用 ts-node / tsx / Vitest 等已封装好的工具就够。但理解这层机制有助于排障"<em>为什么我的 import 行为奇怪</em>"。
+        </p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
           <h3 class="scenario-title">场景 A · 给项目从 CJS 迁到 ESM</h3>
-          <p><em>正文待写。</em>关键步骤：加 <code>"type": "module"</code> + 改所有 require → import + 修扩展名 + 修 __dirname / __filename。</p>
+          <p>
+            老 Node 项目从 CJS 迁 ESM 的关键步骤：(1) 加 <code>"type": "module"</code>；(2) 所有 <code>require</code> → <code>import</code>；(3) 加 .js 后缀；(4) <code>__dirname</code> / <code>__filename</code> 改用 <code>import.meta.url</code> + <code>fileURLToPath</code>；(5) 检查所有 <strong>条件 require</strong> 改成动态 <code>import()</code>；(6) 检查依赖里是否有<strong>纯 CJS 包</strong>—— 仍可被 ESM <code>import</code>，但默认导出可能行为不同。
+          </p>
         </div>
         <div class="scenario">
           <h3 class="scenario-title">场景 B · 调试 import 解析失败</h3>
-          <p><em>正文待写。</em>用 <code>node --trace-deprecation</code> 看 ESM 警告；用 <code>node -e "console.log(require.resolve('foo'))"</code> 看 CJS 实际解析路径。</p>
+          <p>
+            "<em>我的 import 跑不起来</em>"几乎都是 5 类问题之一：(1) 忘加 .js 后缀；(2) <code>"type": "module"</code> 没设；(3) 包的 <code>exports</code> 字段没列你想要的子路径；(4) 依赖是 CJS 但你想 named import（CJS 默认只有 default export）；(5) ESM 文件用了 <code>__dirname</code>。诊断工具：<code>node -e "console.log(require.resolve('foo'))"</code> 看 CJS 实际解析；<code>node --trace-warnings</code> 看 ESM 警告。
+          </p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C · TS + ESM 写法</h3>
-          <p><em>正文待写。</em>tsconfig.json 的 module / moduleResolution 设置 + 引入语法带 .js 后缀。</p>
+          <h3 class="scenario-title">场景 C · TS + ESM 项目正确写法</h3>
+          <p>
+            tsconfig 关键配置：<code>"module": "NodeNext"</code> + <code>"moduleResolution": "NodeNext"</code>。源文件用 <code>import x from './foo.js'</code>（<strong>.js 不是 .ts</strong>）。<code>package.json</code> 加 <code>"type": "module"</code>。如果用 ESM-only 工具（vitest / tsx）配合得好；如果生产用 tsc 编译再用 node 跑，按 NodeNext 规范来不会有问题。
+          </p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 库作者：发什么格式</h3>
+          <p>
+            写库的人面对的选择：(1) <strong>只发 CJS</strong>（兼容老 Node，新项目能 import）—— 安全选；(2) <strong>只发 ESM</strong>（现代，Node 22+ 起 require ESM 实验支持）—— 激进选；(3) <strong>发双格式</strong>（CJS + ESM + .d.ts）—— 大多数库的现代选择，用 tshy / tsup / unbuild 工具自动产出。详见 <a href="02-dual-package-hazard.html">P3.2 Dual Package Hazard</a>。
+          </p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
