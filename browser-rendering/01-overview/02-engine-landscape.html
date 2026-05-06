@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>三大引擎对照：Blink V8 / WebKit JSC / Gecko SpiderMonkey · P1.2 · 浏览器渲染管线深度学习</title>
+    <meta name="description" content="横向对照三大浏览器引擎的设计选择 + 现状份额 + 互相制约。Apple 拒绝实现某些 API 让 Chrome 不能彻底主导；Mozilla 标准合规态度让 Web 不至于变 Chrome-only。三引擎制衡是 Web 平台健康的关键。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234285F4'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EB%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>浏览器渲染管线深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.2 260); color: #fff">Browser</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P1 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · 浏览器是谁</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html">01 · 浏览器项目史（1993-2026）</a></li>
+          <li><a href="02-engine-landscape.html" class="active">02 · 三大引擎对照</a></li>
+        </ul>
+        <h3>其他阶段</h3>
+        <ul>
+          <li><a href="../02-multi-process/index.html">P2 · 多进程架构</a></li>
+          <li><a href="../03-crp/index.html">P3 · 关键渲染路径 CRP</a></li>
+          <li><a href="../04-performance/index.html">P4 · Web Vitals 与性能</a></li>
+          <li><a href="../05-modern-platform/index.html">P5 · 现代 Web Platform</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">浏览器渲染</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · 浏览器是谁</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 三大引擎对照</span>
+        </nav>
+        <h1>三大引擎对照：Blink V8 / WebKit JSC / Gecko SpiderMonkey</h1>
+        <p class="lead">
+          横向对照章。讲清三个浏览器引擎各自做了什么不同选择 + 现状份额（Blink 70% / WebKit 20% / Gecko 3%）+ 互相制约。<strong>关键洞察</strong>：Apple 拒绝实现某些 API 让 Chrome 不能彻底主导；Mozilla 标准合规态度让 Web 不至于变 Chrome-only。<strong>三引擎制衡是 Web 平台健康的关键</strong>，不是奢侈品——这一章把这种制衡的具体机制讲透。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P1.1</span>
+          <span><strong>主要来源</strong> chromium.org / webkit.org / mozilla.org · caniuse.com</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>三引擎不是「谁更好」的关系，是「分工 + 制衡」</strong>——Blink 推 Web 平台前进、WebKit 守 mobile + 隐私边界、Gecko 守标准合规底线。这种分工让 Web 平台不会过度倾斜。</li>
+          <li><strong>引擎差异主要在 JS 引擎 + 多进程 + 新特性速度</strong>——三引擎在 HTML/CSS 渲染基础上分歧不大，差异集中在 V8/JSC/SpiderMonkey 的 JIT 性能、Renderer 进程模型、新 API 实现节奏。</li>
+          <li><strong>Apple 在 iOS 上的 WebKit 强制（2024 EU DMA 前）让 WebKit 在 mobile 不能被 Chromium 完全替代</strong>——这是 Web 多引擎生态最关键的"反向制衡力"。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Blink (Chromium 系)：推平台前进的引擎</h3>
+        <p>Blink 是 Google 2013 年从 WebKit fork 出来的浏览器引擎。当前 <strong>Chrome / Edge / Brave / Opera / Vivaldi / Arc 等 Chromium 系浏览器</strong>都用它。市场份额最大（desktop 70%+ / mobile 65%+，合并约 90%+ 全球浏览器份额）。</p>
+        <p><strong>JS 引擎：V8</strong>。详见 <a href="../../v8/index.html">V8 主题</a>。简短回顾：4 层编译流水线（Ignition → Sparkplug → Maglev → TurboFan），Hidden Class + Inline Cache 是核心优化，Orinoco GC 处理内存。V8 是当前公认最快 / 最成熟的 JS 引擎。</p>
+        <p><strong>渲染引擎：Blink</strong>。从 WebKit fork 后大规模重构——剥离不需要的 KDE 兼容代码、组件解耦、多进程架构改造。现在与原始 WebKit 已经差异巨大。</p>
+        <p><strong>多进程架构</strong>：最激进。每个 site 独立 Renderer 进程（Site Isolation，2018 后）；GPU / Network / Utility 都独立进程；甚至 iframe 跨域也独立进程（OOPIF）。详见 <a href="../02-multi-process/01-process-model.html">P2.1</a>。</p>
+        <p><strong>新特性速度</strong>：最快。Chrome 团队主动推 <strong>Origin Trial</strong>（让开发者在 Chrome 上提前试新 API），反向推 Web 标准化。View Transitions / Speculation Rules / Shared Element Transitions / Anchor Positioning 等都是 Chrome 先实现，再推标准。这种「优先实现 + 推标准」模式有时被 WebKit / Gecko 反对（觉得 Chrome 强推未成熟标准）。</p>
+        <p><strong>商业绑定</strong>：Chrome 是 Google 广告业务入口。某些 API 设计可能偏向 Google 利益—— Privacy Sandbox（FLoC / Topics / FLEDGE）就是为了在抛弃 cookie 的同时保留广告生态。这种"商业绑定"是 Chromium 主导的潜在隐忧。</p>
+
+        <h3>WebKit (Apple/Safari)：守 mobile + 隐私边界的引擎</h3>
+        <p>WebKit 是 Apple 2001-2003 年从 KHTML/KJS（KDE 项目的浏览器引擎）fork 出来的引擎。当前用于 <strong>Safari (macOS/iOS)</strong> + iOS 上所有第三方浏览器（2024 EU DMA 前强制；DMA 后理论上可换但实际仍主流）。市场份额：desktop ~10% / mobile 30%+（iOS 上 95%+）。</p>
+        <p><strong>JS 引擎：JavaScriptCore (JSC)</strong>。详见 <a href="../../bun/02-internals/01-javascriptcore.html">Bun P2.1 JavaScriptCore</a>。简短回顾：4 层流水线（LLInt → Baseline → DFG → FTL/B3）；启动快是核心优势（LLInt 用 LLVM IR 写）；hot 性能略逊 V8 TurboFan。</p>
+        <p><strong>渲染引擎：WebKit</strong>。原始 WebKit 仍由 Apple 维护；2013 Blink fork 后两边独立演进，10 年下来代码差异巨大但<strong>规范层面对齐</strong>——基础 HTML/CSS 行为基本一致。</p>
+        <p><strong>多进程架构</strong>：较激进。每个 tab 独立 Renderer（macOS 上自 2014 Safari 起；iOS 上较晚）。但 Site Isolation 不如 Chromium 完整。</p>
+        <p><strong>新特性速度</strong>：最慢。Apple 通常等 W3C / WHATWG 规范成熟后才实现，不轻易跟 Chrome Origin Trial。<strong>但 Apple 在 mobile 优化上领先</strong>——iOS Safari 的内存效率 / 启动速度 / 触摸响应都比 Chrome iOS 好（这部分 Chrome iOS 也只能用 WebKit，所以是 Apple 的功劳）。</p>
+        <p><strong>关键拒绝：Apple 不实现某些 API</strong>——Web Bluetooth / WebUSB / Web NFC / Notifications API（部分） / Web Share Target / PWA 完整入口。Apple 公开理由是「这些 API 隐私 / 安全风险」（fingerprinting / 设备访问），实际隐含商业理由：<strong>这些 API 让 Web app 太接近 native app，威胁 App Store 商业模式</strong>。这种拒绝是 Apple 在 Web 平台上的"反向制衡力"——它阻止了 Chrome 把 Web 拉得太接近 native。</p>
+        <p><strong>iOS 强制 WebKit（2024 前）</strong>：iOS 上所有第三方浏览器（包括 Chrome iOS）必须用 WebKit。这意味着 Chrome iOS 不是"用 V8 跑的 Chrome"——它是"在 WebKit 引擎上套 Chrome UI 的浏览器"。性能 / 特性都受 Apple 限制。2024 年 3 月 EU DMA 生效解禁——但实际上 Google / Mozilla 仍未推完整第三方引擎到 iOS（受 Apple 各种合规限制阻挡），WebKit 仍 iOS 95%+ 主流。</p>
+
+        <h3>Gecko (Mozilla/Firefox)：守标准合规底线的引擎</h3>
+        <p>Gecko 是 Mozilla 1998-2002 年从 Netscape 代码全部重写的引擎。当前几乎只用于 <strong>Firefox</strong> + 一些 Mozilla-related 项目（Thunderbird / Tor Browser）。市场份额：~3%（持续下滑）。</p>
+        <p><strong>JS 引擎：SpiderMonkey</strong>。SpiderMonkey 是<strong>世界上第一个 JS 引擎</strong>——Brendan Eich 1995 在 Netscape 写的。后续大量重构（IonMonkey / WarpMonkey），现在的 SpiderMonkey 是 4 层 JIT（Interpreter → Baseline Interpreter → Baseline JIT → IonMonkey）。性能略逊 V8，但与 V8 + JSC 同等数量级。</p>
+        <p><strong>渲染引擎：Gecko</strong>。Mozilla 2012-2020 年用 Rust 写新引擎 <strong>Servo</strong>，目标是替代 Gecko。最后 Servo 部分组件被吸收回 Gecko（CSS 引擎 Stylo 在 Firefox 57 / 2017 上线）；2020 Mozilla 大裁员后 Servo 被分拆出去。完整 Servo 没有取代 Gecko —— Gecko 仍是 Firefox 主引擎。</p>
+        <p><strong>多进程架构</strong>：中等。Firefox 自 2017 「Quantum」 起逐步多进程（Project Electrolysis），目前 4-8 个 Content process（每 site 不独立，按数量分组）。Site Isolation 投入不如 Chromium。</p>
+        <p><strong>标准合规态度</strong>：最严格。Mozilla 长期是 W3C / WHATWG / TC39 的核心贡献者，对规范文本质量要求极高。一些 Chrome Origin Trial 的特性 Mozilla 拒绝实现（直到规范成熟）—— 这种<strong>「保守但严谨」</strong>的态度让 Web 不会被 Chrome 单方面推着走。</p>
+        <p><strong>财务困境</strong>：Mozilla 主要收入来自 Google 给的「搜索默认协议费」（每年约 4 亿美元）。这个收入受 Google / 美国反垄断诉讼影响，<strong>长期不稳定</strong>。Mozilla 2024 关闭多个产品（Pocket / Hubs / Voice），裁员 30%+。Gecko 投入逐年减少，新特性跟进越来越慢。</p>
+
+        <h3>三引擎对照矩阵</h3>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 18%">维度</th>
+              <th style="width: 27%">Blink (Chromium)</th>
+              <th style="width: 27%">WebKit (Apple)</th>
+              <th style="width: 28%">Gecko (Mozilla)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>JS 引擎</strong></td>
+              <td>V8</td>
+              <td>JavaScriptCore</td>
+              <td>SpiderMonkey</td>
+            </tr>
+            <tr>
+              <td><strong>主要浏览器</strong></td>
+              <td>Chrome / Edge / Brave / Opera / Vivaldi / Arc</td>
+              <td>Safari + iOS 第三方</td>
+              <td>Firefox + Thunderbird</td>
+            </tr>
+            <tr>
+              <td><strong>desktop 份额</strong></td>
+              <td>~70%</td>
+              <td>~10%</td>
+              <td>~3%</td>
+            </tr>
+            <tr>
+              <td><strong>mobile 份额</strong></td>
+              <td>~65%（Android）</td>
+              <td>~30%（iOS 95%+）</td>
+              <td>&lt; 1%</td>
+            </tr>
+            <tr>
+              <td><strong>多进程</strong></td>
+              <td>极激进（per site）</td>
+              <td>较激进（per tab）</td>
+              <td>中等（Fission 跟进）</td>
+            </tr>
+            <tr>
+              <td><strong>新特性速度</strong></td>
+              <td>最快（Origin Trial）</td>
+              <td>慢（等规范）</td>
+              <td>中（保守但合规）</td>
+            </tr>
+            <tr>
+              <td><strong>mobile 优化</strong></td>
+              <td>Android 主导</td>
+              <td>iOS 唯一 / 最深</td>
+              <td>Mobile 弱</td>
+            </tr>
+            <tr>
+              <td><strong>标准合规</strong></td>
+              <td>中（推自家 OT）</td>
+              <td>中（保守拒绝）</td>
+              <td>高（最严格）</td>
+            </tr>
+            <tr>
+              <td><strong>财务模式</strong></td>
+              <td>Google 广告业务支持</td>
+              <td>Apple 硬件销售支持</td>
+              <td>Google 搜索协议费（不稳）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>三引擎制衡的具体机制</h3>
+        <p>「三引擎制衡」不是抽象口号，是有具体机制的：</p>
+        <p><strong>(1) Apple 拒绝实现 = "硬墙"</strong>。Web Bluetooth / WebUSB / Web NFC / PWA 完整入口等 API，Chrome 实现了但 Apple 拒绝。这意味着<strong>开发者不能假设这些 API 在所有平台可用</strong>——必须 fallback。这阻止了 Web 平台被 Chrome 单方面拉向 native。</p>
+        <p><strong>(2) Mozilla 标准合规 = "底线"</strong>。Mozilla 在规范讨论里的立场严格——某些 Chrome 想推的 API 设计如果 Mozilla 觉得不合理，Mozilla 拒绝实现 + 提反对意见 + 提替代方案。Chrome 团队为了让 API 进入 W3C/WHATWG 标准，必须妥协设计 → 让 API 更好。</p>
+        <p><strong>(3) caniuse 是「制衡的可见化」</strong>。caniuse.com 把每个 API 在三引擎的实现状态 visualize 出来。开发者一看就知道「这个 API 全引擎兼容吗」——制衡的存在直接转化为开发实践。</p>
+        <p><strong>(4) Web Platform Tests (WPT)</strong>。三引擎共同维护的测试套件，确保规范实现一致。测试不通过 → 引擎修复。这套机制让<strong>三引擎在基础规范层面行为对齐</strong>，差异主要在新特性。</p>
+        <p>这种制衡的<strong>结果</strong>是：Web 平台 API 设计经过三引擎博弈后，比单一公司单独决定更合理（虽然进度慢）。这是 Web 30+ 年长期健康的核心机制。</p>
+
+        <h3>JS 引擎横评</h3>
+        <p>三个 JS 引擎细节差异：</p>
+        <p><strong>V8 vs JSC vs SpiderMonkey 性能</strong>：</p>
+        <ul>
+          <li><strong>启动时间</strong>：JSC ~5-10ms &lt; V8 ~30ms &lt; SpiderMonkey ~30ms。JSC 优势来自 LLInt 用 LLVM IR 写。</li>
+          <li><strong>冷启内存</strong>：JSC ~25MB &lt; V8/SpiderMonkey ~50MB。</li>
+          <li><strong>稳态 hot 性能</strong>：V8 TurboFan ≈ SpiderMonkey IonMonkey &gt; JSC FTL/B3（V8/SpiderMonkey 略胜 5-15%）。</li>
+          <li><strong>大对象处理</strong>：V8 / SpiderMonkey 略好（更成熟的 GC）。</li>
+        </ul>
+        <p><strong>实际差异</strong>：在常规 web app 上三引擎差距不到 20%——用户体验差异主要来自<strong>渲染引擎 + 多进程架构 + 网络层</strong>，不是 JS 引擎。</p>
+
+        <h3>渲染引擎差异</h3>
+        <p>三引擎在 HTML/CSS 渲染上<strong>规范层面对齐</strong>，差异在实现细节：</p>
+        <p><strong>(1) Layout 算法实现</strong>——Blink LayoutNG（2017+，新一代 layout 引擎）；WebKit 用更传统的 layout 实现；Gecko Stylo（CSS 引擎用 Rust 写，从 Servo 吸收）。LayoutNG / Stylo 都比传统实现快很多 + 更准确。</p>
+        <p><strong>(2) Paint 实现</strong>——Blink 用 Skia（2D 图形库）；WebKit 用 Core Graphics（macOS/iOS native）+ Skia（其他平台）；Gecko 用 WebRender（Rust，从 Servo 吸收）。WebRender 是 Gecko 性能跃升的关键（2019 上线）。</p>
+        <p><strong>(3) GPU 合成</strong>——Blink / WebKit / Gecko 都用 tile-based + GPU 合成，机制相似但实现不同。详见 <a href="../03-crp/03-paint-composite.html">P3.3</a>。</p>
+        <p><strong>(4) 渲染开销实测</strong>——同一个网页在三引擎上的 LCP / INP / CLS 差异通常 &lt; 20%。如果差异大，往往是某个特性 corner case。</p>
+
+        <h3>新特性实现速度对比</h3>
+        <p>把 2020-2026 年关键 Web 平台特性的三引擎实现进度对比（取每个特性"稳定可用"时间）：</p>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 32%">特性</th>
+              <th style="width: 22%">Chrome</th>
+              <th style="width: 22%">Safari</th>
+              <th style="width: 24%">Firefox</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>CSS Grid</td>
+              <td>2017</td>
+              <td>2017</td>
+              <td>2017</td>
+            </tr>
+            <tr>
+              <td>Web Components (custom elements v1)</td>
+              <td>2016</td>
+              <td>2018</td>
+              <td>2018</td>
+            </tr>
+            <tr>
+              <td>Container Queries</td>
+              <td>2022 (105)</td>
+              <td>2022 (16)</td>
+              <td>2023 (110)</td>
+            </tr>
+            <tr>
+              <td>:has() 选择器</td>
+              <td>2022 (105)</td>
+              <td>2022 (15.4)</td>
+              <td>2023 (121)</td>
+            </tr>
+            <tr>
+              <td>View Transitions</td>
+              <td>2023 (111)</td>
+              <td>未支持（在路上）</td>
+              <td>未支持</td>
+            </tr>
+            <tr>
+              <td>Speculation Rules</td>
+              <td>2024 (121)</td>
+              <td>未支持</td>
+              <td>未支持</td>
+            </tr>
+            <tr>
+              <td>Popover API</td>
+              <td>2023 (114)</td>
+              <td>2023 (17.0)</td>
+              <td>2024 (125)</td>
+            </tr>
+            <tr>
+              <td>CSS Anchor Positioning</td>
+              <td>2024 (125)</td>
+              <td>未支持</td>
+              <td>未支持</td>
+            </tr>
+            <tr>
+              <td>scheduler.yield()</td>
+              <td>2024 (129)</td>
+              <td>未支持</td>
+              <td>未支持</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>规律：<strong>(1) Chrome 通常先实现新特性</strong>；(2) Safari 跟进时间不一致（保守特性较快，激进特性可能不实现）；(3) Firefox 跟进最慢但<strong>会跟进</strong>。这种节奏意味着用<strong>「全引擎兼容的 baseline」</strong>是最稳的开发策略。</p>
+
+        <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 用 Web Platform Baseline 2024 作为开发基线</h3>
+          <p>团队问"我们用什么 baseline 开发"——<strong>Web Platform Baseline</strong>（web.dev 推出的"全引擎共同支持"列表）是 2026 年最合理的答案。Baseline 2024 意味着 Chrome / Edge / Firefox / Safari 在 2024 年共同支持的特性集合。包括：CSS Grid / Flexbox / Custom Properties / :has() / Container Queries / Popover API（部分）等。开发新项目时<strong>所有用到的特性都在 Baseline 内</strong>就能保证三引擎都跑——不需要 polyfill / 渐进增强。具体做法：(1) caniuse.com 查每个特性的 Baseline 状态；(2) browserslist 配置 <code>baseline: 2024</code>（PostCSS / babel 自动控制）；(3) 用 <code>@supports</code> 处理 Baseline 之外的"实验性"特性。这套基线让你不必为兼容性焦虑。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 评估「我们的项目能不能依赖 View Transitions API」</h3>
+          <p>团队想用 View Transitions 做页面间动画——但这是 Chrome-only 特性（Safari / Firefox 未支持）。判据：(1) <strong>用户分布</strong>—— 你的项目 Chrome 占多少？如果 80%+ 是 Chrome（典型 desktop SaaS），用 View Transitions + fallback 给 Safari/Firefox 是合理的渐进增强。(2) <strong>Fallback 设计</strong>—— Safari/Firefox 上没有过渡，但页面切换仍然 work（不卡死）；用 <code>@supports</code> 检测。(3) <strong>等待 Safari/Firefox 跟进</strong>—— Chrome 的实验性特性通常 1-2 年被其他引擎跟进；如果项目长期，等是合理选择。综合：<strong>Web 平台特性可以用，但要做 fallback 设计</strong>，不能假设全引擎都跑。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 给 PWA 项目评估「iOS 上 Apple 限制」</h3>
+          <p>团队想做 PWA（Progressive Web App）覆盖 mobile——但 iOS 上 Apple 限制 PWA 完整体验。具体限制：(1) <strong>Add to Home Screen 必须用户手动操作</strong>——iOS 不会弹"安装" prompt；(2) <strong>Push Notifications 16.4 才支持</strong>——之前完全不支持 web push；(3) <strong>Service Worker 限制</strong>——Background Sync / Periodic Background Sync 不支持；(4) <strong>App Store 不能上架 PWA</strong>——用户只能从浏览器装。综合：<strong>iOS 上 PWA 体验显著弱于 Android</strong>。规避：(1) 接受 iOS PWA 是"次等体验"；(2) 关键功能仍走 native app + WebView 混合；(3) 等 EU DMA 生效后看是否有改善（短期内不明显）。这种限制是 Apple 对 PWA 商业威胁的故意防御——不会快速消失。</p>
+        </div>
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 给做技术决策的架构师：评估「Mozilla 财务困境对 Firefox 影响」</h3>
+          <p>架构师关心"Firefox 在 2030 年还存在吗"——这是合理担心，影响"是否在 Firefox 上测试"的决策。评估：(1) <strong>Mozilla 主要收入</strong>——Google 搜索默认协议费（每年 ~4 亿美元）。如果 Google 因反垄断被迫停付，Mozilla 财务立即崩溃。(2) <strong>美国反垄断诉讼</strong>——Google v. DOJ 2024 判决 Google 是搜索垄断者，但 Search Engine Default Payment 是否被禁止仍未定。(3) <strong>Firefox 投入趋势</strong>——Mozilla 团队 2024 年裁员 30%+，Gecko 投入持续减少；新特性跟进越来越慢。(4) <strong>3-5 年预判</strong>—— Firefox 不会立即消失（Mozilla 仍有现金 + 多年衰退迹象但未崩盘），但会持续衰退。对你的影响：<strong>Firefox 仍要支持（合规 + 用户群）</strong>，但优先级降低；Chrome / Safari 是优先 + Firefox 可接受 corner case。</p>
+        </div>
+
+        <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// 检测特性 + 三引擎兼容性 + 渐进增强
+// 用例：用 View Transitions API 做页面切换动画
+
+async function navigateWith动画(url) {
+  // 检测浏览器是否支持 View Transitions API
+  if (!document.startViewTransition) {
+    // Safari / Firefox 未支持 → 直接导航
+    location.href = url;
+    return;
+  }
+
+  // Chrome / Edge 支持 → 用 View Transitions
+  const transition = document.startViewTransition(async () =&gt; {
+    // 改变 DOM（异步）
+    await loadPage(url);
+  });
+
+  await transition.finished;
+}
+
+// 这种"特性检测 + fallback"是 Web 平台开发的标准模式
+// 三引擎的差异通过这种 pattern 抹平</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// 检测三引擎的具体行为差异（开发时排查 corner case 用）
+const tests = {
+  'View Transitions': 'startViewTransition' in document,
+  'Container Queries': CSS.supports('container-type: inline-size'),
+  ':has() 选择器': CSS.supports('selector(:has(*))'),
+  'Popover API': HTMLElement.prototype.hasOwnProperty('showPopover'),
+  'scheduler.yield': 'scheduler' in window &amp;&amp; 'yield' in scheduler,
+  'Web Bluetooth': 'bluetooth' in navigator,
+  'Web Share': 'share' in navigator,
+};
+
+console.table(tests);
+// 在三引擎跑这段代码会看到不同的特性支持表
+// Chrome: 大部分 true
+// Safari: View Transitions / scheduler.yield / Web Bluetooth false
+// Firefox: View Transitions / scheduler.yield / Anchor Positioning false</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+        <div class="pitfall">
+          <div class="pitfall-title">把「全引擎都支持」作为唯一标准</div>
+          <p>有人坚持「除非全引擎都支持，否则不能用」——这<strong>过于保守</strong>。Web 平台演进的现实是：Chrome 先实现 → 1-2 年其他引擎跟进。如果你坚持等全引擎，你比 Chrome 用户晚拿到所有新特性 1-2 年。<strong>合理的策略</strong>：(1) Baseline 内的特性放心用（已全引擎支持）；(2) Baseline 之外的实验性特性<strong>用 + fallback</strong>——Chrome 用户拿到优秀体验，Safari/Firefox 用户拿到 baseline 体验；(3) 测试覆盖关键 fallback 路径。这种渐进增强是 Web 平台开发的成熟模式。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">假设 iOS 上的 Chrome 是「真 Chrome」</div>
+          <p>用户在 iOS 上装的 Chrome 实际是<strong>「WebKit + Chrome UI」</strong>——JS 引擎是 JSC（不是 V8），渲染引擎是 WebKit（不是 Blink）。所以 iOS Chrome 的特性支持 = Safari 特性支持 + Chrome UI（同步 / 历史 / etc.）。<strong>对你的影响</strong>：iOS Chrome 用户拿不到 Chrome desktop 上的 Chrome-only 特性（View Transitions / Speculation Rules）。如果你在 Chrome desktop 上测试通过，iOS Chrome 上仍可能不工作。规避：iOS 测试当成 Safari 测试看待。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">期待 Mozilla 「永远」 跟进新特性</div>
+          <p>Mozilla 财务困境 + 团队裁员让 Firefox 跟进新特性越来越慢。某些 Chrome 已实现 1-2 年的特性，Firefox 仍未排上日程。<strong>规避策略</strong>：(1) 不期待 Firefox 跟 Chrome 节奏一致；(2) 用 Web Platform Baseline 而非 Chrome 最新特性作为基线；(3) 关键特性的 Firefox 进度可以查 Bugzilla（Mozilla bug tracker）。如果 Mozilla 5 年内继续衰退，Web 多引擎制衡会从 3 个变 2 个（Blink + WebKit），格局会有质变。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">用「Origin Trial」=「正式 API」</div>
+          <p>Chrome 推 Origin Trial 让开发者提前用某个新 API（注册一个 token，在 HTTP header 声明）。这<strong>不等于该 API 是正式标准</strong>——只是 Chrome 的"实验"。Origin Trial 期间 API 可能<strong>变签名 / 行为 / 甚至取消</strong>。<strong>规避</strong>：production 不依赖 Origin Trial 特性；要用先评估"如果这个 API 变了我们要改多少代码"。Origin Trial 适合 prototype / 有限场景，不适合作为产品基础。</p>
+        </div>
+
+        <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://web.dev/baseline/" target="_blank" rel="noopener">Web Platform Baseline</a> · 全引擎共同支持基线</li>
+          <li><a href="https://caniuse.com/" target="_blank" rel="noopener">caniuse.com</a> · 浏览器特性兼容查询</li>
+          <li><a href="https://developer.mozilla.org/en-US/docs/Web" target="_blank" rel="noopener">MDN Web Docs</a> · Mozilla 出品的 Web 文档（中立详细）</li>
+          <li><a href="https://web-platform-tests.org/" target="_blank" rel="noopener">Web Platform Tests</a> · 三引擎共享的规范测试</li>
+          <li><a href="https://wpt.fyi/" target="_blank" rel="noopener">wpt.fyi</a> · 三引擎在 WPT 上的实时通过率</li>
+          <li>对照 V8 → <a href="../../v8/01-overview/02-engine-landscape.html">V8 P1.2 引擎横评</a></li>
+          <li>对照 JSC → <a href="../../bun/02-internals/01-javascriptcore.html">Bun P2.1 JavaScriptCore</a></li>
+          <li>下一章 → <a href="../02-multi-process/01-process-model.html">P2.1 · Chromium 进程模型</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-history.html"><span class="label">← 上一章</span><span class="title">P1.1 · 浏览器项目史（1993-2026）</span></a>
+          <a class="next" href="../02-multi-process/01-process-model.html"><span class="label">下一章 →</span><span class="title">P2.1 · Chromium 进程模型</span></a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录"><h3>本页目录</h3><ul></ul></aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

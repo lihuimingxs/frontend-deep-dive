@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>浏览器渲染管线深度学习 · CRP / Web Vitals / 多进程架构</title>
+    <meta
+      name="description"
+      content="浏览器渲染机制深度学习。5 阶段、11 章：从浏览器项目史与三引擎对照（Blink / WebKit / Gecko）→ Chromium 多进程架构 + Site Isolation → 关键渲染路径 CRP（Parse → Layout → Composite 三段）→ Web Vitals 性能 metrics（LCP/INP/CLS）+ 动画性能 → 现代 Web Platform 特性（View Transitions / Container Queries / Speculation Rules / Scheduler API）。回答「从 URL 到屏幕像素」全管线。"
+    />
+    <link rel="stylesheet" href="../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234285F4'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EB%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="index.html">
+          <span>浏览器渲染管线深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.55 0.2 260); color: #fff">Browser</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">← 深度学习</a>
+          <a href="https://web.dev/" target="_blank" rel="noopener">web.dev</a>
+          <a href="https://developer.chrome.com/" target="_blank" rel="noopener">Chrome Docs</a>
+          <a href="#phases">章节</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <main id="main" class="home">
+      <section class="hero">
+        <h1>浏览器渲染管线深度学习 · CRP / Web Vitals / 多进程架构</h1>
+        <p>
+          基于
+          <a href="https://web.dev/" target="_blank" rel="noopener">web.dev</a> +
+          <a href="https://developer.chrome.com/" target="_blank" rel="noopener">developer.chrome.com</a> +
+          <a href="https://www.chromium.org/developers/design-documents/" target="_blank" rel="noopener">Chromium 设计文档</a>
+          整理。回答三个问题：<strong>浏览器怎么走到今天</strong>（NCSA Mosaic 1993 → Netscape → IE → Webkit/Gecko/Blink → Chromium 90% 主导）、<strong>它怎么把 HTML/CSS/JS 渲染成像素</strong>（多进程 + CRP 三段：Parse → Layout → Composite）、<strong>性能问题怎么诊断</strong>（Web Vitals 三段：LCP/INP/CLS + 动画 fps）。是 <a href="../v8/index.html">V8</a> 主题之上的"应用层"延伸。
+        </p>
+        <div class="hero-meta">
+          <span>受众 <code>已学完 V8 / ECMA / JS 的工程师</code></span>
+          <span>来源 <code>web.dev / Chromium / WebKit / Mozilla</code></span>
+          <span>章节 <code>11 章 / 5 阶段</code></span>
+          <span>状态 <code>✅ 11/11 章完成</code></span>
+        </div>
+      </section>
+
+      <h2 id="phases" style="margin-top: 0">分阶段目录</h2>
+      <p style="color: var(--text-muted); max-width: 720px">
+        共 5 个阶段、11 章，按"渲染管线"展开：<strong>浏览器是谁 → 多进程架构 → 关键渲染路径 CRP → Web Vitals 性能 → 现代 Web Platform</strong>。建议顺序阅读；性能调优 / 排障的工程师可直接跳 P3.3 + P4 全部 + DevTools Performance；做 SSR / 全栈框架的看 P2 + P3.1。
+      </p>
+
+      <div class="phase-grid">
+        <a class="phase-card" href="01-overview/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P1 · 浏览器是谁</h3>
+            <span class="phase-card-badge">✅ 2 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            浏览器 33 年项目史（NCSA Mosaic 1993 → Netscape → IE → Webkit/Gecko/Blink → 2018 Edge 切 Chromium → 2020+ Chromium 90%+ 份额 → 2024 EU DMA 解禁 iOS 引擎）+ 三引擎对照（Blink V8 / WebKit JSC / Gecko SpiderMonkey 各自不同的设计选择 + 互相制约）。
+          </p>
+          <div class="phase-card-topics">
+            <span>NCSA Mosaic</span>
+            <span>第一次浏览器战争</span>
+            <span>WebKit fork → Blink</span>
+            <span>Chromium 主导</span>
+            <span>Blink / WebKit / Gecko</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="02-multi-process/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P2 · 多进程架构</h3>
+            <span class="phase-card-badge">✅ 2 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            Chrome 2008 年立项的核心创新。<strong>Browser / Renderer / GPU / Network / Utility 5 类进程职责</strong>（Mojo IPC / Site Isolation per origin）+ <strong>Spectre 后的安全演化</strong>（2018 Site Isolation / Out-of-Process iframes / COOP/COEP 让 SharedArrayBuffer 重新可用）。
+          </p>
+          <div class="phase-card-topics">
+            <span>5 类进程职责</span>
+            <span>Mojo IPC</span>
+            <span>Site Isolation</span>
+            <span>OOPIF</span>
+            <span>COOP / COEP</span>
+            <span>SharedArrayBuffer</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="03-crp/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P3 · 关键渲染路径 CRP</h3>
+            <span class="phase-card-badge">✅ 3 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            从 URL 到屏幕像素的完整流水线。<strong>Parse 段</strong>（HTML parser + Preload scanner + CSSOM 阻塞 + JS async/defer 语义）+ <strong>Layout 段</strong>（Style cascade + Layout/Reflow 算法 + Box model + CSS Containment + content-visibility）+ <strong>Paint/Composite 段</strong>（Paint records + Layer tree + Tile-based GPU raster + transform/opacity 黄金路径）。
+          </p>
+          <div class="phase-card-topics">
+            <span>Preload scanner</span>
+            <span>CSSOM 阻塞</span>
+            <span>Reflow / Layout</span>
+            <span>CSS Containment</span>
+            <span>GPU 合成</span>
+            <span>transform 黄金路径</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="04-performance/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P4 · Web Vitals 与性能</h3>
+            <span class="phase-card-badge">✅ 3 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            2020 Google 推出的 Web Vitals 是「用户体验可量化」的事实标准。<strong>载入侧</strong>（LCP / FCP / TTFB + preload / fetchpriority）+ <strong>交互侧</strong>（INP 替代 FID + Long Tasks + scheduler.yield/postTask）+ <strong>稳定性 + 动画</strong>（CLS + 60fps 硬约束 + transform vs top/left 优化）。
+          </p>
+          <div class="phase-card-topics">
+            <span>LCP / FCP / TTFB</span>
+            <span>INP（替代 FID）</span>
+            <span>Long Tasks</span>
+            <span>scheduler.yield</span>
+            <span>CLS</span>
+            <span>60fps 动画</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="05-modern-platform/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P5 · 现代 Web Platform</h3>
+            <span class="phase-card-badge">✅ 1 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            2024-2026 的关键新特性，让浏览器从「渲染引擎」进化为「应用平台」。<strong>View Transitions</strong>（替代 Framer Motion 部分场景）+ <strong>Container Queries</strong>（基于父容器的 responsive）+ <strong>Speculation Rules</strong>（真预渲染下一页）+ <strong>Scheduler API</strong> + <strong>Popover / Anchor Positioning / CSS Nesting</strong>（从 JS hack 到平台原语的趋势）。
+          </p>
+          <div class="phase-card-topics">
+            <span>View Transitions</span>
+            <span>Container Queries</span>
+            <span>Speculation Rules</span>
+            <span>Scheduler API</span>
+            <span>Popover</span>
+            <span>Anchor Positioning</span>
+          </div>
+        </a>
+      </div>
+
+      <h2 style="margin-top: 48px">编写约定</h2>
+      <p style="color: var(--text-muted); max-width: 720px">
+        每章遵循统一的 6 段结构：<strong>速览 → 底层逻辑 → 应用场景 → 典型代码 → 常见陷阱 → 延伸阅读</strong>。本主题相比 V8 / Node 有以下额外约定：
+      </p>
+      <ul style="color: var(--text-muted); line-height: 1.8">
+        <li>
+          <strong>「短重述 + 链回」</strong> —— 当一个机制在
+          <a href="../v8/index.html">V8</a> /
+          <a href="../ecma/index.html">ECMA</a> /
+          <a href="../javascript/index.html">JavaScript</a> 主题已详述时（如 V8 编译流水线 / GC / Microtask Queue / Promise），本主题用 1-3 句话点到本质，紧跟一句"详细的 X 请参考 Y"
+        </li>
+        <li>
+          <strong>版本号与浏览器都要标</strong> —— 浏览器特性 cross-browser 兼容性差异大，每个特性必标"Chrome X / Safari Y / Firefox Z"
+        </li>
+        <li>
+          <strong>web.dev / Chromium 一手优先</strong> —— 每个机制的"权威定义"必须来自浏览器引擎团队官方文档；caniuse.com 验证兼容性
+        </li>
+        <li>
+          <strong>关注 Spec → 实现差距</strong> —— W3C / WHATWG 规范定义行为，但浏览器实现往往有 quirks；涉及 corner case 时同时引用规范 + 引擎源码 + caniuse
+        </li>
+      </ul>
+
+      <h2 style="margin-top: 48px">与既有主题的关系</h2>
+      <p style="color: var(--text-muted); max-width: 720px">
+        本主题<strong>不重复</strong> V8 / ECMA / JS 主题已经讲透的底层机制，但会在每个交叉点提供"短重述 + 链接"。常见对应：
+      </p>
+      <ul style="color: var(--text-muted); line-height: 1.8">
+        <li>
+          P1.2 引擎对照 → V8
+          <a href="../v8/01-overview/02-engine-landscape.html">P1.2 V8 分身史</a> +
+          <a href="../bun/02-internals/01-javascriptcore.html">Bun P2.1 JavaScriptCore</a>
+        </li>
+        <li>
+          P2.1 Renderer 进程内 V8 → V8
+          <a href="../v8/05-embedding/01-embedder-api.html">P5.1 Embedder API</a>（每 Renderer 一个 V8 Isolate）
+        </li>
+        <li>
+          P2.2 Site Isolation + COOP/COEP → ECMA
+          <a href="../ecma/07-execution/05-memory-model.html">P7.5 §24 Memory Model</a>（SharedArrayBuffer + Atomics）
+        </li>
+        <li>
+          P4.2 Long Tasks + scheduler → ECMA
+          <a href="../ecma/07-execution/03-event-loop-async.html">P7.3 Event Loop 规范</a>
+        </li>
+        <li>
+          P4.3 GC pause 作 jank 来源 → V8
+          <a href="../v8/04-memory/02-orinoco-gc.html">P4.2 Orinoco GC</a>
+        </li>
+        <li>
+          P4.1 fetch / preload → 待写的 HTTP/2/3 主题
+        </li>
+      </ul>
+    </main>
+
+    <script src="../assets/app.js"></script>
+  </body>
+</html>
