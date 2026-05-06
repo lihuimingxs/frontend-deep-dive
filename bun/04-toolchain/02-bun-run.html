@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>bun run / TS 直跑 / --hot vs --watch / glob import · P4 · Bun 深度学习</title>
-    <meta name="description" content="bun 作为脚本 runner / 开发时 runtime 的章节。<code>bun run</code> 不只是「跑 package.json scripts」——它是 Bun runtime 的入口。<strong>关键洞察</strong>：--hot 保留 in-memory 状态做模块替换（Bun 独有），与 Node --watch 整进程重启的差异，决定了开发体验差距。" />
+    <title>bun run 与 runtime：直跑 TS / --hot / glob import · P4.2 · Bun 深度学习</title>
+    <meta name="description" content="bun 作为脚本 runner / 开发时 runtime 的章节。直跑 TS/TSX、--hot vs --watch、glob import、.env 自动加载、tsconfig paths、JSC Inspector。--hot 保留 in-memory 状态做模块替换是 Bun 独有，与 Node --watch 整进程重启对比。" />
     <link rel="stylesheet" href="../../assets/styles.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23fbf0df'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23000'%3EB%3C/text%3E%3C/svg%3E" />
   </head>
@@ -28,9 +28,9 @@
         <ul>
           <li><a href="index.html">阶段概览</a></li>
           <li><a href="01-bun-install.html">01 · bun install：替代 pnpm / npm / yarn</a></li>
-          <li><a href="02-bun-run.html" class="active">02 · bun run 与 runtime：直跑 TS、--hot、glob import</a></li>
-          <li><a href="03-bun-build.html">03 · bun build：bundler + --compile SEA 替代</a></li>
-          <li><a href="04-bun-test.html">04 · bun test：替代 Vitest / Jest / node:test</a></li>
+          <li><a href="02-bun-run.html" class="active">02 · bun run 与 runtime</a></li>
+          <li><a href="03-bun-build.html">03 · bun build</a></li>
+          <li><a href="04-bun-test.html">04 · bun test</a></li>
         </ul>
         <h3>其他阶段</h3>
         <ul>
@@ -45,66 +45,304 @@
           <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
           <a href="../index.html">Bun</a><span class="breadcrumb-sep">/</span>
           <a href="index.html">P4 · 一体化工具链</a><span class="breadcrumb-sep">/</span>
-          <span>02 · bun run 与 runtime：直跑 TS、--hot、glob import</span>
+          <span>02 · bun run 与 runtime</span>
         </nav>
-        <h1>bun run / TS 直跑 / --hot vs --watch / glob import</h1>
+        <h1>bun run 与 runtime：直跑 TS、--hot、glob import</h1>
         <p class="lead">
-          bun 作为脚本 runner / 开发时 runtime 的章节。<code>bun run</code> 不只是「跑 package.json scripts」——它是 Bun runtime 的入口。<strong>关键洞察</strong>：--hot 保留 in-memory 状态做模块替换（Bun 独有），与 Node --watch 整进程重启的差异，决定了开发体验差距。
+          bun 作为脚本 runner / 开发时 runtime 的章节。<code>bun run</code> 不只是"跑 package.json scripts"——它是 Bun runtime 的入口。<strong>关键洞察</strong>：<code>--hot</code> 保留 in-memory 状态做模块替换是 Bun 独有的，与 Node <code>--watch</code> 整进程重启的差异，决定了开发体验差距。这一章讲透 TS/TSX 直跑、--hot vs --watch、glob import、.env 自动加载、tsconfig paths 解析、JSC Inspector 调试。
         </p>
         <div class="chapter-meta">
           <span><strong>阅读时长</strong> ~25 分钟</span>
-          <span><strong>前置</strong> P3 + Node P6.1 watch mode</span>
+          <span><strong>前置</strong> P3 + <a href="../../node/06-modern/01-modern-node.html">Node P6.1 watch mode</a></span>
           <span><strong>主要来源</strong> bun.com/docs/runtime · bun.com/blog hot reloading</span>
-        </div>
-
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>本章为<strong>骨架</strong>。已完成大纲与关键知识点列表（见各段标题下的 bullet），正文撰写中。可参考 <a href="../../bun/outline.md">outline.md</a> 了解完整覆盖范围。</p>
         </div>
 
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
-          <li><em>正文待写。</em></li>
+          <li><strong>bun run = 运行入口 + 脚本快捷</strong>——<code>bun run app.ts</code> 直接跑 TS（不需要 ts-node / tsx）；<code>bun run script-name</code> 跑 package.json 的 scripts。这两种用法共享同一个 CLI。</li>
+          <li><strong>--hot 与 --watch 是不同的开发体验</strong>—— <code>--watch</code> 整进程重启（类似 nodemon / Node --watch）；<code>--hot</code> 保留进程，模块级热替换 in-memory 状态保留——dev 服务器 / 长连接场景下体验质变。</li>
+          <li><strong>".env 自动加载 + TS/JSX 直跑 + tsconfig paths" 是 Bun 的零配置体验</strong>——大部分 Node 项目要装 dotenv / ts-node / tsconfig-paths 才能 setup；Bun 这些都是默认行为。</li>
         </ol>
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
-        <p><em>正文待写。本章覆盖：TS/TSX 直跑 · --hot vs --watch · glob import · .env 自动加载 · tsconfig paths · JSC Inspector · bun --print/--eval</em></p>
+
+        <h3>「bun run」的两种用法</h3>
+        <p><code>bun run</code> 在<strong>不同上下文里有两种含义</strong>，理解这点能避免困惑：</p>
+        <p><strong>(1) 跑文件入口</strong>——<code>bun run app.ts</code> 或 <code>bun app.ts</code>（省略 <code>run</code> 也行）。Bun 把这个文件当成 entry，启动 runtime 跑。这种用法<strong>等价于 <code>node app.js</code></strong>，但额外支持 .ts / .tsx / .jsx / .mts / .cts。</p>
+        <p><strong>(2) 跑 package.json scripts</strong>——<code>bun run dev</code> 或 <code>bun dev</code>（省略 <code>run</code> 也行）。Bun 在 package.json 里查 scripts.dev 字段，跑那个命令。这种用法<strong>等价于 <code>npm run dev</code></strong>。</p>
+        <p>Bun 怎么区分？看参数：如果是文件路径（包含 <code>.</code> 或 <code>/</code>），认为是文件入口；否则是 script 名。如果 script 名和文件名冲突，<code>bun run script-name</code> 优先 script。</p>
+        <p>这种"省略 run"的设计让命令行体验非常清爽：</p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+<pre class="code"><code class="lang-bash"># 跑 TS 入口
+bun app.ts                    # 等价 bun run app.ts
+bun ./scripts/build.ts        # 跑脚本
+
+# 跑 npm scripts
+bun dev                       # 等价 bun run dev
+bun test                      # 跑 package.json 的 test script（注意 bun test 也是内置命令，优先级特殊）
+bun build                     # 跑 build script
+
+# 区分歧义（如果 script 名和文件名冲突）
+bun run my-script             # 强制跑 script
+bun ./my-script.ts            # 强制跑文件</code></pre>
+        </div>
+
+        <h3>TypeScript / TSX 直跑：内置 transpile</h3>
+        <p>Bun 直接跑 .ts / .tsx 文件——这是它最 viral 的特性之一。机制：<strong>Bun 启动时检测文件扩展名 → 用内置 Zig parser 把 TS / TSX transpile 成 JS → 喂给 JSC 执行</strong>。整个流程对用户透明。</p>
+        <p>关键设计：<strong>Bun 只 transpile，不做类型检查</strong>。TypeScript 的类型错误在 <code>bun run app.ts</code> 时<strong>不会阻断运行</strong>——transpile 阶段只去掉类型注解 + 转换 TS 特定语法（如 <code>as</code> / enum / decorators）。这与 ts-node 默认行为一致，但与 <code>tsc</code>（先 check 再 emit）不同。</p>
+        <p>这套设计的<strong>取舍</strong>：</p>
+        <p><strong>优势</strong>：(1) 速度——Zig parser 比 tsc 快 10-30x，启动几乎无感；(2) 兼容性——transpile-only 永远能跑，不会卡在类型错误；(3) 简单——不需要 tsconfig.json 也能跑（合理默认）。</p>
+        <p><strong>劣势</strong>：(1) 类型错误不被发现——production 仍然要 <code>tsc --noEmit</code> 在 CI 跑；(2) 一些 TS 高级特性（如 emit-affecting decorators / namespaces）需要 tsc 标准编译——Bun 实现可能差异。</p>
+        <p>这套定位和 Node 22+ 的 <code>--experimental-strip-types</code> 路线<strong>完全一致</strong>——Node 团队也意识到"transpile-only 是 dev 体验最佳路径"，跟进了 Bun 的设计。差异：Bun 用自家 Zig parser；Node 用 SWC（Rust）。性能差不多。</p>
+
+        <h3>--hot vs --watch：开发体验的关键差异</h3>
+        <p>Bun 提供两种"自动重载"模式，差异比看起来大：</p>
+        <p><strong><code>bun --watch app.ts</code></strong>：监视文件变更 → 整进程重启。每次改代码：进程退出 → in-memory 状态丢失 → 重新启动 → 重新初始化（连数据库 / 加载缓存 / setup 中间件）。这是<strong>类似 nodemon / Node --watch</strong> 的传统模式。</p>
+        <p><strong><code>bun --hot app.ts</code></strong>：监视文件变更 → 保留进程 → 模块级热替换。每次改代码：把改过的模块重新 evaluate → in-memory 状态<strong>保留</strong>（数据库连接 / 已加载的 cache / 已注册的 timer 都还在）。</p>
+        <p>具体差异在<strong>开发服务器场景</strong>明显：</p>
+        <p><strong>用 --watch</strong>：你改了一个路由 handler → 进程重启 → 数据库重连（~500ms）→ Redis 重连（~200ms）→ 中间件重新挂（~100ms）→ HTTP server 重新 listen → 你的浏览器请求才能恢复响应。每次改代码 1-2 秒延迟。</p>
+        <p><strong>用 --hot</strong>：你改了一个路由 handler → 改过的模块重新 evaluate → 新的 handler 立即生效。数据库连接 / 缓存 / 中间件都还在。延迟几乎 0。WebSocket / SSE 长连接也不会断。</p>
+        <p>这种差异<strong>在长连接场景特别明显</strong>。比如调试一个 WebSocket 服务器：用 --watch，你每改一行代码所有连接断掉重连；用 --hot，连接保持。</p>
+        <p>但 --hot 也有<strong>限制</strong>：</p>
+        <p><strong>(1) 模块替换不是无限干净</strong>——已经被旧版本模块返回的对象（如返回的中间件 closure）仍然在用旧 logic。要让所有代码都用新版需要"重新调用入口"——通常 Bun 做不到，要看你的代码结构。</p>
+        <p><strong>(2) 全局状态可能不一致</strong>——你改了 const SOMETHING = 'foo' 改成 'bar'，已经持有 'foo' 的 closure 不变，新调用看到 'bar'。这种"半态"在简单场景没问题，复杂场景可能 bug。</p>
+        <p><strong>(3) 内存可能慢慢涨</strong>——每次热替换都留一些"旧版本 module 的内存"（GC 不一定立刻清）。长跑后 dev 进程内存可能涨到几百 MB——这时 restart 一下就好。</p>
+        <p>总体上 <code>--hot</code> 是更好的 dev 体验，但要意识到它是"<strong>best-effort 热替换</strong>"，不是完美的。复杂场景遇到诡异行为，<code>Ctrl+C</code> 重启进程是最稳的 reset。</p>
+
+        <h3>.env 自动加载 + tsconfig paths</h3>
+        <p>Bun 启动时<strong>自动加载几个文件</strong>，给"零配置体验"：</p>
+        <p><strong>(1) .env 文件按优先级加载</strong>——按 <code>.env.local</code> &gt; <code>.env.{NODE_ENV}</code> &gt; <code>.env</code> 顺序加载。<code>process.env.FOO</code> 立即可用，不需要 dotenv 包。</p>
+        <p><strong>(2) tsconfig.json 的 paths 字段</strong>——<code>"paths": { "@/*": ["./src/*"] }</code> 这种 alias 配置 Bun 自动识别。<code>import { x } from '@/utils'</code> 自动解析为 <code>./src/utils.ts</code>。Node 上要装 tsconfig-paths 或在 build 时 alias rewrite。</p>
+        <p><strong>(3) bunfig.toml 项目配置</strong>——Bun 的项目级配置文件。一般用来配 install 行为 / 测试设置 / build 配置。</p>
+        <p>这些"自动行为"在 Node 上要装一堆包：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>需求</th>
+              <th>Node 方案</th>
+              <th>Bun 默认</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>.env 加载</td>
+              <td>装 dotenv，<code>require('dotenv').config()</code></td>
+              <td>启动自动</td>
+            </tr>
+            <tr>
+              <td>TS 直跑</td>
+              <td>装 ts-node 或 tsx</td>
+              <td>启动自动 transpile</td>
+            </tr>
+            <tr>
+              <td>tsconfig paths</td>
+              <td>装 tsconfig-paths + 配置 ts-node</td>
+              <td>启动自动识别</td>
+            </tr>
+            <tr>
+              <td>watch 模式</td>
+              <td>装 nodemon（Node 22 内置 --watch）</td>
+              <td>--watch / --hot 内置</td>
+            </tr>
+            <tr>
+              <td>JSX 直跑</td>
+              <td>装 babel + 配置</td>
+              <td>启动自动 transpile</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>这些差异在<strong>"setup 一个新项目"</strong>时累积起来——Node 上 setup 一个 TS server 项目要 install + 配置 5-7 个包，bun 上零配置直接跑。<strong>这是 Bun 在 dev 体验上的核心红利</strong>，不是性能差异。</p>
+
+        <h3>Glob import（Bun 1.2+）：批量加载文件</h3>
+        <p>Bun 1.2 引入了<strong>glob import</strong>——用 <code>import.meta.glob()</code> 或 import 语句的 glob pattern 批量加载文件：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// 1. import.meta.glob —— 学习自 Vite
+const routes = import.meta.glob('./routes/*.ts', { eager: true });
+// routes = { './routes/users.ts': {...}, './routes/posts.ts': {...} }
+
+// 2. lazy 模式（按需加载）
+const lazyRoutes = import.meta.glob('./routes/*.ts');
+const usersModule = await lazyRoutes['./routes/users.ts']();
+
+// 用法：自动注册路由
+for (const [path, module] of Object.entries(routes)) {
+  const name = path.match(/\.\/routes\/(.+)\.ts/)[1];
+  app.use(`/${name}`, module.handler);
+}</code></pre>
+        </div>
+        <p>这种用法在 Vite 生态早就普及——Vue / React 项目自动注册路由 / 组件。Bun 内置 <code>import.meta.glob</code> 让你不需要 Vite 也能用。</p>
+        <p>但有<strong>取舍</strong>：</p>
+        <p><strong>(1) 静态可分析性下降</strong>——传统 import 是静态可分析的（bundler / tree shaker / type checker 能看到所有依赖）；glob import 是运行时解析的，bundler 要做特殊处理才能 inline。Bun build 支持，其他 bundler 看情况。</p>
+        <p><strong>(2) Production 谨慎用</strong>——Glob import 给 dev 加速，但 production 经常被诟病："为什么这个 glob 多带了一个文件"。最佳实践：dev 用 glob 快速试，production 改成显式 import 更稳。</p>
+        <p><strong>(3) 替代方案</strong>——也可以手写 explicit import 或用 codegen（如自动生成 routes.ts），不一定要 glob。</p>
+
+        <h3>JSC Inspector：调试 Bun 代码</h3>
+        <p>Bun 支持 inspector protocol（与 Chrome DevTools Protocol 部分兼容）。启动调试：</p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+<pre class="code"><code class="lang-bash">bun --inspect app.ts          # 启动 inspector，端口 6499
+bun --inspect-wait app.ts     # 等调试器接入再开始执行
+bun --inspect-brk app.ts      # 在第一行断住
+
+# 接入：
+# 1. Safari Web Inspector：开 Safari Develop &gt; Develop &gt; localhost:6499
+# 2. WebStorm：自带 Bun debug 配置
+# 3. VSCode：装 Oven 官方 Bun extension</code></pre>
+        </div>
+        <p>调试体验和 Node + V8 Inspector 类似，但底层是 JSC——一些 V8-specific 的功能（如某些 heap profile 的 metadata）可能不一致。具体限制详见 <a href="../02-internals/01-javascriptcore.html">P2.1 JavaScriptCore</a>。日常断点 + step + 看变量 + console.log 都正常。</p>
+
+        <h3>bun --print / bun --eval：交互式 REPL</h3>
+        <p>Bun 也是 REPL：</p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+<pre class="code"><code class="lang-bash"># 单行表达式
+bun --print '1 + 2'           # 输出 3
+bun -p 'process.versions.bun' # 简写
+
+# 跑一段代码
+bun --eval 'console.log(Bun.version)'
+bun -e 'await fetch("https://api.example.com").then(r =&gt; r.text())'
+
+# 进入 REPL
+bun repl                      # 启动交互式 REPL
+&gt; const x = 1 + 2
+&gt; x * 2
+6
+&gt; await fetch("https://api.example.com").then(r =&gt; r.json())</code></pre>
+        </div>
+        <p>Bun REPL 自带 top-level await（不需要包 async function），TS / TSX 也能直接跑。比 Node REPL 体验略好——Node REPL 有些限制（top-level await 是 Node 22+ 才稳定）。</p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 A · 用 bun run 替代 ts-node + tsx + nodemon 组合</h3>
+          <p>典型 Node 后端 dev 设置：装 ts-node（或 tsx）+ nodemon + dotenv + tsconfig-paths——5-10 个包，配置文件几个。切到 Bun 之后这一切消失：<code>bun --hot src/server.ts</code> 就够。.env 自动加载、TS 自动 transpile、tsconfig paths 自动识别、热替换。dev 体验质变——启动从 ~3s 到 ~100ms，每次改代码从 ~1s（nodemon 重启）到几乎 0（--hot）。这是<strong>"用 bun run 切 ts-node + nodemon"</strong>的核心 ROI。生产仍然 build → 部署 .js（不要在 production 用 bun run app.ts，虽然能跑但 transpile 开销每次启动都付）。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 B · 用 --hot 调试 WebSocket / SSE 长连接服务</h3>
+          <p>开发实时应用（chat / dashboard / collaboration）—— WebSocket / SSE 连接持续，<code>--watch</code> 每次改代码所有连接断掉重连，调试体验糟糕。<code>--hot</code> 保留连接 + 模块级热替换让你<strong>改 handler 后立即生效，前端连接不断</strong>。具体做法：用 <code>bun --hot server.ts</code> 启动，前端正常连 ws://localhost:3000；改 handler 代码 + 保存 → Bun 替换模块 → 下一个 ws message 就走新 handler。这种工作流让长连接服务的 dev 速度提升一个数量级。但要意识到 --hot 是 best-effort——遇到诡异行为重启进程是 reset。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 C · 用 bun run 写 CLI 脚本（替代 npx tsx）</h3>
+          <p>Node 生态写 TS 脚本（如 deploy CLI / migration script）通常用 <code>npx tsx script.ts</code> 或 <code>npm exec tsx script.ts</code> —— 启动 ~500ms-1s（npx + tsx 加载 + ts-node compile）。切 <code>bun script.ts</code> ~50ms 启动。这种"一次性脚本"场景下 Bun 启动优势巨大——shipping CLI 工具时差距能让用户体验显著好。具体做法：把 CLI 脚本写 .ts，shebang <code>#!/usr/bin/env bun</code>，<code>chmod +x</code> 直接当二进制用。如果要分发给没装 Bun 的用户，<code>bun build --compile</code>（详见 <a href="03-bun-build.html">P4.3</a>）打包成 SEA。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 D</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 D · 评估「我们项目能不能 production 用 bun run app.ts」</h3>
+          <p>团队问"能不能 production 直接 <code>bun run app.ts</code>，不要 build 步骤"——技术上可以，但<strong>不推荐</strong>。每次启动 transpile TS → 浪费 50-200ms（取决于 codebase 大小）；TS 类型错误在 production 启动后才暴露（不像 build 时 catch）；Source map / minify / tree shake 都没跑（产物体积大 + debugging 不友好）。生产<strong>仍然推荐 build 步骤</strong>：<code>bun build src/server.ts --outfile=dist/server.js --target=bun</code>，然后 <code>bun dist/server.js</code> 跑。或者 <code>bun build --compile</code> 打成单二进制更方便。dev 用 <code>bun --hot src/server.ts</code> 享受零配置；production 用 build 产物拿到稳定 + 性能。</p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
         <div class="code-block">
+          <span class="code-label">bash</span>
+<pre class="code"><code class="lang-bash"># bun run 的常用工作流
+
+# 直跑 TS / JSX
+bun src/index.ts               # entry point
+bun src/cli.tsx                # JSX 也能直跑
+
+# 跑 package.json scripts（省略 run 也行）
+bun dev                        # 跑 scripts.dev
+bun build                      # 跑 scripts.build
+bun test                       # 注意：bun test 是内置命令，与 scripts.test 优先级特殊
+
+# 监视模式
+bun --watch src/server.ts      # 整进程重启
+bun --hot src/server.ts        # 模块级热替换（推荐 dev）
+
+# 指定 watch 路径（默认监视 import 链）
+bun --watch --watch-path=./src src/server.ts
+
+# 调试
+bun --inspect src/server.ts                  # 启动 inspector
+bun --inspect-wait src/server.ts             # 等调试器接入
+bun --inspect=0.0.0.0:9229 src/server.ts     # 监听指定地址
+
+# 一行表达式
+bun -p 'process.platform'      # 输出当前 platform
+bun -e 'console.log(await Bun.file("./package.json").json())'
+
+# 跑 GitHub gist 风格脚本
+bun run https://gist.githubusercontent.com/.../script.ts</code></pre>
+        </div>
+        <div class="code-block">
           <span class="code-label">javascript</span>
-<pre class="code"><code class="lang-js">// 正文待写</code></pre>
+<pre class="code"><code class="lang-js">// --hot 模式下能保留状态的小 demo
+// 启动：bun --hot server.ts
+// 改代码后看到 startCount 不重置 → --hot 工作
+
+let startCount = 0;
+console.log('server starting, count:', ++startCount);
+
+const db = await connectDB();  // 假设连数据库
+const cache = new Map();        // 内存 cache
+
+Bun.serve({
+  port: 3000,
+  fetch(req) {
+    // 改这里 + 保存 —— 下次请求看到新逻辑
+    // 但 db / cache / startCount 都保留
+    return new Response(`hello, count: ${startCount}, cache size: ${cache.size}`);
+  }
+});
+
+// 与之对照：用 --watch 启动
+// 每次改代码：startCount 回到 0、db 重连、cache 清空
+// dev 体验差距明显</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+<pre class="code"><code class="lang-ts">// glob import 用法（Bun 1.2+）
+
+// 自动注册路由
+const routeModules = import.meta.glob('./routes/**/*.ts', { eager: true });
+
+const routes: Record&lt;string, any&gt; = {};
+for (const [path, mod] of Object.entries(routeModules)) {
+  // ./routes/users.ts -&gt; /users
+  const route = path.replace(/^\.\/routes/, '').replace(/\.ts$/, '');
+  routes[route] = (mod as any).default;
+}
+
+Bun.serve({
+  port: 3000,
+  routes,
+  fetch() { return new Response('Not Found', { status: 404 }); }
+});
+
+// 等价的显式 import（更可分析但更啰嗦）
+// import users from './routes/users.ts';
+// import posts from './routes/posts.ts';
+// const routes = { '/users': users, '/posts': posts };</code></pre>
         </div>
 
         <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
         <div class="pitfall">
-          <div class="pitfall-title">陷阱标题</div>
-          <p><em>正文待写。</em></p>
+          <div class="pitfall-title">期待 bun run 做类型检查</div>
+          <p><code>bun run app.ts</code> 只 transpile 不做类型检查——代码里的 TS 类型错误<strong>不会阻断运行</strong>。这与 ts-node 默认行为一致，但与 <code>tsc</code> 不同。如果你期待"运行时 catch 类型错误"会失望。规避：production CI 跑 <code>tsc --noEmit</code> 做类型检查；dev 用 IDE（VSCode 的 TS 插件）实时看类型错误；不要把"代码能跑"当成"类型对"。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">--hot 在某些场景下行为不符合预期</div>
+          <p>--hot 是<strong>"best-effort 模块级热替换"</strong>，不是完美的。常见怪异行为：(1) 改了一个全局 const，但已经持有旧值的 closure 不变——半态；(2) 改了某个类的 method，但已实例化的对象用旧 method（除非重新实例化）；(3) 改了 server middleware 注册，但 already-registered 的还在；(4) 内存慢慢涨。规避：(1) 遇到诡异行为 Ctrl+C restart；(2) 长跑 dev session 偶尔 restart 清内存；(3) production 别用 --hot（仅 dev）。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">期望 bun run 自动支持 monorepo workspace 名</div>
+          <p>monorepo 中你可能想 <code>bun run --filter @org/app dev</code> ——这<strong>是 install 命令，不是 run</strong>。Bun 1.2+ 支持 <code>bun run --filter</code> 但仍在完善，复杂场景可能不如 pnpm <code>pnpm --filter</code> 完美。简单场景：cd 进 workspace 直接 <code>bun dev</code>。复杂的 cross-workspace 命令：用 turborepo / nx 的 task runner（这些和 Bun 兼容）做编排。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">.env 自动加载在 production 可能不符合期待</div>
+          <p>Bun 启动自动加载 .env——这在 dev 是好事，<strong>但 production 不一定</strong>。Production 部署常用容器环境变量（K8s ConfigMap / Docker -e）注入，<strong>不应该</strong>从 .env 文件读。如果你的 Docker image 不小心把 .env 文件 COPY 进去（含敏感信息），Bun 启动会自动加载，可能覆盖容器注入的环境变量——<strong>潜在安全问题</strong>。规避：(1) Docker .dockerignore 加 <code>.env*</code>；(2) Production 启动用 <code>--no-env-file</code> 显式禁用；(3) 不要把 .env 提交到 git。</p>
         </div>
 
         <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
         <ul>
-          <li><a href="https://bun.com/docs" target="_blank" rel="noopener">bun.com/docs</a></li>
-          <li><a href="https://github.com/oven-sh/bun" target="_blank" rel="noopener">oven-sh/bun GitHub</a></li>
-          <li>回到主题首页 → <a href="../index.html">Bun 深度学习</a></li>
+          <li><a href="https://bun.com/docs/runtime" target="_blank" rel="noopener">Bun · runtime docs</a> · 完整 runtime 行为</li>
+          <li><a href="https://bun.com/docs/runtime/hot" target="_blank" rel="noopener">Bun · --hot reloading</a> · 热替换机制</li>
+          <li><a href="https://bun.com/docs/runtime/typescript" target="_blank" rel="noopener">Bun · TypeScript</a> · TS 直跑细节</li>
+          <li><a href="https://bun.com/docs/runtime/env" target="_blank" rel="noopener">Bun · 环境变量与 .env</a> · 自动加载行为</li>
+          <li>对照 Node Watch mode → <a href="../../node/06-modern/01-modern-node.html">Node P6.1 · 现代 Node 工程</a></li>
+          <li>JSC Inspector → <a href="../02-internals/01-javascriptcore.html">P2.1 · JavaScriptCore</a></li>
+          <li>下一章 → <a href="03-bun-build.html">P4.3 · bun build</a></li>
         </ul>
 
         <nav class="chapter-nav" aria-label="章节翻页">

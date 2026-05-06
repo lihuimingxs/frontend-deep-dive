@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>bun build · 共享 parser · --compile · 与 Vite/Rolldown/Turbopack 横评 · P4 · Bun 深度学习</title>
-    <meta name="description" content="bundler 章。bun build 设计目标：在 Vite / Rolldown / esbuild / Turbopack 这个高度内卷的赛道里，靠「和 runtime / install 共享 parser」差异化。<strong>关键洞察</strong>：bun build 单看 bundler 速度差距不大，差异化在于「一体化」——和 install / run / test 共享 parser，每个工具的启动都摊薄了 parser 加载成本。" />
+    <title>bun build：bundler + --compile SEA 替代 · P4.3 · Bun 深度学习</title>
+    <meta name="description" content="bun build 设计目标：在 Vite / Rolldown / esbuild / Turbopack 高度内卷赛道里，靠和 runtime / install / test 共享 parser 差异化。讲透共享 parser 红利、tree shaking、code splitting、--compile（SEA 替代）、bytecode caching、CSS bundler、与 Vite / Rolldown / Turbopack 横评。" />
     <link rel="stylesheet" href="../../assets/styles.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23fbf0df'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23000'%3EB%3C/text%3E%3C/svg%3E" />
   </head>
@@ -28,9 +28,9 @@
         <ul>
           <li><a href="index.html">阶段概览</a></li>
           <li><a href="01-bun-install.html">01 · bun install：替代 pnpm / npm / yarn</a></li>
-          <li><a href="02-bun-run.html">02 · bun run 与 runtime：直跑 TS、--hot、glob import</a></li>
-          <li><a href="03-bun-build.html" class="active">03 · bun build：bundler + --compile SEA 替代</a></li>
-          <li><a href="04-bun-test.html">04 · bun test：替代 Vitest / Jest / node:test</a></li>
+          <li><a href="02-bun-run.html">02 · bun run 与 runtime</a></li>
+          <li><a href="03-bun-build.html" class="active">03 · bun build</a></li>
+          <li><a href="04-bun-test.html">04 · bun test</a></li>
         </ul>
         <h3>其他阶段</h3>
         <ul>
@@ -45,66 +45,419 @@
           <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
           <a href="../index.html">Bun</a><span class="breadcrumb-sep">/</span>
           <a href="index.html">P4 · 一体化工具链</a><span class="breadcrumb-sep">/</span>
-          <span>03 · bun build：bundler + --compile SEA 替代</span>
+          <span>03 · bun build</span>
         </nav>
-        <h1>bun build · 共享 parser · --compile · 与 Vite/Rolldown/Turbopack 横评</h1>
+        <h1>bun build：bundler + --compile SEA 替代</h1>
         <p class="lead">
-          bundler 章。bun build 设计目标：在 Vite / Rolldown / esbuild / Turbopack 这个高度内卷的赛道里，靠「和 runtime / install 共享 parser」差异化。<strong>关键洞察</strong>：bun build 单看 bundler 速度差距不大，差异化在于「一体化」——和 install / run / test 共享 parser，每个工具的启动都摊薄了 parser 加载成本。
+          bundler 章。bun build 设计目标：在 Vite / Rolldown / esbuild / Turbopack 这个高度内卷的赛道里，靠"<strong>和 runtime / install 共享 parser</strong>"差异化。<strong>关键洞察</strong>：bun build 单看 bundler 速度差距不大，差异化在于"一体化"——和 install / run / test 共享 parser，每个工具的启动都摊薄了 parser 加载成本。这一章讲透 Zig parser、tree shaking、code splitting、source map、<code>--compile</code>（SEA 替代）、bytecode caching、CSS bundler、与 Vite / Rolldown / Turbopack 横评。
         </p>
         <div class="chapter-meta">
           <span><strong>阅读时长</strong> ~30 分钟</span>
-          <span><strong>前置</strong> P4.2 + Node P6.1 SEA</span>
+          <span><strong>前置</strong> P4.2 + <a href="../../node/06-modern/01-modern-node.html">Node P6.1 SEA</a></span>
           <span><strong>主要来源</strong> bun.com/docs/bundler · Bun 1.2 bytecode caching blog</span>
-        </div>
-
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>本章为<strong>骨架</strong>。已完成大纲与关键知识点列表（见各段标题下的 bullet），正文撰写中。可参考 <a href="../../bun/outline.md">outline.md</a> 了解完整覆盖范围。</p>
         </div>
 
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
-          <li><em>正文待写。</em></li>
+          <li><strong>bun build 不是要颠覆 Vite / Rolldown</strong>——它在已经内卷的 bundler 赛道里靠"和其他 Bun 工具共享 parser"差异化，单看速度和 esbuild / Rolldown 接近。</li>
+          <li><strong>--compile 是 Node SEA 的「完成版」</strong>——交叉编译、ESM 默认、产物 ~50MB、bytecode caching。Node SEA 还在追赶。</li>
+          <li><strong>共享 parser 红利在大型项目和工具链一体化场景才显著</strong>——install + run + build + test 都用 Bun 时，每次启动的 parser 加载被摊薄；只用 build 不用其他场景，差距小。</li>
         </ol>
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
-        <p><em>正文待写。本章覆盖：Zig parser · tree shaking · source map · code splitting · --compile · 交叉编译 · bytecode caching · CSS bundler 1.2+ · vs Vite/Rolldown/Turbopack</em></p>
+
+        <h3>2026 年的 bundler 竞争格局</h3>
+        <p>bundler 是 JS 工具链最内卷的赛道。2026 年的格局：</p>
+        <p><strong>Vite (2020+)</strong>：尤雨溪发起，目前事实标准 dev server。dev 用 esbuild + native ESM，build 用 Rollup。Vite 5+ 转向 Rolldown 替代 Rollup（性能更好）。生态最强——Vue / React / Svelte 等框架都默认 Vite。</p>
+        <p><strong>Rolldown (2024+)</strong>：Rust 写的 Rollup 替代品（同样作者：尤雨溪 + Vite 团队）。目标是"用 Rust 重写 Rollup 拿到 esbuild 的性能 + Rollup 的功能"。Vite 6 默认 build 工具。</p>
+        <p><strong>esbuild (2020+)</strong>：Evan Wallace 写的 Go bundler。最早的"native bundler"，速度极快。但 plugin 生态弱、tree shake 不完美。多数被用作"底层 bundler"（被 Vite / 其他工具调用），不是独立产品。</p>
+        <p><strong>Turbopack (2022+)</strong>：Vercel 出品 Rust bundler，Next.js 14+ 默认。但目前只在 Next.js 用，不通用。</p>
+        <p><strong>SWC (2019+)</strong>：Donny Wong 写的 Rust JS/TS compiler。多数被用作"底层 transformer"（如被 Next.js / Parcel 调用）。和 esbuild 是互补关系。</p>
+        <p><strong>Webpack (2014+)</strong>：仍然是企业级遗留项目的主力。新项目极少选。</p>
+        <p><strong>bun build (2022+)</strong>：Bun 自家 Zig bundler。性能与 esbuild 持平 + 功能与 Rolldown 持平 + 工具链一体化。</p>
+        <p>这个赛道<strong>性能差异已经被压到很小</strong>——esbuild / Rolldown / SWC / Turbopack / bun build 在常规项目上 build 时间差距不到 50%。继续优化纯速度边际效益低。差异化转向：(1) 工具链一体化（Bun）；(2) Plugin 生态（Vite / Rollup）；(3) 框架深度集成（Turbopack 之于 Next.js）。<strong>bun build 的核心定位是 (1)</strong>。</p>
+
+        <h3>共享 parser 红利</h3>
+        <p>"<strong>共享 parser</strong>"是 Bun 工具链的核心架构红利。具体看：Bun 的 <code>install</code> / <code>run</code> / <code>build</code> / <code>test</code> 都用<strong>同一个 Zig 写的 JS/TS parser</strong>——它在 Bun 二进制里只加载一次，每个子命令调用直接用，不需要单独启动 / 加载 / 初始化。</p>
+        <p>对比 Node 工具链：</p>
+        <p><strong>Node 工具链</strong>：<code>npm install</code> → 启动 Node + 加载 npm；<code>vite dev</code> → 启动 Node + 加载 Vite（含 esbuild）；<code>vitest</code> → 启动 Node + 加载 Vitest（再含 esbuild）；<code>rollup build</code> → 启动 Node + 加载 Rollup（含 acorn parser）。每次都<strong>重新启动 Node + 重新加载 parser</strong>——加载次数 = 启动次数。</p>
+        <p><strong>Bun 工具链</strong>：<code>bun install</code> / <code>bun run</code> / <code>bun build</code> / <code>bun test</code> 都是同一个 Bun 二进制的子命令。Bun 启动一次（~5ms），parser 加载一次（嵌在二进制里几乎瞬间），后续命令直接用。</p>
+        <p>具体的<strong>累积差距</strong>看一个典型 dev 流程：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>步骤</th>
+              <th>Node 工具链</th>
+              <th>Bun 工具链</th>
+              <th>差距</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>install（冷启）</td>
+              <td>Node + npm 启动 ~50ms</td>
+              <td>Bun 启动 ~5ms</td>
+              <td>~45ms</td>
+            </tr>
+            <tr>
+              <td>run dev</td>
+              <td>Node + Vite ~300ms</td>
+              <td>Bun ~10ms</td>
+              <td>~290ms</td>
+            </tr>
+            <tr>
+              <td>每次改代码 transpile</td>
+              <td>esbuild loaded → transpile 文件</td>
+              <td>Bun parser 直接 transpile</td>
+              <td>microseconds</td>
+            </tr>
+            <tr>
+              <td>跑 test</td>
+              <td>Node + Vitest 启动 ~500ms</td>
+              <td>Bun test ~50ms</td>
+              <td>~450ms</td>
+            </tr>
+            <tr>
+              <td>build</td>
+              <td>Node + Vite + Rolldown ~500ms 启动 + build</td>
+              <td>Bun build ~10ms 启动 + build</td>
+              <td>~490ms 启动开销</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>每个步骤的差距单看不大，但 dev 一天里 install 1 次 / run 5 次 / test 50 次 / build 10 次——累积下来 Bun 比 Node 工具链节省<strong>几十秒到几分钟每天</strong>。一年下来一个工程师几十小时。一个 50 人团队几千小时——这是 Bun 工具链一体化的<strong>真正 ROI</strong>，不是单个工具的 5x / 10x。</p>
+
+        <h3>bun build 核心特性</h3>
+        <p>把 bun build 主要功能列一遍：</p>
+        <p><strong>(1) 输入支持</strong>——<code>.js</code> / <code>.ts</code> / <code>.jsx</code> / <code>.tsx</code> / <code>.mjs</code> / <code>.cjs</code> / <code>.json</code> / <code>.css</code>（1.2+） / <code>.html</code>（1.2+） / 静态资源（<code>.png</code> / <code>.svg</code> 等）。</p>
+        <p><strong>(2) 输出格式</strong>——ESM / CJS / IIFE。<code>--target=bun</code>（针对 Bun 优化）/ <code>--target=node</code>（针对 Node）/ <code>--target=browser</code>（针对浏览器）。每个 target 启用不同的内置代码（如 polyfill）。</p>
+        <p><strong>(3) Tree shaking</strong>——基于 ES Module 静态分析，未用到的 export 会被剪掉。和 esbuild / Rolldown 等价。</p>
+        <p><strong>(4) Code splitting</strong>——动态 <code>import()</code> 自动分块，每块单独输出文件。Bundler 默认行为。</p>
+        <p><strong>(5) Source map</strong>——<code>--sourcemap=linked</code>（默认）/ <code>--sourcemap=inline</code>（嵌入产物）/ <code>--sourcemap=external</code>（独立 .map 文件）。</p>
+        <p><strong>(6) Minify</strong>——<code>--minify</code> 启用。压缩 + mangle 名 + 删 dead code。比 terser / swc minify 速度接近。</p>
+        <p><strong>(7) Plugin API</strong>——和 esbuild 类似的 plugin 接口（<code>onLoad</code> / <code>onResolve</code>）。许多 esbuild plugin 能直接用。</p>
+        <p><strong>(8) Asset 处理</strong>——<code>.png</code> / <code>.svg</code> 等静态资源 hash + 复制到产物，import 返回 URL 字符串。</p>
+        <p><strong>(9) CSS bundler (1.2+)</strong>—— <code>@import</code> 解析、<code>url()</code> 处理、CSS modules 实验。1.2 之前 CSS 是 stub，1.2 完整支持。</p>
+        <p><strong>(10) Bytecode caching (1.2+)</strong>—— Bun 把 JSC bytecode 缓存到 <code>.bun-cache</code>，第二次跑时跳过 parse。启动时间额外节省 30%。</p>
+
+        <h3>--compile：Node SEA 的「完成版」</h3>
+        <p><code>bun build --compile</code> 是 Bun 的"<strong>编译成单文件可执行程序</strong>"特性。这是 Node SEA（详见 <a href="../../node/06-modern/01-modern-node.html">Node P6.1 现代 Node 工程</a>）的对应物：</p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+<pre class="code"><code class="lang-bash"># 把 server.ts + Bun runtime 打成一个二进制
+bun build --compile src/server.ts --outfile=my-server
+
+# 跑：
+./my-server
+# 启动 ~5ms，零依赖（不需要装 Bun）
+
+# 交叉编译（在 macOS 编译给 Linux 跑）
+bun build --compile --target=bun-linux-x64 src/server.ts --outfile=my-server-linux
+bun build --compile --target=bun-linux-arm64 src/server.ts --outfile=my-server-arm64
+bun build --compile --target=bun-windows-x64 src/server.ts --outfile=my-server.exe</code></pre>
+        </div>
+        <p>对比 Node SEA：</p>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 24%">维度</th>
+              <th style="width: 38%">Node SEA</th>
+              <th style="width: 38%">Bun --compile</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>稳定性</strong></td>
+              <td>Node 22+ 实验</td>
+              <td>Bun 1.0+ 稳定</td>
+            </tr>
+            <tr>
+              <td><strong>入口模块系统</strong></td>
+              <td>仅 CJS（22+ 开始 ESM 实验）</td>
+              <td>ESM 原生</td>
+            </tr>
+            <tr>
+              <td><strong>多文件支持</strong></td>
+              <td>实验中</td>
+              <td>完整支持（默认 bundle 整个 import 树）</td>
+            </tr>
+            <tr>
+              <td><strong>产物体积</strong></td>
+              <td>~80MB（Node 二进制）</td>
+              <td>~50MB（Bun 二进制）</td>
+            </tr>
+            <tr>
+              <td><strong>交叉编译</strong></td>
+              <td>不支持</td>
+              <td>支持（Linux / macOS / Windows + x64 / arm64）</td>
+            </tr>
+            <tr>
+              <td><strong>Bytecode caching</strong></td>
+              <td>有（V8 startup snapshot）</td>
+              <td>有（JSC bytecode）</td>
+            </tr>
+            <tr>
+              <td><strong>启动时间</strong></td>
+              <td>~30-50ms</td>
+              <td>~5-10ms</td>
+            </tr>
+          </tbody>
+        </table>
+        <p><code>bun --compile</code> 在<strong>每个维度上都领先 Node SEA</strong>——这不奇怪，因为 Bun 团队把 SEA 当作核心特性优先做，Node 跟进得晚。</p>
+        <p>典型用例：</p>
+        <p><strong>(1) CLI 工具分发</strong>——团队内部 deploy / migrate / lint 工具，给运维 / 非前端同事用。<code>bun build --compile</code> 一次，scp 上去就能跑，不需要装 Bun / Node。</p>
+        <p><strong>(2) 容器极简化</strong>——Dockerfile 只 COPY 这一个二进制，不需要 base image 装 runtime + node_modules。镜像体积从 ~200MB（Node alpine + deps）降到 ~50MB（单二进制）。</p>
+        <p><strong>(3) Lambda 部署</strong>——AWS Lambda custom runtime / Cloudflare Workers（实际上 Workers 不能跑 Bun，但其他类似平台能）。一个二进制就是整个 deployment。</p>
+        <p><strong>(4) 桌面工具</strong>—— 写一个跨平台的桌面 CLI / GUI（不带 Electron），<code>--compile</code> 三个 target 编译三份。</p>
+
+        <h3>Bytecode caching（Bun 1.2+）</h3>
+        <p>Bun 1.2 引入了<strong>JSC bytecode 缓存</strong>。机制：<strong>第一次跑代码时 JSC parse 出 bytecode → Bun 把 bytecode 缓存到磁盘 → 第二次跑直接 mmap 缓存的 bytecode，跳过 parse</strong>。</p>
+        <p>这套机制借鉴自<strong>Node 的 V8 startup snapshot</strong>（详见 <a href="../../v8/05-embedding/01-embedder-api.html">V8 P5.1 嵌入 V8</a>）和 Chrome 的 V8 cache。但 Bun 实现得更激进——所有 JS 文件 + npm 包都自动缓存，不需要用户配置。</p>
+        <p>实际效果：</p>
+        <p><strong>冷启（无缓存）</strong>：和不开缓存一样，~30ms（中型项目）。</p>
+        <p><strong>热启（有缓存）</strong>：~10-20ms，节省 30-60%。</p>
+        <p>这个优化对<strong>"启动很多次"的场景</strong>显著——CLI 工具、Lambda warm 调用、CI 任务。对长跑服务（启动一次跑几天）影响小，因为启动时间不重要。</p>
+        <p>限制：</p>
+        <p><strong>(1) 缓存失效</strong>——代码改动后缓存自动失效（Bun 检查文件 hash），不需要手动清。</p>
+        <p><strong>(2) 占磁盘</strong>——一个中型项目的 cache 几十 MB。<code>~/.bun/install/cache</code> 路径，可以手动清。</p>
+        <p><strong>(3) 不影响 production 部署</strong>——production 通常用 <code>bun build --compile</code>，cache 内嵌在二进制里，不依赖磁盘 cache 目录。</p>
+
+        <h3>与 Vite / Rolldown / esbuild / Turbopack 横评</h3>
+        <p>把 5 个主流 bundler 在不同维度对比（2026 年状态）：</p>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 16%">维度</th>
+              <th style="width: 16.8%">bun build</th>
+              <th style="width: 16.8%">Vite (Rolldown)</th>
+              <th style="width: 16.8%">esbuild</th>
+              <th style="width: 16.8%">Turbopack</th>
+              <th style="width: 16.8%">SWC</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>语言</strong></td>
+              <td>Zig</td>
+              <td>Rust</td>
+              <td>Go</td>
+              <td>Rust</td>
+              <td>Rust</td>
+            </tr>
+            <tr>
+              <td><strong>定位</strong></td>
+              <td>一体化 bundler + runtime</td>
+              <td>dev server + bundler</td>
+              <td>底层 bundler</td>
+              <td>Next.js bundler</td>
+              <td>底层 transformer</td>
+            </tr>
+            <tr>
+              <td><strong>速度（中型项目）</strong></td>
+              <td>~快</td>
+              <td>~快</td>
+              <td>极快</td>
+              <td>~快</td>
+              <td>极快</td>
+            </tr>
+            <tr>
+              <td><strong>Tree shake</strong></td>
+              <td>✅</td>
+              <td>✅</td>
+              <td>⚠️ 不完美</td>
+              <td>✅</td>
+              <td>N/A</td>
+            </tr>
+            <tr>
+              <td><strong>Code split</strong></td>
+              <td>✅</td>
+              <td>✅</td>
+              <td>⚠️ 简单</td>
+              <td>✅</td>
+              <td>N/A</td>
+            </tr>
+            <tr>
+              <td><strong>Plugin 生态</strong></td>
+              <td>esbuild 兼容</td>
+              <td>极强（Vite + Rollup）</td>
+              <td>中等</td>
+              <td>仅 Next.js 内部</td>
+              <td>少</td>
+            </tr>
+            <tr>
+              <td><strong>HMR</strong></td>
+              <td>--hot（runtime 端）</td>
+              <td>极强（dev server 端）</td>
+              <td>无</td>
+              <td>极强（Next.js 内）</td>
+              <td>无</td>
+            </tr>
+            <tr>
+              <td><strong>Compile 单二进制</strong></td>
+              <td>✅</td>
+              <td>❌</td>
+              <td>❌</td>
+              <td>❌</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td><strong>CSS 处理</strong></td>
+              <td>1.2+ 完整</td>
+              <td>极强</td>
+              <td>有</td>
+              <td>极强</td>
+              <td>无</td>
+            </tr>
+            <tr>
+              <td><strong>HTML imports</strong></td>
+              <td>1.2+ 实验</td>
+              <td>无</td>
+              <td>无</td>
+              <td>有</td>
+              <td>无</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>结论：</p>
+        <p><strong>选 bun build 的场景</strong>：(1) 已用 Bun runtime / install / test，工具链一体化最大化；(2) 需要 <code>--compile</code> 单二进制；(3) 后端项目（Node-style，不需要复杂前端 dev server）。</p>
+        <p><strong>选 Vite (Rolldown) 的场景</strong>：(1) 前端项目（Vue / React / Svelte），需要强 dev server + HMR + plugin 生态；(2) 复杂的 CSS 处理需求；(3) 已用 Vite 的项目继续用。</p>
+        <p><strong>选 esbuild / SWC 的场景</strong>：作为底层组件被其他工具调用——大部分情况不直接用。</p>
+        <p><strong>选 Turbopack 的场景</strong>：用 Next.js 14+ 的项目（不需要选，Next.js 默认）。</p>
+        <p>这种横评里 bun build <strong>不是赢家也不是输家</strong>——它在自己的定位上表现优秀（一体化 + --compile），其他 bundler 在自己的定位上更强。Selecting 取决于你的场景。</p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 A · 用 bun build --compile 分发 CLI 工具</h3>
+          <p>团队内部做了个 deploy CLI（含 30 个 npm 依赖），给运维同事用。传统方案：让运维装 nvm + Node + npm install -g。痛点：每次更新都要让运维重新装；运维机器可能没 Node 环境。<code>bun build --compile</code> 解决：<code>bun build --compile src/cli.ts --outfile=deploy-cli</code>，scp 给运维 → 直接 <code>./deploy-cli</code>。一个二进制 50MB，零依赖。如果要支持多平台：交叉编译 <code>--target=bun-linux-x64</code> + <code>bun-darwin-arm64</code> + <code>bun-windows-x64</code>，一次 build 三个二进制。这种场景下 Bun --compile 的体验远胜 Node SEA（Node 22 SEA 仍是实验，且不支持交叉编译）。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 B · 用 bun build 替代 esbuild 做 server 后端 build</h3>
+          <p>典型 Node 后端项目：用 esbuild bundle TS server 代码到 dist/。这个流程在 Bun 上 native 支持：<code>bun build src/server.ts --target=bun --outfile=dist/server.js</code>。差异：(1) <strong>--target=bun</strong> 输出针对 Bun 优化（保留 Bun-specific API）；(2) 启动从 <code>npx esbuild</code> 的 ~500ms 降到 <code>bun build</code> 的 ~10ms（Bun 工具一体化红利）；(3) 与 install + run + test 共享 parser 加速 dev 流程。如果你的 server 仍然 deploy 到 Node，用 <code>--target=node</code>。如果 deploy 到 Bun，<code>--target=bun</code>。Production deploy 时 build 产物 + 启动 <code>bun dist/server.js</code> 而不是 <code>bun src/server.ts</code>——避免每次启动 transpile 开销。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 C · 用 bun build 做 Docker 极简化</h3>
+          <p>典型 Node 后端 Dockerfile：FROM node:20-alpine + RUN npm install + COPY src + CMD node ... 。镜像 ~200MB（Node base + deps）。改用 Bun --compile：FROM scratch + COPY my-server /my-server + CMD ./my-server。镜像 ~50MB，只有一个二进制。优势：(1) <strong>体积小</strong>—— 4x 减少，加速 push / pull；(2) <strong>安全</strong>—— scratch base 没有 shell / OS 工具，attack surface 极小；(3) <strong>启动快</strong>—— 容器冷启动从几秒到 ~50ms。劣势：(1) 调试不方便（容器里没 sh）；(2) 不能 exec 进容器跑命令；(3) 部分系统库依赖（如 OpenSSL）需要静态链接（Bun 默认包含）。这种 deployment 适合<strong>无状态微服务 + Lambda + Cloudflare Container</strong>等场景。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 D</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 D · 决策「前端项目用 Vite 还是 bun build」</h3>
+          <p>团队前端项目（React / Vue / Svelte）选 bundler——Vite 还是 bun build？判据：(1) <strong>HMR 需求</strong>——前端开发依赖 HMR（改 component 不丢 state）。Vite HMR 极强（生态深 + 框架集成 React Refresh / Vue HMR）；bun build 1.2 时仍在追，复杂场景体验不如 Vite。(2) <strong>Plugin 生态</strong>——Vite/Rollup plugin 上千个（PWA / mock / sentry / 各种 CSS 预处理）；bun build plugin 兼容 esbuild 但生态较小。(3) <strong>CSS 处理</strong>——Vite 极强（PostCSS / Sass / Less / CSS Modules / Tailwind 集成）；bun build 1.2 完整支持但生态薄。(4) <strong>build 速度</strong>—— Vite 5+ 用 Rolldown 已经接近 bun build。综合后：<strong>前端项目优先 Vite（成熟生态 + HMR 体验）</strong>；<strong>后端 / CLI / 工具项目优先 bun build（一体化 + --compile）</strong>。前端 + 后端都用 Bun 的 fullstack 项目可以试 Bun.serve + HTML imports，但生态尚浅，先做 prototype 验证。</p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
         <div class="code-block">
+          <span class="code-label">bash</span>
+<pre class="code"><code class="lang-bash"># 基础 build 命令
+bun build src/index.ts --outfile=dist/bundle.js
+bun build src/index.ts --outdir=dist/ --target=node       # ESM 默认
+bun build src/index.ts --outdir=dist/ --format=cjs        # CJS 输出
+
+# Tree shake + minify + sourcemap
+bun build src/index.ts \
+  --outfile=dist/bundle.js \
+  --minify \
+  --sourcemap=linked \
+  --target=browser
+
+# Compile 成单二进制
+bun build --compile src/cli.ts --outfile=my-cli
+
+# 交叉编译
+bun build --compile --target=bun-linux-x64 src/cli.ts --outfile=my-cli-linux-x64
+bun build --compile --target=bun-darwin-arm64 src/cli.ts --outfile=my-cli-darwin-arm64
+bun build --compile --target=bun-windows-x64 src/cli.ts --outfile=my-cli.exe
+
+# Watch 模式（边改边 build）
+bun build src/index.ts --outdir=dist/ --watch
+
+# External（不打进 bundle，运行时 require）
+bun build src/index.ts \
+  --external=react \
+  --external=react-dom \
+  --target=browser
+
+# 多入口
+bun build src/index.ts src/worker.ts --outdir=dist/ --target=browser</code></pre>
+        </div>
+        <div class="code-block">
           <span class="code-label">javascript</span>
-<pre class="code"><code class="lang-js">// 正文待写</code></pre>
+<pre class="code"><code class="lang-js">// 编程式 API（在脚本里调 build）
+import { build } from 'bun';
+
+const result = await build({
+  entrypoints: ['./src/index.ts'],
+  outdir: './dist',
+  target: 'bun',
+  minify: true,
+  sourcemap: 'linked',
+  external: ['react'],
+  define: {
+    'process.env.NODE_ENV': JSON.stringify('production'),
+  },
+  plugins: [
+    {
+      name: 'my-loader',
+      setup(builder) {
+        builder.onLoad({ filter: /\.svg$/ }, async ({ path }) =&gt; {
+          const text = await Bun.file(path).text();
+          return {
+            contents: `export default ${JSON.stringify(text)}`,
+            loader: 'js'
+          };
+        });
+      }
+    }
+  ]
+});
+
+if (!result.success) {
+  for (const log of result.logs) {
+    console.error(log);
+  }
+}</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">json</span>
+<pre class="code"><code class="lang-json">// package.json 集成 build script
+{
+  "scripts": {
+    "build": "bun build src/server.ts --outdir=dist --target=bun --minify",
+    "build:cli": "bun build --compile src/cli.ts --outfile=bin/my-cli",
+    "build:cross": "bun run build:cli && bun build --compile --target=bun-linux-x64 src/cli.ts --outfile=bin/my-cli-linux-x64",
+    "dev": "bun --hot src/server.ts",
+    "start": "bun dist/server.js"
+  }
+}</code></pre>
         </div>
 
         <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
         <div class="pitfall">
-          <div class="pitfall-title">陷阱标题</div>
-          <p><em>正文待写。</em></p>
+          <div class="pitfall-title">用 --target=node 打包但跑 Bun runtime</div>
+          <p><code>--target=node</code> 输出针对 Node 优化的 bundle（含 Node API 兼容代码 / 不内联 Bun-specific 优化）。如果产物部署到 Bun runtime 跑，会少拿到 Bun 优化。规避：deploy 到 Bun 用 <code>--target=bun</code>；deploy 到 Node 用 <code>--target=node</code>；deploy 到浏览器用 <code>--target=browser</code>。target 选错不会崩，只是没拿到对应优化。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">--compile 产物跨 macOS Intel / ARM 不兼容</div>
+          <p>Apple Silicon（M1/M2/M3）是 ARM64 架构，Intel Mac 是 x64 架构——两个二进制不兼容。如果你在 M1 上 <code>bun build --compile</code> 编了一个二进制，scp 给 Intel Mac 同事会"cannot execute binary file"。规避：知道自己的目标架构 + 用 <code>--target=bun-darwin-x64</code> 或 <code>--target=bun-darwin-arm64</code> 显式指定；distribute 时给两个二进制让用户选。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">bun build 不自动处理 .css 在 1.2 之前</div>
+          <p>Bun 1.2 之前 <code>import styles from './app.css'</code> 是 stub——产物里 CSS 不被处理 / 不被 inline / 不被 hash。Bun 1.2 完整支持。如果你用 Bun 1.0 / 1.1 做前端 build，CSS 部分要 fallback 到 Vite / esbuild 单独跑。规避：升 Bun 1.2+；或前端构建仍用 Vite 而 server build 用 bun build。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">期望 esbuild plugin 100% 兼容 bun build</div>
+          <p>Bun 实现了 esbuild 风格的 plugin API，<strong>大部分 esbuild plugin 能直接用</strong>。但少数 plugin 用了 esbuild 特定的内部 API 或行为，在 Bun 上可能有微妙差异。常见问题：(1) plugin 用 <code>build.initialOptions</code>（esbuild 内部）—— Bun 实现可能不一致；(2) plugin 依赖 esbuild 的特定文件解析顺序——Bun 可能不同；(3) plugin 用 esbuild 的 metafile 格式——Bun 输出格式略有差异。规避：(1) 看 plugin GitHub 是否声明 Bun 兼容；(2) build 失败时跑 minimal repro 提 issue；(3) 不能用的 plugin 找 Bun 等价物或自己写。</p>
         </div>
 
         <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
         <ul>
-          <li><a href="https://bun.com/docs" target="_blank" rel="noopener">bun.com/docs</a></li>
-          <li><a href="https://github.com/oven-sh/bun" target="_blank" rel="noopener">oven-sh/bun GitHub</a></li>
-          <li>回到主题首页 → <a href="../index.html">Bun 深度学习</a></li>
+          <li><a href="https://bun.com/docs/bundler" target="_blank" rel="noopener">Bun · bundler docs</a> · 完整 build 命令参考</li>
+          <li><a href="https://bun.com/docs/bundler/executables" target="_blank" rel="noopener">Bun · --compile docs</a> · 单二进制编译</li>
+          <li><a href="https://bun.com/blog/bun-v1.2" target="_blank" rel="noopener">Bun 1.2 · CSS bundler + bytecode caching</a></li>
+          <li><a href="https://vitejs.dev/" target="_blank" rel="noopener">Vite docs</a> · 对照参考</li>
+          <li><a href="https://rolldown.rs/" target="_blank" rel="noopener">Rolldown docs</a> · Rust Rollup</li>
+          <li><a href="https://esbuild.github.io/" target="_blank" rel="noopener">esbuild docs</a> · Go bundler</li>
+          <li>对照 Node SEA → <a href="../../node/06-modern/01-modern-node.html">Node P6.1 · 现代 Node 工程</a></li>
+          <li>V8 startup snapshot → <a href="../../v8/05-embedding/01-embedder-api.html">V8 P5.1 · 嵌入 V8</a></li>
+          <li>下一章 → <a href="04-bun-test.html">P4.4 · bun test</a></li>
         </ul>
 
         <nav class="chapter-nav" aria-label="章节翻页">

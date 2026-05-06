@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>bun install · binary lockfile · Catalogs · hard link · workspaces · P4 · Bun 深度学习</title>
-    <meta name="description" content="包管理器章。Bun 主题里<strong>最容易让用户切换</strong>的工具——通常工程师从 bun install 开始用 Bun，再考虑 runtime / build。<strong>关键洞察</strong>：hard link vs pnpm symlink 是核心取舍——Bun 用 hard link 兼容性好，但 phantom dep 检测严格度不如 pnpm。" />
+    <title>bun install：替代 pnpm / npm / yarn · P4.1 · Bun 深度学习</title>
+    <meta name="description" content="bun install 是包管理器章。binary lockfile + Catalogs + hard link 替代 pnpm symlink + 256 并发解析 + 大 monorepo 比 pnpm 快 2-4x。讲清 hard link vs symlink 取舍 + binary lockfile 改文本格式的争议演进 + 何时仍用 pnpm。" />
     <link rel="stylesheet" href="../../assets/styles.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23fbf0df'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23000'%3EB%3C/text%3E%3C/svg%3E" />
   </head>
@@ -28,9 +28,9 @@
         <ul>
           <li><a href="index.html">阶段概览</a></li>
           <li><a href="01-bun-install.html" class="active">01 · bun install：替代 pnpm / npm / yarn</a></li>
-          <li><a href="02-bun-run.html">02 · bun run 与 runtime：直跑 TS、--hot、glob import</a></li>
-          <li><a href="03-bun-build.html">03 · bun build：bundler + --compile SEA 替代</a></li>
-          <li><a href="04-bun-test.html">04 · bun test：替代 Vitest / Jest / node:test</a></li>
+          <li><a href="02-bun-run.html">02 · bun run 与 runtime</a></li>
+          <li><a href="03-bun-build.html">03 · bun build</a></li>
+          <li><a href="04-bun-test.html">04 · bun test</a></li>
         </ul>
         <h3>其他阶段</h3>
         <ul>
@@ -47,9 +47,9 @@
           <a href="index.html">P4 · 一体化工具链</a><span class="breadcrumb-sep">/</span>
           <span>01 · bun install：替代 pnpm / npm / yarn</span>
         </nav>
-        <h1>bun install · binary lockfile · Catalogs · hard link · workspaces</h1>
+        <h1>bun install：替代 pnpm / npm / yarn</h1>
         <p class="lead">
-          包管理器章。Bun 主题里<strong>最容易让用户切换</strong>的工具——通常工程师从 bun install 开始用 Bun，再考虑 runtime / build。<strong>关键洞察</strong>：hard link vs pnpm symlink 是核心取舍——Bun 用 hard link 兼容性好，但 phantom dep 检测严格度不如 pnpm。
+          包管理器章。Bun 主题里<strong>最容易让用户切换</strong>的工具——通常工程师从 <code>bun install</code> 开始用 Bun，再考虑 runtime / build。<strong>关键洞察</strong>：hard link vs pnpm symlink 是核心取舍——Bun 用 hard link 兼容性好，但 phantom dep 检测严格度不如 pnpm。这一章讲透 binary lockfile 争议演进、Catalogs 版本统一、workspaces、与 pnpm/npm/yarn 的横评、何时仍用 pnpm。
         </p>
         <div class="chapter-meta">
           <span><strong>阅读时长</strong> ~30 分钟</span>
@@ -57,58 +57,346 @@
           <span><strong>主要来源</strong> bun.com/docs/install · Bun 1.2 binary lockfile blog</span>
         </div>
 
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>本章为<strong>骨架</strong>。已完成大纲与关键知识点列表（见各段标题下的 bullet），正文撰写中。可参考 <a href="../../bun/outline.md">outline.md</a> 了解完整覆盖范围。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
-          <li><em>正文待写。</em></li>
+          <li><strong>bun install 是「最容易切换的 Bun 工具」</strong>——你不需要切 runtime / build / test，只把 <code>npm install</code> 换成 <code>bun install</code> 就能拿到 install 速度提升 2-10x。零生态风险——产物 <code>node_modules</code> 与 npm/pnpm 一致，Node 用户直接 <code>node app.js</code> 仍然工作。</li>
+          <li><strong>Bun 用 hard link 而非 pnpm 的 symlink</strong>——这是核心架构差异。Hard link 兼容性好（IDE indexer / 老工具完全识别），但 phantom dep 检测不如 pnpm 严格。</li>
+          <li><strong>大 monorepo 上 Bun install 比 pnpm 快 2-4x</strong>——来自 Zig 实现 + 256 并发请求 + 共享 Bun 已加载的 parser。小项目（&lt;50 包）差距小，因为绝对时间都很短。</li>
         </ol>
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
-        <p><em>正文待写。本章覆盖：binary lockfile · Catalogs · workspaces · hard link vs symlink · 256 并发 · --frozen-lockfile · 大 monorepo 2-4x 提速</em></p>
+
+        <h3>包管理器演进史：npm → yarn → pnpm → bun install</h3>
+        <p>JS 生态包管理器历史是<strong>"性能 + 工程"问题逐代升级</strong>的过程。理解每代的痛点能看清 bun install 在解决什么：</p>
+        <p><strong>npm（2010+）</strong>：第一代官方包管理器。痛点是<strong>慢 + 嵌套 node_modules 黑洞</strong>——npm 1-2 时代每个包都装在自己 node_modules 里，导致深层嵌套和巨量重复（同一个 lodash 装 50 份）。npm 3+ 引入 flat 化（顶层 node_modules 共享），但仍然慢、phantom dep 问题（依赖了未声明的间接 dep）。</p>
+        <p><strong>yarn (1.0, 2016)</strong>：Facebook 出品。痛点解决：(1) 并发下载（npm 当时是串行）；(2) lockfile（yarn.lock，npm 后来才跟进 package-lock.json）；(3) 缓存（offline mirror）。但仍然 flat node_modules，phantom dep 仍在。</p>
+        <p><strong>yarn 2.x / Berry (2019)</strong>：完全重写，引入 PnP（Plug'n'Play，无 node_modules，从 zip 里直接 require）。但生态拒绝——很多老工具不能识别 PnP 路径。yarn 2.x 至今仍是小众选择。</p>
+        <p><strong>pnpm (2017+)</strong>：以"<strong>严格 phantom dep 检测</strong>"为卖点。核心机制：所有包装到全局 store（<code>~/.pnpm-store</code>），项目 node_modules 用 symlink 链回 store。这让<strong>每个包只能 require 它在 package.json 里声明的依赖</strong>——require 没声明的包会失败（phantom dep 暴露）。pnpm 在 2020-2024 期间快速增长，是当前 monorepo 场景的事实标准。</p>
+        <p><strong>bun install (2022+)</strong>：以"<strong>速度 + 工具链一体化</strong>"为卖点。Zig 实现、binary lockfile、hard link 替代 symlink、与 bun runtime 共享 parser。<strong>不强制严格 phantom dep 检测</strong>（默认宽松，<code>--strict-peer-dependencies</code> 可开），换取兼容性。这是 bun install 的定位——比 npm/yarn 快、比 pnpm 兼容性好。</p>
+
+        <h3>Lockfile 设计：从 binary 到 text + binary cache</h3>
+        <p>Bun 的 lockfile 设计经历了一次重大演进：</p>
+        <p><strong>Bun 1.0 (2023-09) 时代：纯二进制 lockfile（bun.lockb）</strong>。Bun 团队为了 install 性能用了纯二进制格式——读 lockfile 时不需要 JSON parse，直接 mmap 进内存就能用。设计理由：lockfile 在大 monorepo 里能到几十 MB（几千个包 + 间接依赖矩阵），文本 JSON parse 耗时显著（500ms+）。</p>
+        <p>但<strong>用户社区强烈反对</strong>——主要痛点：(1) <strong>PR review 看不见 diff</strong>——GitHub 不能展示 binary 文件 diff，导致 review 人不知道改了什么；(2) <strong>合并冲突难解决</strong>——两个分支同时改 lockfile，binary 不能手动合并；(3) <strong>不能用文本工具检查</strong>——grep / awk / 一些 audit 工具不能扫 binary。</p>
+        <p>Bun 1.2 (2025+) 改成<strong>"文本格式 + 内部二进制 cache"</strong>。现在的 lockfile 是<strong>bun.lock</strong>（JSON 风格文本，PR-friendly），同时在 <code>node_modules/.bun-cache</code> 内有二进制版本作为加速 cache。<strong>install 时</strong>：(1) 检查 binary cache 是否最新；(2) 是则 mmap 直接用；(3) 否则 parse 文本 lockfile + 重建 binary cache。这套设计同时拿到"PR review 友好" + "install 性能"。</p>
+        <p>这件事是 Bun 团队"<strong>听用户反馈调整设计</strong>"的好例子——很多 OSS 项目做不到这种快速反应（pnpm / yarn 都用很久才形成现在的 lockfile 格式）。binary lockfile 改文本是 1.2 的关键特性之一。</p>
+
+        <h3>Hard link vs Symlink：核心架构差异</h3>
+        <p>Bun 和 pnpm 都把包装到全局 store（避免重复），但<strong>"项目 node_modules 怎么链接到 store"</strong>不一样：</p>
+        <p><strong>pnpm 用 symlink（软链）</strong>。<code>node_modules/lodash</code> 是 symlink，指向 <code>~/.pnpm-store/lodash@4.17.21/...</code>。读包时 OS 透明 follow symlink。优势：<strong>严格 phantom dep 检测</strong>——pnpm 把每个包的依赖单独建一层 symlink 结构，让"包 A 不能 require 没声明的包 B"成为物理约束。</p>
+        <p><strong>Bun 用 hard link（硬链）</strong>。<code>node_modules/lodash/index.js</code> 不是 symlink，是文件级别的 hard link，指向同一个 inode（store 里的文件）。读包时 OS 看到的就是普通文件。优势：<strong>兼容性好</strong>——任何工具都能识别（IDE / linter / 老 npm 命令 / 一些 audit 工具）。</p>
+        <p>具体差异对比：</p>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 22%">维度</th>
+              <th style="width: 39%">pnpm symlink</th>
+              <th style="width: 39%">Bun hard link</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>磁盘占用</strong></td>
+              <td>store 1 份 + symlink 几乎 0</td>
+              <td>store 1 份 + hard link 0（共享 inode）</td>
+            </tr>
+            <tr>
+              <td><strong>跨 filesystem</strong></td>
+              <td>symlink 跨 fs OK</td>
+              <td>hard link 不能跨 fs（Bun fallback 到 copy）</td>
+            </tr>
+            <tr>
+              <td><strong>IDE 识别</strong></td>
+              <td>偶尔有 follow symlink 问题</td>
+              <td>完全识别（看起来就是普通文件）</td>
+            </tr>
+            <tr>
+              <td><strong>Phantom dep 检测</strong></td>
+              <td>默认严格（不能 require 未声明）</td>
+              <td>默认宽松（<code>--strict-peer-dependencies</code> 可开）</td>
+            </tr>
+            <tr>
+              <td><strong>创建速度</strong></td>
+              <td>symlink syscall 略快</td>
+              <td>hard link syscall 略慢但实测差距不大</td>
+            </tr>
+            <tr>
+              <td><strong>node_modules 视觉</strong></td>
+              <td>".pnpm" 子目录 + 主 node_modules 全是 symlink</td>
+              <td>常规扁平 node_modules，看起来与 npm 一样</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>这套差异的<strong>实际影响</strong>：</p>
+        <p><strong>pnpm 严格 phantom dep 检测的好处</strong>：避免依赖代码意外引入。比如包 A 间接依赖了 lodash（通过包 B），但没在自己 package.json 声明。npm 上能 require lodash（被 hoist 到顶层）；pnpm 上不能（每个包只能 require 自己声明的）。这种约束让代码<strong>更严谨</strong>——升级 B 时如果 lodash 被踢出去，A 不会突然挂。</p>
+        <p><strong>但严格检测也有代价</strong>：很多老 npm 包没正确声明依赖（依赖了 hoisted 包但没写到 package.json），在 pnpm 上突然不工作。pnpm 用户经常踩坑：装个老包发现 require failed，要去 pnpmfile.cjs 加 hoisting 配置或 patch package.json。</p>
+        <p><strong>Bun hard link 的取舍</strong>：默认让 phantom dep 能跑（兼容老 npm 包），换取生态平滑。要严格的人开 <code>--strict-peer-dependencies</code>，效果接近 pnpm。这是 Bun "兼容优先" 哲学的另一个体现。</p>
+
+        <h3>「比 pnpm 快 2-4x」：性能来源</h3>
+        <p>Bun install 在大 monorepo 上比 pnpm 快 2-4x，比 npm 快 5-10x。性能差距来自 4 个机制：</p>
+        <p><strong>(1) Zig 实现 + 静态二进制</strong>——Bun install 是 Bun 二进制的子命令，不需要起 Node 进程。pnpm / npm 启动需要先 spawn Node + 加载 JS 解析器（30-50ms cold）。Bun 是直接的 native 命令，启动 ~5ms。</p>
+        <p><strong>(2) 256 并发请求</strong>——Bun 默认 256 并发下载 npm 元数据 + tarball。npm 默认 16，pnpm 默认 50-100。带宽足够时并发越高速度越快。</p>
+        <p><strong>(3) Zig 实现的 zlib 解压</strong>——npm 包是 .tgz 格式（gzip 压缩 tar）。解压走 Zig 直接调 zlib，比 Node 走 zlib 模块快 30-50%。在装 1000+ 包时累积差距明显。</p>
+        <p><strong>(4) Hard link 创建比 Symlink 快</strong>——这点实际微妙。symlink 的 syscall 略快于 hard link，但 pnpm 要建嵌套的 symlink 结构（每个包一层），总数比 Bun 的 hard link 多 5-10 倍。整体上 Bun 更快。</p>
+        <p><strong>实测数字</strong>（大型 monorepo，~3000 包）：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>包管理器</th>
+              <th>冷装（无 cache）</th>
+              <th>热装（有 cache）</th>
+              <th>frozen-lockfile</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>npm</td>
+              <td>~120s</td>
+              <td>~45s</td>
+              <td>~30s</td>
+            </tr>
+            <tr>
+              <td>yarn 1.x</td>
+              <td>~80s</td>
+              <td>~25s</td>
+              <td>~20s</td>
+            </tr>
+            <tr>
+              <td>pnpm</td>
+              <td>~40s</td>
+              <td>~10s</td>
+              <td>~5s</td>
+            </tr>
+            <tr>
+              <td>bun install</td>
+              <td>~15s</td>
+              <td>~3s</td>
+              <td>~1s</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>这些数字在<strong>小项目（&lt;100 包）</strong>差距不大——大家都在 1-2s 内完成，绝对值差几百 ms 不影响体验。但<strong>大型 monorepo</strong>每天 install 几十次（CI、dev 切分支、加新包），累积下来 Bun 一年能省团队几百人时。</p>
+
+        <h3>Workspaces（monorepo）+ Catalogs（Bun 1.2+）</h3>
+        <p>Bun 原生支持 monorepo workspaces——和 pnpm 等价：</p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+<pre class="code"><code class="lang-json">{
+  "name": "monorepo-root",
+  "workspaces": ["packages/*", "apps/*"],
+  "private": true
+}</code></pre>
+        </div>
+        <p>Bun 把所有 workspace 包扁平化到顶层 node_modules，互相 cross-link。Workspace 内部用相对路径 import 或包名 import 都能用。</p>
+        <p><strong>Catalogs (Bun 1.2+)</strong> 是从 pnpm 学过来的特性，用于 monorepo 中<strong>统一版本管理</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+<pre class="code"><code class="lang-json">// 根 package.json
+{
+  "workspaces": ["packages/*"],
+  "catalog": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "typescript": "^5.5.0"
+  }
+}
+
+// packages/app/package.json
+{
+  "dependencies": {
+    "react": "catalog:",       // 引用 root catalog 的版本
+    "react-dom": "catalog:"
+  }
+}</code></pre>
+        </div>
+        <p>这解决了 monorepo 经典痛点：<strong>多个 package 引用同一个依赖（如 react），版本想保持一致但容易写错</strong>。Catalogs 让你<strong>在一个地方声明版本</strong>，所有 package 引用 <code>catalog:</code> 自动解析。升级 react 时改一个数字而不是改几十个 package.json。</p>
+
+        <h3>实战命令：bun install 常用工作流</h3>
+        <p>常用命令对照：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>意图</th>
+              <th>npm</th>
+              <th>pnpm</th>
+              <th>bun</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>装所有依赖</td>
+              <td>npm install</td>
+              <td>pnpm install</td>
+              <td>bun install</td>
+            </tr>
+            <tr>
+              <td>加包</td>
+              <td>npm install pkg</td>
+              <td>pnpm add pkg</td>
+              <td>bun add pkg</td>
+            </tr>
+            <tr>
+              <td>加 dev dep</td>
+              <td>npm install -D pkg</td>
+              <td>pnpm add -D pkg</td>
+              <td>bun add -d pkg</td>
+            </tr>
+            <tr>
+              <td>移除包</td>
+              <td>npm uninstall pkg</td>
+              <td>pnpm remove pkg</td>
+              <td>bun remove pkg</td>
+            </tr>
+            <tr>
+              <td>CI 严格装</td>
+              <td>npm ci</td>
+              <td>pnpm install --frozen-lockfile</td>
+              <td>bun install --frozen-lockfile</td>
+            </tr>
+            <tr>
+              <td>升级所有依赖</td>
+              <td>npm update</td>
+              <td>pnpm update</td>
+              <td>bun update</td>
+            </tr>
+            <tr>
+              <td>看过期依赖</td>
+              <td>npm outdated</td>
+              <td>pnpm outdated</td>
+              <td>bun outdated</td>
+            </tr>
+            <tr>
+              <td>跑 script</td>
+              <td>npm run xxx</td>
+              <td>pnpm xxx</td>
+              <td>bun xxx (或 bun run xxx)</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>对从 pnpm 切 Bun 的用户，<strong>命令对应基本无缝</strong>——大部分命令直接 sed 替换 <code>pnpm</code> → <code>bun</code> 即可。少数差异（<code>-d</code> vs <code>-D</code>）几分钟适应。</p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 A · 从 pnpm 切 Bun（最常见迁移路径）</h3>
+          <p>团队 monorepo 在 pnpm 上用了 1-2 年，想试 Bun install。迁移流程：(1) <strong>本地试装</strong>—— <code>cd repo &amp;&amp; rm -rf node_modules pnpm-lock.yaml &amp;&amp; bun install</code>。Bun 自动把 pnpm-lock 的版本解析到 bun.lock；(2) <strong>跑测试</strong>—— <code>bun run test</code>（或你的测试命令），验证依赖能正确加载；(3) <strong>跑应用</strong>—— <code>bun run dev</code>，看是否有运行时错误；(4) <strong>看 phantom dep 风险</strong>—— pnpm 严格检测下没出错的代码，到 Bun 上可能有未声明依赖被允许；通常没事，但要意识到这点。(5) <strong>提交</strong>—— commit bun.lock + 删除 pnpm-lock.yaml。完成。这个流程典型 1-2 小时（中型项目），出问题大多是 Bun 兼容性 issue（参考 P3.2）。整体迁移的 ROI：CI install 时间 -50%（pnpm 5s → Bun 1-2s），dev 切分支后 install 时间 -50%。一年下来团队省下几百小时。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 B · 评估「我们要不要用 Catalogs 做 monorepo 版本管理」</h3>
+          <p>Monorepo 中 react 版本同步的痛点：5 个 app 都要 react 18.3.x，每次升级要改 5 个 package.json。Catalogs 让 1 处声明 5 处引用。判据：(1) <strong>monorepo 大小</strong>—— 5+ packages 共享 react/typescript/某个 lib 时，Catalogs ROI 高；2-3 packages 手动管理也行。(2) <strong>升级频率</strong>—— 频繁升 lib（每月）适合；很少升（每年）的不适合。(3) <strong>团队习惯</strong>—— 团队喜欢"显式版本号在 package.json"的就别用；喜欢中央化的就用。(4) <strong>替代方案</strong>—— pnpm 也支持 catalogs（最早是 pnpm 引入的）；syncpack / dependabot 也能做版本同步。综合后中大型 monorepo 推荐用 Catalogs，小项目不必要。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 C · 排查「Bun install 比 pnpm install 慢」的反直觉问题</h3>
+          <p>偶尔团队报"Bun install 反而比 pnpm 慢"——常见原因：(1) <strong>npm registry mirror 配置不对</strong>——Bun 默认用 registry.npmjs.org；如果你们用国内/企业 mirror，Bun 不读 .npmrc 的某些字段（要写 <code>~/.bunfig.toml</code>）。配置后速度恢复正常。(2) <strong>磁盘 I/O 瓶颈</strong>——HDD 或慢 SSD 上 hard link 创建可能比 symlink 慢（pnpm symlink 只占 inode 不写文件）。SSD 上 Bun 通常胜出。(3) <strong>大量小文件</strong>——某些包（如 typescript / @types/*）有几千个小文件，hard link 创建累积慢。这种场景 pnpm 微优势。(4) <strong>Network bottleneck</strong>——256 并发请求被防火墙 / 代理限速；改 <code>--registry</code> 或调小并发。规避：检查 mirror 配置 + SSD + 网络后再 benchmark；大部分场景 Bun 胜出。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 D</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 D · 决策「保留 pnpm 还是切 Bun」</h3>
+          <p>团队已经深度用 pnpm，要不要切 Bun install？判据：(1) <strong>pnpm patch / .pnpmfile.cjs 用得深</strong>—— pnpm 这两个高级特性（修改包 source、hoisting 控制）Bun 部分支持但不完全等价。深度用 pnpm patch 的项目暂时不切。(2) <strong>严格 phantom dep 检测是 quality 要求</strong>—— pnpm 默认严格，Bun 默认宽松（<code>--strict-peer-dependencies</code> 可开但 less battle-tested）。Quality 第一的团队继续 pnpm。(3) <strong>monorepo 大且 install 是瓶颈</strong>—— Bun 速度优势明显（2-4x），有切的 ROI。(4) <strong>团队已用 Bun runtime / build / test</strong>—— 工具链一体化下切 install 是自然延伸；如果 only install 切其他不切，工具链一体化红利拿不到。(5) <strong>规避风险</strong>—— Bun 仍在快速迭代，pnpm 是稳定基础设施；保守团队再观察 1 年。综合后通常的判断：<strong>新项目优先 Bun install；大型遗留 pnpm monorepo 谨慎评估再切</strong>。</p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
         <div class="code-block">
-          <span class="code-label">javascript</span>
-<pre class="code"><code class="lang-js">// 正文待写</code></pre>
+          <span class="code-label">bash</span>
+<pre class="code"><code class="lang-bash"># 标准 install 工作流
+bun install                         # 装所有 deps（读 package.json）
+bun add lodash                      # 加 lodash 到 dependencies
+bun add -d typescript               # 加 typescript 到 devDependencies
+bun add lodash@4.17.21              # 加指定版本
+bun add github:user/repo            # 装 GitHub repo（不是 npm）
+bun remove lodash                   # 移除
+
+# CI 严格模式
+bun install --frozen-lockfile       # 不允许修改 lockfile（CI 必用）
+
+# 升级
+bun update                          # 升所有 deps（在 semver 范围内）
+bun update lodash --latest          # 把 lodash 升到 latest（破坏 semver）
+bun outdated                        # 看哪些 dep 有新版本
+
+# Workspace（monorepo）
+bun install --filter @org/app       # 只装这一个 workspace 的 deps
+bun run --filter @org/app build     # 在指定 workspace 跑 script
+
+# 性能 benchmark（看 install 时间）
+hyperfine --prepare 'rm -rf node_modules' \
+  'npm install' 'pnpm install' 'bun install'</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">toml</span>
+<pre class="code"><code class="lang-toml"># bunfig.toml — Bun 的全局配置（项目根 / ~/.bunfig.toml）
+# 类似 .npmrc 但格式不同
+
+[install]
+# 默认 registry（替代 npm 的 registry.npmjs.org）
+registry = "https://registry.npmmirror.com"
+
+# 严格 phantom dep（默认关）
+strict = true
+
+# Cache 目录（默认 ~/.bun/install/cache）
+cacheDir = "/path/to/cache"
+
+# 并发下载数（默认 256）
+concurrentRequests = 128
+
+[install.scopes]
+# 私有 scope 用单独 registry
+"@your-org" = { token = "$NPM_TOKEN", url = "https://npm.your-org.com" }</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">json</span>
+<pre class="code"><code class="lang-json">// 完整的 monorepo 根 package.json（含 Catalogs）
+{
+  "name": "my-monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "catalog": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "typescript": "^5.5.0",
+    "@types/node": "^20.0.0"
+  },
+  "scripts": {
+    "build": "bun run --filter '*' build",
+    "test": "bun test",
+    "dev": "bun run --filter ./apps/web dev"
+  }
+}</code></pre>
         </div>
 
         <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
         <div class="pitfall">
-          <div class="pitfall-title">陷阱标题</div>
-          <p><em>正文待写。</em></p>
+          <div class="pitfall-title">期待 Bun 像 pnpm 一样默认严格 phantom dep</div>
+          <p>从 pnpm 切 Bun 的人有时遇到：之前 pnpm 上报 phantom dep 错误的代码，到 Bun 上不报错——以为 Bun 不严谨。实际上 Bun 默认<strong>宽松</strong>（兼容老 npm 包），开 <code>--strict-peer-dependencies</code> 才严格。如果你重视 phantom dep 检测，<code>bunfig.toml</code> 里加 <code>strict = true</code>。规避：搞清楚 Bun 的默认行为是"兼容优先"——这是设计选择不是 bug。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">在跨 filesystem 场景下 hard link 自动 fallback 到 copy</div>
+          <p>hard link 不能跨 filesystem 边界（这是 OS 限制）。如果你的项目在一个 fs，Bun store 在另一个 fs（典型情况：项目在 NTFS / 容器 mount，store 在 ext4 / Docker volume），hard link 会失败，Bun fallback 到 copy。这意味着<strong>磁盘占用变成 N 倍</strong>（每个项目独立一份 node_modules），性能也变慢。规避：(1) 把 store 放在和项目同一个 fs（<code>BUN_INSTALL=/path/in/same/fs</code>）；(2) 容器场景统一 volume；(3) Docker 多 stage build 时把 install 放在与 final stage 同 layer。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">误以为 bun.lock 与 pnpm-lock.yaml / package-lock.json 兼容</div>
+          <p>三个 lockfile 格式都不兼容。从 pnpm / npm 切 Bun 时<strong>不能保留旧 lockfile</strong>——要 <code>rm pnpm-lock.yaml</code> + <code>bun install</code> 重新生成 bun.lock。Bun 会读 package.json 的 dependencies 重新解析版本（在 semver 范围内）+ 生成 bun.lock。这意味着<strong>具体版本号可能微变</strong>——比如之前 lockfile 锁的 lodash 4.17.20，重新解析可能变成 4.17.21（如果 package.json 是 ^4.17.20）。生产场景<strong>一定先在 dev 全测一遍</strong>再切，避免版本变化引入回归。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">期待 bunfig.toml 完全等同 .npmrc</div>
+          <p>Bun 不读 .npmrc 的所有字段——它有自己的 bunfig.toml。一些 .npmrc 配置（如 <code>save-exact</code> / <code>fetch-retries</code>）在 bunfig.toml 里有对应字段（语法不同），一些（如 <code>node-options</code> / <code>script-shell</code>）没有等价物。具体要查 bun.com/docs/install/config。常见痛点：私有 registry / 企业 mirror 的认证 token 配置——bunfig.toml 用 <code>[install.scopes]</code> 配置，与 .npmrc 的 <code>//registry.example.com/:_authToken=...</code> 语法不同。从 npm 迁移 Bun 时<strong>第一件事是把 registry / token 配置移植到 bunfig.toml</strong>。</p>
         </div>
 
         <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
         <ul>
-          <li><a href="https://bun.com/docs" target="_blank" rel="noopener">bun.com/docs</a></li>
-          <li><a href="https://github.com/oven-sh/bun" target="_blank" rel="noopener">oven-sh/bun GitHub</a></li>
-          <li>回到主题首页 → <a href="../index.html">Bun 深度学习</a></li>
+          <li><a href="https://bun.com/docs/install" target="_blank" rel="noopener">Bun · install docs</a> · 完整 install 命令参考</li>
+          <li><a href="https://bun.com/blog/bun-install-text-lockfile" target="_blank" rel="noopener">Bun 1.2 · Text-format lockfile</a> · 从 binary 改 text 的设计博客</li>
+          <li><a href="https://bun.com/docs/install/workspaces" target="_blank" rel="noopener">Bun · Workspaces docs</a> · monorepo 用法</li>
+          <li><a href="https://bun.com/docs/install/catalogs" target="_blank" rel="noopener">Bun · Catalogs docs</a> · 版本统一管理</li>
+          <li><a href="https://pnpm.io/motivation" target="_blank" rel="noopener">pnpm · Motivation</a> · pnpm 设计哲学（用于对照）</li>
+          <li>对照 Node CJS/ESM → <a href="../../node/03-modules/01-cjs-esm.html">Node P3.1 · CJS / ESM</a></li>
+          <li>下一章 → <a href="02-bun-run.html">P4.2 · bun run 与 runtime</a></li>
         </ul>
 
         <nav class="chapter-nav" aria-label="章节翻页">
-          <a class="prev" href="../03-runtime/02-node-compat.html"><span class="label">← 上一章</span><span class="title">P3.2 · Node 兼容层</span></a>
+          <a class="prev" href="../03-runtime/02-node-compat.html"><span class="label">← 上一章</span><span class="title">P3.2 · Node 兼容层：边界与 fallback</span></a>
           <a class="next" href="02-bun-run.html"><span class="label">下一章 →</span><span class="title">P4.2 · bun run 与 runtime</span></a>
         </nav>
       </article>

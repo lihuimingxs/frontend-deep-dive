@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>bun test · Jest 兼容 · snapshot · 与 Vitest/node:test 横评 · P4 · Bun 深度学习</title>
-    <meta name="description" content="测试 runner 章。bun test 是 Jest 兼容 + 启动快的方案——和 Vitest / node:test 三方混战。<strong>关键洞察</strong>：bun test 定位是「已用 Jest 想加速」；Vitest 护城河是 DOM 测试 + UI dashboard；node:test 护城河是零依赖 + 与 Node 同生命周期——三者各有不可替代的场景。" />
+    <title>bun test：替代 Vitest / Jest / node:test · P4.4 · Bun 深度学习</title>
+    <meta name="description" content="bun test 是 Jest 兼容 + 启动快的方案——和 Vitest / node:test 三方混战。讲透 Jest 兼容（expect/mock/snapshot）+ snapshot testing + mock 系统 + 内置 coverage + 启动快真因 + 与 Vitest / node:test 横评 + 何时仍 Vitest。" />
     <link rel="stylesheet" href="../../assets/styles.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23fbf0df'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23000'%3EB%3C/text%3E%3C/svg%3E" />
   </head>
@@ -28,9 +28,9 @@
         <ul>
           <li><a href="index.html">阶段概览</a></li>
           <li><a href="01-bun-install.html">01 · bun install：替代 pnpm / npm / yarn</a></li>
-          <li><a href="02-bun-run.html">02 · bun run 与 runtime：直跑 TS、--hot、glob import</a></li>
-          <li><a href="03-bun-build.html">03 · bun build：bundler + --compile SEA 替代</a></li>
-          <li><a href="04-bun-test.html" class="active">04 · bun test：替代 Vitest / Jest / node:test</a></li>
+          <li><a href="02-bun-run.html">02 · bun run 与 runtime</a></li>
+          <li><a href="03-bun-build.html">03 · bun build</a></li>
+          <li><a href="04-bun-test.html" class="active">04 · bun test</a></li>
         </ul>
         <h3>其他阶段</h3>
         <ul>
@@ -45,66 +45,431 @@
           <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
           <a href="../index.html">Bun</a><span class="breadcrumb-sep">/</span>
           <a href="index.html">P4 · 一体化工具链</a><span class="breadcrumb-sep">/</span>
-          <span>04 · bun test：替代 Vitest / Jest / node:test</span>
+          <span>04 · bun test</span>
         </nav>
-        <h1>bun test · Jest 兼容 · snapshot · 与 Vitest/node:test 横评</h1>
+        <h1>bun test：替代 Vitest / Jest / node:test</h1>
         <p class="lead">
-          测试 runner 章。bun test 是 Jest 兼容 + 启动快的方案——和 Vitest / node:test 三方混战。<strong>关键洞察</strong>：bun test 定位是「已用 Jest 想加速」；Vitest 护城河是 DOM 测试 + UI dashboard；node:test 护城河是零依赖 + 与 Node 同生命周期——三者各有不可替代的场景。
+          测试 runner 章。bun test 是 Jest 兼容 + 启动快的方案——和 Vitest / node:test <strong>三方混战</strong>。<strong>关键洞察</strong>：bun test 定位是"已用 Jest 想加速"；Vitest 护城河是 DOM 测试 + UI dashboard；node:test 护城河是零依赖 + 与 Node 同生命周期——<strong>三者各有不可替代的场景</strong>。这一章讲透 Jest 兼容范围、snapshot testing、mock 系统、内置 coverage、启动快的真正原因、与 Vitest / Jest / node:test 的横评。
         </p>
         <div class="chapter-meta">
           <span><strong>阅读时长</strong> ~30 分钟</span>
-          <span><strong>前置</strong> Node P6.1 node:test</span>
+          <span><strong>前置</strong> <a href="../../node/06-modern/01-modern-node.html">Node P6.1 node:test</a></span>
           <span><strong>主要来源</strong> bun.com/docs/test · Vitest docs · Jest docs</span>
-        </div>
-
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>本章为<strong>骨架</strong>。已完成大纲与关键知识点列表（见各段标题下的 bullet），正文撰写中。可参考 <a href="../../bun/outline.md">outline.md</a> 了解完整覆盖范围。</p>
         </div>
 
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
-          <li><em>正文待写。</em></li>
+          <li><strong>bun test 的核心定位是「已用 Jest 想加速」</strong>——API 和 Jest 大量兼容（<code>describe</code> / <code>test</code> / <code>expect</code> / <code>mock</code> / <code>spyOn</code>），迁移成本低；启动快 5-10x。</li>
+          <li><strong>Vitest / node:test 各有不可替代的场景</strong>—— Vitest 的 DOM 测试 + UI dashboard 是前端组件测试事实标准；node:test 是 Node 22+ 内置零依赖；bun test 是 Jest 兼容加速。三方混战，没有"赢家通吃"。</li>
+          <li><strong>启动快的真正原因是工具链一体化</strong>—— bun test 启动 ~50ms vs Vitest ~500ms vs Jest ~1-2s。差距来自共享 parser + 没有"启动 Node + 加载 vitest 包"的额外开销。</li>
         </ol>
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
-        <p><em>正文待写。本章覆盖：Jest 兼容 expect/mock · snapshot · spyOn · mock.module · 内置 coverage · fetch mock · happy-dom · 启动快真因</em></p>
+
+        <h3>2026 年的 test runner 格局</h3>
+        <p>JS test runner 在 2026 年是<strong>三方混战</strong>——和 bundler 赛道相似但定位不同：</p>
+        <p><strong>Jest (2014+)</strong>：Facebook 出品。早期事实标准。但启动慢（~1-2s）+ ESM 支持差 + 配置复杂。新项目越来越少选 Jest，但<strong>遗留 Jest 代码量极大</strong>（几百万项目）。</p>
+        <p><strong>Vitest (2021+)</strong>：Vite 团队出品。基于 Vite 的 transform pipeline，dev 体验极好（HMR-style watch、UI dashboard、coverage report 都美观）。前端组件测试（DOM + JSX + jsdom）是事实标准。</p>
+        <p><strong>node:test (Node 18+ 实验，20 稳定)</strong>：Node 内置。零依赖、与 Node 同生命周期、CI 配置极简。详见 <a href="../../node/06-modern/01-modern-node.html">Node P6.1</a>。但 API 与 Jest 不兼容（更接近 Deno test），迁移成本高。</p>
+        <p><strong>bun test (2022+)</strong>：Bun 内置。Jest API 兼容 + 启动快 + 工具链一体化。是 Jest 用户的最直接迁移路径。</p>
+        <p>这四个 test runner 的<strong>正确认识</strong>：不是"谁取代谁"，是<strong>各自抢不同的细分市场</strong>。Vitest 抢前端；node:test 抢"零依赖小项目"；bun test 抢"Jest 用户想要更快"；Jest 守住"已经在用 Jest 的项目"。<strong>未来 5 年这四个会长期共存</strong>，不会一家独大。</p>
+
+        <h3>Jest 兼容：迁移成本最低的卖点</h3>
+        <p>bun test 的<strong>核心定位是"Jest API 兼容"</strong>。具体兼容到什么程度：</p>
+        <p><strong>✅ 完全兼容</strong>：</p>
+        <ul>
+          <li>核心 API：<code>describe</code> / <code>test</code> / <code>it</code> / <code>beforeEach</code> / <code>afterEach</code> / <code>beforeAll</code> / <code>afterAll</code></li>
+          <li><code>expect()</code> 主要 matcher：<code>.toBe</code> / <code>.toEqual</code> / <code>.toContain</code> / <code>.toHaveBeenCalled</code> / <code>.toHaveBeenCalledWith</code> / <code>.toThrow</code> / <code>.toMatch</code> / <code>.toBeNull</code> / <code>.toBeUndefined</code> / <code>.toBeInstanceOf</code> / 等 90%+ 常用 matcher</li>
+          <li><code>mock()</code> / <code>spyOn()</code>：基础 mock 功能</li>
+          <li><code>useFakeTimers()</code> / <code>useRealTimers()</code>：定时器 mock</li>
+          <li>Snapshot testing：<code>.toMatchSnapshot()</code></li>
+          <li>Test filtering：<code>.skip</code> / <code>.only</code> / <code>.each</code></li>
+        </ul>
+        <p><strong>⚠️ 部分兼容（API 在但行为略有差异）</strong>：</p>
+        <ul>
+          <li>Module mocking（<code>jest.mock('./module')</code>）—— Bun 实现是 <code>mock.module()</code>，行为对齐但 API 略有差异</li>
+          <li>一些高级 matcher（<code>.toMatchInlineSnapshot</code> / <code>.toMatchSnapshot({ printer })</code>）部分支持</li>
+          <li>Custom matcher（<code>expect.extend()</code>）—— Bun 1.1+ 支持，但 corner case 可能差异</li>
+        </ul>
+        <p><strong>❌ 不兼容</strong>：</p>
+        <ul>
+          <li>Jest 完整 plugin 系统（<code>jest.config.js</code> 的 transformer / reporters / projects）</li>
+          <li>Jest 的 globals 配置（一些 Jest plugin 给 globals 加东西）</li>
+          <li>jest.config.js 配置文件（Bun 用 bunfig.toml 配置）</li>
+        </ul>
+        <p><strong>导入路径差异</strong>：Jest 通常假设 <code>describe</code> / <code>test</code> 是 globals（<code>"globals": ["describe", "test", "expect"]</code> 在 ESLint 配）。Bun 推荐显式 import：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// Jest 风格（globals）
+describe('add', () =&gt; {
+  test('positive', () =&gt; {
+    expect(add(1, 2)).toBe(3);
+  });
+});
+
+// bun test 风格（推荐显式 import）
+import { describe, test, expect } from 'bun:test';
+
+describe('add', () =&gt; {
+  test('positive', () =&gt; {
+    expect(add(1, 2)).toBe(3);
+  });
+});
+
+// 但 Bun 也接受 globals（Jest 兼容）
+// 不 import 直接用 describe/test/expect 也能跑</code></pre>
+        </div>
+        <p>实测<strong>大部分 Jest 测试代码可以直接跑 bun test</strong>——基础 expect / describe / test / mock 都兼容。深度用 Jest 高级特性（custom transformer / 复杂 globals / 自定义 reporter）的项目迁移成本高。具体迁移工作量：(1) 试跑 <code>bun test</code> 看哪些测试失败；(2) 失败的查兼容性 issue；(3) 大部分 patch 几行代码就好。</p>
+
+        <h3>Mock 系统：与 Jest 接近但 API 略不同</h3>
+        <p>Bun mock 系统覆盖 Jest 的常用功能：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">import { test, expect, mock, spyOn } from 'bun:test';
+
+// 1. 创建 mock function
+const fn = mock((x) =&gt; x * 2);
+fn(3);                          // 6
+expect(fn).toHaveBeenCalledWith(3);
+expect(fn.mock.calls.length).toBe(1);
+
+// 2. spy on existing method
+const obj = { greet: (n) =&gt; `hello ${n}` };
+const spy = spyOn(obj, 'greet');
+obj.greet('world');
+expect(spy).toHaveBeenCalledWith('world');
+
+// 3. mock module（替代 jest.mock）
+import { mock } from 'bun:test';
+mock.module('./db', () =&gt; ({
+  query: () =&gt; Promise.resolve([{ id: 1 }])
+}));
+// 之后 import './db' 拿到 mock 版
+
+// 4. fake timers
+import { setSystemTime } from 'bun:test';
+setSystemTime(new Date('2026-01-01'));
+expect(new Date().getFullYear()).toBe(2026);
+
+// 5. fetch mock（内置！）
+mock.module('global:fetch', () =&gt; async (url) =&gt; new Response('mocked'));
+// 任何 fetch 调用都返回 mocked</code></pre>
+        </div>
+        <p>这套 mock API <strong>覆盖率 80%+</strong> 的 Jest 用法。复杂场景（如 jest.requireActual、模块工厂的 partial mock）可能差异。规避：(1) 简单场景直接用；(2) 复杂场景查 Bun 文档或提 issue。</p>
+
+        <h3>Snapshot Testing</h3>
+        <p>Bun 支持 Jest 风格的 snapshot：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">import { test, expect } from 'bun:test';
+
+test('user shape', () =&gt; {
+  const user = createUser('Alice');
+  expect(user).toMatchSnapshot();
+  // 第一次跑：snapshot 写入 __snapshots__/file.test.ts.snap
+  // 后续跑：与之前 snapshot 比较，不一致则失败
+});
+
+// inline snapshot（snapshot 直接写在 test 文件里）
+test('greeting', () =&gt; {
+  const msg = greet('Bob');
+  expect(msg).toMatchInlineSnapshot(`"hello Bob"`);
+});
+
+// 更新 snapshot：bun test --update-snapshots</code></pre>
+        </div>
+        <p>Snapshot 文件格式与 Jest 一致——这意味着<strong>从 Jest 迁移时已有的 snapshot 文件能直接复用</strong>。这是 Jest 兼容设计的另一个细节红利。</p>
+
+        <h3>内置 Coverage（不需要 c8 / nyc）</h3>
+        <p>测试 coverage 在 Node 生态传统上要装 c8（V8 native coverage）或 nyc（istanbul-based）。Bun 内置 coverage：</p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+<pre class="code"><code class="lang-bash"># 跑测试 + 输出 coverage
+bun test --coverage
+
+# 输出格式
+# Lines:    87.5%
+# Funcs:    91.2%
+# Branches: 78.4%
+# Statements: 86.9%
+
+# LCOV 格式（CI 报告 / Codecov 上传）
+bun test --coverage --coverage-reporter=lcov
+
+# JSON 格式（自定义后处理）
+bun test --coverage --coverage-reporter=json
+
+# 强制 coverage 阈值（CI 用）
+bun test --coverage --coverage-threshold=80</code></pre>
+        </div>
+        <p>底层是 JSC native coverage（类似 V8 native coverage），<strong>开销小 + 准确度高</strong>。比 nyc 的 istanbul instrumentation（在源码插入计数代码）快很多 + 不影响代码执行。</p>
+        <p>这套内置 coverage 让 Bun test 在 CI 配置上极简：<code>bun test --coverage --coverage-reporter=lcov</code> + 上传 LCOV 给 Codecov / Coveralls 就完事，不需要装 c8 或配置 nyc。</p>
+
+        <h3>启动快的真正原因</h3>
+        <p>bun test 比 Vitest / Jest 启动快 5-10x。原因和 P4.3 讲的"共享 parser"是同一套机制：</p>
+        <p><strong>Jest 启动流程</strong>：(1) Node 启动 ~30ms；(2) require Jest 包（~700+ 间接依赖）~500ms；(3) 加载 jest.config.js + transformer（如 ts-jest）~300ms；(4) 找测试文件 + transform ~200ms。<strong>合计 ~1-1.5s</strong>。</p>
+        <p><strong>Vitest 启动流程</strong>：(1) Node 启动 ~30ms；(2) require Vitest（~300 间接依赖，比 Jest 少）~200ms；(3) Vite transform pipeline 启动 ~200ms；(4) 找测试 + transform ~100ms。<strong>合计 ~500-700ms</strong>。</p>
+        <p><strong>bun test 启动流程</strong>：(1) Bun 启动 ~5ms；(2) bun:test 加载（嵌在 Bun 二进制）~0ms；(3) 用 Bun 自家 parser 找测试 + transpile ~30ms。<strong>合计 ~50-100ms</strong>。</p>
+        <p>这个差距在<strong>"频繁跑测试"</strong>场景累积巨大——每次写一段代码 → 跑 test → 等结果 → 改代码。Vitest 每次 ~500ms 等待，Bun ~50ms 等待，差 10x。一天写代码跑测试 100 次，Bun 比 Vitest 省 50 分钟纯等待。</p>
+
+        <h3>DOM 测试：Vitest 的护城河</h3>
+        <p>前端组件测试（React / Vue / Svelte）需要 DOM 环境——通常用 jsdom 或 happy-dom 包模拟。Vitest 在这块的优势：</p>
+        <p><strong>(1) 内置 jsdom / happy-dom 集成</strong>—— Vitest 配置 <code>environment: 'jsdom'</code> 一行启用。bun test 不内置 DOM，要装 happy-dom 包 + 在测试 setup 里手动 inject。</p>
+        <p><strong>(2) Testing Library 集成</strong>—— @testing-library/react 等库与 Vitest 配合极好；bun test 也能用但配置更繁琐。</p>
+        <p><strong>(3) UI dashboard</strong>—— Vitest UI 显示测试结果 + 覆盖率热图 + 时间轴，浏览器里点点就能看。bun test 没有等价物（CI 命令行输出）。</p>
+        <p><strong>(4) Watch 模式</strong>—— Vitest watch 是 HMR-style（改一个测试只重跑那个，状态保留）；bun test --watch 行为略简单。</p>
+        <p>这些差异让<strong>前端组件测试场景 Vitest 仍是事实标准</strong>。bun test 在这块短期内不能替代。</p>
+
+        <h3>三方横评</h3>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 16%">维度</th>
+              <th style="width: 21%">bun test</th>
+              <th style="width: 21%">Vitest</th>
+              <th style="width: 21%">Jest</th>
+              <th style="width: 21%">node:test</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>启动速度</strong></td>
+              <td>~50ms</td>
+              <td>~500ms</td>
+              <td>~1.5s</td>
+              <td>~100ms</td>
+            </tr>
+            <tr>
+              <td><strong>API 兼容</strong></td>
+              <td>Jest 90%</td>
+              <td>Jest 70% (主动兼容)</td>
+              <td>(自身)</td>
+              <td>独立 API</td>
+            </tr>
+            <tr>
+              <td><strong>DOM 测试</strong></td>
+              <td>装 happy-dom</td>
+              <td>内置 jsdom/happy-dom</td>
+              <td>内置 jsdom</td>
+              <td>装包</td>
+            </tr>
+            <tr>
+              <td><strong>UI dashboard</strong></td>
+              <td>无</td>
+              <td>有（极强）</td>
+              <td>无</td>
+              <td>无</td>
+            </tr>
+            <tr>
+              <td><strong>HMR-style watch</strong></td>
+              <td>简单 watch</td>
+              <td>完整 HMR</td>
+              <td>简单 watch</td>
+              <td>简单 watch</td>
+            </tr>
+            <tr>
+              <td><strong>Coverage</strong></td>
+              <td>内置（JSC native）</td>
+              <td>内置（V8 native）</td>
+              <td>装 c8/nyc</td>
+              <td>实验性内置</td>
+            </tr>
+            <tr>
+              <td><strong>依赖体积</strong></td>
+              <td>0（Bun 内置）</td>
+              <td>~300 间接依赖</td>
+              <td>~700 间接依赖</td>
+              <td>0（Node 内置）</td>
+            </tr>
+            <tr>
+              <td><strong>Plugin 生态</strong></td>
+              <td>新生</td>
+              <td>极强</td>
+              <td>极强（遗留）</td>
+              <td>无</td>
+            </tr>
+            <tr>
+              <td><strong>适合场景</strong></td>
+              <td>已用 Bun + Jest 兼容代码</td>
+              <td>前端组件测试</td>
+              <td>遗留项目</td>
+              <td>零依赖小项目</td>
+            </tr>
+          </tbody>
+        </table>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 A · 从 Jest 迁移到 bun test 加速 CI</h3>
+          <p>团队后端项目用 Jest 跑测试 5 年了——CI 单次 test 要 3-5 分钟（启动 + transform + 跑），改一行代码 push 后等很久。迁移到 bun test：(1) <code>bun install</code>（已有 Bun）；(2) 改 package.json scripts.test 从 <code>jest</code> 改 <code>bun test</code>；(3) 跑 <code>bun test</code> 看失败；(4) 大部分测试直接绿；(5) patch 少数 corner case。典型工作量 1-2 天（中型项目）。CI 时间从 3-5 分钟降到 30s-1min——一天提交 50 次 PR 的团队节省几小时 CI 时间。这是 bun test 的<strong>最直接 ROI 场景</strong>——已有 Jest 代码 + 想要更快。前端组件测试如果在用 Jest + jsdom，迁移要谨慎：jsdom 兼容性 corner case 多，可能要保留 Jest 或切 Vitest。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 B · 决策「前端项目 Vitest 还是 bun test」</h3>
+          <p>新 React / Vue 项目选 test runner——Vitest 还是 bun test？判据：(1) <strong>组件测试需求</strong>—— 测 React 组件（jsx + DOM + Testing Library + user-event）→ Vitest 体验远胜（jsdom 集成 + DOM matcher 完整）。(2) <strong>UI dashboard 需求</strong>—— 想要测试结果 + coverage 的浏览器 UI → Vitest 独有。(3) <strong>已用 Vite</strong>—— 同一套 Vite 配置 / plugin / transformer 在 Vitest 复用 → 选 Vitest。(4) <strong>纯逻辑测试（utils / stores / hooks 不带 DOM）</strong>—— 两者都行，bun test 更快但 Vitest 体验也好。综合：<strong>有 DOM 测试需求选 Vitest；纯逻辑 / 后端 / CLI 选 bun test</strong>。前端项目通常 Vitest 主导，bun test 用于跑 utils / API / 后端 server 测试。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 C · 用 bun test 跑 monorepo 中所有 package 测试</h3>
+          <p>Monorepo 有 10 个 package，每个有自己的测试。<code>bun test</code> 在根目录跑——自动找所有 package 的 *.test.ts / *.spec.ts 文件，并行跑。比 Jest <code>--projects</code> 配置简单（不需要 jest.config.js），比 Vitest <code>--workspace</code> 配置简单（不需要 vitest.workspace.ts）。具体做法：根 package.json 的 scripts.test = <code>bun test</code>，CI 跑这个。每个 package 不需要单独配置。注意：(1) <strong>测试文件命名</strong>—— Bun 默认查 *.test.{js,ts,jsx,tsx} 和 *.spec.{js,ts,jsx,tsx}；(2) <strong>路径过滤</strong>—— <code>bun test packages/foo</code> 只跑 foo 包；(3) <strong>并行</strong>—— Bun 默认每个测试文件并行（不同 process）。这套 monorepo test 体验是 bun test 的另一个杀手场景。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 D</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 D · 给 OSS 库维护者：在 CI 矩阵里加 bun test</h3>
+          <p>你维护 npm 库，CI 跑 <code>jest</code> 测试 Node 兼容性——很多 Bun 用户报你的库在 Bun 上挂。解法：CI 矩阵加一行 bun test。具体配置：GitHub Actions 用 <code>matrix: { runtime: ['node-20', 'node-22', 'bun-latest'] }</code>，每个 cell 用对应 runtime 跑测试。<strong>不需要</strong>给 bun 单独写测试——你的 Jest 测试 90%+ 能在 bun test 直接跑。<strong>需要</strong>做的：(1) 测试文件用显式 import (<code>import { test } from 'bun:test'</code>) 兼容性差，建议保留 Jest 风格 globals（Bun 也接受）；(2) 看哪些测试在 bun 上失败 + 提 issue 给 Bun 团队（他们响应快）；(3) 不能修的 corner case 在 README 标注。这给你的库带来"Bun 兼容"的可信度，几乎零额外维护成本。</p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
         <div class="code-block">
+          <span class="code-label">bash</span>
+<pre class="code"><code class="lang-bash"># 跑所有测试
+bun test
+
+# 跑特定文件
+bun test ./src/utils.test.ts
+
+# 跑匹配名字的测试（正则）
+bun test --test-name-pattern '^add'
+
+# Watch 模式
+bun test --watch
+
+# Coverage
+bun test --coverage
+bun test --coverage --coverage-reporter=lcov &gt; coverage.lcov
+bun test --coverage --coverage-threshold=80   # 阈值不达标 fail
+
+# 并行 / 串行
+bun test --bail              # 第一个失败就停
+bun test --concurrency=4     # 限制并发数
+
+# Update snapshots
+bun test --update-snapshots
+
+# Reporter 选择
+bun test --reporter=spec     # 详细输出
+bun test --reporter=junit &gt; report.xml  # CI 格式
+bun test --reporter=tap      # TAP 格式</code></pre>
+        </div>
+        <div class="code-block">
           <span class="code-label">javascript</span>
-<pre class="code"><code class="lang-js">// 正文待写</code></pre>
+<pre class="code"><code class="lang-js">// 完整的测试文件示例
+import {
+  describe, test, expect,
+  beforeEach, afterEach,
+  mock, spyOn
+} from 'bun:test';
+
+import { createUser, validateEmail } from './user';
+
+describe('User module', () =&gt; {
+  let db;
+
+  beforeEach(() =&gt; {
+    db = mock.module('./db', () =&gt; ({
+      query: mock(async () =&gt; [{ id: 1 }])
+    }));
+  });
+
+  afterEach(() =&gt; {
+    mock.restore();  // 清除所有 mock
+  });
+
+  describe('createUser', () =&gt; {
+    test('valid email creates user', async () =&gt; {
+      const user = await createUser('alice@example.com');
+      expect(user).toEqual({ id: 1, email: 'alice@example.com' });
+    });
+
+    test('invalid email throws', async () =&gt; {
+      await expect(createUser('not-an-email')).rejects.toThrow('invalid email');
+    });
+
+    test.each([
+      ['alice@example.com', true],
+      ['bob+filter@example.co.uk', true],
+      ['no-at-sign', false],
+      ['@no-name.com', false]
+    ])('validateEmail(%s) === %s', (input, expected) =&gt; {
+      expect(validateEmail(input)).toBe(expected);
+    });
+  });
+
+  describe('snapshot', () =&gt; {
+    test('user shape stable', () =&gt; {
+      const user = { id: 1, email: 'a@b.c', createdAt: new Date('2026-01-01') };
+      expect(user).toMatchSnapshot();
+    });
+  });
+
+  describe('mock + spy', () =&gt; {
+    test('spies on existing method', () =&gt; {
+      const obj = { greet: (n) =&gt; `hi ${n}` };
+      const spy = spyOn(obj, 'greet');
+      obj.greet('world');
+      expect(spy).toHaveBeenCalledWith('world');
+      expect(spy.mock.calls.length).toBe(1);
+    });
+  });
+});</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">yaml</span>
+<pre class="code"><code class="lang-yaml"># GitHub Actions: 跑 bun test 矩阵（Node + Bun）
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        runtime:
+          - { name: node, version: 20 }
+          - { name: node, version: 22 }
+          - { name: bun, version: latest }
+    steps:
+      - uses: actions/checkout@v4
+
+      - if: matrix.runtime.name == 'node'
+        uses: actions/setup-node@v4
+        with: { node-version: '${{ matrix.runtime.version }}' }
+
+      - if: matrix.runtime.name == 'bun'
+        uses: oven-sh/setup-bun@v2
+        with: { bun-version: '${{ matrix.runtime.version }}' }
+
+      # 同一份测试在 Node 和 Bun 都跑
+      - run: bun install
+      - run: bun test --coverage --coverage-reporter=lcov
+
+      - uses: codecov/codecov-action@v4
+        with: { files: ./coverage.lcov }</code></pre>
         </div>
 
         <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
         <div class="pitfall">
-          <div class="pitfall-title">陷阱标题</div>
-          <p><em>正文待写。</em></p>
+          <div class="pitfall-title">期待 bun test 100% 兼容 Jest 高级特性</div>
+          <p>bun test 兼容 Jest 的<strong>核心 API（90%+ 用法）</strong>，但<strong>高级特性</strong>（custom transformer / 复杂 reporter / Jest plugin / 一些 globals 配置）不完全。深度用 Jest 的项目迁移可能要改测试代码或 fallback。常见踩坑：(1) 用了 jest-extended 或类似 matcher 扩展包；(2) 用了 jest.config.js 的 transform / preset；(3) 用了 jest-environment-* 自定义环境。规避：迁移前先 spike——跑 bun test 看哪些测试失败，估算修复成本。如果失败的多 / 难修，保留 Jest 或切 Vitest（Vitest 也兼容 Jest 但生态更深）。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">bun test 没有 DOM 内置</div>
+          <p>从 Vitest 迁移想测 React 组件——发现 <code>document is not defined</code>。Bun test 不内置 DOM；要装 happy-dom（推荐）或 jsdom 包，再在测试 setup 里手动 inject。具体做法：<code>bun add -d happy-dom</code>，然后测试文件顶部 <code>import { GlobalRegistrator } from "@happy-dom/global-registrator"; GlobalRegistrator.register();</code>。或在 bunfig.toml 里 <code>[test] preload = ["./test-setup.ts"]</code> 集中配置。比 Vitest 一行 <code>environment: 'jsdom'</code> 麻烦。前端组件测试场景 Vitest 仍是更顺畅的选择。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">把 bun test 启动快误读为 「测试本身也快」</div>
+          <p>bun test 启动快（~50ms vs Vitest ~500ms），但<strong>测试本身的执行时间不一定显著快</strong>——一个跑 10s 的测试在哪个 runner 上都是 10s（看你的代码逻辑）。Bun test 的优势集中在<strong>"频繁启动"</strong>场景：dev 时改一行跑一次 test、CI 启动开销摊薄、watch mode reactivity。如果你的瓶颈是测试本身慢（数据库 setup / 长 hot loop），换 runner 收益小——优化测试代码本身。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">期望 bun test 能直接跑 Vitest 测试</div>
+          <p>Vitest 测试代码用 <code>import { test } from 'vitest'</code>——bun test 不认识这个 import 路径。从 Vitest 迁移要把 <code>'vitest'</code> 改 <code>'bun:test'</code>（或删除 import 用 globals）。Vitest 一些独有 API（如 <code>vi.mock</code> / <code>vi.useFakeTimers</code>）有 Bun 等价物（<code>mock</code> / <code>useFakeTimers</code>）但 API 不完全一致。规避：迁移时用 sed / codemod 批量替换；或保留 Vitest（DOM 测试场景仍 Vitest 主导）。</p>
         </div>
 
         <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
         <ul>
-          <li><a href="https://bun.com/docs" target="_blank" rel="noopener">bun.com/docs</a></li>
-          <li><a href="https://github.com/oven-sh/bun" target="_blank" rel="noopener">oven-sh/bun GitHub</a></li>
-          <li>回到主题首页 → <a href="../index.html">Bun 深度学习</a></li>
+          <li><a href="https://bun.com/docs/test" target="_blank" rel="noopener">Bun · test docs</a> · 完整 test 文档</li>
+          <li><a href="https://bun.com/docs/test/writing" target="_blank" rel="noopener">Bun · 写测试</a> · API 参考</li>
+          <li><a href="https://bun.com/docs/test/mocks" target="_blank" rel="noopener">Bun · Mock 系统</a></li>
+          <li><a href="https://vitest.dev/" target="_blank" rel="noopener">Vitest docs</a> · 对照参考</li>
+          <li><a href="https://jestjs.io/" target="_blank" rel="noopener">Jest docs</a> · API 参考</li>
+          <li>对照 Node node:test → <a href="../../node/06-modern/01-modern-node.html">Node P6.1 · 现代 Node 工程</a></li>
+          <li>下一章 → <a href="../05-advanced/01-ffi-macros-db.html">P5.1 · FFI / Macros / 内置 SQLite + Redis</a></li>
         </ul>
 
         <nav class="chapter-nav" aria-label="章节翻页">
