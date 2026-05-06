@@ -1,0 +1,733 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>同代人横评 · P1.2 · pnpm & monorepo 深度学习</title>
+    <meta name="description" content="2026-05 主流 JS 包管理器全维度横评：npm 11 / Yarn classic / Yarn 4 Berry / pnpm 10 / Bun install / Deno + JSR。每家的"世界观"+ 实现语言 / 速度 / 磁盘 / 严格性 / workspace / catalog / Windows / 兼容性 8 维度对比 + 选型决策。回答「为什么有这么多包管理器、我应该选哪个」。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23f69220'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EP%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>pnpm & monorepo 深度学习</span><span class="site-title-badge" style="background: oklch(0.7 0.18 60); color: #fff">pnpm</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P1 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · 包管理器是谁</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html">01 · 包管理器项目史</a></li>
+          <li><a href="02-landscape.html" class="active">02 · 同代人横评</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">pnpm & monorepo</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · 包管理器是谁</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 同代人横评</span>
+        </nav>
+        <h1>同代人横评：6 家全维度对比</h1>
+        <p class="lead">
+          横向对照 2026-05 的 6 家主流 JS 包管理器：<strong>npm 11 / Yarn classic / Yarn 4 (Berry) / pnpm 10 / Bun install / Deno + JSR</strong>。每家都有"<strong>世界观</strong>"——选错工具不是性能问题，是<strong>不匹配场景</strong>。本章一次讲清各自定位 + 8 维度对比 + 选型决策。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P1.1（项目史）</span>
+          <span><strong>主要来源</strong> 各家官方文档 + 实测 benchmark + 社区 case studies</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>没有"通用最佳"包管理器</strong> —— 每家都有 sweet spot：大型 monorepo + 严格 → pnpm；新项目极速安装 → Bun；老 npm 项目无痛升级 → npm 11；Webpack/CRA 历史项目 → Yarn classic 维护期；Deno / 原生 TS / 跨 runtime → Deno + JSR。<strong>选错 ≠ 性能问题，而是不匹配场景</strong>。</li>
+          <li><strong>2026 主流分布（粗估）</strong> —— pnpm ~35% / npm ~30% / Yarn (classic + 4) ~20% / Bun ~12% / 其他 ~3%。<strong>Yarn classic 仍占明显份额</strong>（百万级遗留项目），但增量市场基本不选 Yarn classic 了。</li>
+          <li><strong>选型最重要的 3 个维度</strong> —— (1) <strong>严格性</strong>（要不要禁止幻影依赖）；(2) <strong>monorepo 深度</strong>（workspace + catalog + filter 怎么用）；(3) <strong>生态兼容性</strong>（你的依赖里有没有"对包管理器挑食"的奇葩）。性能差距通常不是最重要的——除非你 CI 时间紧到秒。</li>
+          <li><strong>"快"的真相</strong> —— Bun cold install 最快（10-20x of npm），但 cold install 通常 CI 才出现。warm install / lockfile-only 几家差距收窄到 2-3x。<strong>对日常开发，pnpm/Bun 都"足够快"</strong>。性能数字通常是营销，落地差距不那么戏剧性。</li>
+          <li><strong>Yarn 4 是"两个产品"</strong> —— 默认 PnP 模式（激进）+ <code>nodeLinker: node-modules</code> 模式（保守）。后者本质是把 Berry 当 classic 用，性能 + 体验介于 classic 和 pnpm 之间。在 2026 仍是"小众但忠实"路线。</li>
+          <li><strong>Deno + JSR 是另一个范式</strong> —— 不是替代 npm 的"更快 npm"，而是从 registry 层重做。同一项目要么走 npm 生态，要么走 Deno 生态，二者目前不能混（Deno 可以 import npm 包但反向不行）。</li>
+          <li><strong>catalog 是 2026 的分水岭</strong> —— 支持 catalog 的包管理器（pnpm 9.5+ / Bun 1.1.42+）做 monorepo 才"现代"；不支持的（npm 11、Yarn 4 PnP 默认）落后一拍。这影响中大型 monorepo 选型。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>6 家全维度对比表（2026-05）</h3>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 100px">工具</th>
+              <th>实现语言</th>
+              <th>Lockfile</th>
+              <th>布局</th>
+              <th>严格性</th>
+              <th>Workspace</th>
+              <th>Catalog</th>
+              <th>主要场景</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>npm 11</strong></td>
+              <td>JS</td>
+              <td>package-lock.json (JSON)</td>
+              <td>扁平 hoisting</td>
+              <td>低（默认幻影依赖）</td>
+              <td>✅ 基础</td>
+              <td>❌</td>
+              <td>baseline / 老项目</td>
+            </tr>
+            <tr>
+              <td><strong>Yarn classic 1.x</strong></td>
+              <td>JS</td>
+              <td>yarn.lock (text)</td>
+              <td>扁平 hoisting</td>
+              <td>低</td>
+              <td>✅ 基础</td>
+              <td>❌</td>
+              <td>遗留维护</td>
+            </tr>
+            <tr>
+              <td><strong>Yarn 4 PnP</strong></td>
+              <td>JS</td>
+              <td>yarn.lock (text)</td>
+              <td>无 node_modules</td>
+              <td><strong>极高</strong></td>
+              <td>✅ + protocol 丰富</td>
+              <td>🟡 RFC</td>
+              <td>极客 / Yarn 忠实用户</td>
+            </tr>
+            <tr>
+              <td><strong>Yarn 4 nodeLinker</strong></td>
+              <td>JS</td>
+              <td>yarn.lock (text)</td>
+              <td>扁平 hoisting</td>
+              <td>中</td>
+              <td>✅</td>
+              <td>🟡 RFC</td>
+              <td>Yarn 用户保守路线</td>
+            </tr>
+            <tr>
+              <td><strong>pnpm 10</strong></td>
+              <td>JS</td>
+              <td>pnpm-lock.yaml (YAML)</td>
+              <td>CAS + symlink</td>
+              <td><strong>高</strong></td>
+              <td>✅ + strict peer</td>
+              <td>✅ 主导者</td>
+              <td>大型 monorepo / 严格</td>
+            </tr>
+            <tr>
+              <td><strong>Bun install</strong></td>
+              <td>Zig</td>
+              <td>bun.lock (JSON / 旧版二进制)</td>
+              <td>hoisting + hardlink</td>
+              <td>中</td>
+              <td>✅</td>
+              <td>✅ 跟进 pnpm</td>
+              <td>新项目 / 极速 CI</td>
+            </tr>
+            <tr>
+              <td><strong>Deno + JSR</strong></td>
+              <td>Rust</td>
+              <td>deno.lock (JSON)</td>
+              <td>全局 cache, no node_modules</td>
+              <td><strong>极高</strong>（URL-based imports）</td>
+              <td>✅ Deno 自家</td>
+              <td>—</td>
+              <td>Deno 项目 / 跨 runtime 库</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>性能横评（典型中型项目，cold install）</h3>
+        <p>需要先标注：<strong>包管理器性能数字依硬件 / 网络 / 项目规模 / cache 状态变化巨大</strong>。下面是一个"典型 React 项目（next.js + 50 个 npm 依赖）"在 macOS / 千兆网 / 现代 SSD 的近似数字。复现条件 + 真实 benchmark 见各家官方公告。</p>
+        <table>
+          <thead>
+            <tr>
+              <th>工具</th>
+              <th>cold install（首次，无 cache）</th>
+              <th>warm install（有 cache，重装）</th>
+              <th>lockfile-only（CI 场景）</th>
+              <th>磁盘（单项目）</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>npm 11</td>
+              <td>~25-30s</td>
+              <td>~10-15s</td>
+              <td>~8-12s</td>
+              <td>~250 MB</td>
+            </tr>
+            <tr>
+              <td>Yarn classic</td>
+              <td>~20-25s</td>
+              <td>~8-10s</td>
+              <td>~6-8s</td>
+              <td>~250 MB</td>
+            </tr>
+            <tr>
+              <td>Yarn 4 PnP</td>
+              <td>~5-8s</td>
+              <td>~1-2s</td>
+              <td>~1-2s</td>
+              <td>~80 MB（zip 不解压）</td>
+            </tr>
+            <tr>
+              <td>pnpm 10</td>
+              <td>~10-15s</td>
+              <td>~3-5s</td>
+              <td>~2-4s</td>
+              <td>~80 MB（hardlink）</td>
+            </tr>
+            <tr>
+              <td><strong>Bun install</strong></td>
+              <td><strong>~2-4s</strong></td>
+              <td><strong>~0.5-1s</strong></td>
+              <td><strong>~0.5-1s</strong></td>
+              <td>~80 MB</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>关键观察：</p>
+        <ul>
+          <li><strong>Bun install 是性能标杆</strong>，但 cold install 这个差距在日常开发中很少触发——大部分时候你装的是 1-2 个新依赖，不是从零</li>
+          <li><strong>pnpm / Bun / Yarn PnP 的磁盘占用都低于 npm/Yarn classic 3 倍以上</strong>（CAS / hardlink / zip 复用各有路线）</li>
+          <li><strong>lockfile-only（CI）场景</strong> npm 仍是慢的——CI 时间成本是 npm 用户的最大日常痛点</li>
+          <li>差距随项目规模扩大：100+ 包的 monorepo cold install 差距能到 10x，CI 时间差从 2 分钟到 20 分钟</li>
+        </ul>
+
+        <div class="callout warn">
+          <div class="callout-title">⚠️ 性能数字读法</div>
+          <p>不要把这些数字当作"绝对真理"。所有包管理器都在快速演化，npm 11 vs npm 8 的速度差距已经很大。<strong>Benchmark 必须复现</strong>：相同项目 / 相同硬件 / 相同网络 / 相同 cache 状态。营销文章里的"快 30x"通常是 cherry-picked 场景。</p>
+        </div>
+
+        <h3>npm 11 · "默认基线"</h3>
+        <p><strong>世界观</strong>：JS 生态需要一个"够用"的包管理器，作为 Node 的捆绑组件普及到每个 Node 用户。<strong>npm 不追求性能巅峰，追求"装上 Node 就有"</strong>。</p>
+        <p><strong>设计立场</strong>：</p>
+        <ul>
+          <li>跟 Node LTS 绑定：每代 Node LTS 自带某版本 npm，零额外安装</li>
+          <li>布局 = 扁平 hoisting（npm 3 以来不变）</li>
+          <li>lockfile = package-lock.json，2017 年加入，与 yarn.lock 兼容地解决"非确定性"</li>
+          <li>workspace = 2020 年加入（v7），但功能比 pnpm/Yarn 落后</li>
+          <li>没有 catalog（2025-2026 仍未跟进）</li>
+        </ul>
+        <p><strong>2025-2026 进化方向</strong>：</p>
+        <ul>
+          <li><strong>provenance</strong>（npm 9.5+，2023 年）—— GitHub Actions OIDC 自动签名，对抗供应链攻击。这是 npm 近年最显著的改进</li>
+          <li><strong>性能持续改进</strong>—— npm 10 → npm 11 安装速度有 30-40% 提升，但仍落后于 pnpm/Bun</li>
+          <li><strong>workspace 改进</strong>—— v9+ workspace 命令更完善，但仍不支持 catalog 这种 "monorepo 高级特性"</li>
+        </ul>
+        <p><strong>Sweet spot</strong>：</p>
+        <ul>
+          <li>新人 / 一次性 demo / 教学项目（"装上 Node 就有"是优势）</li>
+          <li>遗留 npm 项目维护期（不想折腾迁移）</li>
+          <li>对 monorepo 没需求的小项目</li>
+        </ul>
+        <p><strong>避坑</strong>：</p>
+        <ul>
+          <li>大型 monorepo 不推荐——workspace 实现单薄，缺 catalog</li>
+          <li>幻影依赖问题严重（详见 <a href="../02-node-modules/02-phantom-deps.html">P2.2</a>）</li>
+        </ul>
+
+        <h3>Yarn classic（1.x）· "维护期遗产"</h3>
+        <p><strong>世界观</strong>：2016 年是革命者，2026 年是遗产。Yarn classic 当年解决了 npm 3 的非确定性 + 速度问题，但今天它的优势被 npm 5+ 完全追平。</p>
+        <p><strong>2026 状态</strong>：</p>
+        <ul>
+          <li>Yarn 官方主线已经走到 v4（Berry）；classic（v1.x）只接受关键 bug fix</li>
+          <li>大量历史项目仍用 classic（百万级 GitHub 仓库锁定 yarn 1.x）</li>
+          <li>classic 与 Berry 配置 / 命令不互通——"yarn 2 升级"实际是<strong>换了一个产品</strong></li>
+        </ul>
+        <p><strong>Sweet spot</strong>：</p>
+        <ul>
+          <li>历史 Yarn 1.x 项目维护期（不想动）</li>
+          <li>对老项目无痛——Yarn classic 的 hoisting 行为与 npm 兼容性最好（甚至比 Yarn 4 都好）</li>
+        </ul>
+        <p><strong>避坑</strong>：</p>
+        <ul>
+          <li><strong>新项目不要选 Yarn classic</strong>——选什么都比它合适</li>
+          <li>不要把"yarn classic 用得好好的"当作"不需要升级"——真正决定时机是何时切 pnpm/Bun，不是何时切 Yarn 4</li>
+        </ul>
+
+        <h3>Yarn 4（Berry）· "PnP 信仰者 + 保守 fallback"</h3>
+        <p><strong>世界观</strong>：Maël Nison 主导，主张"<strong>node_modules 是错的，应该取消</strong>"。2026 年这个立场仍小众但坚定。</p>
+        <p><strong>两个模式</strong>：</p>
+        <ul>
+          <li><strong>PnP 模式（默认）</strong>—— 完全无 node_modules；.pnp.cjs 劫持 require；性能 / 严格性最高，生态接受度最低</li>
+          <li><strong>nodeLinker: node-modules 模式</strong>—— 退回到 hoisting + node_modules；本质把 Berry 当 classic 用；牺牲 PnP 优势但获得生态兼容</li>
+        </ul>
+        <p><strong>独特能力（PnP 模式）</strong>：</p>
+        <ul>
+          <li><strong>zero-installs</strong>—— commit <code>.yarn/cache</code> + <code>.pnp.cjs</code> 到 git；新 clone 的人不用 install 就能跑</li>
+          <li><strong>极致严格</strong>—— require 必须经过 .pnp.cjs 仲裁，比 pnpm 还严</li>
+          <li><strong>protocol 丰富</strong>—— <code>workspace:</code> / <code>portal:</code> / <code>patch:</code> / <code>git:</code> / <code>file:</code> 各种依赖来源</li>
+        </ul>
+        <p><strong>2026 现状</strong>：</p>
+        <ul>
+          <li>大部分 Yarn 4 项目实际跑 nodeLinker mode（生态兼容性原因）</li>
+          <li>PnP 用户社区高度忠实但小众</li>
+          <li>catalog 仍在 RFC 阶段，落后 pnpm/Bun</li>
+        </ul>
+        <p><strong>Sweet spot</strong>：</p>
+        <ul>
+          <li>有重度 patch 需求的项目（Yarn patch protocol 强大）</li>
+          <li>愿意为 zero-installs 付出生态适配成本的极客团队</li>
+          <li>已用 Yarn 多年的团队迁移成本最低</li>
+        </ul>
+        <p><strong>避坑</strong>：</p>
+        <ul>
+          <li>新项目 + 主流栈，pnpm 几乎总是更省心的选择</li>
+          <li>不要把 Yarn 4 当 Yarn classic 升级版——它是几乎完全不同的产品</li>
+        </ul>
+
+        <h3>pnpm 10 · "monorepo 标准答案"</h3>
+        <p><strong>世界观</strong>：Zoltan Kochan 主导。<strong>扁平化是错的，但不必取消 node_modules——用 CAS + symlink 拓扑</strong>。在严格性 + 生态兼容性之间找到了 2026 年的平衡点。</p>
+        <p><strong>设计核心</strong>（详见 <a href="../03-pnpm-internals/01-cas-storage.html">P3.1</a>）：</p>
+        <ul>
+          <li>~/.pnpm-store 全局 CAS，每包+版本只有一份物理文件</li>
+          <li>项目内 hardlink 引用 store；symlink 拓扑控制可见性</li>
+          <li>顶层 node_modules 只有 package.json 显式声明的包</li>
+          <li>严格 peer dependency 解析（详见 <a href="../03-pnpm-internals/02-lockfile-peers-hooks.html">P3.2</a>）</li>
+        </ul>
+        <p><strong>monorepo 优势</strong>：</p>
+        <ul>
+          <li>workspace 实现成熟（pnpm-workspace.yaml）</li>
+          <li><strong>catalog 协议主导者</strong>（2024-08 引入，已成事实标准）</li>
+          <li><code>--filter</code> 选择器强大（按包名 / 路径 / git 变更）</li>
+          <li><code>.pnpmfile.cjs</code> hooks 可以系统性 patch 上游错误</li>
+        </ul>
+        <p><strong>2026 旗舰用户</strong>：Vue / Vite / Astro / TypeScript-eslint / shadcn/ui / Cloudflare Workers / 大量 Vercel 旗舰开源项目。<strong>事实上的"现代 JS monorepo 标配"</strong>。</p>
+        <p><strong>Sweet spot</strong>：</p>
+        <ul>
+          <li>大型 monorepo（30+ 包）— 几乎是默认选择</li>
+          <li>需要严格依赖管理的项目</li>
+          <li>跨多项目共享磁盘 cache 的开发者机器</li>
+        </ul>
+        <p><strong>避坑</strong>：</p>
+        <ul>
+          <li>从 npm 切 pnpm 通常会暴露幻影依赖，需要修补 5-30 处</li>
+          <li>严格 peer 模式对老旧依赖不友好——可能需要 <code>auto-install-peers</code> 或 <code>.pnpmfile.cjs</code> patch</li>
+        </ul>
+
+        <h3>Bun install · "速度怪兽 + 一体化新人"</h3>
+        <p><strong>世界观</strong>（详见 <a href="../../bun/index.html">Bun 主题</a>）：Jarred Sumner 主导。<strong>install / run / build / test 应该是同一个产品的 4 个面，不是 4 个独立工具</strong>。</p>
+        <p><strong>设计选择</strong>：</p>
+        <ul>
+          <li><strong>Zig 实现</strong>—— 直接调系统调用，绕过 libuv 抽象</li>
+          <li><strong>二进制 lockfile（早期）→ JSON lockfile（Bun 1.2+）</strong>—— 2024-2025 切回 JSON 形式提升 diff 友好度，仍保留快速解析</li>
+          <li><strong>hardlink + hoisting 布局</strong>—— 比 npm 类似但 hardlink 节省磁盘</li>
+          <li><strong>workspace + catalog</strong>—— catalog 在 1.1.42（2024-12）跟进 pnpm 协议</li>
+          <li><strong>npm 兼容 registry</strong>—— 直接用 npm registry，不要求改 publish 流程</li>
+        </ul>
+        <p><strong>独特能力</strong>：</p>
+        <ul>
+          <li>性能 5-10x 优于 pnpm，10-20x 优于 npm（cold install 场景）</li>
+          <li>与 Bun runtime 深度整合——同一个工具搞定 install / run / test / build</li>
+          <li>Windows 一级支持（Bun 1.1+）</li>
+        </ul>
+        <p><strong>2026 状态</strong>：</p>
+        <ul>
+          <li>新项目 + 中小项目份额快速增长</li>
+          <li>大型 monorepo 仍以 pnpm 为主流（peer 处理 + 复杂 hooks 的边界情况 Bun 在补）</li>
+          <li>生态兼容性基本到位（剩余少量"对包管理器挑食"的奇葩包仍可能踩坑）</li>
+        </ul>
+        <p><strong>Sweet spot</strong>：</p>
+        <ul>
+          <li>新项目（特别是 SaaS / 工具型应用）</li>
+          <li>极致 CI 速度需求（每分钟都贵的场景）</li>
+          <li>已用 Bun runtime 的项目（一体化最大化）</li>
+          <li>个人项目 / 副业项目（"装一个 Bun 替代 Node + npm + tsx + jest"）</li>
+        </ul>
+        <p><strong>避坑</strong>：</p>
+        <ul>
+          <li>大型 monorepo 切 Bun 之前要先做兼容性试跑——少量复杂依赖可能需要 fallback</li>
+          <li>Bun runtime 与 Node 仍有兼容性边界（详见 <a href="../../bun/03-runtime/02-node-compat.html">Bun P3.2</a>），但 <strong>bun install 本身是 npm 兼容的</strong>，可以"用 Bun 装包但用 Node 跑"——这个混合用法是常见过渡方案</li>
+        </ul>
+
+        <h3>Deno + JSR · "另一个范式"</h3>
+        <p><strong>世界观</strong>：Ryan Dahl 在 Deno 反思 Node 设计的延续。<strong>不是"更快的 npm"，而是从 registry 层重做 JS 包管理</strong>。</p>
+        <p><strong>关键设计</strong>：</p>
+        <ul>
+          <li><strong>URL-based imports</strong>（早期）—— <code>import { foo } from 'https://deno.land/x/std/foo.ts'</code>；package.json 不必要</li>
+          <li><strong>JSR registry</strong>（2024-03）—— 改进版 URL imports：<code>import { foo } from 'jsr:@scope/name'</code>；不打 tarball；原生 ESM + TS；强签名</li>
+          <li><strong>npm 兼容</strong>—— Deno 可以 <code>import 'npm:react'</code> 拉 npm 包；但 npm 不能反向拉 jsr/deno.land 包</li>
+          <li><strong>deno.lock</strong>—— Deno 自家 lockfile</li>
+          <li><strong>workspace</strong>—— Deno 1.39+ 支持，集中在 deno.json</li>
+        </ul>
+        <p><strong>独特能力</strong>：</p>
+        <ul>
+          <li>原生 TS 包（不用预编译）</li>
+          <li>cross-runtime（同一个 JSR 包在 Deno / Node / Bun / 浏览器跑）</li>
+          <li>scoped slugs 强制（避免 npm 全局命名空间污染）</li>
+          <li>所有发布自动签名（与 npm provenance 类似但内置）</li>
+        </ul>
+        <p><strong>2026 现状</strong>：</p>
+        <ul>
+          <li>Deno 自家生态（Fresh / Oak）使用 JSR</li>
+          <li>少数库（标准库 / Deno 团队作品）发布到 JSR</li>
+          <li>主流前端 / Node 生态仍以 npm 为主</li>
+          <li>能否撼动 npm 还看 5-10 年</li>
+        </ul>
+        <p><strong>Sweet spot</strong>：</p>
+        <ul>
+          <li>用 Deno runtime 的项目</li>
+          <li>发布 cross-runtime 库（同一个包在 Node/Deno/Bun 都跑）</li>
+          <li>追求"原生 TS + 强签名"的新项目</li>
+        </ul>
+        <p><strong>避坑</strong>：</p>
+        <ul>
+          <li>不要尝试在 Node 项目里"用 JSR 替换 npm"——大部分依赖你要的还在 npm 上</li>
+          <li>JSR 是补充，不是替代——至少 2026 年不是</li>
+        </ul>
+
+        <h3>选型决策矩阵（2026-05）</h3>
+        <p>把上面所有信息收敛成一张决策树：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>场景</th>
+              <th>首选</th>
+              <th>备选</th>
+              <th>避免</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>新建大型 monorepo（30+ 包）</td>
+              <td>pnpm 10</td>
+              <td>Bun install（如有性能需求）</td>
+              <td>npm / Yarn classic</td>
+            </tr>
+            <tr>
+              <td>新建中型项目（5-30 包）</td>
+              <td>pnpm 10</td>
+              <td>Bun install</td>
+              <td>Yarn classic</td>
+            </tr>
+            <tr>
+              <td>新建小项目（&lt; 5 包）</td>
+              <td>Bun install / npm 11</td>
+              <td>pnpm 10</td>
+              <td>Yarn 4 PnP（无必要复杂度）</td>
+            </tr>
+            <tr>
+              <td>极致 CI 速度（每秒钟都贵）</td>
+              <td>Bun install</td>
+              <td>pnpm 10</td>
+              <td>npm</td>
+            </tr>
+            <tr>
+              <td>遗留 npm 项目维护期</td>
+              <td>npm 11（不动）</td>
+              <td>计划切 pnpm 10</td>
+              <td>盲目切 Bun（可能踩坑）</td>
+            </tr>
+            <tr>
+              <td>遗留 Yarn classic 项目</td>
+              <td>Yarn classic（不动）</td>
+              <td>计划切 pnpm 10</td>
+              <td>切 Yarn 4 PnP（升级路径不是无痛）</td>
+            </tr>
+            <tr>
+              <td>跨 runtime 库发布</td>
+              <td>Deno + JSR（先发 JSR）</td>
+              <td>同时发 npm</td>
+              <td>仅 npm（限制使用范围）</td>
+            </tr>
+            <tr>
+              <td>用 Bun runtime 的项目</td>
+              <td>Bun install</td>
+              <td>pnpm 10（如生态兼容问题）</td>
+              <td>npm（一体化优势丧失）</td>
+            </tr>
+            <tr>
+              <td>用 Deno runtime 的项目</td>
+              <td>Deno + JSR</td>
+              <td>—</td>
+              <td>用 npm 不一致</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 团队选型：新 monorepo 该用什么？</h3>
+          <p><strong>背景</strong>：8 人前端团队，要把 3 个 React 项目合并成 monorepo。Tech Lead 倾向 Bun（"性能好"），团队成员用过 npm/pnpm。问 Bun 还是 pnpm。</p>
+          <p><strong>决策维度</strong>：</p>
+          <ul>
+            <li><strong>monorepo 规模</strong>：3 个项目 + 共享 UI 库 + 共享 utils ≈ 10-15 包，中型</li>
+            <li><strong>严格性需求</strong>：要的，团队希望避免幻影依赖</li>
+            <li><strong>CI 时间紧迫度</strong>：不极端，目前 npm 5 分钟，能容忍</li>
+            <li><strong>生态依赖兼容性</strong>：用了一些复杂依赖（patch-package, monorepo-aware tools）</li>
+          </ul>
+          <p><strong>建议</strong>：<strong>pnpm 10</strong>。理由：</p>
+          <ul>
+            <li>monorepo 中型规模，pnpm 的 catalog + filter 收益明显</li>
+            <li>严格性是核心需求，pnpm 是"严格 + 生态友好"的最佳平衡</li>
+            <li>Bun 的速度优势在中型项目落地不那么戏剧（cold install 几秒差距）</li>
+            <li>有复杂依赖时 pnpm 更稳，Bun 兼容性边界仍可能踩坑</li>
+            <li>未来切 Bun 留余地——pnpm-lock.yaml + Bun 互操作良好</li>
+          </ul>
+          <p>这个判断的依据：<strong>选型不是看"最快的"，是看"匹配场景的"</strong>。Bun 在小项目 + 极致 CI 速度场景是首选，但这个团队都不是。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · CI 时间紧迫的 SaaS 团队</h3>
+          <p><strong>背景</strong>：10 人 SaaS 团队，每天 50+ PR，每个 PR CI 30 分钟（其中 10 分钟在 npm install）。每月 CI 账单上千美元。考虑切 Bun install。</p>
+          <p><strong>决策维度</strong>：</p>
+          <ul>
+            <li><strong>性能价值</strong>：CI 时间直接 = 钱，10 分钟 → 1 分钟相当于每月省数百美元</li>
+            <li><strong>风险容忍</strong>：SaaS 不能允许部署 break；切包管理器有兼容性风险</li>
+            <li><strong>团队带宽</strong>：能投 1-2 周做切换 + 验证</li>
+          </ul>
+          <p><strong>建议</strong>：<strong>分阶段切 Bun install，runtime 仍用 Node</strong>。</p>
+          <ul>
+            <li>第 1 周：在 dev 分支用 Bun install 替代 npm install，跑全套测试，看是否 break</li>
+            <li>第 2 周：CI 启用 Bun install + Node runtime 混合模式（"用 Bun 装、用 Node 跑"是 Bun 团队推荐的过渡方案）</li>
+            <li>切完后保留 npm 作为 fallback（如发现某依赖不兼容立即可切回）</li>
+            <li>1-2 个月后看是否值得把 runtime 也切到 Bun（这是另一个决策）</li>
+          </ul>
+          <p><strong>预期结果</strong>：CI install 时间从 10 分钟降到 1 分钟，整体 CI 从 30 分钟降到 21 分钟。投入产出比极佳。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · 想选 Yarn 4 PnP，要不要选？</h3>
+          <p><strong>背景</strong>：工程师看到 Yarn Berry 文档说"<strong>zero-installs + 极致严格</strong>"，技术上心动。问选 Yarn 4 PnP 还是 pnpm。</p>
+          <p><strong>决策维度</strong>：</p>
+          <ul>
+            <li>团队对 zero-installs（commit cache 到 git）有具体需求吗？</li>
+            <li>项目依赖里有"对包管理器挑食"的奇葩吗？</li>
+            <li>团队成员愿意为 PnP 适配花时间吗？</li>
+          </ul>
+          <p><strong>建议</strong>：<strong>除非有极强 zero-installs 需求，否则选 pnpm</strong>。</p>
+          <ul>
+            <li>PnP 在技术上几乎完美，但生态成本是真实的</li>
+            <li>pnpm 提供 90% 的严格性 + 100% 的生态兼容</li>
+            <li>"我想试试新东西"不是好理由——把时间花在业务而不是包管理器调适上</li>
+            <li>如果就是想体验 PnP，做个 side project 试，不要在生产项目冒险</li>
+          </ul>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <p>同一个简单项目，6 家配置文件 + lockfile 对比：</p>
+
+        <div class="code-block">
+          <span class="code-label">package.json（共用）</span>
+          <pre class="code"><code class="lang-json">{
+  "name": "my-app",
+  "version": "1.0.0",
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">npm 11 · package-lock.json（节选）</span>
+          <pre class="code"><code class="lang-json">{
+  "name": "my-app",
+  "version": "1.0.0",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "my-app",
+      "version": "1.0.0",
+      "dependencies": {
+        "react": "^18.3.1",
+        "react-dom": "^18.3.1"
+      }
+    },
+    "node_modules/react": {
+      "version": "18.3.1",
+      "resolved": "https://registry.npmjs.org/react/-/react-18.3.1.tgz",
+      "integrity": "sha512-...",
+      "dependencies": { "loose-envify": "^1.1.0" }
+    }
+  }
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">Yarn classic · yarn.lock（节选）</span>
+          <pre class="code"><code class="lang-text"># THIS IS AN AUTOGENERATED FILE. DO NOT EDIT THIS FILE DIRECTLY.
+# yarn lockfile v1
+
+react@^18.3.1:
+  version "18.3.1"
+  resolved "https://registry.yarnpkg.com/react/-/react-18.3.1.tgz#..."
+  integrity sha512-...
+  dependencies:
+    loose-envify "^1.1.0"</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">Yarn 4 · yarn.lock（节选，版本 8）</span>
+          <pre class="code"><code class="lang-yaml"># This file is generated by running "yarn install" inside your project.
+# Manual changes might be lost - proceed with caution!
+__metadata:
+  version: 8
+  cacheKey: 10c0
+"react@npm:^18.3.1":
+  version: 18.3.1
+  resolution: "react@npm:18.3.1"
+  dependencies:
+    loose-envify: "npm:^1.1.0"
+  checksum: 10c0/...
+  languageName: node
+  linkType: hard</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">pnpm 10 · pnpm-lock.yaml（节选）</span>
+          <pre class="code"><code class="lang-yaml">lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+  .:
+    dependencies:
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
+      react-dom:
+        specifier: ^18.3.1
+        version: 18.3.1(react@18.3.1)
+
+packages:
+  react@18.3.1:
+    resolution: { integrity: sha512-... }
+    engines: { node: '>=0.10.0' }
+
+snapshots:
+  react@18.3.1:
+    dependencies:
+      loose-envify: 1.4.0</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">Bun 1.2+ · bun.lock（节选，JSON 格式）</span>
+          <pre class="code"><code class="lang-json">{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": { "name": "my-app", "version": "1.0.0",
+      "dependencies": { "react": "^18.3.1", "react-dom": "^18.3.1" }
+    }
+  },
+  "packages": {
+    "react": ["react@18.3.1", "", { "loose-envify": "^1.1.0" },
+              "sha512-..."],
+    "react-dom": ["react-dom@18.3.1", "",
+                  { "react": "^18.3.1", "scheduler": "^0.23.2" },
+                  "sha512-..."]
+  }
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">Deno + JSR · deno.json + deno.lock</span>
+          <pre class="code"><code class="lang-json">// deno.json（不是 package.json！）
+{
+  "imports": {
+    "react": "npm:react@^18.3.1",
+    "react-dom": "npm:react-dom@^18.3.1",
+    "@std/assert": "jsr:@std/assert@^1.0.0"
+  }
+}
+
+// deno.lock
+{
+  "version": "4",
+  "specifiers": {
+    "npm:react@^18.3.1": "18.3.1",
+    "jsr:@std/assert@^1.0.0": "1.0.0"
+  },
+  "npm": { "react@18.3.1": { "integrity": "sha512-..." } },
+  "jsr": { "@std/assert@1.0.0": { "integrity": "sha256-..." } }
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 用"快"作为唯一选型依据</div>
+          <p>包管理器营销战激烈，"我比 X 快 30 倍"是常见话术。但<strong>实际开发中，install 速度差距通常不是决定性</strong>——你日常装新依赖每次差几秒不那么戏剧，CI 才是大头。<strong>选型应优先看严格性 + monorepo 能力 + 生态兼容性</strong>，性能是次要维度。Bun 适合极致 CI 速度场景，但对中型项目 pnpm 通常是更全面的选择。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 把 Yarn 4 当 Yarn classic 升级</div>
+          <p>Yarn 1.x 和 Yarn 4 共享名字但是几乎完全不同的产品——配置语法、命令行、布局都不互通。<strong>从 Yarn 1 升 Yarn 4 不是"升级"，是"迁移"</strong>。如果你只是想要 Yarn classic 的小修复，留在 1.x 维护期；如果想要现代特性，直接评估 pnpm 而不是默认升 Yarn 4。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 在 Deno 项目中混用 npm 和 jsr</div>
+          <p>Deno 可以 import npm 包（<code>import 'npm:react'</code>），看起来"两边都能用"。但<strong>npm 包的依赖图最终仍要走 npm 生态</strong>——你的 lockfile 里会出现 <code>npm:</code> 和 <code>jsr:</code> 两套。<strong>原则上：选定 runtime（Node 或 Deno），就以那个 runtime 的 native registry 为主</strong>，跨 registry 依赖只在必要时用。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 把"主流就是最好的"当作选型理由</div>
+          <p>npm 是主流，但 npm 是"装上 Node 就有"的默认值，不是"最好"的代名词。<strong>市场份额 ≠ 工程价值</strong>。pnpm/Bun 在工程价值上对中大型项目超越 npm，是有具体技术理由的。反过来：因为"pnpm 大家都在用"就盲目切，但你的项目实际上是单包 + 5 个依赖，可能没有任何收益甚至增加复杂度。<strong>选型应基于项目特征，不是大势</strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 在 monorepo 选型时忽略 catalog</div>
+          <p>2024-2026 catalog 是 monorepo 的关键能力——升级 React 不用改 50 处 package.json。<strong>选包管理器时如果不支持 catalog（npm 11 / Yarn 4 PnP 默认）</strong>，monorepo 用起来会比 pnpm/Bun 累。这个差距比"装包速度"对长期生产力影响更大。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://docs.npmjs.com/cli/v11" target="_blank" rel="noopener">npm 11 官方文档</a></li>
+          <li><a href="https://classic.yarnpkg.com/" target="_blank" rel="noopener">Yarn classic 1.x 文档（维护期）</a></li>
+          <li><a href="https://yarnpkg.com/getting-started/install" target="_blank" rel="noopener">Yarn 4（Berry）官方文档</a></li>
+          <li><a href="https://pnpm.io/installation" target="_blank" rel="noopener">pnpm 官方文档</a></li>
+          <li><a href="https://bun.com/docs/install" target="_blank" rel="noopener">Bun install 文档</a></li>
+          <li><a href="https://jsr.io/docs/introduction" target="_blank" rel="noopener">JSR 文档（Deno 团队）</a></li>
+          <li><a href="https://pnpm.io/feature-comparison" target="_blank" rel="noopener">pnpm 官方 feature comparison（pnpm vs npm vs Yarn 维度对比）</a></li>
+          <li><a href="https://bun.com/blog/bun-v1.2" target="_blank" rel="noopener">Bun 1.2 Release（含 JSON lockfile + catalog 介绍）</a></li>
+          <li><a href="../../bun/04-toolchain/01-bun-install.html">Bun P4.1 · Bun install 内部细节（本站）</a></li>
+          <li><a href="../03-pnpm-internals/01-cas-storage.html">P3.1 · pnpm CAS 存储详解（本站，下下章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-history.html">
+            <span class="label">← 上一章</span>
+            <span class="title">01 · 包管理器项目史</span>
+          </a>
+          <a class="next" href="../02-node-modules/index.html">
+            <span class="label">下一阶段 →</span>
+            <span class="title">P2 · node_modules 真相</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

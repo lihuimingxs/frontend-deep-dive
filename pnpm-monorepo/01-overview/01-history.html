@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>包管理器项目史（2010-2026）· P1.1 · pnpm & monorepo 深度学习</title>
+    <meta name="description" content="JS 包管理器 15 年史。2010 npm 1 嵌套 → 2015 npm 3 扁平化 → 2016 Yarn classic lockfile → 2017 pnpm CAS → 2019 Yarn Berry PnP → 2022 Lerna 退场 + Turborepo → 2023 Bun install 二进制 lockfile → 2025 Catalog 标准化 → 2025 JSR。回答「为什么有这么多包管理器」的根因——每代都是回答上一代某个具体痛点的产物。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23f69220'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EP%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>pnpm & monorepo 深度学习</span><span class="site-title-badge" style="background: oklch(0.7 0.18 60); color: #fff">pnpm</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P1 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · 包管理器是谁</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html" class="active">01 · 包管理器项目史</a></li>
+          <li><a href="02-landscape.html">02 · 同代人横评</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">pnpm & monorepo</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · 包管理器是谁</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 包管理器项目史</span>
+        </nav>
+        <h1>包管理器项目史（2010-2026）</h1>
+        <p class="lead">
+          把 JS 包管理 15 年史讲成一条主线 —— 不是按工具版本，按"<strong>每次范式转移及其根因</strong>"。<strong>核心问题</strong>：包管理器怎么从 2010 年的 npm 1 演化到 2026 年的 pnpm + Bun + Turborepo + JSR 这套生态？答案藏在四次范式转移：(1) <strong>嵌套 → 扁平化</strong>（npm 3, 2015）；(2) <strong>无 lockfile → 强 lockfile</strong>（Yarn 2016, npm 5 2017）；(3) <strong>扁平 → CAS + symlink</strong>（pnpm 2017+）；(4) <strong>独立工具 → 一体化 + 远程 cache</strong>（Bun + Turborepo 2022+）。每次都有具体痛点驱动，不是"工具流行的轮换"。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> 用过 npm install</span>
+          <span><strong>主要来源</strong> Isaac Z. Schlueter / Zoltan Kochan / Maël Nison / Jared Palmer 公开文章 + 各家 RFC</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>包管理器 15 年由 4 次范式转移组成</strong> —— (1) <strong>嵌套 node_modules → 扁平 hoisting</strong>（npm 3, 2015，解决磁盘 + Windows 路径长度）；(2) <strong>无 lockfile → 强 lockfile</strong>（Yarn 2016 / npm 5 2017，解决"我电脑能跑你的不能跑"）；(3) <strong>扁平 → CAS + symlink</strong>（pnpm 2017+，解决幻影依赖 + 磁盘）；(4) <strong>独立工具 → 一体化 + 远程 cache</strong>（Bun install 2022 / Turborepo 2020+，解决"50 个包跑 build 半小时"）。</li>
+          <li><strong>2010-2015 是 npm 独家时代</strong> —— Isaac Z. Schlueter 的 npm 几乎是 Node 生态的代名词。但嵌套 node_modules 在大项目下磁盘爆炸，Windows 因路径长度限制（260 字符）经常崩溃。</li>
+          <li><strong>2015 npm 3 引入扁平化（hoisting）</strong> —— 解决了磁盘问题，但<strong>引入了"幻影依赖"灾难根源</strong>（详见 P2.2）。这个决定成为后来 pnpm / PnP 起义的导火索。</li>
+          <li><strong>2016 Yarn classic 出生</strong> —— Facebook 出品；核心是<strong>确定性 lockfile + 并行下载 + 离线 cache</strong>。npm 在 2017 年 v5 反向跟进 package-lock.json。Yarn 输出了一整代工程实践。</li>
+          <li><strong>2017 pnpm 主张"扁平化是错的"</strong> —— Zoltan Kochan 设计 CAS（内容寻址存储）+ symlink 拓扑：磁盘上每个包 + 版本只有一份物理文件，项目里靠链接组装。**严格性 + 省磁盘**双赢。</li>
+          <li><strong>2019 Yarn Berry / PnP 走激进路线</strong> —— Maël Nison 主张<strong>取消 node_modules</strong>，用 .pnp.cjs 直接告诉 Node 包在哪。性能与正确性极佳但生态接受度有限——5 年来很多工具不愿适配 PnP。</li>
+          <li><strong>2022 是 monorepo 元年</strong> —— Lerna 维护停滞被 Nrwl（Nx 团队）接管；Vercel 收购 Turborepo；Nx 进入主流视野。<strong>包管理 → monorepo 编排</strong>成为新焦点。</li>
+          <li><strong>2023 Bun install 把"快"做到极致</strong> —— Jarred Sumner 用 Zig + 二进制 lockfile + 系统调用优化，benchmark 普遍 10-20x 于 npm。但生态兼容性还在追赶（详见 <a href="../../bun/04-toolchain/01-bun-install.html">Bun P4.1</a>）。</li>
+          <li><strong>2024-2025 Catalog 标准化</strong> —— pnpm 9.5（2024-08）发起的"workspace 共享版本字典"协议被 Bun 1.1.42 接受、Yarn 4 实验中。<strong>workspace 协议第一次跨工具兼容</strong>。</li>
+          <li><strong>2024 JSR 登场</strong> —— Deno 团队主导的下一代 registry，原生 ESM + TS + scoped slugs，尝试推翻 npm 的历史包袱。能否撼动 npm 还看 5 年（详见 P7）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>前史 · 2009 · Node.js + 它需要包管理</h3>
+        <p>2009 年 Ryan Dahl 在 JSConf EU 发布 Node.js。Node 的设计明显受 CommonJS 启发——用 <code>require('foo')</code> 加载模块。但 Node 0.x 时代<strong>没有官方的"模块从哪来"答案</strong>：你只能手动下载 .js 文件、git submodule、或自己写脚本。</p>
+        <p>这个空白持续了大约一年。Node 社区急需一个包管理器——既要能下载分发别人的代码，又要能让 <code>require('foo')</code> 找到它。</p>
+
+        <h3>2010-01 · npm 1.0 · Isaac Z. Schlueter 的"嵌套 node_modules"决定</h3>
+        <p>2010 年 1 月 Isaac Z. Schlueter（当时在 Node 核心团队，后任 Node TSC 主席）发布 <strong>npm 1.0</strong>。它定义了至今仍主导生态的几个关键决定：</p>
+        <p><strong>(1) registry 模型</strong> —— 包发布到中心化的 registry（registry.npmjs.org），靠 CouchDB 存储元数据；客户端 <code>npm install</code> 拉取 tarball。这个模型 15 年没变。</p>
+        <p><strong>(2) package.json 格式</strong> —— 用 JSON 描述包的元数据 + dependencies + scripts。简单到任何工具都能解析，成为整个 JS 生态的事实标准。</p>
+        <p><strong>(3) 嵌套 node_modules 布局</strong> —— 这是最被诟病也最深远的决定。如果 A 依赖 B@1，B 又依赖 C@2，那么 <code>node_modules/A/node_modules/B/node_modules/C</code>。<strong>每个包独立解析自己的依赖</strong>，简单可靠。</p>
+        <p>嵌套布局的好处：<strong>正确性绝对</strong>——A 用 C@2，D 用 C@3，互不干扰；npm 不需要做版本"合并"决策。坏处也明显：<strong>磁盘爆炸 + 路径长</strong>。一个中型 React 项目在 npm 1-2 时代经常是 GB 级的 node_modules。</p>
+        <p><strong>Windows 灾难</strong>：Windows 文件系统传统上路径限制 260 字符（MAX_PATH）。当嵌套深度到 7-8 层时，路径如 <code>C:\Users\...\project\node_modules\a\node_modules\b\...\node_modules\h\index.js</code> 直接超长，无法读取/删除。这成为 Windows 用户在 npm 1-2 时代的共同噩梦。</p>
+
+        <h3>2014 · npm 2 · 基本未变 + 痛点累积</h3>
+        <p>2014-2015 年 Node 已经成为前端工具链事实底座（Webpack 2014 / Babel 2014 / Browserify 2013）。npm 2.x 仍是嵌套布局，但项目复杂度上升让"磁盘 + 路径"问题从烦恼变成 blocker：一个 enterprise 项目的 <code>node_modules</code> 经常 1.5-2 GB，CI 拉取要 5-10 分钟。</p>
+        <p>社区开始有"<strong>npm install 是 JS 生态最大的痛</strong>"的共识。npm 团队必须做点什么。</p>
+
+        <h3>2015-06 · npm 3 · "扁平化"——治磁盘，引入幻影依赖</h3>
+        <p>2015 年 6 月 npm 3.0 stable 发布。核心变化：<strong>node_modules 扁平化（hoisting）</strong>。算法大致是：</p>
+        <ul>
+          <li>所有依赖默认提到根 <code>node_modules</code>，每个包只装一份</li>
+          <li>遇到版本冲突，把冲突版本回退到嵌套位置</li>
+          <li>提升顺序按解析顺序，结果是<strong>非确定性</strong>的（同一份 package.json 不同时间装出不同布局）</li>
+        </ul>
+        <p>效果：磁盘占用降低 50-70%；Windows 路径长度问题大幅缓解。但代价深远：</p>
+        <p><strong>(1) 幻影依赖（phantom dependency）</strong> —— 没有在 package.json 声明 <code>lodash</code>，但因为某个传递依赖装了它，hoisting 后能 <code>require('lodash')</code>。看似能跑，升级 / 切包管理器时突然崩溃。<strong>这是后来 pnpm / PnP 出生的根本动机</strong>（详见 <a href="../02-node-modules/02-phantom-deps.html">P2.2</a>）。</p>
+        <p><strong>(2) doppelganger</strong> —— 同一个包的不同版本被装到不同子目录，导致 <code>instanceof</code> / 单例失效（典型：<code>react</code> 装两次，Hook 报错）。</p>
+        <p><strong>(3) 非确定性</strong> —— 同一份 package.json 在两台机器装出不同布局；两个开发者拉同一个 commit 跑出来结果不一样。这成为 Yarn 出生的导火索。</p>
+        <p>npm 3 是一个"<strong>用一个新问题换掉旧问题</strong>"的妥协决定——治了磁盘，造了幻影。整个生态后来 10 年都在还这笔账。</p>
+
+        <h3>2016-10 · Yarn classic · 确定性 + 速度</h3>
+        <p>2016 年 10 月 Facebook 发布 <strong>Yarn classic</strong>（Sebastian McKenzie / Christoph Pojer 主导）。这是<strong>第一次有大公司专门为 JS 包管理痛点出力</strong>。Yarn 的核心创新：</p>
+        <p><strong>(1) yarn.lock</strong> —— 第一个流行的 JS lockfile。锁住每个传递依赖的精确版本 + 解析路径 + integrity hash。<strong>解决"我电脑能跑你的不能跑"</strong>。</p>
+        <p><strong>(2) 并行下载</strong> —— 当时 npm 是串行的；Yarn 充分利用网络带宽，benchmark 普遍 2-3x 于 npm。</p>
+        <p><strong>(3) 离线 cache</strong> —— 装过的 tarball 自动缓存到 <code>~/.yarn-cache</code>；二次安装零网络。</p>
+        <p><strong>(4) 友好的 CLI 输出</strong> —— 进度条 + 表情符；对比 npm 当时的 spinner。</p>
+        <p>Yarn 在 2017-2019 占据明显市场份额。<strong>对 npm 的逼宫效果显著</strong>：</p>
+        <ul>
+          <li>npm 5（2017-05）反向引入 <code>package-lock.json</code></li>
+          <li>npm 5 默认开启 cache + 支持离线</li>
+          <li>npm 6+ 持续追平 Yarn 的速度差距</li>
+        </ul>
+        <p>Yarn 输出了一整代工程实践——"<strong>lockfile 是必需品，不是可选项</strong>"——影响延续至今。</p>
+
+        <h3>2017-04 · pnpm · "扁平化是错的"</h3>
+        <p>2017 年 4 月 Zoltan Kochan 发布 <strong>pnpm 1.0</strong>。pnpm 的论点直接挑战 npm 3 的核心决定：<strong>扁平化（hoisting）从根本上是错的，因为它把"未声明的包"暴露给了用户代码</strong>。</p>
+        <p>pnpm 提出的替代方案：</p>
+        <p><strong>(1) 内容寻址存储（CAS）</strong> —— 全局唯一的 <code>~/.pnpm-store</code>；每个 <code>包@版本</code> 全机只有一份物理文件，按 SHA-512 hash 存放。多项目共享同一份。</p>
+        <p><strong>(2) Hardlink 引用</strong> —— 项目本地的 <code>node_modules/.pnpm/&lt;name&gt;@&lt;ver&gt;/...</code> 用 hardlink 指向 store 中的物理文件。零拷贝、零额外磁盘。</p>
+        <p><strong>(3) Symlink 拓扑</strong> —— 项目顶层 <code>node_modules/&lt;name&gt;</code> 是 symlink 指向 <code>.pnpm/&lt;name&gt;@&lt;ver&gt;/node_modules/&lt;name&gt;</code>。<strong>只有 package.json 显式声明的依赖才出现在顶层</strong>，幻影依赖从结构上被消除。</p>
+        <p>效果（详见 <a href="../03-pnpm-internals/01-cas-storage.html">P3.1</a>）：</p>
+        <ul>
+          <li>磁盘占用比 npm 节省 70-95%（多项目场景）</li>
+          <li>没有幻影依赖（你 require 的，必须在 package.json 里）</li>
+          <li>没有 doppelganger（每个版本在 store 里只有一份）</li>
+          <li>安装速度与 Yarn classic 相当或更快</li>
+        </ul>
+        <p>2017-2020 pnpm 是"小众但忠实"。一波 Vue 生态项目（包括后来的 Vite）率先采用。<strong>转折点在 2021-2022</strong>：当 monorepo 趋势上升、磁盘 + 严格性都成为主流诉求时，pnpm 进入大厂视野。今天 React Native / Vite / Astro / TypeScript-eslint / Cloudflare Workers 等许多旗舰项目以 pnpm 为标准。</p>
+
+        <h3>2018 · Lerna · monorepo 第一波尝试（也埋下退场伏笔）</h3>
+        <p><strong>Lerna</strong> 由 Sebastian McKenzie（Babel 作者）于 2015 年创建，2017-2019 年成为 monorepo 事实标准。它的核心是：</p>
+        <ul>
+          <li><strong>独立 vs 固定版本</strong>——<code>lerna publish</code> 帮你协调 monorepo 内部多包的版本号</li>
+          <li><strong>跨包脚本运行</strong>——<code>lerna run build</code> 在所有包里跑 build</li>
+          <li><strong>linked package</strong>——把内部包用 symlink 互相引用</li>
+        </ul>
+        <p>Lerna 在 Babel / Jest / Yarn 自身等大型 monorepo 流行。<strong>但它逐渐被边缘化</strong>，原因有三：</p>
+        <ul>
+          <li>没有 task graph + cache（每次 <code>lerna run build</code> 都全量重跑）</li>
+          <li>不管包管理（仍要靠 npm/Yarn install）</li>
+          <li>原作者 Sebastian 转向 Babel + Rome（后来失败），Lerna 维护停滞</li>
+        </ul>
+        <p>2020 年 Lerna 几乎完全无人维护；2022 年项目交接给 Nrwl（Nx 团队）继续做。<strong>Lerna 的退场把 monorepo 工具的 "task graph + cache" 痛点彻底暴露——这个空白被 Turborepo 与 Nx 占领</strong>。</p>
+
+        <h3>2019-09 · Yarn Berry（2.x）/ PnP · 取消 node_modules 的激进路线</h3>
+        <p>2019 年 9 月 Yarn 2.0 alpha 发布，Maël Nison 主导。Yarn Berry 抛出更激进的论点：<strong>node_modules 本身就是错的，连扁平 + symlink 都不要</strong>。</p>
+        <p>Berry 的解决方案 <strong>Plug'n'Play (PnP)</strong>：</p>
+        <ul>
+          <li>所有 tarball 解压到 <code>.yarn/cache/</code>（zip 格式，不解压）</li>
+          <li>项目根有一个 <code>.pnp.cjs</code> 文件，是<strong>一个 Node loader</strong>——它劫持 <code>require</code> 函数，告诉 Node "这个模块的字节码在 cache 中的什么位置"</li>
+          <li>不需要 node_modules，理论上零磁盘占用 + 启动瞬间</li>
+        </ul>
+        <p>PnP 的好处：</p>
+        <ul>
+          <li>install 速度极快（不用解压 + 不用建立 node_modules 树）</li>
+          <li>严格性绝对（require 必须经过 .pnp.cjs 仲裁，比 pnpm 更严）</li>
+          <li>可以"<strong>zero-installs</strong>"——把 cache + .pnp.cjs commit 到 git，新 clone 的人不需要 install 就能跑</li>
+        </ul>
+        <p>但 5 年下来 PnP 在生态接受度上失败了。原因：</p>
+        <ul>
+          <li><strong>工具兼容性差</strong>——很多包假设 <code>node_modules</code> 存在（直接 fs.readdir / 自定义 resolution）；这些包在 PnP 下要打 patch 才能跑。Yarn 维护一个庞大的 patch 列表。</li>
+          <li><strong>编辑器支持成本</strong>——VS Code 需要专门插件配合 PnP；TypeScript 需要 <code>ts-pnp</code> resolver；webpack 需要 <code>pnp-webpack-plugin</code>。每个工具都要单独适配。</li>
+          <li><strong>调试体验</strong>——栈跟踪指向 zip 内部，难定位</li>
+        </ul>
+        <p>2024 年 Yarn 4 默认仍是 PnP，但<strong>大量用户切换到 <code>nodeLinker: node-modules</code> 模式</strong>，相当于把 Berry 当 classic 用。PnP 的思想被部分吸收（Bun / Deno 的二进制 lockfile + 类似 cache 复用思路），但<strong>"完全取消 node_modules"在 2026 年仍是少数派立场</strong>。</p>
+
+        <div class="callout warn">
+          <div class="callout-title">⚠️ 历史教训：太超前的设计也会失败</div>
+          <p>PnP 在技术上几乎完美——更快、更严、更省。但<strong>它忽略了生态惯性</strong>：JS 工具链的几十万个包都假设 node_modules 存在。一个新方案再好，如果让 80% 的包要打 patch 才能跑，市场就不接受。这是 pnpm 走"<strong>保留 node_modules 形式 + 改写其拓扑</strong>"路线赢过 PnP 的根本原因。</p>
+        </div>
+
+        <h3>2020 · Turborepo · monorepo 工具的"task graph + cache"</h3>
+        <p>2020 年 Jared Palmer（前 Formik / TSDX 作者）创建 <strong>Turborepo</strong>。设计立场：<strong>不替包管理器；建在 npm/Yarn/pnpm/Bun 之上的 task runner + cache layer</strong>。</p>
+        <p>Turborepo 的核心 idea：</p>
+        <ul>
+          <li><strong>turbo.json 描述任务图</strong>——<code>build</code> 依赖上游包的 <code>build</code>，<code>test</code> 依赖本包的 <code>build</code></li>
+          <li><strong>input/output hash</strong>——把任务的输入文件 + 环境变量 + 工具版本 hash → cache key；命中即 replay output + log，未命中真正执行</li>
+          <li><strong>远程 cache</strong>——cache key 可以推到远程存储，团队成员 + CI 共享。"<strong>Linus 编译过的，我不再编译</strong>"</li>
+        </ul>
+        <p>2021 年底 Vercel 收购 Turborepo（同时把 Webpack 作者 Tobias Koppers 挖来做 Turbopack）。Turborepo 进入 Vercel 旗舰生态，与 Next.js 深度整合。</p>
+        <p>Turborepo 的影响：<strong>monorepo CI 时间从分钟级降到秒级</strong>。一个改了 1 行 README 的 PR，几乎所有任务都命中 cache，CI 30 秒结束。这极大降低了"拆 monorepo"的运维成本，间接推动了 monorepo 在 2022-2024 的主流化。</p>
+
+        <h3>2022 · Nx 接手 Lerna · 一体化 vs 组合工具的分野</h3>
+        <p>Nx 由 Nrwl 公司（Victor Savkin / Jeff Cross 等前 Angular 团队成员）从 2017 年开始开发，最初服务于 Angular monorepo。2022 年 Nx 接手 Lerna，标志着<strong>monorepo 工具市场二分</strong>：</p>
+        <ul>
+          <li><strong>Turborepo / 组合工具流派</strong>——做一件事（task cache）；包管理用 pnpm/Bun，bundler 用 Vite/Next，互相不锁定</li>
+          <li><strong>Nx / 全家桶流派</strong>——一体化提供项目图 + plugin（@nx/react / @nx/next / @nx/vite）+ generator + migration codemod</li>
+        </ul>
+        <p>两条路线没有对错，只是哲学不同：</p>
+        <ul>
+          <li>Turborepo 适合"已经有自己工具链，只缺 cache" 的团队</li>
+          <li>Nx 适合"从零搭 monorepo，希望工具链统一" 的团队，特别是大型企业（详见 <a href="../05-orchestration/02-nx.html">P5.2</a>）</li>
+        </ul>
+
+        <h3>2023-09 · Bun install · 二进制 lockfile + Zig + 极致性能</h3>
+        <p>2021 年 Jarred Sumner 启动 <strong>Bun</strong>（详见 <a href="../../bun/index.html">Bun 主题</a>）。Bun 是 runtime + toolchain 一体化设计；其 <code>bun install</code> 子命令在 2022 年开始成熟，2023 年 9 月 Bun 1.0 GA 时已经是<strong>性能标杆</strong>。</p>
+        <p>Bun install 的设计选择：</p>
+        <ul>
+          <li><strong>Zig 实现</strong>——直接调系统调用（io_uring / kqueue），绕过 Node 的 libuv abstraction（详见 <a href="../../bun/02-internals/02-zig-system-layer.html">Bun P2.2</a>）</li>
+          <li><strong>二进制 lockfile（bun.lock 旧版/bun.lock JSON 新版）</strong>——直接 mmap 读取，比 yaml/json 解析快</li>
+          <li><strong>全局 cache 复用</strong>——类似 pnpm 的 store，但 hardlink 策略</li>
+          <li><strong>workspace 一等公民</strong>——支持 catalog（2024 跟进）+ glob workspace</li>
+        </ul>
+        <p>典型 benchmark：cold install 一个 Next.js 项目，bun ~2s / pnpm ~10s / npm ~30s（数字依硬件 + 网络条件，但 5-10x 量级是稳定的）。</p>
+        <p><strong>但 Bun install 的生态兼容性还在追赶</strong>：</p>
+        <ul>
+          <li>peer dependency 处理与 pnpm/npm 略有差异</li>
+          <li>少量复杂 monorepo（特别是带 patch / 复杂 hooks 的）需要 fallback 到 pnpm</li>
+          <li>Windows 一级支持到 Bun 1.1+ 才完整</li>
+        </ul>
+        <p>2025-2026 的现实是：<strong>Bun install 在新项目 + 中小项目占据快速增长份额；大型 monorepo 仍以 pnpm 为主流</strong>。两者趋于共存（详见 <a href="02-landscape.html">P1.2</a> 同代人横评）。</p>
+
+        <h3>2024-08 · Catalog · workspace 协议第一次跨工具兼容</h3>
+        <p>monorepo 长期有一个具体痛点：<strong>50 个包都用 React 18.3.1，每次升级要改 50 处 package.json</strong>。社区有 <code>syncpack</code> 这种 lint 工具，但本质是"改完后纠正"，不是"从源头统一"。</p>
+        <p>2024 年 8 月 pnpm 9.5 引入 <strong>catalog 协议</strong>：在 <code>pnpm-workspace.yaml</code> 顶层定义一个版本字典，子包用 <code>catalog:</code> 引用：</p>
+        <div class="code-block">
+          <span class="code-label">yaml</span>
+          <pre class="code"><code class="lang-yaml"># pnpm-workspace.yaml
+packages:
+  - 'packages/*'
+  - 'apps/*'
+catalog:
+  react: ^18.3.1
+  react-dom: ^18.3.1
+  typescript: ^5.6.0</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// packages/ui/package.json
+{
+  "dependencies": {
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  }
+}</code></pre>
+        </div>
+        <p>升级 React 只改顶层一处，所有子包自动同步。<strong>命名 catalog</strong>（<code>catalog:react18</code>）允许同一 monorepo 内多版本并存。</p>
+        <p>2024 年 12 月 Bun 1.1.42 跟进，写法兼容 pnpm。Yarn 4.x 也在 RFC 阶段。<strong>这是 workspace 协议第一次有"跨工具共识"</strong>。详见 <a href="../04-workspaces/01-workspace-protocol.html">P4.1</a>。</p>
+
+        <h3>2024-03 · JSR · Deno 主导的下一代 registry</h3>
+        <p>2024 年 3 月 Deno 团队（Ryan Dahl + Bert Belder）发布 <strong>JSR</strong>（jsr.io），定位为"<strong>下一代 JS/TS 包 registry</strong>"。</p>
+        <p>JSR 的设计立场：</p>
+        <ul>
+          <li><strong>原生 ESM + TS</strong>——不接受 CJS-only 包；TypeScript 源码直接发布（不用预编译）</li>
+          <li><strong>scoped slugs</strong>——所有包 <code>@scope/name</code> 强制 scoped，避免 npm 全局命名空间污染</li>
+          <li><strong>no-tarball</strong>——用 JSON manifest + 文件清单，不打 tarball</li>
+          <li><strong>cross-runtime</strong>——同一个 JSR 包能在 Deno / Node / Bun / 浏览器跑（用 import maps + conditional exports）</li>
+          <li><strong>signing</strong>——所有发布自动签名（与 npm provenance 类似但内置）</li>
+        </ul>
+        <p>JSR 2024-2026 的状态：技术成熟，生态在积累。<strong>能否撼动 npm 还看 5-10 年</strong>——npm 的 200 万包基数不是一个新 registry 能 overnight 接管的。但 JSR 的方向（原生 ESM + TS + 强签名）很可能成为<strong>npm v2 的设计参考</strong>。</p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 历史规律：每代都是回答上一代某个具体痛点的产物</div>
+          <p>看 15 年史可以总结一条规律：<strong>新一代不是"更好的 X"，而是"针对 X 某个具体痛点的解</strong>"。</p>
+          <ul>
+            <li>npm 3 扁平化 → 解 npm 1-2 嵌套磁盘爆炸</li>
+            <li>Yarn classic → 解 npm 3 不确定性 + 慢</li>
+            <li>pnpm → 解 npm 3 幻影依赖 + 磁盘</li>
+            <li>Yarn Berry / PnP → 解 pnpm 仍有 node_modules 的"性能 / 严格上限"</li>
+            <li>Turborepo / Nx → 解 Lerna 没 cache 导致 monorepo CI 慢</li>
+            <li>Bun install → 解 pnpm/npm 安装速度天花板</li>
+            <li>Catalog → 解 monorepo 多包版本同步痛苦</li>
+            <li>JSR → 解 npm 的历史包袱（CJS / 非 scoped / 无原生 TS）</li>
+          </ul>
+          <p>选型时不该问"最新的最好吗"，应问"<strong>它解的是不是我的痛点</strong>"。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 旧项目从 npm 切 pnpm，CI 突然报"undefined is not a function"</h3>
+          <p><strong>背景</strong>：5 年的中型 React 项目，一直用 npm。某次决定切 pnpm 提升 CI 速度。本地 <code>pnpm install</code> 没问题，但 CI 跑测试时一些 utility 函数报 <code>undefined is not a function</code>。</p>
+          <p><strong>诊断</strong>：源码里 <code>require('lodash.merge')</code>，但 package.json 里没有 lodash.merge，只有 <code>lodash</code>。npm 时代靠 hoisting，<code>lodash.merge</code> 是 lodash 的传递依赖被提到顶层，能 require 到。pnpm 严格拓扑下，没声明的包就 require 不到——这就是"<strong>幻影依赖切包管理器时翻车</strong>"。</p>
+          <p><strong>修复</strong>：<code>pnpm add lodash.merge</code> 显式声明。这种情况一个项目通常有 5-30 处。<strong>历史背景</strong>：这正是 pnpm 在 2017 年就警告过的痛点（npm 3 扁平化的代价），但 npm 项目长期没意识到，切 pnpm 时一次性暴露。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · 团队在选 monorepo 工具，纠结 Lerna / Turborepo / Nx</h3>
+          <p><strong>背景</strong>：12 人团队，要把 4 个 React 项目 + 3 个 npm 包合并成 monorepo。Tech Lead 提出 Lerna，团队成员看 GitHub 觉得 Lerna 维护停滞。</p>
+          <p><strong>诊断</strong>：Lerna 在 2022 年由 Nrwl 接手后仍有维护，但<strong>它不再是"独立产品"</strong>——本质上是 Nx 生态的一个组件。如果你不用 Nx，单独用 Lerna 等于"用一个 task runner 没 cache"。</p>
+          <p><strong>建议</strong>：</p>
+          <ul>
+            <li>组合工具流派 → pnpm + Turborepo（轻量，team 自由组合各种工具）</li>
+            <li>全家桶流派 → Nx（开箱即用，但绑定 Nx 的 plugin 模型）</li>
+            <li>不要选 Lerna 单飞——它今天的角色是 "Nx 的版本协调子模块"</li>
+          </ul>
+          <p>这个判断的根据是 P1 历史背景：<strong>Lerna 退场不是因为它不好，而是因为它没赶上"task graph + cache"那次范式转移</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · 想试 Yarn Berry / PnP，被同事劝退</h3>
+          <p><strong>背景</strong>：工程师看到 Yarn Berry 文档说"<strong>zero-installs + 5x faster</strong>"，技术上心动想试。同事说"PnP 上次我们项目用了一年踩坑无数，弃了"。</p>
+          <p><strong>诊断</strong>：PnP 在技术上接近完美，但<strong>生态接受度有限</strong>是它 5 年来的硬伤。常见问题：</p>
+          <ul>
+            <li>某些 webpack / metro / vite plugin 假设 node_modules 存在，需要 patch</li>
+            <li>VS Code 自动补全要装 <code>@yarnpkg/sdks</code> 适配</li>
+            <li>调试栈跟踪指向 zip 内部</li>
+            <li>遇到 patch 需求时 Yarn 自家的 patch 工具与社区 <code>patch-package</code> 不互通</li>
+          </ul>
+          <p><strong>建议</strong>：除非你的项目所有依赖都是"主流且现代"（Vite / Next.js / React 等核心生态包都做了 PnP 适配），否则 2026 年仍推荐 <code>yarnRcYml</code> 配 <code>nodeLinker: node-modules</code> 把 Berry 当 classic 用。或者直接选 pnpm——同样严格但生态接受度高。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <p>用一个简单的"A 依赖 B@1, B 依赖 C@2"项目作样本，看每代包管理器装出来的目录是什么样：</p>
+
+        <div class="code-block">
+          <span class="code-label">npm 1-2 嵌套布局（2010-2015）</span>
+          <pre class="code"><code class="lang-text">node_modules/
+├── A/
+│   ├── package.json
+│   └── node_modules/
+│       └── B/
+│           ├── package.json
+│           └── node_modules/
+│               └── C/
+│                   └── package.json</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">npm 3+ / Yarn classic 扁平布局（2015+）</span>
+          <pre class="code"><code class="lang-text">node_modules/
+├── A/
+│   └── package.json
+├── B/
+│   └── package.json
+└── C/        ← 提到顶层！这就是为什么 require('C') 在没声明时也能跑（幻影依赖）
+    └── package.json</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">pnpm symlink 布局（2017+）</span>
+          <pre class="code"><code class="lang-text">node_modules/
+├── A → .pnpm/A@1.0.0/node_modules/A          ← symlink
+├── .pnpm/
+│   ├── A@1.0.0/
+│   │   └── node_modules/
+│   │       ├── A/                             ← hardlink 到 ~/.pnpm-store
+│   │       └── B → ../../B@1.0.0/node_modules/B  ← symlink
+│   ├── B@1.0.0/
+│   │   └── node_modules/
+│   │       ├── B/                             ← hardlink 到 ~/.pnpm-store
+│   │       └── C → ../../C@2.0.0/node_modules/C  ← symlink
+│   └── C@2.0.0/
+│       └── node_modules/
+│           └── C/                             ← hardlink 到 ~/.pnpm-store
+
+# 顶层只有 A（package.json 里声明的）；require('C') 不能从顶层找到
+# B 和 C 都在 .pnpm 中各自 sandbox，互不串味</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">Yarn Berry PnP（2019+）</span>
+          <pre class="code"><code class="lang-text">.yarn/
+├── cache/
+│   ├── A-npm-1.0.0-abc.zip                  ← 不解压！
+│   ├── B-npm-1.0.0-def.zip
+│   └── C-npm-2.0.0-ghi.zip
+└── unplugged/                                ← 仅 native 模块解压
+
+.pnp.cjs                                      ← Node loader，劫持 require
+                                              ← 它告诉 Node "C 在 cache/C-npm-2.0.0-ghi.zip 里"
+package.json
+yarn.lock
+
+# 没有 node_modules 目录！</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">每代的 lockfile 对比</span>
+          <pre class="code"><code class="lang-text"># 2010-2017: 没有 lockfile（npm 1-4）
+# 装包结果完全依赖 registry 当前状态 + 解析顺序，非确定
+
+# 2017+: package-lock.json（npm 5+）
+{
+  "name": "my-app",
+  "lockfileVersion": 3,
+  "packages": {
+    "node_modules/lodash": { "version": "4.17.21", "integrity": "sha512-..." }
+  }
+}
+
+# 2016+: yarn.lock（Yarn）
+"lodash@^4.17.0":
+  version "4.17.21"
+  resolved "https://registry.yarnpkg.com/..."
+  integrity sha512-...
+
+# 2017+: pnpm-lock.yaml（pnpm）
+lockfileVersion: '9.0'
+importers:
+  .:
+    dependencies:
+      lodash:
+        specifier: ^4.17.0
+        version: 4.17.21
+packages:
+  lodash@4.17.21:
+    resolution: { integrity: sha512-... }
+
+# 2023+: bun.lock（Bun，二进制 → 后改 JSON）
+{
+  "lockfileVersion": 1,
+  "workspaces": { ... },
+  "packages": { "lodash": ["lodash@4.17.21", { "integrity": "sha512-..." }] }
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · "新一代肯定比上一代好"</div>
+          <p>看到 Yarn Berry 性能数字漂亮就上 PnP，看到 Bun benchmark 快就全员切 Bun——这种思路常翻车。每代包管理器都在某些维度先进、在另一些维度让步。<strong>选型应基于"它解的是不是我的痛点"</strong>，而不是新旧。例如大型企业 monorepo 在 2026 年仍以 pnpm 为主，不是因为 pnpm 比 Bun 新，而是因为 pnpm 的严格 peer + workspace 成熟度对大团队更重要。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 把 npm 3 扁平化看成"性能优化"</div>
+          <p>很多文档把 hoisting 描述为"提升性能 + 节省磁盘"。这是<strong>话术，不是真相</strong>。npm 3 扁平化是<strong>用一个新问题（幻影依赖）换掉旧问题（嵌套磁盘 + 路径长）</strong>的妥协决定，不是单方面的进步。理解这一点你才知道为什么 pnpm / PnP 后来要"反扁平化"——它们不是在反对节省磁盘，而是在反对扁平化引入的"暴露未声明依赖"副作用。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 在生产 monorepo 里同时挂 pnpm + Lerna + Turborepo + Nx</h3>
+          <p>这是一种很常见的"积弊型"项目状态：原本用 Lerna，后来加了 pnpm（替代 npm），再后来加了 Turborepo（cache），再后来又加了 Nx（plugin）。结果四套工具的配置文件都有，每个开发者搞不清哪个在生效。<strong>monorepo 工具链应该 1-2 个工具就够</strong>：pnpm + Turborepo（组合流派）或 Nx + 内置包管理（全家桶流派）二选一，不要混搭。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 把 Lerna 的退场理解为"monorepo 死了"</div>
+          <p>2020-2022 看到 Lerna "deprecated" 标签的人有时得出"<strong>monorepo 是错的</strong>"结论。事实正相反——Lerna 退场是因为<strong>monorepo 工具市场升级了</strong>（Turborepo / Nx 提供 cache + 项目图），不是因为 monorepo 这个范式有问题。2022-2026 monorepo 比 Lerna 时代更主流。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 把 catalog 当成"poor man's syncpack"</div>
+          <p>有人看到 catalog 觉得"这只是版本号集中放一处嘛"。其实 catalog 还有<strong>publish 时不会泄露</strong>（pnpm publish 自动改写为真实版本号）+ <strong>命名 catalog 支持多版本并存</strong>等高级特性。它不是 syncpack 这种 lint 的替代——而是"<strong>从源头统一</strong>"，比"装完 lint 检查"安全得多。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://blog.npmjs.org/post/120703408590/npm-weekly-17" target="_blank" rel="noopener">npm Blog · npm v3 dependency resolution（npm v3 扁平化设计 RFC）</a></li>
+          <li><a href="https://classic.yarnpkg.com/blog/2016/10/11/yarn-a-new-package-manager-for-javascript/" target="_blank" rel="noopener">Yarn 2016 Launch Blog（"why yarn"原始公告）</a></li>
+          <li><a href="https://pnpm.io/motivation" target="_blank" rel="noopener">pnpm Motivation（Zoltan Kochan 解释为什么 pnpm 是必要的）</a></li>
+          <li><a href="https://yarnpkg.com/features/pnp" target="_blank" rel="noopener">Yarn Berry PnP 文档（Maël Nison 主导）</a></li>
+          <li><a href="https://github.com/lerna/lerna/issues/3121" target="_blank" rel="noopener">Lerna Maintenance Mode（2022 项目交接 Nrwl 公告）</a></li>
+          <li><a href="https://turbo.build/blog/joining-vercel" target="_blank" rel="noopener">Turborepo Joins Vercel（2021 收购公告，Jared Palmer）</a></li>
+          <li><a href="https://bun.com/blog/bun-v1.0" target="_blank" rel="noopener">Bun 1.0 Announcement（2023-09，含 install benchmark）</a></li>
+          <li><a href="https://pnpm.io/catalogs" target="_blank" rel="noopener">pnpm Catalogs（catalog 协议官方文档）</a></li>
+          <li><a href="https://jsr.io/docs/introduction" target="_blank" rel="noopener">JSR Introduction（Deno 团队 2024-03 公告）</a></li>
+          <li><a href="../../bun/04-toolchain/01-bun-install.html">Bun P4.1 · Bun install 内部细节（本站）</a></li>
+          <li><a href="../02-node-modules/02-phantom-deps.html">P2.2 · 幻影依赖详解（本站，下下章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="index.html">
+            <span class="label">← 阶段概览</span>
+            <span class="title">P1 · 包管理器是谁</span>
+          </a>
+          <a class="next" href="02-landscape.html">
+            <span class="label">下一章 →</span>
+            <span class="title">02 · 同代人横评</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
