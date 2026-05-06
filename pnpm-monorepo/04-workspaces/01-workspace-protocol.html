@@ -1,0 +1,702 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>4 家 workspace 对比 + catalog · P4.1 · pnpm & monorepo 深度学习</title>
+    <meta name="description" content="npm/Yarn/pnpm/Bun 四家 workspace 配置入口对比 + workspace:* / link: / portal: 协议 + catalog 2025 共识。catalog 协议详解 + publish 时如何被改写。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23f69220'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EP%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>pnpm & monorepo 深度学习</span><span class="site-title-badge" style="background: oklch(0.7 0.18 60); color: #fff">pnpm</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · Workspace 协议</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-workspace-protocol.html" class="active">01 · 4 家 workspace + catalog</a></li>
+          <li><a href="02-filter-topological.html">02 · --filter / topological / 联调</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">pnpm & monorepo</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · Workspace 协议</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 4 家 workspace + catalog</span>
+        </nav>
+        <h1>4 家 workspace 对比 + catalog</h1>
+        <p class="lead">
+          monorepo 不是把代码塞一个目录就成立——它需要<strong>一套协议描述"内部多个包如何互相引用 + 如何统一升级 + 如何选择性 publish"</strong>。本章对比 4 家（npm / Yarn / pnpm / Bun）的 workspace 配置入口、解析协议（<code>workspace:*</code> / <code>link:</code> / <code>portal:</code>），重点讲 2024-2025 的 <strong>catalog 协议</strong>——第一次让 workspace 在多家工具间互通的共识。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P3 全部（pnpm 内部）</span>
+          <span><strong>主要来源</strong> pnpm.io / yarnpkg.com / docs.npmjs.com / bun.com/docs 4 家 workspace 文档</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>4 家 workspace 配置入口</strong> —— npm / Yarn classic / Yarn Berry：在<strong>根 package.json 加 <code>"workspaces"</code> 字段</strong>；pnpm：单独 <code>pnpm-workspace.yaml</code> 文件；Bun：根 package.json 的 <code>"workspaces"</code>（兼容 npm 写法）。配置语法都用 glob，但语义略有差异。</li>
+          <li><strong>workspace 内部依赖用 <code>workspace:*</code> 协议</strong> —— 写 <code>"@app/ui": "workspace:*"</code> 表示"这是 monorepo 内部包，按当前版本链接"。<code>workspace:^</code> / <code>workspace:~</code> / <code>workspace:./packages/ui</code> 是变体。<strong>publish 时自动改写为真实版本号</strong>。</li>
+          <li><strong>link: vs portal: vs workspace:</strong> —— <code>link:</code> 是开发期纯 symlink，不在 lockfile（旧时代 monorepo 用法）；<code>portal:</code> 是 Yarn 特有，类似 link 但解决一致性问题；<code>workspace:</code> 是<strong>2026 推荐</strong>——记入 lockfile + publish 时改写。</li>
+          <li><strong>catalog 协议（2024-08 pnpm 9.5 引入）</strong> —— monorepo 顶层定义版本字典：<code>catalog: { react: ^18.3.1 }</code>；子包用 <code>"react": "catalog:"</code> 引用。<strong>升级 React 改一处，所有包同步</strong>。Bun 1.1.42 / Yarn 4 RFC 已跟进，事实上的"workspace 协议跨工具兼容化"。</li>
+          <li><strong>命名 catalog</strong> —— 同一 monorepo 多版本并存（<code>catalog:react18</code> 和 <code>catalog:react19</code> 各管各的）。比"全部统一"灵活。</li>
+          <li><strong>workspace 内部 publish 时的处理</strong> —— pnpm/Bun/Changesets 都会在 <code>pnpm publish</code> / <code>bun publish</code> / <code>changeset publish</code> 时<strong>自动把 <code>workspace:*</code> 改写为真实版本号</strong>，发到 npm 的 tarball 不带 workspace: 协议。这让"<strong>monorepo 内开发 + 单独 publish</strong>"工作流自然。</li>
+          <li><strong>4 家在严格性 / 灵活性 / 生态成熟度上各有侧重</strong> —— pnpm 最严格 + 最成熟的 workspace 实现；Yarn Berry 最丰富的协议（portal / patch / git 都有）；npm workspace 最基础但兼容性最高；Bun 是 npm 兼容 + 速度优势。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>workspace 配置入口对比</h3>
+
+        <p><strong>npm（v7+）/ Yarn classic / Yarn Berry / Bun</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">根 package.json</span>
+          <pre class="code"><code class="lang-json">{
+  "name": "my-monorepo",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
+}</code></pre>
+        </div>
+
+        <p>简单形式（数组 of glob）。npm/Yarn/Bun 都用这个写法。</p>
+
+        <p><strong>Yarn Berry 扩展形式</strong>（支持 <code>nohoist</code>）：</p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">{
+  "workspaces": {
+    "packages": ["apps/*", "packages/*"],
+    "nohoist": ["**/react-native"]
+  }
+}</code></pre>
+        </div>
+
+        <p><strong>pnpm</strong>（独立文件）：</p>
+        <div class="code-block">
+          <span class="code-label">pnpm-workspace.yaml</span>
+          <pre class="code"><code class="lang-yaml">packages:
+  - 'apps/*'
+  - 'packages/*'
+  - '!**/test/**'         # 排除（pnpm 特性）
+
+# pnpm 9+ 还能在这里定义 catalog（详见下面）
+catalog:
+  react: ^18.3.1
+  react-dom: ^18.3.1</code></pre>
+        </div>
+
+        <p><strong>为什么 pnpm 用独立文件</strong>：</p>
+        <ul>
+          <li>pnpm 的 monorepo 配置（packages / catalog / pkg-overrides 等）逐渐变多，塞进 package.json 会乱</li>
+          <li>独立文件更清晰，与 npm/Yarn 的"在 package.json 配置"路线分道扬镳</li>
+          <li>YAML 比 JSON 注释友好</li>
+        </ul>
+
+        <p><strong>结果是 pnpm 的 monorepo 配置一目了然</strong>，npm/Yarn 把所有东西塞 package.json 后期会膨胀。</p>
+
+        <h3><code>workspace:*</code> 协议详解</h3>
+
+        <p>monorepo 中 apps/web 依赖 packages/ui。怎么写？</p>
+
+        <p><strong>三种写法</strong>：</p>
+
+        <p><strong>(1) 古老方式：相对路径或 file:</strong></p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// apps/web/package.json
+{
+  "dependencies": {
+    "@app/ui": "file:../../packages/ui"
+  }
+}</code></pre>
+        </div>
+        <ul>
+          <li>各家都支持但不在 monorepo 中常用——它是<strong>外部包的本地化引用</strong>，不是 workspace 概念</li>
+          <li>缺点：publish 时不会被改写，发到 npm 的包仍带 <code>file:</code> 路径，下游用户装不上</li>
+        </ul>
+
+        <p><strong>(2) 旧 monorepo 方式：直接版本号</strong></p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// apps/web/package.json
+{
+  "dependencies": {
+    "@app/ui": "1.0.0"
+  }
+}</code></pre>
+        </div>
+        <ul>
+          <li>包管理器看到 @app/ui 是 workspace 内部包，自动 symlink 而不是从 npm 拉</li>
+          <li>但版本号要手动跟 packages/ui/package.json 同步——容易漂移</li>
+          <li>2018 年前的 Lerna monorepo 常见</li>
+        </ul>
+
+        <p><strong>(3) 现代方式：<code>workspace:*</code> 协议（Yarn Berry 引入，pnpm/Bun 跟进）</strong></p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// apps/web/package.json
+{
+  "dependencies": {
+    "@app/ui": "workspace:*"
+  }
+}</code></pre>
+        </div>
+        <ul>
+          <li><code>workspace:*</code>：跟随 packages/ui 当前版本（写啥都行，反正 workspace 内）</li>
+          <li><code>workspace:^</code>：跟随当前主版本（packages/ui 是 1.5.0 → ^1.5.0）</li>
+          <li><code>workspace:~</code>：跟随当前次版本（packages/ui 是 1.5.3 → ~1.5.3）</li>
+          <li><code>workspace:./packages/ui</code>：显式路径（罕见，覆盖默认按 name 解析）</li>
+          <li><strong>publish 时自动改写</strong>（下面详解）</li>
+        </ul>
+
+        <p><strong>支持矩阵</strong>：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>协议</th>
+              <th>npm</th>
+              <th>Yarn classic</th>
+              <th>Yarn Berry</th>
+              <th>pnpm</th>
+              <th>Bun</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>workspace:*</code></td>
+              <td>v9+</td>
+              <td>❌</td>
+              <td>✅（首发）</td>
+              <td>✅</td>
+              <td>✅</td>
+            </tr>
+            <tr>
+              <td><code>workspace:^</code></td>
+              <td>v9+</td>
+              <td>❌</td>
+              <td>✅</td>
+              <td>✅</td>
+              <td>✅</td>
+            </tr>
+            <tr>
+              <td><code>workspace:~</code></td>
+              <td>v9+</td>
+              <td>❌</td>
+              <td>✅</td>
+              <td>✅</td>
+              <td>✅</td>
+            </tr>
+            <tr>
+              <td><code>link:</code></td>
+              <td>✅</td>
+              <td>✅</td>
+              <td>⚠️ 弱化</td>
+              <td>✅</td>
+              <td>✅</td>
+            </tr>
+            <tr>
+              <td><code>portal:</code></td>
+              <td>❌</td>
+              <td>❌</td>
+              <td>✅（独有）</td>
+              <td>❌</td>
+              <td>❌</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>publish 时自动改写：从 workspace: 到真实版本号</h3>
+
+        <p>monorepo 中 apps/web 的 package.json 写 <code>"@app/ui": "workspace:*"</code>。如果直接 publish，下游用户装时找不到 @app/ui（npm registry 没有 workspace: 协议的概念）。</p>
+
+        <p>所以包管理器在 <code>publish</code> 时<strong>自动改写</strong>：</p>
+
+        <div class="code-block">
+          <span class="code-label">改写前后对比</span>
+          <pre class="code"><code class="lang-json">// 源码（git 中）
+{
+  "dependencies": {
+    "@app/ui": "workspace:*",
+    "@app/utils": "workspace:^"
+  }
+}
+
+// publish 时自动改写（packages/ui 当前是 2.3.1，packages/utils 当前是 1.5.0）
+{
+  "dependencies": {
+    "@app/ui": "2.3.1",                    // workspace:* → 当前确切版本
+    "@app/utils": "^1.5.0"                 // workspace:^ → ^当前主版本
+  }
+}
+
+// 这个改写后的 package.json 才是发到 npm 的版本
+// 但 git 仓库中的 package.json 仍保持 workspace: 协议</code></pre>
+        </div>
+
+        <p><strong>谁来改写</strong>：</p>
+        <ul>
+          <li><strong>pnpm publish</strong>：自动</li>
+          <li><strong>bun publish</strong>：自动</li>
+          <li><strong>Changesets publish</strong>：自动（详见 P6.1）</li>
+          <li><strong>npm publish</strong>：v9+ 支持 workspace: 但改写行为略有不同</li>
+        </ul>
+
+        <p><strong>关键洞见</strong>：<code>workspace:</code> 协议是 monorepo 的"<strong>开发期占位符</strong>"——dev 时让 symlink 即时生效，publish 时还原成真实版本。这分离了"开发期方便"和"发布期严格"两个需求。</p>
+
+        <h3>catalog 协议 · 2025 共识</h3>
+
+        <p>monorepo 长期痛点：50 个包都用 React 18.3.1，每次升级要改 50 处 package.json。社区 lint 工具（syncpack）治标——版本写错了能检测，但不能从源头统一。</p>
+
+        <p>2024 年 8 月 pnpm 9.5 引入 <strong>catalog 协议</strong>。在 monorepo 顶层定义版本字典：</p>
+
+        <div class="code-block">
+          <span class="code-label">pnpm-workspace.yaml（pnpm）</span>
+          <pre class="code"><code class="lang-yaml">packages:
+  - 'apps/*'
+  - 'packages/*'
+
+catalog:
+  react: ^18.3.1
+  react-dom: ^18.3.1
+  typescript: ^5.6.0
+  '@types/node': ^22.0.0
+
+# 命名 catalog（高级用法）
+catalogs:
+  react18:
+    react: ^18.3.1
+    react-dom: ^18.3.1
+  react19:
+    react: ^19.0.0
+    react-dom: ^19.0.0</code></pre>
+        </div>
+
+        <p>子包用 <code>catalog:</code> 引用：</p>
+        <div class="code-block">
+          <span class="code-label">packages/ui/package.json</span>
+          <pre class="code"><code class="lang-json">{
+  "name": "@app/ui",
+  "dependencies": {
+    "react": "catalog:",                 // 默认 catalog
+    "react-dom": "catalog:",
+    "typescript": "catalog:"
+  }
+}
+
+// 用命名 catalog（跑 React 19 的 app）
+// packages/ui-experimental/package.json
+{
+  "dependencies": {
+    "react": "catalog:react19",
+    "react-dom": "catalog:react19"
+  }
+}</code></pre>
+        </div>
+
+        <p><strong>升级 React 18.3.1 → 18.3.2 只改一处</strong>（pnpm-workspace.yaml 顶层），所有用 <code>catalog:</code> 的子包自动跟随。</p>
+
+        <p><strong>publish 时改写</strong>（与 workspace: 类似）：</p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// 源码
+{ "dependencies": { "react": "catalog:" } }
+
+// publish 改写
+{ "dependencies": { "react": "^18.3.1" } }     // 用顶层 catalog 中的范围</code></pre>
+        </div>
+
+        <p><strong>Bun 1.1.42（2024-12）跟进</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">package.json（根，Bun 写法）</span>
+          <pre class="code"><code class="lang-json">{
+  "workspaces": ["apps/*", "packages/*"],
+  "catalog": {
+    "react": "^18.3.1"
+  },
+  "catalogs": {
+    "react19": { "react": "^19.0.0" }
+  }
+}</code></pre>
+        </div>
+
+        <p>Bun 选择把 catalog 放 package.json（与 npm 工作流一致），pnpm 放 pnpm-workspace.yaml（与 pnpm 风格一致）。但<strong>子包的引用语法两家都用 <code>"react": "catalog:"</code></strong>——这就是跨工具兼容的关键。</p>
+
+        <p><strong>Yarn 4 RFC 阶段</strong>（2024-2025）：</p>
+        <ul>
+          <li>RFC #570 讨论 catalog 协议</li>
+          <li>API 设计可能与 pnpm/Bun 兼容</li>
+          <li>2026 年正式支持时间未定</li>
+        </ul>
+
+        <p><strong>npm 11</strong>：截至 2026-05 仍未跟进 catalog。这是 monorepo 选 pnpm/Bun 的具体理由之一。</p>
+
+        <h3>命名 catalog 的用途</h3>
+
+        <p>monorepo 内不同子包用<strong>不同主版本</strong>的同一包是常见需求：</p>
+        <ul>
+          <li>主 app 用 React 18，实验 app 用 React 19</li>
+          <li>新组件库用 TypeScript 5.6，老 lib 兼容 5.0</li>
+          <li>不同 testing 框架共存（Vitest 1.x 和 Vitest 2.x 渐进迁移）</li>
+        </ul>
+
+        <p>命名 catalog 让多版本各管各：</p>
+        <div class="code-block">
+          <span class="code-label">pnpm-workspace.yaml</span>
+          <pre class="code"><code class="lang-yaml">catalogs:
+  react18:
+    react: ^18.3.1
+    react-dom: ^18.3.1
+  react19:
+    react: ^19.0.0
+    react-dom: ^19.0.0</code></pre>
+        </div>
+
+        <p>子包按需引用：</p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// apps/main-app/package.json
+{ "dependencies": { "react": "catalog:react18" } }
+
+// apps/experimental/package.json
+{ "dependencies": { "react": "catalog:react19" } }</code></pre>
+        </div>
+
+        <p>升级实验 app 时只改 react19 catalog，不影响主 app。这比"全部统一一个版本"灵活得多。</p>
+
+        <h3>link: 协议 · 与 workspace: 的微妙差异</h3>
+
+        <p><strong>link:</strong> 是<strong>纯 symlink，不进 lockfile</strong>。它的设计意图是"我有一个本地目录想直接接入项目"。</p>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">{
+  "dependencies": {
+    "some-pkg": "link:../some-other-project"
+  }
+}</code></pre>
+        </div>
+
+        <p><strong>vs workspace:*</strong>：</p>
+        <ul>
+          <li>workspace:* 在<strong>同一 monorepo</strong>（受 packages glob 包含）；link: 可以指任何路径</li>
+          <li>workspace:* 进 lockfile + publish 改写；link: 不进 lockfile + publish 时报错（"包含 link: 不能 publish"）</li>
+          <li>workspace:* 是 monorepo 用法；link: 是"开发期临时接入外部项目"用法</li>
+        </ul>
+
+        <p><strong>典型 link: 场景</strong>：</p>
+        <ul>
+          <li>调试一个外部 npm 包：clone 它的源码到 ../some-pkg-source，在自己项目用 <code>link:../some-pkg-source</code></li>
+          <li>本地开发跨 monorepo 联调（"我的 app monorepo + 我的 lib monorepo 互相调用"）</li>
+          <li>Yarn Berry 的 portal: 是 link: 的"严格版"，校验依赖一致</li>
+        </ul>
+
+        <h3>4 家 workspace 的"个性"</h3>
+
+        <p><strong>npm workspace</strong>：</p>
+        <ul>
+          <li>v7+ 支持，v9+ 支持 workspace:* 协议</li>
+          <li>没有 catalog（落后一代）</li>
+          <li>filter 简单（<code>--workspace=&lt;name&gt;</code>）</li>
+          <li>主要场景：从 npm 单 repo 渐进迁移到 monorepo，最低门槛</li>
+        </ul>
+
+        <p><strong>Yarn classic workspace</strong>：</p>
+        <ul>
+          <li>v1.x 的 workspace 设计简单，不支持 workspace: 协议（要 v2+）</li>
+          <li>主流 Yarn classic monorepo 在 2026 年已迁移到 pnpm 或 Yarn Berry</li>
+        </ul>
+
+        <p><strong>Yarn Berry workspace</strong>：</p>
+        <ul>
+          <li>workspace: 协议的发明者</li>
+          <li>额外协议：portal: / patch: / git: / patch://...</li>
+          <li>nohoist 字段（PnP 模式不太用）</li>
+          <li>catalog 在 RFC，2026 实验</li>
+        </ul>
+
+        <p><strong>pnpm workspace</strong>：</p>
+        <ul>
+          <li>pnpm-workspace.yaml 独立文件，配置量大时清晰</li>
+          <li>workspace: 协议完整支持</li>
+          <li>catalog 协议主导者（2024-08 引入）</li>
+          <li>filter 强大（<code>--filter '...{packages/ui}^...'</code>）</li>
+          <li>主流大型 monorepo 选择</li>
+        </ul>
+
+        <p><strong>Bun workspace</strong>：</p>
+        <ul>
+          <li>npm 兼容写法（package.json 中 workspaces 数组）</li>
+          <li>workspace: 协议支持（Bun 1.0+）</li>
+          <li>catalog 跟进（Bun 1.1.42+）</li>
+          <li>速度优势（详见 <a href="../../bun/04-toolchain/01-bun-install.html">Bun P4.1</a>）</li>
+          <li>新项目 + 已用 Bun runtime 的场景首选</li>
+        </ul>
+
+        <div class="callout info">
+          <div class="callout-title">💡 关键洞见：catalog 是 2026 monorepo 的分水岭</div>
+          <p>选 monorepo 工具时，<strong>支不支持 catalog 是日常生产力的关键</strong>。它的影响比"装包速度差几秒"大得多——升级 React/TypeScript/Vitest 等核心依赖的痛苦差距是<strong>改一处 vs 改 50 处</strong>。这是 npm 11 / Yarn 4 默认在 2026 年仍落后一代的具体表现。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 把老 monorepo 迁移到 catalog</h3>
+          <p><strong>背景</strong>：5 年的 pnpm monorepo，30 个包，每个包的 package.json 单独写 react 版本。已经被 react@18 升级时改 30 处折腾过几次。决定迁移 catalog。</p>
+          <p><strong>步骤</strong>：</p>
+          <ol>
+            <li>确认 pnpm 版本 ≥ 9.5（<code>pnpm -v</code>）</li>
+            <li>编辑 pnpm-workspace.yaml 顶层加 catalog 字段</li>
+            <li>对每个核心依赖（react / react-dom / typescript / @types/node 等）：在 catalog 里写当前版本范围</li>
+            <li>子包 package.json 把 <code>"react": "^18.3.1"</code> 改成 <code>"react": "catalog:"</code></li>
+            <li>跑 <code>pnpm install</code>，确认 lockfile 没变化（应该等价）</li>
+            <li>跑全套测试 + build 确认没问题</li>
+            <li>commit + 教育团队"以后升级核心依赖只改 catalog"</li>
+          </ol>
+          <p>30 个包的迁移通常 1-2 小时（grep + sed 自动化）。一次投入，长期收益。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · monorepo 里同时支持 React 18 和 React 19</h3>
+          <p><strong>背景</strong>：主线 app 跑生产 React 18，新实验 app 想用 React 19 的新特性。怎么共存？</p>
+          <p><strong>方案</strong>：用命名 catalog</p>
+          <div class="code-block">
+            <span class="code-label">pnpm-workspace.yaml</span>
+            <pre class="code"><code class="lang-yaml">catalogs:
+  react18:
+    react: ^18.3.1
+    react-dom: ^18.3.1
+  react19:
+    react: ^19.0.0
+    react-dom: ^19.0.0</code></pre>
+          </div>
+          <div class="code-block">
+            <span class="code-label">json</span>
+            <pre class="code"><code class="lang-json">// apps/main/package.json
+{ "dependencies": { "react": "catalog:react18", "react-dom": "catalog:react18" } }
+
+// apps/experimental/package.json
+{ "dependencies": { "react": "catalog:react19", "react-dom": "catalog:react19" } }
+
+// packages/ui/package.json （内部库，跑双版本）
+{
+  "peerDependencies": {
+    "react": "^18 || ^19",
+    "react-dom": "^18 || ^19"
+  }
+}</code></pre>
+          </div>
+          <p>pnpm 会在 .pnpm 中分别 sandbox react@18 和 react@19，互不串味。各 app 跑各自的 React 版本。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · 切包管理器：从 npm workspace 到 pnpm</h3>
+          <p><strong>背景</strong>：npm workspace monorepo（10 个包），决定切 pnpm 用 catalog + 严格性。</p>
+          <p><strong>步骤</strong>：</p>
+          <ol>
+            <li>装 pnpm（<code>npm install -g pnpm</code> 或 <code>corepack enable pnpm</code>）</li>
+            <li>把根 package.json 的 <code>"workspaces": [...]</code> 复制到新建的 <code>pnpm-workspace.yaml</code>（YAML 格式）</li>
+            <li>删除根 package.json 的 <code>"workspaces"</code> 字段</li>
+            <li>子包 package.json 中的 <code>"@app/ui": "1.0.0"</code> 改成 <code>"@app/ui": "workspace:*"</code></li>
+            <li>删 node_modules + package-lock.json</li>
+            <li><code>pnpm install</code></li>
+            <li>跑全套测试——可能暴露幻影依赖（详见 P2.2 + 修复指引）</li>
+            <li>修完幻影依赖后 commit pnpm-workspace.yaml + pnpm-lock.yaml + 各包改动</li>
+            <li>更新 CI workflow（npm install → pnpm install --frozen-lockfile）</li>
+          </ol>
+          <p>典型耗时 1-3 天（取决于幻影依赖数量）。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">完整 pnpm monorepo 配置</span>
+          <pre class="code"><code class="lang-text"># 项目结构
+my-monorepo/
+├── package.json                   # 根（仅元信息 + dev 依赖）
+├── pnpm-workspace.yaml            # workspace + catalog 配置
+├── pnpm-lock.yaml
+├── .pnpmfile.cjs                  # 可选 hooks
+├── .npmrc
+├── apps/
+│   ├── web/
+│   │   └── package.json           # React 18 主 app
+│   └── experimental/
+│       └── package.json           # React 19 实验 app
+└── packages/
+    ├── ui/
+    │   └── package.json           # 跨版本组件库
+    ├── utils/
+    │   └── package.json
+    └── config/
+        └── package.json</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">pnpm-workspace.yaml</span>
+          <pre class="code"><code class="lang-yaml">packages:
+  - 'apps/*'
+  - 'packages/*'
+  - '!**/test/**'
+
+catalog:
+  typescript: ^5.6.0
+  '@types/node': ^22.0.0
+  vitest: ^1.6.0
+
+catalogs:
+  react18:
+    react: ^18.3.1
+    react-dom: ^18.3.1
+    '@types/react': ^18.3.0
+  react19:
+    react: ^19.0.0
+    react-dom: ^19.0.0
+    '@types/react': ^19.0.0</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">apps/web/package.json（React 18 app）</span>
+          <pre class="code"><code class="lang-json">{
+  "name": "@app/web",
+  "private": true,
+  "dependencies": {
+    "@app/ui": "workspace:*",
+    "@app/utils": "workspace:^",
+    "react": "catalog:react18",
+    "react-dom": "catalog:react18"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:react18",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">packages/ui/package.json（跨版本组件库）</span>
+          <pre class="code"><code class="lang-json">{
+  "name": "@app/ui",
+  "version": "1.0.0",
+  "dependencies": {
+    "@app/utils": "workspace:^"
+  },
+  "peerDependencies": {
+    "react": "^18 || ^19",
+    "react-dom": "^18 || ^19"
+  },
+  "devDependencies": {
+    "react": "catalog:react18",
+    "react-dom": "catalog:react18",
+    "typescript": "catalog:"
+  }
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">.npmrc（项目根）</span>
+          <pre class="code"><code class="lang-text">auto-install-peers=true
+strict-peer-dependencies=false
+side-effects-cache=true
+node-linker=isolated
+package-import-method=auto
+
+# CI 推荐显式
+# frozen-lockfile=true 通过 --frozen-lockfile 命令行传</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">检查 catalog 在使用</span>
+          <pre class="code"><code class="lang-bash"># 看哪些包用了 catalog
+grep -r "catalog:" packages/ apps/ --include="package.json"
+
+# 看 catalog 当前版本被解析成什么
+pnpm install --lockfile-only && grep "react" pnpm-lock.yaml | head -5</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 忘记把 monorepo 内部包标 private</div>
+          <p>monorepo 中 <strong>apps/* 通常不该 publish 到 npm</strong>（它们是 app，不是 lib）。如果 apps/web/package.json 没写 <code>"private": true</code>，<code>pnpm publish</code> 时可能误发。<strong>修复</strong>：所有 app 类包加 <code>"private": true</code>；只有真正要发的 lib 包不加。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 把 link: 当 workspace: 用</div>
+          <p>monorepo 内部依赖错写成 <code>"@app/ui": "link:../ui"</code>。表面能跑（dev 模式 symlink 工作），但<strong>publish 时崩溃</strong>（link: 不能 publish）+ lockfile 不记录依赖图。<strong>修复</strong>：monorepo 内部用 <code>workspace:*</code>，跨 monorepo（外部本地目录）才用 link:。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · catalog 没声明的依赖也写 catalog:</div>
+          <p>子包写 <code>"react-router": "catalog:"</code> 但顶层 catalog 中没 react-router。pnpm install 报错 <code>No version specified in catalog for react-router</code>。<strong>修复</strong>：要用 catalog 必须先在顶层声明，或回到显式版本号。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 期望 npm 11 / Yarn 4 默认理解 catalog</div>
+          <p>2026-05 npm 11 不支持 catalog；Yarn 4 在 RFC 阶段。如果团队混用 npm/Yarn 装某个 pnpm monorepo，<code>"catalog:"</code> 写法直接装不上。<strong>修复</strong>：monorepo 团队统一用 pnpm 或 Bun；强制 <code>packageManager</code> 字段（详见下面）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · workspace:^ 在 pre-1.0 版本不直观</div>
+          <p>packages/ui 当前是 0.5.3，<code>workspace:^</code> 解析为 <code>^0.5.3</code>。但 SemVer 规则下 <code>^0.5.3</code> 等价于 <code>0.5.x</code>（0.x 时主版本未稳定，^ 等价 ~）。<strong>建议</strong>：1.0 之前用 <code>workspace:*</code>（精确）或 <code>workspace:~</code>（明确次版本）；1.0+ 用 <code>workspace:^</code>。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://pnpm.io/workspaces" target="_blank" rel="noopener">pnpm Workspaces 官方文档</a></li>
+          <li><a href="https://pnpm.io/catalogs" target="_blank" rel="noopener">pnpm Catalogs 官方文档</a></li>
+          <li><a href="https://yarnpkg.com/features/workspaces" target="_blank" rel="noopener">Yarn Workspaces（Berry）官方</a></li>
+          <li><a href="https://docs.npmjs.com/cli/v11/using-npm/workspaces" target="_blank" rel="noopener">npm Workspaces v11</a></li>
+          <li><a href="https://bun.com/docs/install/workspaces" target="_blank" rel="noopener">Bun Workspaces 官方</a></li>
+          <li><a href="https://bun.com/docs/install/catalogs" target="_blank" rel="noopener">Bun Catalogs（2024-12 跟进）</a></li>
+          <li><a href="https://github.com/yarnpkg/berry/issues/4097" target="_blank" rel="noopener">Yarn Catalog RFC</a></li>
+          <li><a href="../../bun/04-toolchain/01-bun-install.html">Bun P4.1 · Bun install workspace（本站）</a></li>
+          <li><a href="02-filter-topological.html">P4.2 · --filter / topological / 联调（下一章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../03-pnpm-internals/02-lockfile-peers-hooks.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P3.2 · lockfile + 严格 peer + hooks</span>
+          </a>
+          <a class="next" href="02-filter-topological.html">
+            <span class="label">下一章 →</span>
+            <span class="title">02 · --filter / topological / 联调</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
