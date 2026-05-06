@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WASM 项目史（2009-2026）· P1.1 · WebAssembly 深度学习</title>
+    <meta name="description" content="WebAssembly 17 年项目史。NaCl 2009 → asm.js 2013 → 2015 提案（四大引擎罕见联合）→ 2017-03 MVP → 2019-12 W3C 推荐 1.0 → 2020 WASI Preview 1 → 2023 WasmGC → 2025-03 WASM 2.0 → 2026 Component Model。回答「NaCl 死了、asm.js 死了，wasm 不仅活了还走出浏览器」的根因——四大引擎联合 + 独立二进制格式 + 多语言 + 跨平台是设计决策的链条。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23654ff0'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EWA%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>WebAssembly 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.22 290); color: #fff">WASM</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P1 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · WASM 是谁</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html" class="active">01 · WASM 项目史（2009-2026）</a></li>
+          <li><a href="02-landscape.html">02 · 同代人对照</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">WebAssembly</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · WASM 是谁</a><span class="breadcrumb-sep">/</span>
+          <span>01 · WASM 项目史（2009-2026）</span>
+        </nav>
+        <h1>WASM 项目史（2009-2026）</h1>
+        <p class="lead">
+          把 wasm 17 年（含 NaCl / asm.js 前史）讲成一条主线 —— 不是按 spec 版本，而是按"<strong>每次范式转移及其根因</strong>"。这是后面所有章节"为什么这样设计"的历史坐标。<strong>核心问题</strong>：为什么 NaCl 死了、asm.js 死了，wasm 不仅活了还走出浏览器？答案藏在三个设计决策里——<strong>四大引擎联合 + 独立二进制格式 + 多语言通用</strong>。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> 无</span>
+          <span><strong>主要来源</strong> webassembly.org · hacks.mozilla.org · v8.dev/blog · github.com/WebAssembly/design</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>WASM 不是"突然出现"，是 NaCl + asm.js 8 年试错的产物</strong>—— 2009 Google 推 NaCl，2013 Mozilla 推 asm.js，2015 四大引擎团队联合提出 WebAssembly。前两个的失败教训直接塑造了 wasm 的核心设计：跨引擎、二进制、多语言、与 JS 平等。</li>
+          <li><strong>2015 四大引擎联合是浏览器历史最稀有事件之一</strong>—— Mozilla / Google / Microsoft / Apple 在 wasm 上的合作密度只有 HTML5 时代能比。这种联合本身就是设计决策——任何一家单干必然失败（NaCl 教训）。</li>
+          <li><strong>WASM 演化的真正引擎不是"性能"而是"应用场景扩展"</strong>—— MVP（2017）只是为了 Unreal/Unity 等大型 C++ 应用进浏览器；之后<strong>WASI</strong>（2020）扩到服务端、<strong>WasmGC</strong>（2023）扩到托管语言、<strong>Component Model</strong>（2024+）扩到跨语言库格式。每一次扩展都让 wasm 用户群成倍。</li>
+          <li><strong>wasm 走出浏览器是 NaCl 没做到的"质变"</strong>—— Cloudflare Workers / Fastly Compute@Edge / Shopify Functions / Polkadot 智能合约 都把 wasm 作为"轻沙箱 + 快冷启动"的部署单元，与 Docker 直接竞争。这是 2026 wasm 最重要的市场。</li>
+          <li><strong>2026 现状</strong>—— WASM 2.0 正式（2025-03），SIMD/bulk memory/reference types/multi-value 都进 spec；Component Model + WIT 在 Preview 2 走向生产；浏览器端 wasm 主要用在"既有 C++/Rust 大项目搬上 Web"（Figma/Photoshop/Google Earth/SQLite），服务端 wasm 主要用在"多租户沙箱"（Edge Functions / 智能合约 / 插件）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>前史一：Google Native Client (NaCl) · 2009-2017 · 失败的开端</h3>
+        <p><strong>背景</strong>：2009 年 Web 仍以 JS 为主，但 JS 性能有上限，重型应用（游戏 / CAD / 视频处理）跑不动。Google 提出激进方案：<strong>在浏览器里直接跑 x86 / ARM native 代码</strong>，用 SFI（Software Fault Isolation）做沙箱。</p>
+        <p>NaCl 技术核心：</p>
+        <p><strong>(1) SFI 沙箱</strong>—— 编译时插入跳转 / 内存访问检查；运行时不能跳出沙箱区</p>
+        <p><strong>(2) NaCl module 是 ELF 格式</strong>—— Linux 风格的 ELF，与 OS 二进制几乎一致</p>
+        <p><strong>(3) PPAPI（Pepper Plugin API）</strong>—— 浏览器暴露给 NaCl 的接口，类似 NPAPI 但安全</p>
+        <p>典型应用：<strong>Quake 3 / Bastion / Unreal Engine / AutoCAD WebApp</strong>。技术上证明可行。</p>
+        <p><strong>致命问题</strong>：</p>
+        <p><strong>(1) 锁定 Chrome</strong>—— 只在 Chrome 实现；Firefox / Safari / IE 都拒绝采纳。Mozilla 公开反对，理由是"NaCl 把 Web 锁定在 x86 / ARM ISA 上，违背 Web 跨平台精神"。</p>
+        <p><strong>(2) ISA 不可移植</strong>—— x86 binary 不能在 ARM 跑；要发两套二进制；ARM64 / RISC-V 时代要发更多套</p>
+        <p><strong>(3) 安全审查复杂</strong>—— SFI 验证器需理解 x86 / ARM 全部指令；新指令、新 CPU 都要审；Spectre 类硬件漏洞让 SFI 假设崩溃</p>
+        <p>2011 年 Google 推出 <strong>PNaCl (Portable NaCl)</strong>：用 LLVM bitcode 替代 native binary，Chrome 在客户端把 bitcode 编译成 native。解决了"跨 ISA"问题，但<strong>仍是 Chrome only</strong>。下载体积大、启动慢、生态没起来。</p>
+        <p><strong>2017 年 Chrome 弃用 NaCl / PNaCl</strong>。原因：(1) wasm 已成熟，是更好的方案；(2) Chrome team 不想维护两套"非 JS 性能通道"。NaCl 死了，留下的教训是 wasm 设计的"反面教材"。</p>
+
+        <h3>前史二：Mozilla asm.js · 2013-2018 · 部分成功的过渡</h3>
+        <p><strong>背景</strong>：Mozilla 拒绝 NaCl，但承认"JS 性能有上限"。<strong>Alon Zakai</strong>（Emscripten 作者）在 2013 提出更激进的方案：<strong>把 C/C++ 代码编译到 JS 严格子集</strong>。</p>
+        <p>asm.js 的核心 idea：</p>
+        <p><strong>(1) JS 不是"动态语言"，是"两种语言"</strong>—— 普通 JS（动态、慢）+ 严格子集 asm.js（类型可推导、AOT 可编译、几乎和 native 一样快）</p>
+        <p><strong>(2) 类型注解是 JS 已有语法</strong>—— <code>x | 0</code> 强制 i32、<code>+x</code> 强制 f64、<code>x &gt;&gt;&gt; 0</code> 强制 u32；用 JS 现有运算符实现"类型注解"</p>
+        <p><strong>(3) "use asm" 指令</strong>—— 函数顶部一行 <code>"use asm";</code>，引擎检测到后切换 AOT 编译路径</p>
+        <p>典型 asm.js 函数：</p>
+        <pre class="code"><code class="lang-javascript">function asmModule(stdlib, ffi, heap) {
+  "use asm";
+  var HEAP32 = new stdlib.Int32Array(heap);
+  function add(x, y) {
+    x = x | 0;       // x 是 i32
+    y = y | 0;       // y 是 i32
+    return (x + y) | 0;  // 返回 i32
+  }
+  return { add: add };
+}</code></pre>
+        <p><strong>关键创新</strong>：asm.js <strong>不是新语言</strong>，是给 JS engine 的 "AOT hint"。任何 JS 引擎都能跑（不识别 "use asm" 就当普通 JS 跑，慢但正确）；识别的引擎切到 AOT 路径，跑得跟 native 几乎一样快。</p>
+        <p><strong>Emscripten</strong>（Mozilla 维护）让 C/C++ 代码通过 LLVM 编译到 asm.js。2014 年 Unreal Engine 4 / Unity 5 用 asm.js 跑在 Firefox，性能 50-80% native；2015 年 Citadel demo（Unreal）惊艳业界。</p>
+        <p><strong>致命问题</strong>：</p>
+        <p><strong>(1) 仍是 JS 文本</strong>—— 下载体积大（asm.js 一个 hello world ~10MB+）、parse 慢（要重新走 JS 词法分析）</p>
+        <p><strong>(2) 标注 hack</strong>—— <code>x | 0</code> 这种写法是"利用 JS 现有运算符做类型注解"，本质 hack；不是干净设计</p>
+        <p><strong>(3) 单语言（C/C++）</strong>—— 工具链只有 Emscripten；其他语言（Rust / Go / Java）支持差</p>
+        <p><strong>(4) 性能上限 ~80% native</strong>—— 因为引擎仍要 parse JS、做一些 JS 语义保证；纯二进制能再 push 10-15%</p>
+        <p>但 asm.js 证明了三件事：(1) <strong>跨引擎确实有可能</strong>（不像 NaCl 锁 Chrome）；(2) <strong>C/C++ 进浏览器有市场</strong>（Unity / Unreal 推动）；(3) <strong>类型化的"JS 子集"性能能接近 native</strong>。这三条直接奠定 wasm 的目标。</p>
+
+        <h3>2015-04 · WebAssembly 提案 · 四大引擎罕见联合</h3>
+        <p><strong>触发事件</strong>：2014 年 Mozilla / Google 工程师私下沟通发现共识 —— "asm.js 是对的方向，但用 JS 文本是过渡，应该有真正的二进制格式"。Google 的 NaCl 团队也意识到 NaCl 不会被其他引擎接受。两边在 2014 末 / 2015 初秘密合作设计新方案。</p>
+        <p><strong>2015-04-01 公开宣布</strong>：四个引擎团队联合宣布 WebAssembly：</p>
+        <ul>
+          <li><strong>Mozilla</strong>（SpiderMonkey 团队 + Alon Zakai）</li>
+          <li><strong>Google</strong>（V8 团队 + NaCl 老兵）</li>
+          <li><strong>Microsoft</strong>（Chakra 团队，当时 Edge 自家引擎）</li>
+          <li><strong>Apple</strong>（JavaScriptCore / WebKit 团队）</li>
+        </ul>
+        <p>这种联合在浏览器历史上极其稀有。HTML5 工作组也是多家联合，但 wasm 的合作更深 —— 不是"同意一个 spec"，是<strong>共同设计一个新执行环境</strong>。</p>
+        <p><strong>设计目标</strong>（2015 年 wasm 提案 README 列出，2026 仍是 wasm 北极星）：</p>
+        <p><strong>(1) Fast, portable, safe</strong>—— 接近 native 性能、跨平台二进制、沙箱执行</p>
+        <p><strong>(2) Open and debuggable</strong>—— 开放标准、可调试（有 wat 文本对应）</p>
+        <p><strong>(3) Multiple language support</strong>—— C/C++ 是起点，但 Rust / Go / Java / Kotlin 都是目标</p>
+        <p><strong>(4) Compatible with Web Platform</strong>—— 与 JS 互操作 + 同沙箱模型 + 不破坏 Web 安全模型</p>
+        <p><strong>(5) 不是 JS 替代</strong>—— wasm 与 JS <strong>共存</strong>，不取代；DOM 操作 / 业务逻辑 JS 仍主导，wasm 处理性能敏感模块</p>
+        <p>2015 年下半年到 2017 年，四个引擎并行实现 MVP。规范在 GitHub 公开开发（github.com/WebAssembly/design），所有讨论可追溯。</p>
+
+        <h3>2017-03-06 · WebAssembly MVP · 四浏览器同时启用</h3>
+        <p>2017 年 3 月 6 日，<strong>Chrome 57 / Firefox 52 / Safari 11 / Edge 16 在同一周内启用 wasm</strong>。这种"同时启用"在浏览器历史也罕见 —— 通常一家先实现，其他几年后跟进。</p>
+        <p><strong>MVP 功能极小</strong>：</p>
+        <p><strong>(1) 4 种数值类型</strong>—— i32 / i64 / f32 / f64</p>
+        <p><strong>(2) 1 块 linear memory</strong>—— 连续 byte 数组，64KB 页粒度，最大 4GB（i32 索引）</p>
+        <p><strong>(3) 基本控制流</strong>—— block / loop / if / br / br_if / call / call_indirect / return</p>
+        <p><strong>(4) Tables</strong>—— 函数引用数组，用于 call_indirect</p>
+        <p><strong>(5) Imports / Exports</strong>—— 模块声明依赖与暴露</p>
+        <p><strong>(6) JS API</strong>—— <code>WebAssembly.compile</code> / <code>WebAssembly.instantiate</code> / <code>WebAssembly.Module</code> / <code>WebAssembly.Instance</code> / <code>WebAssembly.Memory</code> / <code>WebAssembly.Table</code></p>
+        <p>MVP <strong>没有</strong>：threads（要 SAB）、SIMD、reference types、bulk memory ops、GC、tail call、exception handling、JSPI。这些都是后续提案。</p>
+        <p>MVP 体现的设计哲学：<strong>能少则少</strong>。先把核心机器模型 + 与 JS 互操作做对，其他特性按提案流程逐个加。这与 ECMAScript 一年一更新、CSS 模块化逐个推进是同一思路。</p>
+
+        <h3>2018-2019 · Spectre 阴影下的安全审视</h3>
+        <p>2018 年 1 月 Spectre / Meltdown 公开（详见 <a href="../../browser-rendering/02-multi-process/02-site-isolation.html">浏览器渲染 P2.2</a>）。这两个 CPU 漏洞让 JS 能跨进程读取其他 site 的内存数据。<strong>对 wasm 的影响巨大</strong>：</p>
+        <p><strong>(1) Threads 提案延迟</strong>—— wasm threads 依赖 SharedArrayBuffer + 高精度 timer；Spectre 后 SAB 全面禁用，wasm threads 至 2018 年底才在 cross-origin isolated 网页恢复</p>
+        <p><strong>(2) sandbox 假设重新审视</strong>—— wasm 的 sandbox 一直假设"只防恶意 wasm 写出 sandbox 外"；Spectre 让"读"也成了威胁。后续 V8 sandbox 加固（pointer compression / cage / sandboxed pointers）部分受 Spectre 启发</p>
+        <p><strong>(3) 高精度 timer 降级</strong>—— performance.now() 从微秒降到毫秒；让 wasm 的"精确性能测量"变难，但消除了 timing-based attack 的放大镜</p>
+        <p>Spectre 没让 wasm 倒退，反而让 wasm 安全模型更扎实。<strong>capability-based 安全模型</strong>（2024 WASI Preview 2）的设计直接受 Spectre 教训影响 —— 别假设硬件层完美隔离，软件层显式授权才安全。</p>
+
+        <h3>2019-12 · W3C 推荐标准 1.0 · 同 HTML 同等地位</h3>
+        <p>2019 年 12 月 5 日，<strong>WebAssembly Core Specification 1.0</strong> 成为 W3C Recommendation。这是 wasm 第一份正式 spec，也是<strong>1995 HTML 4.0 之后第一个新的 W3C "core web technology"</strong> —— 与 HTML / CSS / DOM 同等地位。</p>
+        <p>Spec 文档：</p>
+        <ul>
+          <li><strong>Core Specification</strong>（机器模型 + 二进制格式 + wat + validation + execution）</li>
+          <li><strong>JavaScript API</strong>（WebAssembly.compile / instantiate 等）</li>
+          <li><strong>Web API</strong>（Streaming compilation 等浏览器特定）</li>
+        </ul>
+        <p>Spec 关键作者：<strong>Andreas Rossberg</strong>（Mozilla → Google，wasm spec 主笔，类型系统设计）、<strong>Ben L. Titzer</strong>（V8 wasm 实现，Liftoff 设计）、<strong>JF Bastien</strong>（Apple/Google，wasm 早期推动）等。</p>
+        <p>1.0 的意义不是"功能多"（仍是 MVP 那一套），是<strong>正式承认 wasm 是 Web 平台一等公民</strong>。这之后才有大规模工具链 / 生态投入。</p>
+
+        <h3>2019-11 · Bytecode Alliance 成立 · wasm 走出浏览器</h3>
+        <p>2019 年 11 月，<strong>Mozilla / Fastly / Intel / Red Hat</strong> 成立 Bytecode Alliance（BA），目标：<strong>把 wasm 推到浏览器外</strong>（服务端 / Edge / 嵌入式）。</p>
+        <p>BA 旗下项目：</p>
+        <ul>
+          <li><strong>wasmtime</strong>—— Rust 实现的服务端 wasm runtime（替代 Mozilla 的 lucet）</li>
+          <li><strong>WASI</strong>—— wasm 系统接口（POSIX 风格 imports）</li>
+          <li><strong>Cranelift</strong>—— wasm/native 代码生成后端</li>
+          <li><strong>WAMR (WebAssembly Micro Runtime)</strong>—— Intel 推动的嵌入式 wasm</li>
+        </ul>
+        <p><strong>为什么 wasm 服务端化是必然</strong>：</p>
+        <p><strong>(1) Edge computing 兴起</strong>—— Cloudflare Workers (2017) / Fastly Compute@Edge (2019) 需要"轻沙箱 + 快冷启动"。Docker 冷启动 100ms-1s，wasm 1ms 内；Docker 内存基线 50MB+，wasm <1MB</p>
+        <p><strong>(2) 多租户场景需要细粒度沙箱</strong>—— Shopify Functions / Envoy 插件等场景要跑用户提交的代码，capability-based 比 Linux capabilities 细</p>
+        <p><strong>(3) wasm 已成熟</strong>—— 2017 MVP、2019 W3C 1.0，浏览器证明可行；服务端是自然延展</p>
+        <p>2020 年 Fastly Compute@Edge 上线（基于 wasmtime + WASI），第一个生产级"非浏览器" wasm 平台。</p>
+
+        <h3>2020-04 · WASI Preview 1 · 第一版"wasm 操作系统"</h3>
+        <p>WASI = WebAssembly System Interface。Preview 1（2020）是第一个标准化的 "wasm 系统调用"集合。</p>
+        <p>Preview 1 imports（部分）：</p>
+        <pre class="code"><code class="lang-text">wasi_snapshot_preview1::fd_read     // 从 fd 读
+wasi_snapshot_preview1::fd_write    // 写到 fd
+wasi_snapshot_preview1::fd_close    // 关 fd
+wasi_snapshot_preview1::path_open   // 打开文件路径
+wasi_snapshot_preview1::clock_time_get  // 读时钟
+wasi_snapshot_preview1::random_get  // 读随机字节
+wasi_snapshot_preview1::environ_get // 读环境变量
+wasi_snapshot_preview1::proc_exit   // 退出</code></pre>
+        <p><strong>设计风格</strong>：POSIX 致敬 —— fd_read / fd_write / path_open 都是 POSIX 概念。让 C/C++/Rust 已有代码（用 read / write / open）可以经 libc 层映射到 WASI imports，不改源码就能跑。</p>
+        <p>Preview 1 <strong>立刻被广泛采纳</strong>：wasmtime / wasmer / WasmEdge / wazero 都实现 Preview 1。Rust 的 <code>wasm32-wasi</code> target、Go 的 wasi 编译、Zig 等语言都基于 Preview 1。</p>
+        <p>但<strong>Preview 1 有根本设计缺陷</strong>，2021-2022 年逐渐暴露 —— 见后文 Preview 2。</p>
+
+        <h3>2022-2023 · WasmGC · 托管语言翻身</h3>
+        <p>WasmGC 提案（始于 2017，Phase 5 完成 2023-12）让 wasm 引擎<strong>暴露内置 GC</strong>，允许托管语言（Java / Kotlin / Dart / Scala / OCaml）直接编译到 wasm，<strong>不必带自己的 GC runtime</strong>。</p>
+        <p>没有 WasmGC 时托管语言怎么做的：</p>
+        <p><strong>方案 A：带完整 runtime</strong>—— Java 编译到 wasm 时把 JVM 也一起编译进去；产物 5-20MB，启动数百 ms</p>
+        <p><strong>方案 B：自实现 GC</strong>—— 在 wasm linear memory 上实现 GC（mark/sweep）；体积小但慢、且和宿主 GC 重复扫描</p>
+        <p>WasmGC 后：<strong>引擎 GC 直接管理 wasm 对象</strong>。V8 用现有 Orinoco（详见 <a href="../../v8/04-memory/02-orinoco-gc.html">V8 P4.2</a>），SpiderMonkey 用自己的 GC，JSC 用自己的 —— 但 spec 抽象一致。</p>
+        <p><strong>影响</strong>：</p>
+        <p><strong>(1) Kotlin/Wasm</strong>—— JetBrains 官方 target；让 Compose Multiplatform 跑在 Web。Kotlin 1.9（2023）开始 alpha，1.10+（2024）稳定。</p>
+        <p><strong>(2) Dart → wasm</strong>—— Flutter Web 2024 起转 wasm 部署，替代 dart2js；启动时间 / 性能都改善</p>
+        <p><strong>(3) Java / Scala</strong>—— TeaVM / CheerpJ 等转 WasmGC；早期"带 JVM"方案被淘汰</p>
+        <p><strong>(4) .NET Blazor</strong>—— 2024 起 NativeAOT + WasmGC 替代 mono runtime</p>
+        <p><strong>(5) OCaml / F#</strong>—— 函数式语言进入 wasm</p>
+        <p>WasmGC 是 wasm 历史上"用户群扩展最大"的单个特性。</p>
+
+        <h3>2024-04 · WASI Preview 2 + Component Model · 重启与未来</h3>
+        <p>2024 年 1 月 25 日，WASI 团队<strong>正式发布 Preview 2</strong>（minor 0.2.0），承认 Preview 1 的设计缺陷并整体重构。</p>
+        <p><strong>Preview 1 的根本问题</strong>：</p>
+        <p><strong>(1) POSIX 假设单语言、可信进程</strong>—— wasm 是多语言、不可信沙箱；fork/exec/signal/shmem 等 POSIX 概念在 wasm 没意义</p>
+        <p><strong>(2) 网络模型不完整</strong>—— Preview 1 只有 socket fd 抽象，没 DNS / TLS / HTTP；服务端 wasm 大量场景需要这些</p>
+        <p><strong>(3) 不支持 async</strong>—— 所有 imports 都是同步；与浏览器的 fetch / IndexedDB 等异步 API 不兼容</p>
+        <p><strong>(4) 没有"接口定义"标准</strong>—— Preview 1 只是一组 imports；不同 runtime 实现可能略有差异，没正式契约</p>
+        <p><strong>Preview 2 解决方案</strong>：</p>
+        <p><strong>(1) 转向 Component Model</strong>—— 不再列 POSIX 风格 imports，改用 WIT（WebAssembly Interface Types）定义接口</p>
+        <p><strong>(2) Capability-based 安全</strong>—— 宿主显式授予能力（"只能读这个目录"、"只能连这个域名"）；与 Linux capabilities 思路一致但更细</p>
+        <p><strong>(3) 标准化 worlds</strong>—— wasi:io / wasi:filesystem / wasi:http / wasi:clocks / wasi:random / wasi:sockets 等</p>
+        <p><strong>(4) 承认与浏览器互通的现实</strong>—— Preview 2 wasi:http 接口与浏览器 fetch 概念对齐，但仍非完全统一</p>
+        <p><strong>Component Model</strong>（同期 2024 推进）让 wasm 从"二进制 module"升级为"<strong>跨语言库格式</strong>"。详见 <a href="../07-component-model/01-component-and-apps.html">P7.1</a>。</p>
+
+        <h3>2025-03 · WebAssembly 2.0 · 第二个 W3C 里程碑</h3>
+        <p>2025 年 3 月 19 日，<strong>WebAssembly 2.0 Core Specification</strong> 成为 W3C Recommendation。这是 wasm 第二个正式标准。</p>
+        <p>2.0 包含的特性（之前都是 phase 5 但散落在不同提案）：</p>
+        <ul>
+          <li><strong>Sign extension instructions</strong>（i32.extend8_s 等，方便从小整数符号扩展）</li>
+          <li><strong>Non-trapping float-to-int</strong>（NaN / 越界转换不再 trap）</li>
+          <li><strong>Bulk memory operations</strong>（memory.copy / fill / init / drop）</li>
+          <li><strong>Reference types</strong>（funcref / externref + table 多元素类型）</li>
+          <li><strong>Multi-value</strong>（函数 / block 可多返回值）</li>
+          <li><strong>SIMD (Fixed-width SIMD)</strong>（v128 + 200+ 指令）</li>
+          <li><strong>WasmGC</strong>（struct / array / i31ref + subtyping，2023 phase 5）</li>
+          <li><strong>Tail call</strong>（return_call / return_call_indirect，2024 phase 5）</li>
+        </ul>
+        <p>2.0 没包含的（仍 phase 4 或更早）：Threads、Exception handling、JSPI、Memory64、Component Model。</p>
+
+        <h3>2026 现状 · 三个市场</h3>
+        <p>2026-05 wasm 真实使用场景：</p>
+        <p><strong>市场一：浏览器内"既有大代码库搬上 Web"</strong></p>
+        <ul>
+          <li>Figma（C++ 布局引擎，2017+）</li>
+          <li>Photoshop Web（Adobe，2023 上线，完整 C++ Photoshop 代码库）</li>
+          <li>Google Earth Web（C++ 3D 引擎）</li>
+          <li>FFmpeg.wasm（视频转码）</li>
+          <li>SQLite WASM（官方支持，OPFS 持久化）</li>
+          <li>DuckDB-WASM（浏览器内 OLAP）</li>
+          <li>Pyodide（Jupyter / Streamlit 在浏览器）</li>
+          <li>AutoDesk Tinkercad / Forge / 各种 CAD Web 版</li>
+        </ul>
+        <p><strong>市场二：服务端 / Edge "轻沙箱多租户"</strong></p>
+        <ul>
+          <li>Cloudflare Workers（V8 isolate 跑 wasm，不用 wasmtime）</li>
+          <li>Fastly Compute@Edge（wasmtime）</li>
+          <li>Vercel Edge Functions</li>
+          <li>Shopify Functions（商家用 Rust/JS 写 wasm 插件）</li>
+          <li>Envoy Wasm Plugins（服务网格扩展）</li>
+          <li>Tetrate Service Bridge / Istio wasm filters</li>
+        </ul>
+        <p><strong>市场三：区块链智能合约</strong></p>
+        <ul>
+          <li>Polkadot / Substrate（wasm 是 runtime 升级机制）</li>
+          <li>NEAR Protocol（智能合约用 wasm，编译自 Rust / AssemblyScript）</li>
+          <li>Internet Computer (DFINITY)（canister = wasm 实例）</li>
+          <li>CosmWasm（Cosmos 生态智能合约）</li>
+          <li>Fluence / Wasmer Edge / Ethereum 实验中的 ewasm</li>
+        </ul>
+        <p>三个市场的共同特点：<strong>需要"安全沙箱 + 高性能 + 跨语言"</strong>。这正是 wasm 的设计契合点。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景：从历史看决策</span></h2>
+
+        <h3>场景 A · 评估"我的项目要不要用 wasm"</h3>
+        <p>2026 年看 wasm 是否适合，<strong>历史给的判据</strong>：</p>
+        <p><strong>(1) 你有<u>既有 C/C++/Rust 大代码库</u>需要 Web 化吗？</strong> → 是 → wasm 是几乎唯一选择（Figma / Photoshop 类）</p>
+        <p><strong>(2) 你需要在<u>浏览器跑性能敏感计算</u>（视频 / 图像 / 加密 / 数值）吗？</strong> → 是 → wasm 通常 2-10x 快于 JS（取决于场景）</p>
+        <p><strong>(3) 你需要<u>跨平台分发二进制</u>（不是只 x86 / ARM）？</strong> → 是 → wasm 一次编译跑所有，胜过 native</p>
+        <p><strong>(4) 你需要<u>多租户沙箱执行不可信代码</u>（插件 / 用户脚本 / 合约）？</strong> → 是 → wasm 比 Docker 轻 50x，比 V8 isolate 跨语言</p>
+        <p><strong>(5) 上面都不是 → 通常不需要 wasm</strong>。普通 SaaS / 业务应用 JS + 框架已足够；为了 wasm 而 wasm 通常带来工具链复杂度但没性能收益。</p>
+
+        <h3>场景 B · 选浏览器 wasm runtime（V8 / SpiderMonkey / JSC）vs 选服务端（wasmtime / wasmer / wazero）</h3>
+        <p>从历史看：</p>
+        <p><strong>浏览器 wasm</strong>—— 用 JS 引擎自带的 wasm 实现（V8 / SpiderMonkey / JSC）；不能换；优化方向是"与 JS 共享 runtime"</p>
+        <p><strong>服务端 wasm</strong>—— 选 wasmtime（事实标准）/ wasmer（多后端）/ wazero（纯 Go）/ WasmEdge（CNCF + AI）；可换；优化方向是"AOT 缓存 + 冷启动"</p>
+        <p><strong>Cloudflare Workers 选 V8 isolate 不选 wasmtime 的根因</strong>—— 他们已有 V8 平台跑 JS，加 wasm 几乎零成本；wasmtime 适合"只跑 wasm"的纯 wasm 平台。这是历史路径依赖。</p>
+
+        <h3>场景 C · 评估"wasm 提案"是否成熟</h3>
+        <p>看 phase + 浏览器 + 服务端三方实现：</p>
+        <p><strong>Phase 5 + 4 大引擎 + 主流 wasmtime 都实现</strong>—— 可生产用（如 SIMD / WasmGC / Tail call）</p>
+        <p><strong>Phase 4 + 部分实现</strong>—— 试用或有 fallback 才用（如 Threads 需要 cross-origin isolated；EH / JSPI 浏览器实现但服务端不全）</p>
+        <p><strong>Phase 3 或更早</strong>—— 实验性，不要押注</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：版本时间线对照</span></h2>
+
+        <h3>asm.js（2013）vs wasm（2017）vs wasm 2.0（2025）做同一件事</h3>
+        <p>计算两个数相加。注意每代代码量 / 类型清晰度的演化。</p>
+        <p><strong>asm.js (2013)</strong>：</p>
+        <pre class="code"><code class="lang-javascript">function asmModule(stdlib) {
+  "use asm";
+  function add(x, y) {
+    x = x | 0; y = y | 0;
+    return (x + y) | 0;
+  }
+  return { add: add };
+}
+var module = asmModule(self);
+console.log(module.add(2, 3)); // 5</code></pre>
+        <p>注：<code>x | 0</code> 是"类型注解"hack，本质是利用位运算把 JS 数转成 i32。</p>
+        <p><strong>wasm MVP (2017) wat</strong>：</p>
+        <pre class="code"><code class="lang-text">(module
+  (func $add (param $x i32) (param $y i32) (result i32)
+    local.get $x
+    local.get $y
+    i32.add)
+  (export "add" (func $add)))</code></pre>
+        <p>JS 端调用：</p>
+        <pre class="code"><code class="lang-javascript">const wasmBytes = /* 编译 wat 得到的二进制 */;
+const { instance } = await WebAssembly.instantiate(wasmBytes);
+console.log(instance.exports.add(2, 3)); // 5</code></pre>
+        <p>注：类型清晰（i32）+ 二进制 + 跨引擎。</p>
+        <p><strong>wasm 2.0 (2025)，用 multi-value 同时返回和差</strong>：</p>
+        <pre class="code"><code class="lang-text">(module
+  (func $addsub (param $x i32) (param $y i32) (result i32 i32)
+    local.get $x
+    local.get $y
+    i32.add
+    local.get $x
+    local.get $y
+    i32.sub)
+  (export "addsub" (func $addsub)))</code></pre>
+        <p>JS 调用：</p>
+        <pre class="code"><code class="lang-javascript">const [sum, diff] = instance.exports.addsub(5, 3);
+// sum = 8, diff = 2</code></pre>
+        <p>注：multi-value 让"返回 struct"不再需要 linear memory 中转。</p>
+
+        <h3>Hello World 体积演化</h3>
+        <p>纯加法函数 wasm 二进制大小：</p>
+        <ul>
+          <li>asm.js（2013）：~1KB（JS 文本）</li>
+          <li>wasm MVP（2017）：~50 bytes（极致紧凑）</li>
+          <li>Rust + wasm-pack hello world（2026 默认）：~150KB（带 panic / fmt 等 Rust 标准库）</li>
+          <li>Rust + wasm-opt + lto + abort：~10KB</li>
+          <li>手写 wat：&lt; 100 bytes</li>
+        </ul>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：把 wasm 当"加速 JS 的银弹"</h3>
+        <p><strong>错误认知</strong>："JS 慢，wasm 快，所有性能问题用 wasm 解决"。</p>
+        <p>实际：(1) 现代 V8 跑 JS 已经非常快，热点 JS 接近 native 80%+；(2) wasm 调用 DOM / Web API 必须经 JS 桥（跨边界税）；(3) 短函数 wasm 不一定快（启动 + glue 开销）。</p>
+        <p><strong>正确判据</strong>：wasm 适合"<u>大块独立计算</u>"（视频编码、图像滤镜、加密、数值）；不适合"频繁调 DOM 或短小工具"。</p>
+
+        <h3>陷阱 2：以为 wasm 会取代 JS</h3>
+        <p>2015 年提案 README 就明确：<strong>wasm 不是 JS 替代</strong>。事实上 2026 年浏览器：</p>
+        <ul>
+          <li>UI / DOM 操作：JS（wasm 调 DOM 仍需 JS 桥）</li>
+          <li>业务逻辑：JS / TS（生态 + 工具链 + 招人成本最低）</li>
+          <li>性能敏感模块（编解码 / 压缩 / 加密 / 计算）：wasm</li>
+        </ul>
+        <p>JS / wasm 是<strong>互补</strong>不是替代。Figma / Photoshop 这种 wasm 主导的应用仍有大量 JS 处理 DOM / 状态管理 / 网络。</p>
+
+        <h3>陷阱 3：以为"NaCl 失败 = native 路线错"</h3>
+        <p>NaCl 失败的<strong>不是技术</strong>（它技术上证明可行），是<strong>Chrome 单家方案</strong>。wasm 的成功证明 native 路线本身没问题，关键是<strong>跨引擎 + 二进制独立 + 多语言</strong>。</p>
+        <p>类似教训：Adobe Flash 也是单家方案，最终被 HTML5 + wasm 取代。</p>
+
+        <h3>陷阱 4：以为"wasm 走出浏览器是临时市场"</h3>
+        <p>2026 年服务端 / Edge wasm 增长比浏览器 wasm 快得多。Cloudflare Workers 每天调用百亿级，Shopify Functions 每个商家平台跑用户 wasm 插件。<strong>wasm 服务端化不是临时</strong>，是 wasm 长期最大的用户群之一。</p>
+
+        <h3>陷阱 5：押注"提前实现的提案"</h3>
+        <p>Chrome 经常 phase 3-4 就启用提案（origin trial），但其他引擎可能 1-3 年后跟进甚至不跟进。生产代码<strong>看 phase + 主流引擎实现状态</strong>，不要看"Chrome 已有"。</p>
+        <p>典型例子：JSPI（phase 4，Chrome 137 默认）、Threads（phase 4 但需 cross-origin isolated）、Memory64（phase 4，浏览器实现但 wasmtime 完整）。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范 + 设计文档</h3>
+        <ul>
+          <li><a href="https://webassembly.github.io/spec/core/" target="_blank" rel="noopener">WebAssembly Core Spec 2.0</a> · 正式 W3C Recommendation</li>
+          <li><a href="https://github.com/WebAssembly/design" target="_blank" rel="noopener">webassembly/design</a> · 早期设计文档归档</li>
+          <li><a href="https://github.com/WebAssembly/proposals" target="_blank" rel="noopener">webassembly/proposals</a> · 所有提案 phase 进度</li>
+        </ul>
+
+        <h3>项目史关键文章</h3>
+        <ul>
+          <li>Lin Clark, <a href="https://hacks.mozilla.org/2017/02/a-cartoon-intro-to-webassembly/" target="_blank" rel="noopener"><em>A cartoon intro to WebAssembly</em></a> · 2017 经典 wasm 入门系列</li>
+          <li>Lin Clark, <a href="https://hacks.mozilla.org/2019/03/standardizing-wasi/" target="_blank" rel="noopener"><em>Standardizing WASI</em></a> · 2019 WASI 起源</li>
+          <li>Lin Clark, <a href="https://hacks.mozilla.org/2023/02/webassemblys-road-to-2024/" target="_blank" rel="noopener"><em>WebAssembly's road to 2024 + WIT</em></a> · 2023 Component Model 介绍</li>
+          <li>Bradley M. Kuhn, <em>Bringing the Web up to Speed with WebAssembly</em>（PLDI 2017）· 第一篇 wasm 学术论文</li>
+          <li><a href="https://v8.dev/blog/liftoff" target="_blank" rel="noopener">V8: Liftoff baseline compiler</a>（2018）· V8 wasm 实现的关键里程碑</li>
+        </ul>
+
+        <h3>NaCl / asm.js 历史</h3>
+        <ul>
+          <li>Bennet Yee et al., <em>Native Client: A Sandbox for Portable, Untrusted x86 Native Code</em>（2009）· NaCl 原始论文</li>
+          <li>Alon Zakai, <em>asm.js: an extraordinarily optimizable, low-level subset of JavaScript</em>（2013）· asm.js 提案</li>
+          <li><a href="https://blog.chromium.org/2017/05/goodbye-pnacl-hello-webassembly.html" target="_blank" rel="noopener"><em>Goodbye PNaCl, Hello WebAssembly</em></a>（Chromium 博客 2017）· NaCl 弃用宣告</li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="02-landscape.html">P1.2 同代人对照：NaCl / asm.js / WebGL2 compute / WebGPU</a> —— 横向对照"想跑性能代码"的所有方案</li>
+          <li><a href="../02-machine/01-binary-stack-machine.html">P2.1 二进制格式与栈机器执行模型</a> —— 进入技术细节，从 wasm32 ISA 开始</li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../v8/06-wasm/01-wasm-pipeline.html">V8 P6.1 V8 的 Wasm 编译流水线</a> · V8 怎么实现 wasm（Liftoff + TurboFan + WasmGC）</li>
+          <li><a href="../../browser-rendering/02-multi-process/02-site-isolation.html">浏览器渲染 P2.2 Site Isolation + COOP/COEP</a> · Spectre 后的 SAB 限制（影响 wasm threads）</li>
+          <li><a href="../../v8/01-overview/01-history.html">V8 P1.1 V8 项目史</a> · V8 17 年演化，与 wasm 历史平行</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

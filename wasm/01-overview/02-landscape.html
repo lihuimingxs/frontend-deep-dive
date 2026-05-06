@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>同代人对照：NaCl / asm.js / WebGL2 compute / WebGPU · P1.2 · WebAssembly 深度学习</title>
+    <meta name="description" content="横向对照「想在浏览器跑性能代码」的所有方案：NaCl/PNaCl（Chrome 锁定，2017 死）、asm.js（标注的 JS，2018 被替代）、WebGL2/WebGPU compute（GPU 优先，并行强但限制多）、WebAssembly（活到今天的唯一通用 CPU 性能通道）。回答跨引擎要求 / 二进制格式 / CPU vs GPU 互补 / 服务端化的根本问题。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23654ff0'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EWA%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>WebAssembly 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.22 290); color: #fff">WASM</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P1 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · WASM 是谁</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html">01 · WASM 项目史</a></li>
+          <li><a href="02-landscape.html" class="active">02 · 同代人对照</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">WebAssembly</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · WASM 是谁</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 同代人对照</span>
+        </nav>
+        <h1>同代人对照：NaCl / asm.js / WebGL2 compute / WebGPU</h1>
+        <p class="lead">
+          横向对照"想在浏览器跑性能代码"的所有方案。<strong>NaCl / PNaCl</strong>（2009-2017，Chrome 锁定，死）+ <strong>asm.js</strong>（2013-2018，"标注的 JS"，被 wasm 替代）+ <strong>WebGL2 / WebGPU compute</strong>（GPU 优先，并行强但限制多）+ <strong>WebAssembly</strong>（活到今天的唯一通用 CPU 性能通道）。<strong>核心洞察</strong>：跨引擎是底线、二进制格式不可选、CPU 和 GPU 是互补不是替代、服务端化是 NaCl 没做到的"质变"。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P1.1（项目史）</span>
+          <span><strong>主要来源</strong> webassembly.org · webgpu.org · MDN · Chromium / Mozilla 博客</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>"想跑性能代码"在 Web 上有 4 条历史路线</strong>—— NaCl（native 二进制 + SFI 沙箱）/ asm.js（JS 严格子集 + AOT）/ GPU compute（WebGL2 → WebGPU）/ wasm（独立 ISA + 二进制）。前两个死了，后两个活着且<strong>互补</strong>。</li>
+          <li><strong>跨引擎是底线</strong>—— NaCl 失败的核心原因不是技术烂，是 Apple/Mozilla 不接受 Chrome 单家方案。<strong>任何"性能通道"想活，必须四大引擎联合实现</strong>。Flash / Silverlight / NaCl 都死在这条上。</li>
+          <li><strong>二进制格式是"非可选"</strong>—— asm.js 跨引擎但下载体积大（hello world ~10MB+）、parse 慢；wasm 紧凑二进制 + streaming compile 是"性能心智"基础。</li>
+          <li><strong>CPU vs GPU 是互补</strong>—— wasm 跑通用 CPU 代码（控制流复杂、串行也可），WebGPU 跑大规模并行（图像 / AI 推理）。Figma 用 wasm 跑布局引擎 + WebGPU 跑加速渲染——典型互补。</li>
+          <li><strong>wasm 走出浏览器是 NaCl 没做到的"质变"</strong>—— NaCl 只活在浏览器；wasm 不仅活了，还把战场扩到 Edge / 嵌入式 / 区块链。这背后是<strong>独立 ISA + 多语言 + capability-based 安全</strong>三个设计的累积效应。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>设计选择对比表（2026-05 现状）</h3>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 130px">维度</th>
+              <th>NaCl/PNaCl</th>
+              <th>asm.js</th>
+              <th>WebGL2/WebGPU compute</th>
+              <th>WebAssembly</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>跨引擎</strong></td>
+              <td>❌ Chrome only</td>
+              <td>✅ 全引擎（asm.js 退役后所有 JS 引擎仍兼容）</td>
+              <td>✅ 全引擎（WebGPU 2023+ 全引擎稳定）</td>
+              <td>✅ 4 大引擎联合</td>
+            </tr>
+            <tr>
+              <td><strong>二进制格式</strong></td>
+              <td>✅ ELF / PEXE</td>
+              <td>❌ JS 文本（带 "use asm" hint）</td>
+              <td>❌ shader 文本（GLSL / WGSL）</td>
+              <td>✅ 紧凑二进制（参考 wasm 二进制 sections）</td>
+            </tr>
+            <tr>
+              <td><strong>编译目标</strong></td>
+              <td>C/C++（PNaCl 加 LLVM bitcode）</td>
+              <td>C/C++（Emscripten 主导）</td>
+              <td>shader 语言子集</td>
+              <td>50+ 语言（Rust/C/C++/Zig/Go/Java/Kotlin/Dart/Python/...）</td>
+            </tr>
+            <tr>
+              <td><strong>性能</strong></td>
+              <td>~native</td>
+              <td>~50-80% native</td>
+              <td>GPU 大规模并行（特定场景）</td>
+              <td>~80-95% native</td>
+            </tr>
+            <tr>
+              <td><strong>沙箱模型</strong></td>
+              <td>SFI 软件错误隔离</td>
+              <td>JS 沙箱继承</td>
+              <td>GPU driver 沙箱</td>
+              <td>独立 sandbox + load-time validation</td>
+            </tr>
+            <tr>
+              <td><strong>启动速度</strong></td>
+              <td>慢（PNaCl 要 LLVM 编译）</td>
+              <td>慢（要 parse JS 文本）</td>
+              <td>shader compile 慢</td>
+              <td>快（streaming compile + AOT 缓存）</td>
+            </tr>
+            <tr>
+              <td><strong>服务端</strong></td>
+              <td>❌</td>
+              <td>❌</td>
+              <td>❌（GPU server 是另一种方案）</td>
+              <td>✅ WASI / wasmtime / wasmer</td>
+            </tr>
+            <tr>
+              <td><strong>2026 状态</strong></td>
+              <td>死（2017 弃用）</td>
+              <td>退役（被 wasm 完全替代）</td>
+              <td>活，针对 GPU 场景</td>
+              <td>蓬勃，浏览器 + 服务端双线</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>方案 1：NaCl / PNaCl（2009-2017，已死）</h3>
+        <p><strong>定位</strong>：在浏览器里跑 native 代码 + SFI 沙箱 + Pepper API（PPAPI）暴露浏览器 API</p>
+        <p><strong>技术核心</strong>：</p>
+        <p><strong>(1) SFI（Software Fault Isolation）</strong>—— 编译时插入运行时检查（每次跳转 / 内存访问验证）；让恶意 native 代码不能跳出 sandbox 区。原理与 Linux seccomp 类似但软件实现</p>
+        <p><strong>(2) NaCl module 是 ELF</strong>—— Linux 风格的 ELF 文件，与系统二进制几乎一致；ISA 锁定 x86 / ARM</p>
+        <p><strong>(3) PNaCl 用 LLVM bitcode</strong>—— 客户端编译；解决 ISA 锁定但启动慢、体积大</p>
+        <p><strong>(4) Pepper API</strong>—— 浏览器暴露给 NaCl 的接口；类似 NPAPI 但更安全；只有 Chrome 实现</p>
+        <p><strong>失败原因（按重要性排序）</strong>：</p>
+        <p><strong>(1) 跨引擎失败</strong>—— Mozilla / Apple 公开拒绝；理由是"NaCl 把 Web 锁定在 Chrome + native 二进制";Mozilla 同期推 asm.js 作为对抗方案</p>
+        <p><strong>(2) ISA 锁定 / 体积问题</strong>—— NaCl 锁 x86/ARM；PNaCl 用 LLVM bitcode 体积大（hello world ~5MB）+ 启动慢（要本地编译）</p>
+        <p><strong>(3) 安全审查复杂</strong>—— SFI 验证器要理解 x86 / ARM 全部指令；新指令 / 新 CPU 都要审；2018 Spectre 让 SFI 假设崩溃</p>
+        <p><strong>(4) 工具链锁定 Chrome</strong>—— Pepper API 让生态绑死；开发者要为 NaCl 学一套独立 API</p>
+        <p>2015 wasm 提案后，NaCl 就被 Chrome 内部"逐步弃用"。2017-05 Chromium 博客 <em>Goodbye PNaCl, Hello WebAssembly</em> 正式宣告 NaCl 死。</p>
+        <p><strong>NaCl 留给 wasm 的教训</strong>：</p>
+        <ul>
+          <li>必须跨引擎（不能 Chrome only）</li>
+          <li>必须独立 ISA（不能锁 x86 / ARM）</li>
+          <li>验证器必须简单（wasm 的 load-time validation 比 SFI 简单一个数量级）</li>
+          <li>Pepper API 的"浏览器特定"教训 → wasm 不直接暴露浏览器 API，通过 imports + JS glue 间接访问</li>
+        </ul>
+
+        <h3>方案 2：asm.js（2013-2018，被替代）</h3>
+        <p><strong>定位</strong>：把 C/C++ 编译到 JS 严格子集，用 JS 引擎已有的 AOT 路径跑</p>
+        <p><strong>技术核心</strong>：</p>
+        <p><strong>(1) "use asm" 指令</strong>—— 函数顶部 <code>"use asm";</code>，引擎检测后切 AOT 编译路径</p>
+        <p><strong>(2) 类型注解 hack</strong>—— 用 JS 已有运算符做类型标注：<code>x | 0</code>（i32）、<code>+x</code>（f64）、<code>x &gt;&gt;&gt; 0</code>（u32）、<code>fround(x)</code>（f32）</p>
+        <p><strong>(3) Heap = ArrayBuffer</strong>—— 所有"内存"是一个 ArrayBuffer，TypedArray view 访问；模拟 C 的 linear memory</p>
+        <p><strong>(4) Emscripten 工具链</strong>—— Mozilla 主导；clang → LLVM bitcode → asm.js；自动生成"模拟 POSIX"的 JS glue</p>
+        <p><strong>典型 asm.js 代码</strong>：</p>
+        <pre class="code"><code class="lang-javascript">function asmModule(stdlib, ffi, heap) {
+  "use asm";
+  var HEAP32 = new stdlib.Int32Array(heap);
+  var imul = stdlib.Math.imul;
+  function fib(n) {
+    n = n | 0;          // n: i32
+    if ((n | 0) &lt; 2) return n | 0;
+    return (fib((n - 1) | 0) + fib((n - 2) | 0)) | 0;
+  }
+  return { fib: fib };
+}</code></pre>
+        <p><strong>成绩</strong>：</p>
+        <ul>
+          <li>2014 Unreal Engine 4 跑在 Firefox（Citadel demo）</li>
+          <li>2015 Unity 5 默认导出 asm.js</li>
+          <li>2017 wasm 出来前，asm.js 是 Web 性能代码事实标准</li>
+        </ul>
+        <p><strong>失败原因</strong>：</p>
+        <p><strong>(1) 仍是 JS 文本</strong>—— 下载 / parse 都比二进制慢；hello world ~10MB+</p>
+        <p><strong>(2) 标注 hack</strong>—— <code>x | 0</code> 是利用 JS 现有运算符做类型注解，本质 hack；不是干净设计</p>
+        <p><strong>(3) 单语言（C/C++）</strong>—— Emscripten 是唯一成熟工具链；其他语言（Rust / Go / Java）支持差</p>
+        <p><strong>(4) 性能上限 ~80% native</strong>—— 因为引擎仍要 parse JS、做一些 JS 语义保证；纯二进制能再 push 10-15%</p>
+        <p>2017 wasm MVP 启用后，<strong>Emscripten 默认输出从 asm.js 切换到 wasm</strong>。2018 年起 asm.js 实际上退役（仍被引擎兼容，但新项目都用 wasm）。</p>
+        <p><strong>asm.js 留给 wasm 的教训</strong>：</p>
+        <ul>
+          <li>跨引擎确实有可能（不像 NaCl 锁 Chrome）</li>
+          <li>类型化的"JS 子集"性能能接近 native（论证 wasm 性能可行）</li>
+          <li>C/C++ 进浏览器有市场（Unity / Unreal 推动）</li>
+          <li>但下一代必须二进制（asm.js 自身证明文本格式有上限）</li>
+          <li>必须多语言（不能只服务 C/C++）</li>
+        </ul>
+
+        <h3>方案 3：WebGL2 / WebGPU compute（活，GPU 优先）</h3>
+        <p><strong>定位</strong>：用 GPU shader 跑通用计算（不只是图形）</p>
+        <p><strong>技术核心</strong>：</p>
+        <p><strong>(1) WebGL2（2017）+ Compute shader 提案</strong>—— 通过 GLSL ES 3.10 写 compute shader；浏览器实现差强人意，Compute shader 在 WebGL2 上没真正通用</p>
+        <p><strong>(2) WebGPU（2023 W3C, Chrome 113+ / Safari 18 / Firefox 141）</strong>—— 现代 GPU API，对应 Vulkan / Metal / DX12；正式支持 compute shader</p>
+        <p><strong>(3) WGSL（WebGPU Shading Language）</strong>—— 替代 GLSL；Rust 风格语法；类型严格</p>
+        <p><strong>(4) Buffer / Texture binding</strong>—— GPU 内存通过 buffer 与 CPU（JS / wasm）交换</p>
+        <p><strong>典型 WGSL compute shader</strong>（向量加法）：</p>
+        <pre class="code"><code class="lang-text">@group(0) @binding(0) var&lt;storage, read&gt; a: array&lt;f32&gt;;
+@group(0) @binding(1) var&lt;storage, read&gt; b: array&lt;f32&gt;;
+@group(0) @binding(2) var&lt;storage, read_write&gt; c: array&lt;f32&gt;;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3&lt;u32&gt;) {
+  let i = gid.x;
+  c[i] = a[i] + b[i];
+}</code></pre>
+        <p><strong>定位差异（vs wasm）</strong>：</p>
+        <p><strong>(1) GPU 适合大规模并行</strong>—— 千万级数据相同操作；图像 / 视频 / AI 推理是黄金场景</p>
+        <p><strong>(2) GPU 不适合控制流复杂代码</strong>—— branch divergence 严重伤性能；不能 malloc / 任意内存访问</p>
+        <p><strong>(3) GPU 不能链接 C / Rust 库</strong>—— shader 是独立小语言，没法把 SQLite / FFmpeg 移植上来</p>
+        <p><strong>(4) GPU 数据传输是瓶颈</strong>—— CPU ↔ GPU 内存拷贝开销大；不适合"小批数据频繁来回"</p>
+        <p><strong>WebGPU 与 wasm 的互补关系</strong>：</p>
+        <ul>
+          <li>Figma：wasm 跑布局引擎（控制流复杂）+ WebGPU 加速渲染（大规模 raster）</li>
+          <li>Photoshop Web：wasm 跑滤镜算法（移植 C++）+ WebGPU 跑实时预览</li>
+          <li>AI 推理（onnxruntime-web / TensorFlow.js）：wasm 跑 op 调度 + WebGPU 跑矩阵运算</li>
+        </ul>
+        <p><strong>WebGPU 的限制</strong>：</p>
+        <ul>
+          <li>启动慢（device init + shader compile 几十 ms）</li>
+          <li>不能跑通用 CPU 代码（不能跑游戏逻辑 / 业务代码）</li>
+          <li>移动设备 GPU 差异大（性能 / 兼容性）</li>
+          <li>2026 仍在快速迭代（subgroups / mesh shaders / ray tracing 提案中）</li>
+        </ul>
+
+        <h3>方案 4：WebAssembly（活，唯一通用 CPU 性能通道）</h3>
+        <p>已在 P1.1 详述。这里只对照其他方案的关键差异：</p>
+        <p><strong>(1) vs NaCl</strong>：</p>
+        <ul>
+          <li>NaCl: ELF + SFI + Chrome only → 死</li>
+          <li>wasm: 独立 ISA + load-time validation + 4 引擎联合 → 活</li>
+          <li>关键差：跨引擎 + 独立 ISA</li>
+        </ul>
+        <p><strong>(2) vs asm.js</strong>：</p>
+        <ul>
+          <li>asm.js: JS 文本子集 + AOT hint + 单 C/C++ 工具链 → 退役</li>
+          <li>wasm: 二进制 + 独立 spec + 多语言 → 活</li>
+          <li>关键差：二进制格式 + 多语言</li>
+        </ul>
+        <p><strong>(3) vs WebGPU</strong>：</p>
+        <ul>
+          <li>WebGPU: GPU 优先，大规模并行；不能跑通用 CPU 代码</li>
+          <li>wasm: CPU 优先，控制流任意；不擅长大规模并行（需要 SIMD + threads，仍有限）</li>
+          <li>关键差：CPU vs GPU 是互补不是替代</li>
+        </ul>
+
+        <h3>三引擎对 wasm 的实现差异（2026-05）</h3>
+        <p>wasm spec 是统一的，但实际实现细节有差异：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>引擎</th>
+              <th>编译流水线</th>
+              <th>WasmGC</th>
+              <th>JSPI</th>
+              <th>新提案速度</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>V8 (Chrome/Edge/Brave)</td>
+              <td>Liftoff (baseline) + TurboFan (optimizing) + Tier-up（详见 <a href="../../v8/06-wasm/01-wasm-pipeline.html">V8 P6.1</a>）</td>
+              <td>✅（共享 Orinoco GC）</td>
+              <td>✅ Chrome 137+</td>
+              <td>最快</td>
+            </tr>
+            <tr>
+              <td>SpiderMonkey (Firefox)</td>
+              <td>WasmBaseline (baseline) + Ion (optimizing)</td>
+              <td>✅（自实现 GC）</td>
+              <td>实验中</td>
+              <td>跟随，标准最严</td>
+            </tr>
+            <tr>
+              <td>JavaScriptCore (Safari)</td>
+              <td>BBQ (baseline) + OMG (optimizing)</td>
+              <td>✅ Safari 18.2+</td>
+              <td>计划中</td>
+              <td>较慢，更保守</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>实际工程影响：<strong>新提案要等 3 个引擎都 ship 才能放心用</strong>。Chrome 抢先 1-2 年实现是常态。</p>
+
+        <h3>服务端 wasm runtime（不在浏览器里）</h3>
+        <p>详见 <a href="../06-wasi-runtime/02-server-runtimes.html">P6.2</a>，这里只对照定位：</p>
+        <ul>
+          <li><strong>wasmtime</strong>（Bytecode Alliance, Rust + Cranelift）—— 事实标准</li>
+          <li><strong>wasmer</strong>（商业公司，Rust，多后端 Cranelift/LLVM/Singlepass）—— 跨语言绑定丰富</li>
+          <li><strong>wazero</strong>（Tetrate, 纯 Go）—— Go 项目嵌入 wasm 不需 CGO</li>
+          <li><strong>WasmEdge</strong>（CNCF, C++）—— 针对 cloud-native + AI 推理</li>
+          <li><strong>V8 isolate / JSC</strong>—— Cloudflare Workers / Bun 用 JS 引擎跑 wasm，与 JS 共享 runtime</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景：选择哪条路</span></h2>
+
+        <h3>场景 A · 浏览器内跑既有 C++/Rust 代码库</h3>
+        <p><strong>选 wasm</strong>。NaCl 死了，asm.js 退役了，WebGPU 不能跑通用 CPU 代码。<strong>wasm 是唯一选择</strong>。</p>
+        <p>典型：Figma（C++ 布局引擎）/ Photoshop Web / FFmpeg.wasm / SQLite WASM / Pyodide / DuckDB-WASM。</p>
+
+        <h3>场景 B · 浏览器内跑大规模并行计算（图像 / AI 推理 / 物理）</h3>
+        <p><strong>选 WebGPU</strong>，可能配合 wasm 做调度。</p>
+        <p>典型：onnxruntime-web（WASM + WebGPU 双 backend）/ TensorFlow.js / WebLLM / 浏览器内 Stable Diffusion / 图像滤镜。</p>
+        <p>选择规则：(1) 数据量 &lt; 1MB 或控制流复杂 → wasm；(2) 数据量 &gt; 10MB 且高度并行 → WebGPU；(3) 中间地带 → 实测两者。</p>
+
+        <h3>场景 C · 浏览器内业务逻辑（CRUD / 表单 / 简单交互）</h3>
+        <p><strong>选 JS / TS</strong>，不要用 wasm 也不要用 WebGPU。</p>
+        <p>原因：(1) 现代 V8 跑 JS 已经接近 native 80%+；(2) 业务代码工具链 / 招人 / 调试 JS 完胜；(3) wasm 启动开销 + glue 体积 + 跨边界税在小工具上得不偿失。</p>
+
+        <h3>场景 D · 服务端 / Edge 多租户沙箱</h3>
+        <p><strong>选 wasm + WASI</strong>。NaCl / asm.js / WebGPU 在服务端都没有意义。</p>
+        <p>典型：Cloudflare Workers（V8 isolate 跑 wasm）/ Fastly Compute@Edge（wasmtime）/ Shopify Functions / Envoy plugins。</p>
+
+        <h3>场景 E · 区块链智能合约</h3>
+        <p><strong>选 wasm</strong>。早期区块链用自家 VM（EVM / Solana BPF），新一代普遍 wasm 化（Polkadot / NEAR / Internet Computer / CosmWasm）。原因：跨语言 + 沙箱 + 性能 + 生态。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：相同任务四种方案</span></h2>
+
+        <h3>任务：计算 1M 个 float32 的两两相加</h3>
+
+        <h4>方案 A · 纯 JS</h4>
+        <pre class="code"><code class="lang-javascript">function addJS(a, b) {
+  const c = new Float32Array(a.length);
+  for (let i = 0; i &lt; a.length; i++) {
+    c[i] = a[i] + b[i];
+  }
+  return c;
+}</code></pre>
+        <p>性能基准（V8, 1M 元素）：~5ms。简单、无依赖。</p>
+
+        <h4>方案 B · asm.js（已退役）</h4>
+        <pre class="code"><code class="lang-javascript">function asmAdd(stdlib, ffi, heap) {
+  "use asm";
+  var f32 = new stdlib.Float32Array(heap);
+  function add(aPtr, bPtr, cPtr, n) {
+    aPtr = aPtr | 0; bPtr = bPtr | 0;
+    cPtr = cPtr | 0; n = n | 0;
+    var i = 0;
+    for (; (i | 0) &lt; (n | 0); i = (i + 1) | 0) {
+      f32[(cPtr + (i &lt;&lt; 2)) &gt;&gt; 2] =
+        +f32[(aPtr + (i &lt;&lt; 2)) &gt;&gt; 2] + +f32[(bPtr + (i &lt;&lt; 2)) &gt;&gt; 2];
+    }
+  }
+  return { add: add };
+}</code></pre>
+        <p>性能（Firefox 旧版）：~3ms。<strong>2026 没有引擎再为 asm.js 做特殊优化，仍按普通 JS 跑</strong>，性能与方案 A 相当。</p>
+
+        <h4>方案 C · WASM（Rust + wasm-bindgen）</h4>
+        <pre class="code"><code class="lang-rust">// lib.rs
+use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+pub fn add(a: &amp;[f32], b: &amp;[f32]) -&gt; Vec&lt;f32&gt; {
+    a.iter().zip(b).map(|(x, y)| x + y).collect()
+}</code></pre>
+        <p>JS 端：</p>
+        <pre class="code"><code class="lang-javascript">import { add } from './pkg/my_wasm.js';
+const c = add(a, b);  // wasm-bindgen 自动 marshalling</code></pre>
+        <p>性能：~2.5ms（无 SIMD）/ ~0.8ms（带 SIMD wasm32-unknown-unknown +simd128）。<strong>SIMD 是 wasm 的杀手锏</strong>。</p>
+
+        <h4>方案 D · WebGPU compute shader</h4>
+        <pre class="code"><code class="lang-text">// add.wgsl
+@group(0) @binding(0) var&lt;storage, read&gt; a: array&lt;f32&gt;;
+@group(0) @binding(1) var&lt;storage, read&gt; b: array&lt;f32&gt;;
+@group(0) @binding(2) var&lt;storage, read_write&gt; c: array&lt;f32&gt;;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3&lt;u32&gt;) {
+  c[gid.x] = a[gid.x] + b[gid.x];
+}</code></pre>
+        <p>JS 端：</p>
+        <pre class="code"><code class="lang-javascript">// 简化代码：实际要 device.createBuffer / writeBuffer / setBindGroup / dispatch / submit
+const c = await runComputeShader(shaderCode, [a, b]);</code></pre>
+        <p>性能：~10ms 计算 + ~5ms 内存传输 = 15ms 总。<strong>1M 元素太小，GPU 启动开销吃掉收益</strong>。10M 元素后 GPU 才领先；100M 元素 GPU 是 wasm 的 5-10x。</p>
+
+        <h3>性能对照表</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>数据量</th>
+              <th>JS</th>
+              <th>WASM (无 SIMD)</th>
+              <th>WASM + SIMD</th>
+              <th>WebGPU</th>
+              <th>推荐</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1K</td>
+              <td>~0.05ms</td>
+              <td>~0.03ms</td>
+              <td>~0.01ms</td>
+              <td>~5ms (启动)</td>
+              <td>JS</td>
+            </tr>
+            <tr>
+              <td>1M</td>
+              <td>~5ms</td>
+              <td>~2.5ms</td>
+              <td>~0.8ms</td>
+              <td>~15ms</td>
+              <td>WASM + SIMD</td>
+            </tr>
+            <tr>
+              <td>100M</td>
+              <td>~500ms</td>
+              <td>~250ms</td>
+              <td>~80ms</td>
+              <td>~30ms</td>
+              <td>WebGPU</td>
+            </tr>
+          </tbody>
+        </table>
+        <p><strong>规律</strong>：小数据 JS 最优（启动开销小）；中等数据 WASM SIMD 最优（GPU 启动太贵）；大数据 GPU 最优。</p>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：以为 WebGPU 会取代 wasm</h3>
+        <p><strong>错误认知</strong>："GPU 比 CPU 快，所以 WebGPU 是未来，wasm 是过渡"。</p>
+        <p>实际：GPU 只在<strong>大规模高度并行</strong>场景快。控制流复杂 / 数据量小 / 串行依赖 / 不规则内存访问 —— GPU 都是输的。<strong>CPU 通用代码永远需要 wasm</strong>，GPU 永远是补充。</p>
+
+        <h3>陷阱 2：以为 asm.js 已经"完全没用"</h3>
+        <p>2026 仍有少量场景 asm.js 有意义：(1) 极老旧浏览器（IE 11 等仍偶尔遇到）的 fallback；(2) 某些 polyfill 需要 fallback 路径。但<strong>新项目不要再写 asm.js</strong>。</p>
+
+        <h3>陷阱 3：把 NaCl 教训过度推广到 wasm</h3>
+        <p>有人因为"NaCl 死了"对 wasm 也悲观。错误。NaCl 失败的核心是<strong>Chrome 单家方案</strong>，不是技术路线。wasm 跨引擎从一开始就解决了这个根本问题。</p>
+
+        <h3>陷阱 4：选错"性能通道"</h3>
+        <p>常见错误：</p>
+        <ul>
+          <li>简单 CRUD 用 wasm（启动开销 + glue 体积反而拖慢）</li>
+          <li>大规模图像处理用 wasm（应该用 WebGPU）</li>
+          <li>ML 推理只用一种（onnxruntime-web 同时用 wasm + WebGPU 是经典案例）</li>
+        </ul>
+        <p><strong>正确判据</strong>：(1) 数据量；(2) 计算特点（并行 vs 串行 / 控制流复杂度）；(3) 已有代码资产；(4) 启动时间预算。综合判断。</p>
+
+        <h3>陷阱 5：以为"wasm 主导浏览器"</h3>
+        <p>2026 年浏览器代码量 95%+ 仍是 JS / TS。<strong>wasm 是性能敏感模块的 5%</strong>，不是替代 JS 的"主流"。把 wasm 看成"高性能补丁"，不是"下一代 JS"。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>WebGPU</h3>
+        <ul>
+          <li><a href="https://www.w3.org/TR/webgpu/" target="_blank" rel="noopener">WebGPU W3C Spec</a></li>
+          <li><a href="https://surma.dev/things/webgpu/" target="_blank" rel="noopener">Surma's WebGPU intro</a></li>
+          <li><a href="https://webgpufundamentals.org/" target="_blank" rel="noopener">WebGPU Fundamentals</a></li>
+          <li><a href="https://onnxruntime.ai/docs/tutorials/web/" target="_blank" rel="noopener">onnxruntime-web (WASM + WebGPU)</a> · 实战双 backend</li>
+        </ul>
+
+        <h3>NaCl / asm.js 历史档案</h3>
+        <ul>
+          <li>Bennet Yee et al., <em>Native Client: A Sandbox for Portable, Untrusted x86 Native Code</em>（IEEE S&amp;P 2009）</li>
+          <li><a href="https://web.archive.org/web/20171225172530/https://developer.chrome.com/native-client" target="_blank" rel="noopener">NaCl 开发者文档（archive）</a></li>
+          <li>Alon Zakai, <em>asm.js: an extraordinarily optimizable, low-level subset of JavaScript</em>（2013 提案）</li>
+          <li><a href="http://asmjs.org/spec/latest/" target="_blank" rel="noopener">asm.js Spec</a></li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="../02-machine/01-binary-stack-machine.html">P2.1 二进制格式与栈机器执行模型</a> · 进入 wasm 技术细节</li>
+          <li><a href="../02-machine/02-wat-and-types.html">P2.2 wat 文本格式与类型系统</a></li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../v8/01-overview/02-engine-landscape.html">V8 P1.2 V8 与同代人</a> · JS 引擎对照（V8 / SpiderMonkey / JSC / Hermes / QuickJS）</li>
+          <li><a href="../../browser-rendering/01-overview/02-engine-landscape.html">浏览器渲染 P1.2 三引擎对照</a> · 浏览器引擎对照（Blink / WebKit / Gecko）</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
