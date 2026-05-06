@@ -1,0 +1,720 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Changesets + provenance + workspace publish · P6.1 · pnpm & monorepo 深度学习</title>
+    <meta name="description" content="Changesets 完整工作流（markdown → version PR → publish）+ 独立 vs 固定版本 + prerelease/snapshot + npm provenance（GitHub OIDC 签名）+ workspace:* 自动改写 + 私有 registry 选项。回答「monorepo 怎么发包」。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23f69220'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EP%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>pnpm & monorepo 深度学习</span><span class="site-title-badge" style="background: oklch(0.7 0.18 60); color: #fff">pnpm</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · 版本与发布</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-changesets-publish.html" class="active">01 · Changesets + provenance + publish</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">pnpm & monorepo</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · 版本与发布</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Changesets + publish</span>
+        </nav>
+        <h1>Changesets + provenance + workspace publish</h1>
+        <p class="lead">
+          monorepo 写出来要发到 npm。但<strong>12 个包同时 publish、版本怎么联动、内部 <code>workspace:*</code> 怎么改写、CI 怎么对抗供应链攻击</strong>——这些是 P6 的主题。本章讲清楚 2026 年开源 monorepo 的事实标准方案：<strong>Changesets</strong> 工作流 + <strong>npm provenance</strong> 签名 + <strong>workspace 协议自动改写</strong>。完整 GitHub Actions 配置 + 真实开源案例。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P4（workspace 协议）+ P5（任务编排）</span>
+          <span><strong>主要来源</strong> changesets/changesets repo / npm provenance 文档 / typescript-eslint / Astro / Vite 项目实践</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Changesets 是 2026 monorepo 发版事实标准</strong> —— 由 Atlassian 出品（typescript-eslint / Astro / Vite / Vitest / Remix / shadcn/ui / Cloudflare Workers 等都用）。核心思路：<strong>每次 PR 写一个 markdown 描述变更</strong>，CI 聚合成 changelog + 自动发版 PR。</li>
+          <li><strong>4 步工作流</strong> —— (1) 开发 + 写 changeset（<code>pnpm changeset</code> 交互生成 markdown）；(2) PR 合并到 main，CI 跑 <code>changeset version</code> 把 pending changesets 聚合成 changelog + bump 版本号；(3) CI 创建"Version Packages" PR；(4) 人工 review 合并 → CI 触发 <code>changeset publish</code> 自动发到 npm。</li>
+          <li><strong>独立版本（默认） vs 固定版本</strong> —— 独立：每个包独立 SemVer，依赖关系自动联动（packages/ui 改 → 依赖 ui 的 apps/web 自动 bump）；固定：<code>fixed: ['@app/*']</code> 让一组包始终相同版本（紧耦合 SDK 用）。</li>
+          <li><strong>prerelease 模式</strong> —— <code>changeset pre enter alpha</code> 进入预发布阶段，所有 publish 自动加 alpha.0 / alpha.1 后缀。<code>changeset pre exit</code> 退出。<strong>用于 major 版本发布前的多轮 RC</strong>。</li>
+          <li><strong>snapshot 模式</strong> —— <code>changeset publish --snapshot pr-123</code>：CI 上每个 PR 发一个临时版本（如 <code>1.0.0-pr-123-abc</code>），让外部消费者可以验证 PR。Vite / Vitest 等大型 OSS 用得多。</li>
+          <li><strong>npm provenance（2023+）</strong> —— GitHub Actions OIDC 自动签名包来源。消费者能验证"<strong>这个 npm 包确实是从这个 git commit 在这个 GitHub Actions workflow 上构建的</strong>"。对抗供应链攻击的现代标准。<strong>不需付费，开源 + 私有项目都能用</strong>。</li>
+          <li><strong>workspace:* 在 publish 时自动改写</strong> —— pnpm publish / Changesets publish 都把 <code>"@app/utils": "workspace:^"</code> 改写为 <code>"@app/utils": "^1.5.0"</code>（packages/utils 当前版本）。源码 git 仓库保持 workspace: 协议，发到 npm 的 tarball 是改写版。</li>
+          <li><strong>私有 registry 选项</strong> —— Verdaccio（开源自建）/ npm Enterprise / GitHub Packages / JFrog Artifactory / GitLab Package Registry 等。<code>.npmrc</code> 中按 scope 路由。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Changesets 完整工作流</h3>
+
+        <p>典型 monorepo 用 Changesets 的工作流：</p>
+
+        <p><strong>Step 1 · 开发阶段：每次 PR 写 changeset</strong></p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 工程师写代码 + 准备发版（在 PR 分支上）
+pnpm changeset
+
+# 交互式问答：
+# ? Which packages would you like to include? · @app/ui, @app/utils
+# ? Which packages should have a major bump? · (空，无 breaking change)
+# ? Which packages should have a minor bump? · @app/ui
+# ? Which packages should have a patch bump? · @app/utils
+# ? Please enter a summary for this change · "Add new Button variants"
+
+# 生成 .changeset/some-random-name.md：</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">.changeset/some-random-name.md</span>
+          <pre class="code"><code class="lang-markdown">---
+"@app/ui": minor
+"@app/utils": patch
+---
+
+Add new Button variants and fix utils edge case</code></pre>
+        </div>
+
+        <p>这个 markdown 文件随 PR commit 进 git。<strong>多个 PR 可以累积多个 changeset 文件</strong>，等到要发版时一起处理。</p>
+
+        <p><strong>Step 2 · 合并到 main 后：CI 跑 changeset version</strong></p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># CI 自动跑（不是手动）
+pnpm changeset version
+
+# Changesets 自动：
+# - 读所有 .changeset/*.md 文件
+# - 计算每个包的最终版本（多个 minor 取最高）
+# - 生成 / 更新每个包的 CHANGELOG.md
+# - 修改每个包的 package.json version 字段
+# - 删除已处理的 .changeset/*.md（保留 README.md / config.json）
+
+# 此外还会自动联动：
+# - 如果 @app/ui patch 升级，依赖 @app/ui 的所有内部包也 patch 升级（关联 bump）</code></pre>
+        </div>
+
+        <p><strong>Step 3 · CI 创建"Version Packages" PR</strong></p>
+        <p>实际由 <code>changesets/action</code>（GitHub Actions 官方）自动完成：</p>
+        <ul>
+          <li>Action 在 main 分支跑 <code>changeset version</code></li>
+          <li>把所有改动（package.json bumps + CHANGELOGs + 删除的 changeset 文件）打包成一个 PR</li>
+          <li>PR 标题如 <code>Version Packages</code></li>
+          <li>这个 PR 由<strong>人工 review 后合并</strong>——给个最后审视机会</li>
+        </ul>
+
+        <p><strong>Step 4 · "Version Packages" PR 合并 → CI 触发 publish</strong></p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># CI 检测到 main 分支没有 pending changeset（刚被 version 处理掉）
+# + package.json 版本号变化 = 该 publish 了
+
+pnpm changeset publish
+
+# Changesets 自动：
+# - 检测每个包的当前版本是否已发到 npm
+# - 没发的：跑 npm publish（实际是 pnpm publish 或 bun publish）
+# - 改写 workspace:* 为真实版本号
+# - 给每个版本打 git tag（如 @app/ui@1.5.0）
+# - 输出每个包的 publish 结果</code></pre>
+        </div>
+
+        <p><strong>整体效果</strong>：每个 PR 加 changeset 文件 → 几个 PR 后批量发版（避免每 PR 一发），changelog 自动维护，版本号语义化。</p>
+
+        <h3>独立 vs 固定版本</h3>
+
+        <p>Changesets 默认每个包<strong>独立 SemVer</strong>。某 patch 不要求所有包都 bump。</p>
+
+        <div class="code-block">
+          <span class="code-label">.changeset/config.json</span>
+          <pre class="code"><code class="lang-json">{
+  "$schema": "https://unpkg.com/@changesets/config@3/schema.json",
+  "changelog": "@changesets/changelog-github",
+  "commit": false,
+  "fixed": [],                           // 默认空，全独立
+  "linked": [],
+  "access": "public",
+  "baseBranch": "main",
+  "updateInternalDependencies": "patch"
+}</code></pre>
+        </div>
+
+        <p><strong>fixed 模式</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">{
+  "fixed": [
+    ["@my-sdk/*"]                        // 这组包始终保持相同版本
+  ]
+}</code></pre>
+        </div>
+
+        <p>fixed 适合<strong>紧耦合的 SDK</strong>——一个变化所有包都升。例如 React 的 <code>react / react-dom / react-server-dom-webpack</code> 都同版本（虽然 React 不用 Changesets）。</p>
+
+        <p><strong>linked 模式</strong>（弱版的 fixed）：</p>
+        <ul>
+          <li>多个包<strong>互相联动</strong>：A 升 minor，B 也升 minor</li>
+          <li>但版本号<strong>不强制相同</strong>（可能 A 1.5.0 / B 2.5.0，下次都升 minor 变 1.6.0 / 2.6.0）</li>
+          <li>用得少，主要是中间过渡选择</li>
+        </ul>
+
+        <p><strong>updateInternalDependencies</strong>：</p>
+        <ul>
+          <li>当 monorepo 内部 A 是 B 的依赖时，A 升级，B 的依赖范围怎么处理</li>
+          <li><code>"patch"</code>（默认）：B 的 package.json 中 A 的依赖范围自动 patch（如 ^1.5.0 → ^1.5.1）；如果 A 升 minor，B 也跟着 minor 升级（确保下游知道 A 变了）</li>
+          <li><code>"minor"</code>：仅当 A 升 minor 以上才更新 B 的范围</li>
+        </ul>
+
+        <h3>prerelease 模式 · 多轮 RC 发布</h3>
+
+        <p>major 版本发布前通常要多轮 RC 让用户测试。Changesets 支持：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 进入预发布阶段（标识符 alpha）
+pnpm changeset pre enter alpha
+
+# 此时所有 changeset version + publish 自动加 alpha 后缀
+pnpm changeset             # 写新 changeset
+pnpm changeset version     # 1.5.0 → 2.0.0-alpha.0
+pnpm changeset publish     # 发到 npm 的 alpha tag
+
+# 继续迭代
+pnpm changeset
+pnpm changeset version     # 2.0.0-alpha.0 → 2.0.0-alpha.1
+pnpm changeset publish
+
+# 准备正式发布
+pnpm changeset pre exit
+pnpm changeset version     # 2.0.0-alpha.1 → 2.0.0
+pnpm changeset publish     # 正式 2.0.0 发到 latest tag</code></pre>
+        </div>
+
+        <p><strong>npm dist-tag</strong>：</p>
+        <ul>
+          <li>Changesets prerelease 默认发到 npm 的 <code>alpha</code> / <code>beta</code> / <code>next</code> tag（不是 latest）</li>
+          <li>用户安装 <code>npm install @app/ui@alpha</code> 拿预发布版</li>
+          <li>正式发布时切换到 latest tag</li>
+        </ul>
+
+        <h3>snapshot 模式 · 每个 PR 一个临时版本</h3>
+
+        <p>大型 OSS 项目（Vite / Vitest）常见痛点：用户报 bug，PR 修复了想给用户验证。但 Vite 不能为每个 PR 都发正式版。</p>
+
+        <p><strong>snapshot 解</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 在 PR CI 上跑（不在 main 上）
+pnpm changeset version --snapshot pr-123
+pnpm changeset publish --tag pr-123 --no-git-tag
+
+# 自动：
+# - 版本号变成 0.0.0-pr-123-&lt;commit-hash&gt;
+# - 不加 git tag（snapshot 不留 tag）
+# - 发到 npm 的 pr-123 dist-tag（不污染 latest / next）
+
+# 用户验证
+npm install @app/vite@pr-123</code></pre>
+        </div>
+
+        <p>这是 Vite / Vitest 等项目让"贡献者验证 PR"成为标准流程的方式。详见 <a href="../../vite/index.html">Vite 主题</a>。</p>
+
+        <h3>npm provenance · 供应链签名</h3>
+
+        <p>2022 年 npm 大范围供应链攻击事件后（如恶意 maintainer 推恶意更新），npm 在 2023 年引入 <strong>provenance</strong>：</p>
+
+        <p><strong>原理</strong>：</p>
+        <ol>
+          <li>包发布时，npm 签发 <strong>OIDC token</strong>（GitHub Actions / GitLab CI 自动有）</li>
+          <li>token 包含：repo URL + commit SHA + workflow ID + actor</li>
+          <li>npm 把 token + 包 manifest 一起签名 + 存到 transparency log（公开可审计）</li>
+          <li>用户安装时可以验证 <strong>"这个包是从我看到的 GitHub repo 的某 commit 在某 CI 跑出来的"</strong></li>
+        </ol>
+
+        <p><strong>启用 provenance</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">yaml</span>
+          <pre class="code"><code class="lang-yaml"># .github/workflows/release.yml
+- name: Publish
+  run: pnpm changeset publish
+  env:
+    NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+# package.json 加 publishConfig
+{
+  "publishConfig": {
+    "provenance": true              # 关键开关
+  }
+}
+
+# GitHub Actions 必须有 id-token: write 权限
+permissions:
+  contents: write
+  id-token: write          # ← provenance 必需
+  pull-requests: write</code></pre>
+        </div>
+
+        <p><strong>用户验证</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 装包后验证
+npm install @app/ui
+npm view @app/ui dist.signatures
+npm audit signatures @app/ui
+
+# npm 网页上每个有 provenance 的包都有"Provenance"标签 + 链接到 commit</code></pre>
+        </div>
+
+        <p><strong>2026 现状</strong>：开源生态广泛采用 provenance（typescript-eslint / Vite / Astro / shadcn 等都开了）。用户开始期待"<strong>没有 provenance 的包不可信</strong>"。<strong>新发布的包应该默认开 provenance</strong>。</p>
+
+        <h3>workspace:* 在 publish 时的处理</h3>
+
+        <p>monorepo 中 packages/ui 的 package.json 写 <code>"@app/utils": "workspace:^"</code>。如果直接发到 npm，下游用户装时找不到（npm 不知道 workspace: 协议）。</p>
+
+        <p><strong>publish 自动改写</strong>：</p>
+
+        <div class="code-block">
+          <span class="code-label">改写前后</span>
+          <pre class="code"><code class="lang-json">// 源码（git）
+{
+  "name": "@app/ui",
+  "dependencies": {
+    "@app/utils": "workspace:^",
+    "@app/types": "workspace:*"
+  }
+}
+
+// pnpm publish / changeset publish 改写后（发到 npm 的 tarball）
+{
+  "name": "@app/ui",
+  "dependencies": {
+    "@app/utils": "^1.5.0",            // packages/utils 当前是 1.5.0
+    "@app/types": "1.0.0"              // packages/types 当前是 1.0.0（* → 精确）
+  }
+}</code></pre>
+        </div>
+
+        <p><strong>规则</strong>：</p>
+        <ul>
+          <li><code>workspace:*</code> → 精确版本（<code>1.5.0</code>）</li>
+          <li><code>workspace:^</code> → caret 范围（<code>^1.5.0</code>）</li>
+          <li><code>workspace:~</code> → tilde 范围（<code>~1.5.0</code>）</li>
+        </ul>
+
+        <p>这让"<strong>monorepo 内开发用 workspace 协议方便 + publish 时还原成标准范围</strong>"成为完整工作流。</p>
+
+        <h3>publishConfig 字段 · publish 时覆盖配置</h3>
+
+        <p>有些字段开发时和 publish 时希望不同（详见 <a href="../04-workspaces/02-filter-topological.html">P4.2 src-as-main</a>）：</p>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">{
+  "name": "@app/ui",
+  "version": "1.5.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.mjs",
+        "require": "./dist/index.js"
+      }
+    },
+    "access": "public",
+    "provenance": true
+  }
+}</code></pre>
+        </div>
+
+        <p>publish 时 publishConfig 中的字段<strong>覆盖</strong>顶层。这让一份 package.json 兼顾 dev（src）和 prod（dist）两个 view。</p>
+
+        <h3>私有 registry · scope 路由</h3>
+
+        <p>企业项目常用私有 registry 发内部包。配置原理：<code>.npmrc</code> 按 scope 路由。</p>
+
+        <div class="code-block">
+          <span class="code-label">.npmrc</span>
+          <pre class="code"><code class="lang-text"># 默认走 npmjs.org
+registry=https://registry.npmjs.org
+
+# @my-org scope 走自家 registry
+@my-org:registry=https://npm.my-company.com
+
+# 私有 registry 鉴权
+//npm.my-company.com/:_authToken=${INTERNAL_NPM_TOKEN}
+
+# scope 路由（.npmrc 里）
+# pnpm publish @my-org/* 自动用 https://npm.my-company.com</code></pre>
+        </div>
+
+        <p><strong>主流私有 registry 选项</strong>：</p>
+        <ul>
+          <li><strong>Verdaccio</strong>—— 开源 + 自建（最低成本，单机运行 + npm 协议代理）</li>
+          <li><strong>npm Enterprise</strong>—— GitHub 子产品，付费</li>
+          <li><strong>GitHub Packages</strong>—— GitHub 自带，对 OSS / GitHub 用户最低门槛</li>
+          <li><strong>JFrog Artifactory</strong>—— 大企业全栈 artifact（Docker / Maven / npm 一统）</li>
+          <li><strong>GitLab Package Registry</strong>—— GitLab 自带</li>
+          <li><strong>AWS CodeArtifact</strong>—— AWS 子服务</li>
+        </ul>
+
+        <p><strong>选型建议</strong>：</p>
+        <ul>
+          <li>OSS 项目 + 自动化：<strong>不需要私有 registry，发 npmjs.org</strong></li>
+          <li>小团队 + 内部库：Verdaccio 自建（一台 VM 即可）</li>
+          <li>已用 GitHub Enterprise：GitHub Packages 自然</li>
+          <li>大企业 + 已用 JFrog/Artifactory：复用现有基础设施</li>
+        </ul>
+
+        <h3>真实开源案例 · typescript-eslint / Astro / Vite</h3>
+
+        <p><strong>typescript-eslint</strong>（<a href="https://github.com/typescript-eslint/typescript-eslint" target="_blank">github</a>）：</p>
+        <ul>
+          <li>13 个包的 monorepo，pnpm workspace</li>
+          <li>Changesets + Yarn Berry → 后切 pnpm + Changesets</li>
+          <li>每周自动发版（cron 跑 changeset version + publish）</li>
+          <li>provenance 已启用</li>
+        </ul>
+
+        <p><strong>Astro</strong>（<a href="https://github.com/withastro/astro" target="_blank">github</a>）：</p>
+        <ul>
+          <li>30+ 包，pnpm + Turborepo + Changesets</li>
+          <li>snapshot 模式给 PR 临时版本（用户验证 + bug fix 反馈快）</li>
+          <li>core / integration plugin 各自独立 SemVer</li>
+          <li>provenance 已启用（2024+）</li>
+        </ul>
+
+        <p><strong>Vite / Vitest</strong>（<a href="https://github.com/vitejs/vite" target="_blank">github</a>）：</p>
+        <ul>
+          <li>Vite + plugin + Vitest 多 monorepo（不在同一 repo）</li>
+          <li>Changesets + pnpm + GitHub Actions</li>
+          <li>用 changeset bot（自动检测 PR 是否有 changeset 文件）</li>
+          <li>定期 release week（积累几周再发，避免频繁打扰用户）</li>
+        </ul>
+
+        <p>这些项目把 Changesets + provenance 工作流做成<strong>新项目可直接抄的模板</strong>。</p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 关键洞见：发版自动化是 monorepo 成熟度的标志</div>
+          <p>有些团队 monorepo 维护得很好，但发版仍是"<strong>手动 npm publish 每个包</strong>"——这种状态会卡在小规模无法扩张。Changesets 把"<strong>每个 PR 描述变更 → 批量发版 → changelog 维护 → 版本联动</strong>"全套自动化，一旦设好后维护成本几乎为零。<strong>2026 年新 monorepo 默认起步就用 Changesets</strong>，已是事实标准。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 新 monorepo 接入 Changesets（从零）</h3>
+          <p><strong>步骤</strong>：</p>
+          <div class="code-block">
+            <span class="code-label">bash</span>
+            <pre class="code"><code class="lang-bash"># 1. 装 Changesets
+pnpm add -D -w @changesets/cli @changesets/changelog-github
+
+# 2. 初始化（创建 .changeset/ 目录 + config.json）
+pnpm changeset init
+
+# 3. 编辑 .changeset/config.json
+# 关键字段：
+# - changelog: ["@changesets/changelog-github", { "repo": "my-org/my-repo" }]
+# - access: "public"
+# - baseBranch: "main"
+
+# 4. 写第一个 changeset（让流程跑起来）
+pnpm changeset
+
+# 5. 配 GitHub Actions（见下面）
+
+# 6. push + 让 CI 跑一遍验证流程</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · 给 PR 用 snapshot 让用户验证</h3>
+          <p><strong>背景</strong>：开源 React 库收到 bug report，PR 修复了。想给用户测试不发正式版。</p>
+          <p><strong>方案</strong>：</p>
+          <div class="code-block">
+            <span class="code-label">yaml</span>
+            <pre class="code"><code class="lang-yaml"># .github/workflows/snapshot.yml（手动触发）
+name: Snapshot Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        required: true
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/head
+      - uses: pnpm/action-setup@v4
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm changeset version --snapshot pr-${{ inputs.pr_number }}
+      - run: pnpm changeset publish --tag pr-${{ inputs.pr_number }} --no-git-tag
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}</code></pre>
+          </div>
+          <p>用户：<code>npm install @app/ui@pr-123</code> 拿到 PR 对应版本。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · 把已有 monorepo 切到 provenance</h3>
+          <p><strong>背景</strong>：项目用 Changesets 发了几年，没启用 provenance。决定切。</p>
+          <p><strong>步骤</strong>：</p>
+          <ol>
+            <li>每个要发包的 package.json 加 <code>"publishConfig": { "provenance": true }</code></li>
+            <li>GitHub Actions workflow 加 <code>permissions: { id-token: write }</code></li>
+            <li>确认 npm token 是<strong>"Automation"类型</strong>（不是 publish/grant）—— provenance 要求 Automation token</li>
+            <li>下次 release 时 npm 上每个包自动有 Provenance 标记</li>
+          </ol>
+          <p>整个迁移 30 分钟，向后兼容（旧版本不受影响，新版本带 provenance）。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">完整 .changeset/config.json</span>
+          <pre class="code"><code class="lang-json">{
+  "$schema": "https://unpkg.com/@changesets/config@3/schema.json",
+  "changelog": [
+    "@changesets/changelog-github",
+    { "repo": "my-org/my-monorepo" }
+  ],
+  "commit": false,
+  "fixed": [],
+  "linked": [],
+  "access": "public",
+  "baseBranch": "main",
+  "updateInternalDependencies": "patch",
+  "ignore": [
+    "@app/web",
+    "@app/web-e2e"
+  ]
+}</code></pre>
+        </div>
+
+        <p><code>ignore</code>：列出不发布的包（apps 通常不发；只有 lib 包发）。但<strong>注意：apps 也要有 <code>"private": true</code></strong> 才更稳。</p>
+
+        <div class="code-block">
+          <span class="code-label">完整 GitHub Actions release.yml</span>
+          <pre class="code"><code class="lang-yaml">name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # 写 git tag + commit
+      pull-requests: write     # 创建 Version Packages PR
+      id-token: write          # provenance 必需
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0       # Changesets 需要完整 git 历史
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build         # 先 build 所有 lib
+
+      - name: Create Release Pull Request or Publish to npm
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          # 当 main 分支没有 pending changesets 时跑这条
+          publish: pnpm changeset publish
+          # 否则创建 Version Packages PR
+          version: pnpm changeset version
+          commit: 'chore: version packages'
+          title: 'Version Packages'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">每个发布包的 package.json 模板</span>
+          <pre class="code"><code class="lang-json">{
+  "name": "@my-org/ui",
+  "version": "1.5.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.mjs",
+        "require": "./dist/index.js"
+      }
+    },
+    "access": "public",
+    "provenance": true
+  },
+  "peerDependencies": {
+    "react": "^18 || ^19"
+  }
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">.npmrc · 多 registry 路由</span>
+          <pre class="code"><code class="lang-text"># 默认 npmjs.org
+registry=https://registry.npmjs.org/
+
+# @my-org scope 走 npmjs.org（OSS 公开）
+@my-org:registry=https://registry.npmjs.org/
+
+# @internal scope 走自家 Verdaccio
+@internal:registry=https://npm.my-company.com/
+
+# 多 registry 鉴权
+//registry.npmjs.org/:_authToken=${NPM_TOKEN}
+//npm.my-company.com/:_authToken=${INTERNAL_NPM_TOKEN}
+
+# CI 推荐
+always-auth=true</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">手动触发 prerelease 流程</span>
+          <pre class="code"><code class="lang-bash"># 进入 alpha 阶段
+pnpm changeset pre enter alpha
+git add . && git commit -m "chore: enter prerelease"
+
+# 写代码 + changeset
+# ... 多次 PR ...
+
+# 进入 beta（之前的 alpha 自动从 changesets 中清掉）
+pnpm changeset pre enter beta
+
+# 退出预发布，准备正式发布
+pnpm changeset pre exit
+git add . && git commit -m "chore: exit prerelease"
+
+# 让 CI 跑 changeset version + publish 进入正式 2.0.0</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 忘记给 apps 加 private: true</div>
+          <p>Changesets 不区分 lib 和 app（除非配 ignore）。如果 apps/web/package.json 没写 <code>"private": true</code>，<code>changeset publish</code> 可能尝试发它。<strong>修复</strong>：所有 app 类项目<strong>必须</strong> <code>"private": true</code>；只有真要发的 lib 包不加。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · provenance 失败因为 token 类型错</div>
+          <p>npm provenance 要求 <strong>Automation token</strong>（在 npm 的 Access Tokens 页面创建时选 "Automation"），不是 publish 类型 token。token 错时 provenance 静默失败但 publish 仍 OK。<strong>修复</strong>：检查 token 类型；可以用 <code>npm whoami --registry=https://registry.npmjs.org/</code> 排查。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 漏写 fetch-depth: 0</div>
+          <p>GitHub Actions 默认浅 clone（fetch-depth: 1）。Changesets 需要完整 git 历史比对——浅 clone 时 <code>changeset version</code> 可能错判 baseBranch。<strong>修复</strong>：checkout step 加 <code>fetch-depth: 0</code>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 把所有变化都写 changeset</div>
+          <p>每次 PR 都写 changeset 显得很勤奋，但<strong>非用户可见的变化（重构 / 内部 refactor / 测试）</strong>不应写——它们不该 bump 版本。<strong>修复</strong>：只对"<strong>影响用户的</strong>"变化写 changeset；refactor / docs / test 不写。Changesets bot 可以提醒"<strong>这个 PR 没 changeset，是不是无 user-facing change？</strong>"。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · publishConfig 写错路径</div>
+          <p>publishConfig.main 指向不存在的 dist 路径，publish 时不报错（npm 不验证），但下游用户安装后立即报 <code>ERR_MODULE_NOT_FOUND</code>。<strong>修复</strong>：CI 在 publish 前跑 <code>publint</code>（package.json lint）+ <code>arethetypeswrong</code>（双产物 + types 验证）。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://github.com/changesets/changesets" target="_blank" rel="noopener">Changesets 官方仓库 + 文档</a></li>
+          <li><a href="https://github.com/changesets/action" target="_blank" rel="noopener">changesets/action（GitHub Actions 集成）</a></li>
+          <li><a href="https://docs.npmjs.com/generating-provenance-statements" target="_blank" rel="noopener">npm Provenance 官方文档</a></li>
+          <li><a href="https://github.blog/security/supply-chain-security/introducing-npm-package-provenance/" target="_blank" rel="noopener">GitHub Blog · Introducing npm Package Provenance</a></li>
+          <li><a href="https://verdaccio.org/" target="_blank" rel="noopener">Verdaccio · 自建私有 npm registry</a></li>
+          <li><a href="https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry" target="_blank" rel="noopener">GitHub Packages · npm registry</a></li>
+          <li><a href="https://publint.dev/" target="_blank" rel="noopener">publint · package.json lint</a></li>
+          <li><a href="https://github.com/arethetypeswrong/arethetypeswrong.github.io" target="_blank" rel="noopener">arethetypeswrong</a></li>
+          <li><a href="../04-workspaces/01-workspace-protocol.html">P4.1 · workspace 协议（前提）</a></li>
+          <li><a href="../07-future/01-decision-tree.html">P7.1 · 选型决策树（下一阶段）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../05-orchestration/02-nx.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P5.2 · Nx</span>
+          </a>
+          <a class="next" href="../07-future/index.html">
+            <span class="label">下一阶段 →</span>
+            <span class="title">P7 · 选型与下一代</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
