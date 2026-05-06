@@ -1,0 +1,836 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vite/Rollup 插件 API + Unplugin · P7.1 · Vite & 构建工具深度学习</title>
+    <meta name="description" content="Plugin 是 bundler 的扩展机制。Rollup plugin hooks: resolveId / load / transform / buildStart / generateBundle / writeBundle 等。Vite 在 Rollup hooks 之上加: config / configResolved / configureServer / handleHotUpdate / transformIndexHtml。Plugin 顺序: pre / default / post。Unplugin（Anthony Fu）跨 Vite/Rollup/Webpack/esbuild/Rspack 的 plugin 抽象。典型 plugin: vite-plugin-react / vue / pwa / pages / unplugin-auto-import / unplugin-icons。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23bd34fe'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Vite & 构建工具深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.25 305); color: #fff">Vite</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P7 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · 插件 + 下一代横评</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-plugins.html" class="active">01 · Vite/Rollup 插件 API + Unplugin</a></li>
+          <li><a href="02-next-gen.html">02 · 下一代构建工具横评</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Vite & 构建工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · 插件 + 下一代横评</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 插件 API + Unplugin</span>
+        </nav>
+        <h1>Vite/Rollup 插件 API + Unplugin</h1>
+        <p class="lead">
+          Plugin 是 bundler 的<strong>扩展机制</strong>。Rollup plugin API 是事实标准（Vite/Rolldown/Bun build 都基于或兼容）。<strong>Rollup hooks</strong>: resolveId / load / transform / buildStart / generateBundle / writeBundle 等；<strong>Vite 在 Rollup hooks 之上加</strong>: config / configResolved / configureServer / handleHotUpdate / transformIndexHtml；<strong>Plugin 顺序</strong>: pre / default / post 三档。<strong>Unplugin</strong>（Anthony Fu）让一份 plugin 代码跑在 Vite/Rollup/Webpack/esbuild/Rspack 多个 bundler 上。<strong>典型 plugin</strong>: vite-plugin-react/vue/pwa/pages / unplugin-auto-import / unplugin-icons。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P2（Vite 架构）+ P3（ESM）</span>
+          <span><strong>主要来源</strong> Rollup plugin API · Vite plugin docs · Unplugin · Anthony Fu blog</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Rollup plugin API 是事实标准</strong>—— Vite / Rolldown / Bun build 都基于或兼容 Rollup API。学一次跨工具用。</li>
+          <li><strong>核心 hooks</strong>：<strong>resolveId</strong>（把 import 字符串解析到文件路径）/ <strong>load</strong>（读取文件内容）/ <strong>transform</strong>（改文件内容，编译）/ <strong>buildStart / buildEnd</strong>（生命周期）/ <strong>generateBundle / writeBundle</strong>（产物生成）。</li>
+          <li><strong>Vite 在 Rollup hooks 之上加</strong>：<strong>config / configResolved</strong>（访问 Vite 配置）/ <strong>configureServer</strong>（在 dev server 上加 middleware）/ <strong>handleHotUpdate</strong>（自定义 HMR）/ <strong>transformIndexHtml</strong>（处理 index.html）。这些是 Vite 特有功能。</li>
+          <li><strong>Plugin 顺序：pre / default / post 三档</strong>—— Vite 内置 plugin 有固定顺序；用户 plugin 默认 default。某些 plugin（如 React Refresh）必须 pre。</li>
+          <li><strong>Unplugin（Anthony Fu）</strong>—— 跨 Vite / Rollup / Webpack / esbuild / Rspack 的 plugin 抽象。让 plugin 作者维护一份代码。Vue 生态广泛使用（Anthony Fu 是 Vue 团队 + Vite 核心）。</li>
+          <li><strong>典型 plugin 例子</strong>：vite-plugin-react / vite-plugin-vue（框架）/ vite-plugin-pwa（PWA）/ vite-plugin-pages（文件路由）/ unplugin-auto-import（自动 import）/ unplugin-icons（icon component）。</li>
+          <li><strong>写 plugin 的常见 mistake</strong>：transform 顺序错（应该 pre 但用了 default）/ 没处理 query string（<code>?direct</code> / <code>?worker</code>）/ sourcemap 丢失（transform 没返回 map）/ HMR 没正确处理。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Rollup plugin 基本结构</h3>
+        <pre class="code"><code class="lang-typescript">// 最简 plugin
+function myPlugin(options) {
+  return {
+    name: 'my-plugin',   // 必需，用于错误信息
+
+    // 各种 hooks（按需实现）
+    resolveId(source, importer) { ... },
+    load(id) { ... },
+    transform(code, id) { ... },
+    buildStart() { ... },
+    generateBundle(options, bundle) { ... }
+  };
+}
+
+// 使用
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  plugins: [myPlugin({ option: 'value' })]
+});</code></pre>
+
+        <h3>Rollup hooks 详解</h3>
+
+        <h4>resolveId hook</h4>
+        <p>把 import 字符串解析到文件路径。最常用于"虚拟模块"和"自定义路径解析"：</p>
+        <pre class="code"><code class="lang-javascript">{
+  name: 'virtual-module',
+  resolveId(source) {
+    if (source === 'virtual:my-module') {
+      return source;   // 返回字符串 = 这就是 final id
+    }
+    return null;       // 返回 null = 让其他 plugin 处理
+  }
+}</code></pre>
+        <p>典型场景：</p>
+        <ul>
+          <li>虚拟模块（如 vite-plugin-pages 把 <code>virtual:routes</code> 解析）</li>
+          <li>自定义 alias</li>
+          <li>"package 没有但生成"的场景</li>
+        </ul>
+
+        <h4>load hook</h4>
+        <p>读 id 对应的文件内容。配合 resolveId 实现虚拟模块：</p>
+        <pre class="code"><code class="lang-javascript">{
+  name: 'virtual-module',
+  resolveId(source) {
+    if (source === 'virtual:routes') return source;
+    return null;
+  },
+  load(id) {
+    if (id === 'virtual:routes') {
+      // 返回虚拟模块内容
+      return `export const routes = [
+        { path: '/', component: () =&gt; import('./Home') },
+        { path: '/about', component: () =&gt; import('./About') }
+      ];`;
+    }
+    return null;   // 让 Rollup 自己读
+  }
+}</code></pre>
+
+        <h4>transform hook</h4>
+        <p>改文件内容（编译 / 注入代码 / 等）。<strong>最常用 hook</strong>：</p>
+        <pre class="code"><code class="lang-javascript">{
+  name: 'inject-version',
+  transform(code, id) {
+    if (id.endsWith('main.tsx')) {
+      return {
+        code: `const __VERSION__ = '${pkgVersion}';\n${code}`,
+        map: null   // 简单注入不影响 sourcemap，可以 null
+      };
+    }
+    return null;
+  }
+}</code></pre>
+        <p><strong>关键</strong>：</p>
+        <ul>
+          <li>返回 <code>null</code> 或 <code>undefined</code> = 不修改</li>
+          <li>返回 <code>{ code, map }</code> = 修改后的代码 + sourcemap</li>
+          <li>map 应该<strong>正确生成</strong>（详见 <a href="../06-compilers/02-source-maps.html">P6.2</a>）</li>
+        </ul>
+
+        <h4>buildStart / buildEnd hook</h4>
+        <p>构建生命周期：</p>
+        <pre class="code"><code class="lang-javascript">{
+  name: 'log-build',
+  buildStart() {
+    this.info('Build started');   // 用 plugin context 的 info / warn / error
+  },
+  buildEnd(error) {
+    if (error) this.error(error);
+    else this.info('Build finished');
+  }
+}</code></pre>
+
+        <h4>generateBundle hook</h4>
+        <p>产物生成阶段，可以修改 bundle 输出：</p>
+        <pre class="code"><code class="lang-javascript">{
+  name: 'add-banner',
+  generateBundle(options, bundle) {
+    for (const fileName in bundle) {
+      const chunk = bundle[fileName];
+      if (chunk.type === 'chunk') {
+        chunk.code = `/* My Banner v1.0 */\n${chunk.code}`;
+      }
+    }
+  }
+}</code></pre>
+
+        <h4>writeBundle hook</h4>
+        <p>产物写入磁盘后调用。用于 build 后的副作用（如 copy 资源）：</p>
+        <pre class="code"><code class="lang-javascript">{
+  name: 'copy-extra',
+  writeBundle(options, bundle) {
+    fs.copyFileSync('./LICENSE', `${options.dir}/LICENSE`);
+  }
+}</code></pre>
+
+        <h3>Vite 特有 hooks</h3>
+        <p>Vite 在 Rollup hooks 基础上加了几个 Vite 特有 hook：</p>
+
+        <h4>config / configResolved</h4>
+        <pre class="code"><code class="lang-javascript">{
+  name: 'configure-vite',
+  config(config, env) {
+    // 修改 Vite 配置（合并）
+    return {
+      define: { __DEV__: env.mode === 'development' }
+    };
+  },
+  configResolved(resolvedConfig) {
+    // 配置已 resolve，存下来用
+    this.viteConfig = resolvedConfig;
+  }
+}</code></pre>
+
+        <h4>configureServer</h4>
+        <p>在 Vite dev server 上加 middleware：</p>
+        <pre class="code"><code class="lang-javascript">{
+  name: 'add-api-mock',
+  configureServer(server) {
+    server.middlewares.use('/api', (req, res, next) =&gt; {
+      if (req.url === '/users') {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify([{ id: 1, name: 'alice' }]));
+      } else {
+        next();
+      }
+    });
+  }
+}</code></pre>
+
+        <h4>handleHotUpdate（自定义 HMR）</h4>
+        <pre class="code"><code class="lang-javascript">{
+  name: 'custom-hmr',
+  handleHotUpdate({ file, server, modules }) {
+    if (file.endsWith('.svg')) {
+      // SVG 改了，重新加载使用它的所有模块
+      server.ws.send({ type: 'full-reload' });
+      return [];
+    }
+    return modules;   // 默认行为
+  }
+}</code></pre>
+
+        <h4>transformIndexHtml</h4>
+        <p>处理 index.html（注入 script / meta / 等）：</p>
+        <pre class="code"><code class="lang-javascript">{
+  name: 'inject-meta',
+  transformIndexHtml(html) {
+    return html.replace(
+      '&lt;/head&gt;',
+      `&lt;meta name="version" content="${VERSION}" /&gt;\n  &lt;/head&gt;`
+    );
+  }
+}</code></pre>
+        <p>或返回 tag descriptor（更结构化）：</p>
+        <pre class="code"><code class="lang-javascript">transformIndexHtml(html) {
+  return [
+    {
+      tag: 'meta',
+      attrs: { name: 'version', content: VERSION },
+      injectTo: 'head'
+    },
+    {
+      tag: 'script',
+      attrs: { src: '/analytics.js' },
+      injectTo: 'body-prepend'
+    }
+  ];
+}</code></pre>
+
+        <h3>Plugin 顺序：pre / default / post</h3>
+        <p>plugin 数组中的顺序决定 hook 执行顺序，<strong>但</strong>有 <code>enforce</code> 选项强制：</p>
+        <pre class="code"><code class="lang-javascript">{
+  name: 'must-run-first',
+  enforce: 'pre',          // 'pre' | 'post'，省略 = default
+  transform(code, id) { ... }
+}</code></pre>
+        <p>顺序：</p>
+        <ol>
+          <li>所有 enforce: 'pre' 的 plugin（按数组顺序）</li>
+          <li>Vite 内置 plugin（resolve / esbuild transform / etc.）</li>
+          <li>所有 default plugin</li>
+          <li>所有 enforce: 'post' 的 plugin</li>
+        </ol>
+        <p>典型用法：</p>
+        <ul>
+          <li>React Refresh transform 必须 'pre'（在 esbuild transform 之前）</li>
+          <li>Compression / minification 必须 'post'（最后处理）</li>
+        </ul>
+
+        <h3>plugin context</h3>
+        <p>hook 函数里 <code>this</code> 是 plugin context，提供工具：</p>
+        <pre class="code"><code class="lang-javascript">{
+  name: 'my-plugin',
+  async transform(code, id) {
+    // 报错（这个文件失败）
+    this.error('Something wrong', { line: 5, column: 10 });
+
+    // 警告
+    this.warn('Deprecated usage');
+
+    // 信息
+    this.info('Processing ' + id);
+
+    // 解析依赖
+    const resolved = await this.resolve('./other-file', id);
+    if (resolved) console.log(resolved.id);
+
+    // 加载文件
+    const moduleInfo = await this.load({ id: resolved.id });
+
+    // emitFile（产物中加文件）
+    const refId = this.emitFile({
+      type: 'asset',
+      name: 'my-asset.txt',
+      source: 'hello'
+    });
+    return `const ASSET = ${this.getFileName(refId)};`;
+  }
+}</code></pre>
+
+        <h3>典型 plugin 例子</h3>
+
+        <h4>vite-plugin-react</h4>
+        <p>给 Vite 加 React 支持：</p>
+        <ul>
+          <li>JSX transform（用 esbuild 或 SWC）</li>
+          <li>React Refresh 注入</li>
+          <li>Babel plugin 集成（如 emotion / styled-components）</li>
+        </ul>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+import react from '@vitejs/plugin-react';
+
+export default {
+  plugins: [
+    react({
+      babel: {
+        plugins: ['babel-plugin-styled-components']
+      }
+    })
+  ]
+};</code></pre>
+
+        <h4>vite-plugin-pwa</h4>
+        <p>给 Vite app 加 PWA / Service Worker / manifest：</p>
+        <pre class="code"><code class="lang-javascript">import { VitePWA } from 'vite-plugin-pwa';
+
+export default {
+  plugins: [
+    VitePWA({
+      registerType: 'autoUpdate',
+      manifest: {
+        name: 'My App',
+        short_name: 'MyApp',
+        icons: [{ src: '/icon.png', sizes: '192x192', type: 'image/png' }]
+      }
+    })
+  ]
+};</code></pre>
+
+        <h4>vite-plugin-pages（文件路由）</h4>
+        <pre class="code"><code class="lang-javascript">import Pages from 'vite-plugin-pages';
+
+export default {
+  plugins: [
+    react(),
+    Pages({ dirs: 'src/pages' })
+  ]
+};
+
+// src/main.tsx
+import routes from 'virtual:generated-pages-react';
+// 自动从 src/pages/ 文件夹生成路由
+</code></pre>
+
+        <h3>Unplugin：跨 bundler 抽象</h3>
+        <p>问题：plugin 作者要维护多个版本（Vite plugin / Rollup plugin / Webpack plugin / esbuild plugin）—— 重复代码。</p>
+        <p><strong>Unplugin</strong>（Anthony Fu, 2022-）解决：定义一份 plugin，自动适配多 bundler：</p>
+        <pre class="code"><code class="lang-typescript">// my-plugin.ts
+import { createUnplugin } from 'unplugin';
+
+export const unplugin = createUnplugin((options) =&gt; ({
+  name: 'my-plugin',
+
+  resolveId(source) {
+    if (source === 'virtual:my') return source;
+  },
+
+  load(id) {
+    if (id === 'virtual:my') return 'export const x = 1;';
+  },
+
+  transform(code, id) {
+    if (id.endsWith('.tsx')) {
+      return code.replace('FOO', 'BAR');
+    }
+  }
+}));
+
+// 导出多 bundler 适配
+export const vitePlugin = unplugin.vite;
+export const rollupPlugin = unplugin.rollup;
+export const webpackPlugin = unplugin.webpack;
+export const esbuildPlugin = unplugin.esbuild;
+export const rspackPlugin = unplugin.rspack;</code></pre>
+        <p>用户在自家 bundler 用：</p>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+import { vitePlugin as myPlugin } from 'my-plugin';
+export default { plugins: [myPlugin()] };
+
+// webpack.config.js
+const { webpackPlugin: myPlugin } = require('my-plugin');
+module.exports = { plugins: [myPlugin()] };</code></pre>
+        <p><strong>Unplugin 生态</strong>（2026）：</p>
+        <ul>
+          <li>unplugin-auto-import（自动 import React/Vue 等）</li>
+          <li>unplugin-icons（icon as component）</li>
+          <li>unplugin-vue-components（Vue 自动注册组件）</li>
+          <li>unplugin-vue-router</li>
+          <li>很多其他</li>
+        </ul>
+
+        <h3>Plugin 调试</h3>
+        <p>调 plugin 不容易（要看 transform 输入输出）：</p>
+        <pre class="code"><code class="lang-javascript">{
+  name: 'debug-plugin',
+  transform(code, id) {
+    if (id.endsWith('.tsx')) {
+      console.log('--- transform input:', id);
+      console.log(code.substring(0, 200));
+      const result = doTransform(code);
+      console.log('--- transform output:');
+      console.log(result.code.substring(0, 200));
+      return result;
+    }
+  }
+}</code></pre>
+        <p>或用 Vite debug 模式：</p>
+        <pre class="code"><code class="lang-bash">$ DEBUG="vite:*" vite</code></pre>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · 写自定义 SVG icon plugin</h3>
+        <p>需求：<code>import Icon from './my-icon.svg?component'</code>，得到 React component。</p>
+        <pre class="code"><code class="lang-typescript">// vite-plugin-svg-component.ts
+import type { Plugin } from 'vite';
+import fs from 'node:fs';
+
+export default function svgComponent(): Plugin {
+  return {
+    name: 'svg-component',
+    enforce: 'pre',
+
+    async transform(code, id) {
+      if (!id.match(/\.svg\?component$/)) return;
+
+      // 读 SVG 文件（去掉 ?component query）
+      const filePath = id.replace(/\?component$/, '');
+      const svg = await fs.promises.readFile(filePath, 'utf8');
+
+      // 生成 React component
+      return `
+        import React from 'react';
+        export default function Icon(props) {
+          return ${jsxFromSvg(svg)};   // 简化：把 svg 转成 JSX
+        }
+      `;
+    }
+  };
+}</code></pre>
+
+        <h3>场景 B · 自动注入版本号到所有 file</h3>
+        <pre class="code"><code class="lang-typescript">import type { Plugin } from 'vite';
+import { execSync } from 'node:child_process';
+
+export default function injectVersion(): Plugin {
+  const version = execSync('git rev-parse --short HEAD').toString().trim();
+
+  return {
+    name: 'inject-version',
+    config() {
+      return {
+        define: {
+          __VERSION__: JSON.stringify(version)
+        }
+      };
+    }
+  };
+}
+
+// 用户代码
+console.log(__VERSION__);   // git commit hash</code></pre>
+
+        <h3>场景 C · 生成虚拟路由模块</h3>
+        <pre class="code"><code class="lang-typescript">// vite-plugin-routes.ts
+import { glob } from 'glob';
+import type { Plugin } from 'vite';
+
+export default function routes(): Plugin {
+  return {
+    name: 'routes',
+
+    resolveId(id) {
+      if (id === 'virtual:routes') return id;
+    },
+
+    async load(id) {
+      if (id !== 'virtual:routes') return;
+
+      const files = await glob('src/pages/**/*.tsx');
+      const routes = files.map(file =&gt; {
+        const path = file.replace('src/pages', '').replace('.tsx', '');
+        return `{ path: '${path}', component: () =&gt; import('${file}') }`;
+      });
+
+      return `export const routes = [${routes.join(',\n')}];`;
+    }
+  };
+}
+
+// 用户代码
+import { routes } from 'virtual:routes';
+// routes = [{ path: '/Home', component: () =&gt; import('...') }, ...]</code></pre>
+
+        <h3>场景 D · dev 模拟 API（mock）</h3>
+        <pre class="code"><code class="lang-typescript">import type { Plugin } from 'vite';
+
+export default function apiMock(): Plugin {
+  return {
+    name: 'api-mock',
+
+    configureServer(server) {
+      server.middlewares.use('/api', (req, res, next) =&gt; {
+        const url = req.url;
+
+        if (url === '/users') {
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify([{ id: 1, name: 'alice' }]));
+        } else if (url?.startsWith('/posts/')) {
+          const id = url.split('/').pop();
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ id, title: 'Post ' + id }));
+        } else {
+          next();
+        }
+      });
+    }
+  };
+}</code></pre>
+
+        <h3>场景 E · 用 Unplugin 写跨工具 plugin</h3>
+        <pre class="code"><code class="lang-typescript">// unplugin-strip-debug/src/index.ts
+import { createUnplugin } from 'unplugin';
+
+export interface Options {
+  enabled?: boolean;
+}
+
+export const unplugin = createUnplugin&lt;Options&gt;((options = {}) =&gt; {
+  const enabled = options.enabled ?? true;
+
+  return {
+    name: 'unplugin-strip-debug',
+
+    transformInclude(id) {
+      return id.endsWith('.ts') || id.endsWith('.tsx');
+    },
+
+    transform(code) {
+      if (!enabled) return code;
+      // 删除所有 debug() 调用
+      return code.replace(/debug\([^)]*\);?/g, '');
+    }
+  };
+});
+
+export const vite = unplugin.vite;
+export const rollup = unplugin.rollup;
+export const webpack = unplugin.webpack;
+export const esbuild = unplugin.esbuild;</code></pre>
+
+        <h3>场景 F · 修改 index.html（注入 analytics）</h3>
+        <pre class="code"><code class="lang-typescript">import type { Plugin } from 'vite';
+
+export default function analytics(id: string): Plugin {
+  return {
+    name: 'analytics',
+
+    transformIndexHtml(html, ctx) {
+      // 仅 production 注入
+      if (ctx.server) return html;
+
+      return [
+        {
+          tag: 'script',
+          attrs: { async: true, src: `https://www.googletagmanager.com/gtag/js?id=${id}` },
+          injectTo: 'head'
+        },
+        {
+          tag: 'script',
+          children: `window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            gtag('js', new Date());
+            gtag('config', '${id}');`,
+          injectTo: 'head'
+        }
+      ];
+    }
+  };
+}</code></pre>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：完整 plugin</span></h2>
+
+        <h3>带类型定义的 Vite plugin</h3>
+        <pre class="code"><code class="lang-typescript">// vite-plugin-banner.ts
+import type { Plugin, ResolvedConfig } from 'vite';
+
+export interface BannerOptions {
+  text: string;
+  files?: string | RegExp;
+}
+
+export default function banner(options: BannerOptions): Plugin {
+  let config: ResolvedConfig;
+  const { text, files = /\.js$/ } = options;
+
+  return {
+    name: 'banner',
+
+    configResolved(resolvedConfig) {
+      config = resolvedConfig;
+    },
+
+    generateBundle(_, bundle) {
+      for (const fileName in bundle) {
+        const chunk = bundle[fileName];
+        if (chunk.type !== 'chunk') continue;
+
+        const matches =
+          typeof files === 'string'
+            ? fileName.includes(files)
+            : files.test(fileName);
+
+        if (matches) {
+          chunk.code = `/* ${text} */\n${chunk.code}`;
+        }
+      }
+    }
+  };
+}</code></pre>
+        <p>使用：</p>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+import banner from './vite-plugin-banner';
+
+export default {
+  plugins: [
+    banner({ text: 'My App v1.0 (c) 2026' })
+  ]
+};</code></pre>
+
+        <h3>plugin 处理 query string（asset import）</h3>
+        <pre class="code"><code class="lang-typescript">// 处理 import logo from './logo.svg?inline'
+{
+  name: 'svg-loader',
+
+  async load(id) {
+    if (!id.match(/\.svg\?inline$/)) return;
+
+    const filePath = id.replace(/\?inline$/, '');
+    const svg = await fs.promises.readFile(filePath, 'utf8');
+    const dataUrl = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+    return `export default ${JSON.stringify(dataUrl)};`;
+  }
+}</code></pre>
+
+        <h3>测试 plugin</h3>
+        <pre class="code"><code class="lang-typescript">// __tests__/banner.test.ts
+import { build } from 'vite';
+import banner from '../src/vite-plugin-banner';
+
+test('banner is added', async () =&gt; {
+  const result = await build({
+    root: __dirname + '/fixtures',
+    plugins: [banner({ text: 'Hello' })],
+    build: {
+      write: false,   // 不写文件，返回 result
+      lib: { entry: 'index.js', formats: ['es'] }
+    }
+  });
+
+  const code = (result as any).output[0].code;
+  expect(code).toMatch(/^\/\* Hello \*\//);
+});</code></pre>
+
+        <h3>测试 dev server middleware</h3>
+        <pre class="code"><code class="lang-typescript">import { createServer } from 'vite';
+import apiMock from '../src/vite-plugin-api-mock';
+
+test('api mock works', async () =&gt; {
+  const server = await createServer({
+    plugins: [apiMock()],
+    server: { port: 0 }
+  });
+  await server.listen();
+
+  const resolvedUrls = server.resolvedUrls!;
+  const baseUrl = resolvedUrls.local[0];
+
+  const res = await fetch(baseUrl + 'api/users');
+  const data = await res.json();
+  expect(data).toEqual([{ id: 1, name: 'alice' }]);
+
+  await server.close();
+});</code></pre>
+
+        <h3>用 Unplugin starter</h3>
+        <pre class="code"><code class="lang-bash">$ npx create-unplugin my-plugin
+$ cd my-plugin
+# 已经包含 Vite/Rollup/Webpack/esbuild 适配 + 测试 setup</code></pre>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：transform 没返回 sourcemap</h3>
+        <p>详见 <a href="../06-compilers/02-source-maps.html">P6.2</a>。<strong>修改 code 必须返回 map</strong>，否则下游 plugin 的 sourcemap 链断。</p>
+
+        <h3>陷阱 2：忘记处理 query string</h3>
+        <p>Vite 用 query 区分不同导入方式（<code>?direct</code> / <code>?worker</code> / <code>?raw</code> / <code>?url</code>）。如果 plugin 不处理 query，可能<strong>错误处理或忽略</strong>：</p>
+        <pre class="code"><code class="lang-javascript">// ❌ 没考虑 query
+transform(code, id) {
+  if (id.endsWith('.ts')) {   // 'foo.ts?worker' 不匹配！
+    ...
+  }
+}
+
+// ✅ 用 path-only 部分检查
+transform(code, id) {
+  const [path, query] = id.split('?');
+  if (path.endsWith('.ts')) {
+    ...
+  }
+}</code></pre>
+
+        <h3>陷阱 3：plugin 顺序错</h3>
+        <p>典型：自定义 transform 在 esbuild transform 之后跑（应该之前）。</p>
+        <p>对策：明确设 <code>enforce: 'pre'</code>。</p>
+
+        <h3>陷阱 4：dev 和 build 行为不一致</h3>
+        <p>有些 plugin hook 只在 dev 调用（configureServer）；有些只 build（generateBundle）。<strong>测试两种模式</strong>：</p>
+        <pre class="code"><code class="lang-bash">$ vite                    # dev
+$ vite build &amp;&amp; vite preview   # build + preview</code></pre>
+
+        <h3>陷阱 5：在 transform 里 fetch 远程资源</h3>
+        <pre class="code"><code class="lang-javascript">// ❌ 慢
+async transform(code, id) {
+  const remote = await fetch('https://api.example.com/data');   // 每次 transform 都 fetch！
+  return code.replace('REMOTE_DATA', JSON.stringify(remote));
+}
+
+// ✅ buildStart 只一次
+async buildStart() {
+  this.remoteData = await fetch('https://api.example.com/data').then(r =&gt; r.json());
+},
+transform(code, id) {
+  return code.replace('REMOTE_DATA', JSON.stringify(this.remoteData));
+}</code></pre>
+
+        <h3>陷阱 6：忘记 invalidate 模块（HMR 后）</h3>
+        <p>Vite plugin 修改了某个文件相关的虚拟模块，要让 HMR 知道：</p>
+        <pre class="code"><code class="lang-javascript">{
+  configureServer(server) {
+    fs.watch('config.json', () =&gt; {
+      const mod = server.moduleGraph.getModuleById('virtual:config');
+      if (mod) server.moduleGraph.invalidateModule(mod);
+      server.ws.send({ type: 'full-reload' });
+    });
+  }
+}</code></pre>
+
+        <h3>陷阱 7：plugin 没正确处理 SSR</h3>
+        <p>Vite plugin 在 SSR 模式下行为可能不同。<code>config</code> hook 接收 ssr context；<code>load</code> 等 hook 也有 ssr 参数：</p>
+        <pre class="code"><code class="lang-javascript">{
+  load(id, options) {
+    const isSSR = options?.ssr;
+    if (isSSR) {
+      // 服务端不同处理
+    }
+  }
+}</code></pre>
+
+        <h3>陷阱 8：没 publish Unplugin 多版本</h3>
+        <p>用 Unplugin 写 plugin，但 npm publish 时<strong>只导出 vite</strong> → 用户用 Webpack 时找不到。</p>
+        <p>对策：package.json exports 字段：</p>
+        <pre class="code"><code class="lang-json">{
+  "exports": {
+    "./vite": "./dist/vite.js",
+    "./rollup": "./dist/rollup.js",
+    "./webpack": "./dist/webpack.js",
+    "./esbuild": "./dist/esbuild.js",
+    "./rspack": "./dist/rspack.js"
+  }
+}</code></pre>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>官方文档</h3>
+        <ul>
+          <li><a href="https://vitejs.dev/guide/api-plugin.html" target="_blank" rel="noopener">Vite Plugin API</a></li>
+          <li><a href="https://rollupjs.org/plugin-development/" target="_blank" rel="noopener">Rollup Plugin Development</a></li>
+          <li><a href="https://github.com/unjs/unplugin" target="_blank" rel="noopener">Unplugin</a></li>
+        </ul>
+
+        <h3>典型 plugin 源码</h3>
+        <ul>
+          <li><a href="https://github.com/vitejs/vite-plugin-react" target="_blank" rel="noopener">@vitejs/plugin-react</a></li>
+          <li><a href="https://github.com/vitejs/vite-plugin-vue" target="_blank" rel="noopener">@vitejs/plugin-vue</a></li>
+          <li><a href="https://github.com/vite-pwa/vite-plugin-pwa" target="_blank" rel="noopener">vite-plugin-pwa</a></li>
+          <li><a href="https://github.com/hannoeru/vite-plugin-pages" target="_blank" rel="noopener">vite-plugin-pages</a></li>
+          <li><a href="https://github.com/unplugin/unplugin-auto-import" target="_blank" rel="noopener">unplugin-auto-import</a></li>
+          <li><a href="https://github.com/unplugin/unplugin-icons" target="_blank" rel="noopener">unplugin-icons</a></li>
+        </ul>
+
+        <h3>Anthony Fu 博客</h3>
+        <ul>
+          <li><a href="https://antfu.me/posts/" target="_blank" rel="noopener">antfu.me/posts</a> · Unplugin 设计 + Vite plugin 经验</li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="02-next-gen.html">P7.2 下一代构建工具横评 + 选型</a></li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../06-compilers/02-source-maps.html">P6.2 Source Maps</a> · plugin 必须正确传 sourcemap</li>
+          <li><a href="../05-hmr/01-hmr-and-react-refresh.html">P5.1 HMR</a> · plugin 接 HMR API</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

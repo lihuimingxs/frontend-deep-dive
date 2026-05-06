@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>下一代构建工具横评 + 选型 · P7.2 · Vite & 构建工具深度学习</title>
+    <meta name="description" content="2026 选什么 bundler。Turbopack（Vercel, Tobias Koppers, Rust + 增量编译, Next.js 15 stable）/ Rspack（字节跳动, Rust + Webpack 兼容）/ Rolldown（Vite team, Rust + Rollup 兼容, 2026-Q2 stable 接班 Vite build）/ Bun build（Bun team, Zig + JSC 集成）/ Farm（中国社区, Rust + Vite plugin 兼容）。选型决策树 + 2026-2030 趋势：Webpack 持续退场 / Vite + Rolldown 双标准 / Rust bundlers 占 90%+ / Component Model 让 wasm bundler 集成。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23bd34fe'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Vite & 构建工具深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.25 305); color: #fff">Vite</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P7 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · 插件 + 下一代横评</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-plugins.html">01 · Vite/Rollup 插件 API + Unplugin</a></li>
+          <li><a href="02-next-gen.html" class="active">02 · 下一代构建工具横评</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Vite & 构建工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · 插件 + 下一代横评</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 下一代构建工具横评</span>
+        </nav>
+        <h1>下一代构建工具横评 + 选型</h1>
+        <p class="lead">
+          <strong>2026 选什么 bundler</strong>。这一章把 P1.2 同代人横评升级 —— 聚焦"<strong>2024+ 下一代</strong>"5 个 Rust/Zig bundler：<strong>Turbopack</strong>（Vercel, Tobias Koppers）/ <strong>Rspack</strong>（字节跳动）/ <strong>Rolldown</strong>（Vite team）/ <strong>Bun build</strong>（Bun team）/ <strong>Farm</strong>（中国社区）。每个绑定一个生态。<strong>选型决策树 + 2026-2030 趋势</strong>：Webpack 持续退场 / Vite + Rolldown 双标准 / Rust bundlers 占 90%+ 新项目 / Component Model 让 wasm + bundler 进一步集成。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P1.2（同代人横评）+ P2-P6 全部</span>
+          <span><strong>主要来源</strong> 各项目官方 + 性能 benchmark + Twitter / 博客</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>5 个下一代 bundler 同时存在</strong>—— Turbopack / Rspack / Rolldown / Bun build / Farm。<strong>每个绑定一个生态</strong>：Turbopack→Next.js / Rspack→Webpack 兼容 / Rolldown→Vite + Rollup / Bun build→Bun runtime / Farm→Vite 兼容。<strong>独立用某个 Rust bundler 罕见</strong>。</li>
+          <li><strong>实现语言</strong>—— 4 个 Rust（Turbopack/Rspack/Rolldown/Farm）+ 1 个 Zig（Bun build）。<strong>都比 JS bundler 快 5-50x</strong>。</li>
+          <li><strong>Turbopack（Vercel）</strong>—— Tobias Koppers（Webpack 原作者跳槽）主导；增量编译 + 共享缓存；Next.js 15+ production stable。<strong>独立用罕见</strong>，生态围绕 Next.js。</li>
+          <li><strong>Rspack（字节跳动）</strong>—— Webpack API 兼容；让旧项目"换 Rspack 即加速"。大型企业（字节自家 / 抖音 / TikTok）用。<strong>新项目不会主动选</strong>（Vite 更适合）。</li>
+          <li><strong>Rolldown（Vite team）</strong>—— Rollup plugin API 兼容；2026-Q2 stable 后<strong>接班 Vite build mode</strong>。Vite 用户几乎无感切换。也能独立用做库打包。</li>
+          <li><strong>Bun build</strong>—— 与 Bun runtime 深度集成；Zig 实现 + JSC parser 共享。极快。<strong>非 Bun 项目用不上</strong>。详见 <a href="../../bun/04-toolchain/03-bun-build.html">Bun P4.3</a>。</li>
+          <li><strong>Farm（中国社区）</strong>—— Vite plugin 兼容 + 比 Vite 快 5-10x（声称）。用户群较小但活跃。<strong>愿意尝试新工具的团队</strong>。</li>
+          <li><strong>2026-2030 趋势</strong>—— Webpack 持续退场（仍有大量存量但增长停滞）/ Vite + Rolldown 成为 app dev/build 双标准 / Rust bundlers 占 90%+ 新项目 / Component Model 让 wasm + bundler 进一步集成（如 wasm 作为 build cache 后端）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Turbopack：Tobias Koppers 的"Webpack 重写"</h3>
+        <p><strong>背景</strong>：Tobias Koppers（Webpack 原作者，2014-2022 维护 Webpack 8 年）2022-10 跳槽 Vercel。Vercel 重金支持他做 <strong>Turbopack</strong>—— 用 Rust 重写一个"现代 Webpack"。</p>
+        <p>2022-11 alpha 发布时声称 <strong>"Webpack 700x 快"</strong>—— 但实际 benchmark 受争议（被指 misleading）。Vercel 2023 年低调修正叙述："增量编译性能领先"。</p>
+        <p>2024-10 Next.js 15 production stable —— Turbopack 第一次正式 production-ready。</p>
+        <p><strong>关键设计</strong>：</p>
+        <p><strong>(1) Rust 实现 + 高度并行</strong>—— 类似 esbuild Go，但 Rust 让内存管理更精细</p>
+        <p><strong>(2) 增量编译</strong>—— Tobias 在 Webpack 时代的经验：增量是关键。Turbopack 用 <strong>Turbo 引擎</strong>（Vercel 自家）做<strong>函数级 memoization</strong>—— 每个编译步骤的输入输出缓存，相同输入直接返回缓存</p>
+        <p><strong>(3) 共享缓存</strong>—— 多个项目共享构建缓存（experimental）；让 monorepo 第二个 build 几乎免费</p>
+        <p><strong>(4) Next.js 深度集成</strong>—— RSC / Server Actions / App Router / Turbopack 是同一团队设计。Next 15 默认 turbo dev，turbo build 也 stable</p>
+        <p><strong>限制</strong>：</p>
+        <ul>
+          <li><strong>plugin ecosystem 弱</strong>—— 不兼容 Webpack/Rollup plugin</li>
+          <li>独立用罕见 —— 文档 / 示例都围绕 Next.js</li>
+          <li>不开源（部分 Vercel 闭源）—— 社区贡献困难</li>
+        </ul>
+        <p><strong>典型用户</strong>：Next.js 15+ 项目（默认）。</p>
+
+        <h3>Rspack：字节跳动的"Webpack Rust 兼容版"</h3>
+        <p><strong>背景</strong>：字节跳动 2022 启动 Rspack —— Webpack 项目太多（抖音 / TikTok / Lark / 飞书等），但 Webpack 慢。<strong>不能全部迁移 Vite</strong>（项目太大），所以做"<strong>API 兼容的 Rust 替代</strong>"。</p>
+        <p>2023-03 Rspack 0.1 / 2024 v1.0 stable。</p>
+        <p><strong>关键设计</strong>：</p>
+        <p><strong>(1) Webpack API 90%+ 兼容</strong>—— 大部分配置 / loader / plugin 直接用</p>
+        <p><strong>(2) Rust 实现 + 极度优化</strong>—— 5-10x Webpack 速度</p>
+        <p><strong>(3) 内置 SWC</strong>—— 转译用 SWC（不是 Babel）</p>
+        <p><strong>(4) Module Federation 支持</strong>—— Webpack 独家特性，Rspack 也实现</p>
+        <p><strong>典型迁移</strong>：</p>
+        <pre class="code"><code class="lang-bash"># 把 webpack 命令换成 rspack
+$ npm uninstall webpack webpack-cli webpack-dev-server
+$ npm install -D @rspack/core @rspack/cli @rspack/dev-server
+
+# 配置只需改：
+# webpack.config.js → rspack.config.js
+# 大部分内容直接复制</code></pre>
+        <p>启动 / build 速度立刻 5-10x。</p>
+        <p><strong>限制</strong>：</p>
+        <ul>
+          <li>少数 Webpack plugin 不兼容（特别是用 internal API 的）</li>
+          <li>新项目不会选（Vite 体验更好）</li>
+          <li>仍带 Webpack 的"配置复杂"问题（继承 API）</li>
+        </ul>
+        <p><strong>典型用户</strong>：</p>
+        <ul>
+          <li>字节跳动自家（抖音 / TikTok / Lark / Lynx）</li>
+          <li>大型企业 Webpack 项目，迁移到 Vite 成本太高</li>
+          <li>需要 Module Federation 等 Webpack 独家特性</li>
+        </ul>
+
+        <h3>Rolldown：Vite team 自家继任 Rollup</h3>
+        <p><strong>背景</strong>：尤雨溪（Vite/Vue 作者）2023-08 启动 Rolldown。<strong>动机</strong>：</p>
+        <ul>
+          <li>Vite build mode 用 Rollup，慢（JS 实现）</li>
+          <li>切到 esbuild 不行（plugin 弱、不兼容 Rollup ecosystem）</li>
+          <li>所以做<strong>Rust 实现的 Rollup 兼容版</strong></li>
+        </ul>
+        <p><strong>关键设计</strong>：</p>
+        <p><strong>(1) Rollup plugin API 100% 兼容</strong>—— 用户切换时 plugin 不需改</p>
+        <p><strong>(2) Rust + 并行</strong>—— 速度目标 10x Rollup</p>
+        <p><strong>(3) Vite 深度协调</strong>—— Vite team 主导，与 Vite 演化一致</p>
+        <p><strong>接班路径</strong>：</p>
+        <table>
+          <thead>
+            <tr><th>Vite 版本</th><th>状态</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Vite 5</td><td>仅 Rollup（稳定）</td></tr>
+            <tr><td>Vite 6（2024-11）</td><td>Rollup 默认 + Rolldown 实验性（experimental.rolldown 切换）</td></tr>
+            <tr><td>Vite 7（2026-Q2 预计）</td><td>Rolldown 默认 + Rollup fallback</td></tr>
+            <tr><td>Vite 8+（2027+）</td><td>仅 Rolldown</td></tr>
+          </tbody>
+        </table>
+        <p><strong>对用户影响</strong>：</p>
+        <ul>
+          <li>Vite 用户几乎无感切换</li>
+          <li>build 速度 5-10x 提升</li>
+          <li>plugin ecosystem 不变（Rollup plugin 直接用）</li>
+        </ul>
+        <p><strong>独立用 Rolldown</strong>：库打包替代 Rollup 也可（Rolldown CLI / config 与 Rollup 类似）。</p>
+
+        <h3>Bun build：与 Bun runtime 深度集成</h3>
+        <p>Bun build 是 Bun 自家 bundler。详见 <a href="../../bun/04-toolchain/03-bun-build.html">Bun P4.3</a>。简短：</p>
+        <ul>
+          <li>Zig 实现（不是 Rust）</li>
+          <li>与 Bun JSC parser 共享 → 速度极致</li>
+          <li><code>bun build</code> CLI + <code>Bun.build()</code> JS API</li>
+          <li>Bun.serve 集成 dev server</li>
+          <li>plugin ecosystem 弱</li>
+        </ul>
+        <p><strong>典型用户</strong>：</p>
+        <ul>
+          <li>Bun runtime 项目（npm install + bun run）</li>
+          <li>追求极简的 demo / 工具</li>
+          <li>不需要复杂 plugin</li>
+        </ul>
+
+        <h3>Farm：中国社区的 Rust bundler</h3>
+        <p><strong>背景</strong>：Farm（草根项目，主要中国维护者）2022 启动。<strong>动机</strong>：尝试做"<strong>比 Vite 更快的 Vite</strong>"。</p>
+        <p><strong>关键设计</strong>：</p>
+        <ul>
+          <li>Rust 实现</li>
+          <li>Vite plugin 兼容（部分）</li>
+          <li>声称 5-10x Vite</li>
+        </ul>
+        <p><strong>状态（2026-05）</strong>：</p>
+        <ul>
+          <li>v1.0 已发布（2024）</li>
+          <li>用户群较小（vs Vite 主流）</li>
+          <li>实测加速效果因项目而异（小项目差异不大）</li>
+          <li>遇到问题求助资源少</li>
+        </ul>
+        <p><strong>典型用户</strong>：愿意尝试新工具 + 追求极致速度 + 不怕踩坑的团队。</p>
+
+        <h3>5 工具全维度对比（2026-05）</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>Turbopack</th>
+              <th>Rspack</th>
+              <th>Rolldown</th>
+              <th>Bun build</th>
+              <th>Farm</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>实现语言</td>
+              <td>Rust</td>
+              <td>Rust</td>
+              <td>Rust</td>
+              <td>Zig</td>
+              <td>Rust</td>
+            </tr>
+            <tr>
+              <td>主导组织</td>
+              <td>Vercel</td>
+              <td>字节跳动</td>
+              <td>Vite team</td>
+              <td>Bun team</td>
+              <td>中国社区</td>
+            </tr>
+            <tr>
+              <td>API 兼容</td>
+              <td>自家</td>
+              <td>Webpack</td>
+              <td>Rollup</td>
+              <td>自家</td>
+              <td>Vite plugin</td>
+            </tr>
+            <tr>
+              <td>主要场景</td>
+              <td>Next.js</td>
+              <td>Webpack 大项目迁移</td>
+              <td>Vite build / 库打包</td>
+              <td>Bun runtime</td>
+              <td>追求快</td>
+            </tr>
+            <tr>
+              <td>稳定度</td>
+              <td>Next.js 内 stable</td>
+              <td>v1+ stable</td>
+              <td>2026-Q2 stable 预期</td>
+              <td>v1+ stable</td>
+              <td>v1.0+ stable</td>
+            </tr>
+            <tr>
+              <td>独立用容易</td>
+              <td>❌（Next.js 强绑）</td>
+              <td>✅</td>
+              <td>✅（库 / Vite 内）</td>
+              <td>✅（Bun 项目）</td>
+              <td>✅</td>
+            </tr>
+            <tr>
+              <td>plugin 生态</td>
+              <td>弱（Next 围绕）</td>
+              <td>巨大（Webpack 兼容）</td>
+              <td>中（Rollup 兼容）</td>
+              <td>弱</td>
+              <td>小（Vite 兼容部分）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>速度 benchmark（2026-05 实测）</h3>
+        <p>典型 React 项目（500 文件，50 npm 依赖）：</p>
+        <table>
+          <thead>
+            <tr><th>工具</th><th>Dev start</th><th>HMR</th><th>Production build</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Webpack 5（baseline）</td><td>~15-30s</td><td>~1-3s</td><td>~30-60s</td></tr>
+            <tr><td>Vite 6 (Rollup)</td><td>~500ms</td><td>~30ms</td><td>~15-30s</td></tr>
+            <tr><td>Vite 6 + Rolldown 实验</td><td>~500ms</td><td>~30ms</td><td>~3-8s</td></tr>
+            <tr><td>Turbopack（Next 15）</td><td>~200ms</td><td>~20ms</td><td>~10-20s</td></tr>
+            <tr><td>Rspack 1+</td><td>~1-2s</td><td>~100-300ms</td><td>~5-15s</td></tr>
+            <tr><td>Bun build</td><td>~100ms</td><td>~20ms</td><td>~3-8s</td></tr>
+            <tr><td>Farm</td><td>~300ms</td><td>~20ms</td><td>~5-10s</td></tr>
+            <tr><td>esbuild 直用</td><td>~50ms</td><td>—</td><td>~1-3s</td></tr>
+          </tbody>
+        </table>
+        <p>注：实测随项目而异；上表是<strong>多个开源项目实测中位数</strong>。营销宣称（"700x"等）通常基于特定 benchmark。</p>
+
+        <h3>选型决策树（详细版）</h3>
+
+        <h4>问题 1：你写的是什么？</h4>
+        <ul>
+          <li>npm 库 → <strong>Rollup</strong>（即将 Rolldown 接班）</li>
+          <li>Web app（任何 framework）→ <strong>Vite</strong>（默认）</li>
+          <li>Next.js app → <strong>Turbopack</strong>（Next 默认）</li>
+          <li>Bun runtime 应用 → <strong>Bun build</strong></li>
+          <li>纯 wasm 命令行工具 → <strong>esbuild</strong> 或自家脚本</li>
+        </ul>
+
+        <h4>问题 2：你已有什么？</h4>
+        <ul>
+          <li>大型 Webpack 项目，启动慢急需解决，不想改 plugin → <strong>Rspack</strong></li>
+          <li>大型 Webpack 项目，能完全重写 → 迁 <strong>Vite</strong></li>
+          <li>稳定 Webpack 项目，速度可接受 → 不动</li>
+          <li>已用 Vite 6 但 build 慢 → 试 <strong>experimental.rolldown</strong></li>
+        </ul>
+
+        <h4>问题 3：性能优先级？</h4>
+        <ul>
+          <li>启动最快 → <strong>Bun build / esbuild</strong></li>
+          <li>build 最快 → <strong>Rolldown / Bun build</strong></li>
+          <li>HMR 最快 → <strong>Vite + Turbopack 接近</strong></li>
+          <li>稳态 / 兼容性优先 → <strong>Vite + Rollup 路径</strong></li>
+        </ul>
+
+        <h4>问题 4：团队偏好？</h4>
+        <ul>
+          <li>主流 + 文档丰富 → <strong>Vite</strong></li>
+          <li>愿意尝试新工具 → <strong>Bun build / Farm / Rolldown 早采用</strong></li>
+          <li>需要 Webpack 兼容 → <strong>Rspack</strong></li>
+          <li>跟随 Vercel → <strong>Next.js + Turbopack</strong></li>
+        </ul>
+
+        <h3>2026-2030 趋势预判</h3>
+
+        <h4>趋势 1：Webpack 持续退场但仍存活</h4>
+        <ul>
+          <li>2026 仍有数百万 Webpack 项目</li>
+          <li>新项目几乎不选 Webpack</li>
+          <li>Webpack 6 长期"路线图中"，没真正发布</li>
+          <li>2030 预期：Webpack 仍在 legacy 项目，但<strong>新项目几乎归零</strong></li>
+        </ul>
+
+        <h4>趋势 2：Vite + Rolldown 成为双标准</h4>
+        <ul>
+          <li>Vite 6+ 已是 app 默认；2026-Q2 Rolldown stable 让 build 也极快</li>
+          <li>Vue / Svelte / Solid / Astro / SvelteKit / Nuxt 都 Vite 优先</li>
+          <li>React 社区从 CRA 迁到 Vite 已大规模发生（2023+）</li>
+          <li>2030 预期：<strong>Vite 占新项目 70%+</strong>（剩下是 Next.js + Turbopack）</li>
+        </ul>
+
+        <h4>趋势 3：Rust bundlers 占 90%+ 新项目</h4>
+        <ul>
+          <li>所有主流 bundler 都已或正在 Rust 化</li>
+          <li>JS bundler 性能上限低（V8 + 单线程）</li>
+          <li>Bun build 的 Zig 是少数派但不可忽视</li>
+          <li>2030 预期：JS 实现 bundler 几乎只剩 Rollup（被 Rolldown 接班路径中）</li>
+        </ul>
+
+        <h4>趋势 4：Component Model + bundler 集成</h4>
+        <ul>
+          <li>WASM Component Model（详见 <a href="../../wasm/07-component-model/01-component-and-apps.html">WASM P7</a>）让 wasm 成为"跨语言库格式"</li>
+          <li>未来 bundler 可能：</li>
+          <li>- 用 wasm 作为 build cache 后端（共享缓存跨平台）</li>
+          <li>- bundler plugin 用 wasm 写（跨语言互操作）</li>
+          <li>- bundler 自身编译成 wasm 跑在浏览器（dev 完全在浏览器）</li>
+          <li>2027+ 预期：实验阶段；2030+ 部分主流</li>
+        </ul>
+
+        <h4>趋势 5：build cache 共享 / 远程构建</h4>
+        <ul>
+          <li>Turbopack / Vercel 推动远程 build cache</li>
+          <li>Nx / Turborepo 等已有类似</li>
+          <li>monorepo / CI 加速</li>
+          <li>2026 仍偏 enterprise；2030 可能主流</li>
+        </ul>
+
+        <h4>趋势 6：dev 不打包成主流</h4>
+        <ul>
+          <li>Vite 验证了"dev 用浏览器原生 ESM"</li>
+          <li>Turbopack / Bun build 也走同方向</li>
+          <li>未来可能完全"无 bundler dev"（直接用浏览器 ESM + import maps + esm.sh CDN）</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · Next.js 项目升级到 Turbopack</h3>
+        <p>Next.js 14+ 默认 dev 用 turbo；build 仍用 Webpack（Next 15 起 build 也支持 turbo）。</p>
+        <pre class="code"><code class="lang-bash"># Next.js 15+
+$ next dev --turbo        # dev 用 turbopack（默认）
+$ next build --turbo      # build 用 turbopack（实验性 → stable）</code></pre>
+        <p>不需要额外配置。Next.js 处理 turbopack 集成。</p>
+
+        <h3>场景 B · 大型 Webpack 项目迁 Rspack</h3>
+        <pre class="code"><code class="lang-bash">$ npm uninstall webpack webpack-cli webpack-dev-server
+$ npm install -D @rspack/core @rspack/cli @rspack/dev-server</code></pre>
+        <pre class="code"><code class="lang-javascript">// rspack.config.js（基本是 webpack.config.js 复制粘贴）
+const { rspack } = require('@rspack/core');
+
+module.exports = {
+  entry: './src/index.tsx',
+  output: { ... },
+  module: {
+    rules: [
+      // 多数 webpack loader 直接用
+      { test: /\.tsx?$/, use: 'builtin:swc-loader', exclude: /node_modules/ }
+    ]
+  },
+  plugins: [
+    new rspack.HtmlRspackPlugin({ template: './src/index.html' })
+  ]
+};</code></pre>
+        <pre class="code"><code class="lang-bash">$ npm run build   # 5-10x 快</code></pre>
+
+        <h3>场景 C · 提前用 Rolldown（Vite 6+）</h3>
+        <pre class="code"><code class="lang-javascript">// vite.config.js (Vite 6+)
+export default {
+  experimental: {
+    rolldown: true   // 启用 Rolldown
+  }
+};</code></pre>
+        <pre class="code"><code class="lang-bash">$ vite build
+# build 用 Rolldown，5-10x 加速</code></pre>
+        <p>注意：仍实验性，遇到问题报 issue 给 Rolldown。生产用要先充分测试。</p>
+
+        <h3>场景 D · Bun 项目用 Bun build</h3>
+        <pre class="code"><code class="lang-bash">$ bun build src/index.tsx --outdir dist --target browser</code></pre>
+        <pre class="code"><code class="lang-typescript">// 或 JS API
+await Bun.build({
+  entrypoints: ['./src/index.tsx'],
+  outdir: './dist',
+  target: 'browser',
+  minify: true,
+  sourcemap: 'external'
+});</code></pre>
+        <p>详见 <a href="../../bun/04-toolchain/03-bun-build.html">Bun P4.3</a>。</p>
+
+        <h3>场景 E · 试用 Farm</h3>
+        <pre class="code"><code class="lang-bash">$ npm i -D @farmfe/cli @farmfe/core</code></pre>
+        <pre class="code"><code class="lang-typescript">// farm.config.ts
+import { defineConfig } from '@farmfe/core';
+import react from '@farmfe/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  compilation: {
+    input: { index: './index.html' }
+  }
+});</code></pre>
+        <pre class="code"><code class="lang-bash">$ farm dev
+$ farm build</code></pre>
+
+        <h3>场景 F · 长期路线图：Webpack → Vite</h3>
+        <p>大型 Webpack 项目迁移路径（2-6 个月）：</p>
+        <ol>
+          <li><strong>第 1 月</strong>：评估 Webpack 配置 + 列出所有 loader/plugin → 找 Vite 等价物</li>
+          <li><strong>第 2 月</strong>：在新分支并行 Vite 配置 + 跑 dev/build → 解决兼容性问题</li>
+          <li><strong>第 3-4 月</strong>：测试覆盖（unit / integration / e2e）/ visual regression</li>
+          <li><strong>第 5 月</strong>：staging 环境 Vite 跑一段时间</li>
+          <li><strong>第 6 月</strong>：production 切换 + 移除 Webpack 配置</li>
+        </ol>
+        <p>对很多大型项目这是 6+ 月工程。<strong>Rspack 是过渡选择</strong>—— 1-2 周完成 + 立刻获得 5-10x 速度。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：完整选型</span></h2>
+
+        <h3>Vite + Rolldown 实验配置</h3>
+        <pre class="code"><code class="lang-typescript">// vite.config.ts (Vite 6+)
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+
+  experimental: {
+    // 启用 Rolldown（实验性）
+    rolldown: true
+  },
+
+  build: {
+    target: 'es2022',
+    sourcemap: 'hidden',
+    rollupOptions: {
+      // Rolldown 兼容 Rollup options
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom']
+        }
+      }
+    }
+  }
+});</code></pre>
+
+        <h3>Rspack 配置（Webpack 风格）</h3>
+        <pre class="code"><code class="lang-javascript">// rspack.config.js
+const { rspack } = require('@rspack/core');
+const path = require('path');
+
+module.exports = {
+  entry: './src/index.tsx',
+
+  output: {
+    path: path.resolve(__dirname, 'dist'),
+    filename: '[name]-[contenthash].js',
+    publicPath: '/'
+  },
+
+  module: {
+    rules: [
+      {
+        test: /\.tsx?$/,
+        exclude: /node_modules/,
+        loader: 'builtin:swc-loader',
+        options: {
+          jsc: {
+            parser: { syntax: 'typescript', tsx: true },
+            transform: { react: { runtime: 'automatic' }}
+          }
+        }
+      },
+      {
+        test: /\.css$/,
+        use: ['style-loader', 'css-loader']
+      }
+    ]
+  },
+
+  plugins: [
+    new rspack.HtmlRspackPlugin({
+      template: './src/index.html'
+    })
+  ],
+
+  optimization: {
+    splitChunks: {
+      chunks: 'all',
+      cacheGroups: {
+        vendor: {
+          test: /[\\/]node_modules[\\/]/,
+          name: 'vendor'
+        }
+      }
+    }
+  }
+};</code></pre>
+
+        <h3>Turbopack（Next.js）</h3>
+        <pre class="code"><code class="lang-javascript">// next.config.js
+module.exports = {
+  experimental: {
+    turbo: {
+      // Turbopack 配置
+      rules: {
+        '*.svg': {
+          loaders: ['@svgr/webpack'],
+          as: '*.js'
+        }
+      }
+    }
+  }
+};</code></pre>
+        <pre class="code"><code class="lang-bash">$ next dev --turbo
+$ next build --turbo</code></pre>
+
+        <h3>Bun build CLI + 集成</h3>
+        <pre class="code"><code class="lang-bash">$ bun build src/index.tsx \
+    --outdir dist \
+    --target browser \
+    --jsx-import-source react \
+    --minify \
+    --sourcemap external \
+    --splitting</code></pre>
+        <pre class="code"><code class="lang-typescript">// build.ts
+const result = await Bun.build({
+  entrypoints: ['./src/index.tsx'],
+  outdir: './dist',
+  target: 'browser',
+  minify: true,
+  sourcemap: 'external',
+  splitting: true
+});
+
+if (!result.success) {
+  console.error('Build failed:', result.logs);
+  process.exit(1);
+}
+
+console.log(`Built ${result.outputs.length} files`);</code></pre>
+
+        <h3>Farm 配置</h3>
+        <pre class="code"><code class="lang-typescript">// farm.config.ts
+import { defineConfig } from '@farmfe/core';
+import react from '@farmfe/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+
+  compilation: {
+    input: {
+      index: './index.html'
+    },
+    output: {
+      path: './dist',
+      publicPath: '/'
+    },
+    persistentCache: true,   // 持久缓存
+    treeShaking: true
+  },
+
+  server: {
+    port: 9000,
+    open: true
+  }
+});</code></pre>
+
+        <h3>性能 benchmark 脚本</h3>
+        <pre class="code"><code class="lang-bash">#!/bin/bash
+# benchmark.sh
+echo "=== Vite ==="
+time npm run build:vite
+
+echo "=== Vite + Rolldown ==="
+time npm run build:vite-rolldown
+
+echo "=== Rspack ==="
+time npm run build:rspack
+
+echo "=== Bun build ==="
+time bun build src/index.tsx --outdir dist-bun --minify
+
+# 清理
+rm -rf dist dist-rolldown dist-rspack dist-bun</code></pre>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：相信营销 benchmark</h3>
+        <p>反复强调。Turbopack alpha 声称 "Webpack 700x"；Farm 声称 "Vite 5-10x"。<strong>实测往往打折</strong>。在自家项目跑 benchmark 才有意义。</p>
+
+        <h3>陷阱 2：过度追新</h3>
+        <p>2024-2026 构建工具变化快。<strong>生产项目不应该追新</strong>：</p>
+        <ul>
+          <li>稳定 Vite 6 + 项目稳定 = 比追 Rolldown alpha 更明智</li>
+          <li>Farm / Bun build 等小众工具：愿意踩坑 + 报 issue 的早期采用者才上</li>
+          <li>2026 主流仍是 Vite 6（Rollup）/ Webpack（旧项目）/ Turbopack（Next）</li>
+        </ul>
+
+        <h3>陷阱 3：忽略生态匹配</h3>
+        <p>选 bundler 必须和 framework / deploy / testing 兼容：</p>
+        <ul>
+          <li>选 Bun build → Vercel 默认 Node + npm；要额外配置部署</li>
+          <li>选 Turbopack → 几乎只能用 Next.js</li>
+          <li>选 Rspack → 可能少数 Webpack plugin 不兼容</li>
+        </ul>
+
+        <h3>陷阱 4：换 bundler 期望"100% 一致"</h3>
+        <p>不同 bundler 行为不完全一致。换 Webpack → Vite 常见差异：</p>
+        <ul>
+          <li>CommonJS 处理不同（Webpack 自动 / Vite 通过 plugin）</li>
+          <li>require.context 等 Webpack 独家特性 Vite 没有</li>
+          <li>Babel transform 链略有差异</li>
+        </ul>
+        <p>换 bundler 必须<strong>充分测试</strong>。</p>
+
+        <h3>陷阱 5：以为 Rust bundler "一律快"</h3>
+        <p>实现语言只决定速度上限。Turbopack alpha 在某些场景比 Vite 慢；某些 Rust bundler 因为没充分优化，实测仅快 2-3x。<strong>实测优于实现语言</strong>。</p>
+
+        <h3>陷阱 6：用 Turbopack 但不用 Next.js</h3>
+        <p>Turbopack 与 Next.js 强绑定 —— 独立用罕见，文档 / 生态都围绕 Next.js。<strong>不用 Next.js 不要选 Turbopack</strong>，选 Vite。</p>
+
+        <h3>陷阱 7：Bun build 不适合复杂场景</h3>
+        <p>Bun build plugin ecosystem 弱 + HMR 仍发展中。复杂项目（Vue / Svelte SFC / 复杂 SSR / Webpack-style 配置）不适合。<strong>简单 React / 工具 / library 是 sweet spot</strong>。</p>
+
+        <h3>陷阱 8：忘记 monorepo / 大型项目实测</h3>
+        <p>小项目 benchmark 差别可能不明显。<strong>大型项目（5000+ 文件）+ 大量依赖</strong> 才能看出 5-10x 差距。<strong>选型要在真实大小项目实测</strong>，不要看 hello-world demo。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>各 Bundler 官方</h3>
+        <ul>
+          <li><a href="https://turbo.build/pack" target="_blank" rel="noopener">Turbopack</a></li>
+          <li><a href="https://rspack.dev/" target="_blank" rel="noopener">Rspack</a></li>
+          <li><a href="https://rolldown.rs/" target="_blank" rel="noopener">Rolldown</a></li>
+          <li><a href="https://bun.sh/docs/bundler" target="_blank" rel="noopener">Bun build</a></li>
+          <li><a href="https://www.farmfe.org/" target="_blank" rel="noopener">Farm</a></li>
+        </ul>
+
+        <h3>横评 + benchmark</h3>
+        <ul>
+          <li><a href="https://github.com/privatenumber/bundler-benchmark" target="_blank" rel="noopener">bundler-benchmark</a></li>
+          <li><a href="https://tooling.report/" target="_blank" rel="noopener">tooling.report</a></li>
+          <li><a href="https://2024.stateofjs.com/en-US/libraries/build-tools/" target="_blank" rel="noopener">State of JS - Build Tools</a></li>
+          <li><a href="https://patak.dev/vite/announcing-vite-6.html" target="_blank" rel="noopener">Patak · Announcing Vite 6</a></li>
+        </ul>
+
+        <h3>未来方向</h3>
+        <ul>
+          <li><a href="https://vercel.com/blog/turbopack-2-0" target="_blank" rel="noopener">Vercel · Turbopack 2.0</a></li>
+          <li><a href="https://github.com/web-infra-dev/rspack/discussions" target="_blank" rel="noopener">Rspack discussions</a></li>
+          <li><a href="https://github.com/rolldown/rolldown/issues" target="_blank" rel="noopener">Rolldown roadmap</a></li>
+        </ul>
+
+        <h3>本主题收尾</h3>
+        <ul>
+          <li><a href="../01-overview/01-history.html">P1.1 构建工具项目史</a> · 回到起点</li>
+          <li><a href="../index.html">主题首页</a> · 全 12 章总览</li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../bun/04-toolchain/03-bun-build.html">Bun P4.3 Bun build</a></li>
+          <li><a href="../../wasm/07-component-model/01-component-and-apps.html">WASM P7 Component Model</a> · 未来 bundler 集成</li>
+          <li><a href="../../react/index.html">React</a> · framework 与 bundler 协作</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
