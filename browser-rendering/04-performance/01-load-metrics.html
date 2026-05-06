@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>LCP / FCP / TTFB · preload / fetchpriority · HTTP/2/3 影响 · P4.1 · 浏览器渲染管线深度学习</title>
-    <meta name="description" content="从 URL 输入到主要内容渲染完成的性能。讲透 LCP（最大内容绘制 ≤ 2.5s）+ FCP（首次内容绘制 ≤ 1.8s）+ TTFB（首字节 ≤ 800ms）+ LCP 优化路径（服务器响应 + critical CSS inline + 关键资源 preload + 图片优化）+ fetchpriority + preload/preconnect/dns-prefetch 三层级 + HTTP/3 在 mobile 网络下的影响。" />
+    <title>载入侧 metrics：LCP / FCP / TTFB · P4.1 · 浏览器渲染管线深度学习</title>
+    <meta name="description" content="从 URL 输入到主要内容渲染完成的性能。LCP（最大内容绘制 ≤ 2.5s）+ FCP（首次内容绘制 ≤ 1.8s）+ TTFB（首字节 ≤ 800ms）+ LCP 优化路径（服务器响应 + critical CSS + preload + 图片优化）+ fetchpriority + HTTP/3 在 mobile 网络下的影响。" />
     <link rel="stylesheet" href="../../assets/styles.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234285F4'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EB%3C/text%3E%3C/svg%3E" />
   </head>
@@ -27,9 +27,9 @@
         <h3>P4 · Web Vitals 与性能</h3>
         <ul>
           <li><a href="index.html">阶段概览</a></li>
-          <li><a href="01-load-metrics.html" class="active">01 · 载入侧 metrics：LCP / FCP / TTFB</a></li>
-          <li><a href="02-inp-long-tasks.html">02 · 交互侧 metrics：INP / Long Tasks</a></li>
-          <li><a href="03-cls-animation.html">03 · CLS + 动画性能（fps + jank）</a></li>
+          <li><a href="01-load-metrics.html" class="active">01 · 载入侧 metrics LCP / FCP / TTFB</a></li>
+          <li><a href="02-inp-long-tasks.html">02 · 交互侧 metrics INP / Long Tasks</a></li>
+          <li><a href="03-cls-animation.html">03 · CLS + 动画性能</a></li>
         </ul>
         <h3>其他阶段</h3>
         <ul>
@@ -44,69 +44,351 @@
           <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
           <a href="../index.html">浏览器渲染</a><span class="breadcrumb-sep">/</span>
           <a href="index.html">P4 · Web Vitals 与性能</a><span class="breadcrumb-sep">/</span>
-          <span>01 · 载入侧 metrics：LCP / FCP / TTFB</span>
+          <span>01 · 载入侧 metrics</span>
         </nav>
-        <h1>LCP / FCP / TTFB · preload / fetchpriority · HTTP/2/3 影响</h1>
+        <h1>载入侧 metrics：LCP / FCP / TTFB</h1>
         <p class="lead">
-          从 URL 输入到主要内容渲染完成的性能。讲透 LCP（最大内容绘制 ≤ 2.5s）+ FCP（首次内容绘制 ≤ 1.8s）+ TTFB（首字节 ≤ 800ms）+ LCP 优化路径（服务器响应 + critical CSS inline + 关键资源 preload + 图片优化）+ fetchpriority + preload/preconnect/dns-prefetch 三层级 + HTTP/3 在 mobile 网络下的影响。
+          从 URL 输入到主要内容渲染完成的性能。讲透 <strong>LCP（最大内容绘制 ≤ 2.5s 是 "good"）</strong>+ FCP（首次内容绘制 ≤ 1.8s）+ TTFB（首字节 ≤ 800ms）+ LCP 优化路径（服务器响应 + critical CSS inline + 关键资源 preload + 图片格式 / 大小优化）+ fetchpriority + preload/preconnect/dns-prefetch 三层级 + HTTP/3 在 mobile 网络下的影响。<strong>关键洞察</strong>：LCP 提升 1s 通常带来 conversion 提升 8-20%，电商场景特别敏感——LCP 是 SEO + 业务效果的核心 metric。
         </p>
         <div class="chapter-meta">
           <span><strong>阅读时长</strong> ~30 分钟</span>
           <span><strong>前置</strong> P3</span>
-          <span><strong>主要来源</strong> web.dev/lcp · web.dev/fcp · web.dev/ttfb</span>
-        </div>
-
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>本章为<strong>骨架</strong>。已完成大纲与关键知识点列表（见各段标题下的 bullet），正文撰写中。可参考 <a href="../outline.md">outline.md</a> 了解完整覆盖范围。</p>
+          <span><strong>主要来源</strong> web.dev/lcp · web.dev/fcp · web.dev/ttfb · CrUX 数据</span>
         </div>
 
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
-          <li><em>正文待写。</em></li>
+          <li><strong>LCP 是 Web Vitals 中最直接影响业务的 metric</strong>——LCP 减 1s 通常带来 conversion 提升 8-20%（电商场景）；Google 搜索排名将 LCP 作为 ranking signal 之一。</li>
+          <li><strong>LCP 的元素通常是首屏 hero image / 主标题 / 视频海报</strong>——可预测性强。优化思路：(1) 服务器响应快（TTFB）；(2) Critical CSS inline；(3) 关键资源 preload + fetchpriority="high"；(4) 图片格式 / 大小优化。</li>
+          <li><strong>HTTP/2 vs HTTP/3 在 mobile 网络下差距明显</strong>—— QUIC + 0-RTT 让 mobile 用户的 TTFB 显著好。CDN + HTTP/3 是现代 web 性能基线。</li>
         </ol>
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
-        <p><em>正文待写。本章覆盖：LCP ≤ 2.5s · FCP ≤ 1.8s · TTFB ≤ 800ms · fetchpriority · preload / preconnect / dns-prefetch · 图片格式优化 · HTTP/3 影响</em></p>
+
+        <h3>Web Vitals：把用户体验量化</h3>
+        <p>2020 年 Google 推出 <strong>Web Vitals</strong>——三个核心 metric 量化用户体验。<strong>核心 Web Vitals</strong>（Core Web Vitals）随时间演进：</p>
+        <p><strong>2020 版</strong>：LCP（载入）+ FID（交互）+ CLS（稳定性）。</p>
+        <p><strong>2024 版</strong>：LCP（载入）+ <strong>INP（交互，替代 FID）</strong>+ CLS（稳定性）。INP 比 FID 更全面（FID 只看首次交互，INP 看所有交互）。</p>
+        <p>Web Vitals 的<strong>意义</strong>：</p>
+        <p>(1) <strong>SEO 影响</strong>—— Google 搜索排名将 Web Vitals 作为 ranking signal（影响小但确实有）。</p>
+        <p>(2) <strong>业务影响</strong>—— 大量研究表明 LCP / INP 改善带来 conversion 提升。</p>
+        <p>(3) <strong>行业标准化</strong>—— 让"网页快慢"从感性变成数字，团队能客观讨论性能。</p>
+        <p>每个 metric 有<strong>三档阈值</strong>："good"（绿色）/ "needs improvement"（橙）/ "poor"（红）。Google 建议<strong>75% 的页面浏览达到 "good"</strong>。</p>
+
+        <h3>TTFB（Time To First Byte）：服务器响应快慢</h3>
+        <p><strong>TTFB</strong>是<strong>从浏览器发请求到收到第一个字节</strong>的时间。包括：</p>
+        <p>(1) <strong>DNS 解析</strong>—— 域名 → IP；</p>
+        <p>(2) <strong>TCP 握手</strong>—— 3-way handshake；</p>
+        <p>(3) <strong>TLS 握手</strong>（HTTPS）—— 证书验证 + key exchange；</p>
+        <p>(4) <strong>HTTP 请求 → 服务器处理 → 第一字节响应</strong>。</p>
+        <p>阈值：<strong>≤ 800ms 是 "good"</strong>，1800ms+ 是 "poor"。</p>
+        <p>TTFB 影响因素：</p>
+        <p><strong>(1) 网络延迟</strong>—— 用户到 CDN edge 的物理距离 + 网络质量。这是 mobile 网络下 TTFB 大头。</p>
+        <p><strong>(2) 服务器处理时间</strong>—— 业务逻辑 + DB 查询 + 模板渲染。SSR 慢的最常见原因。</p>
+        <p><strong>(3) 协议开销</strong>—— TCP / TLS 握手。HTTP/2 是单连接，握手只一次；HTTP/3 进一步优化（0-RTT 重连）。</p>
+        <p>优化路径：</p>
+        <p>(1) <strong>用 CDN</strong>—— 让用户连接到最近的 edge；</p>
+        <p>(2) <strong>静态生成 / 边缘缓存</strong>—— 服务器不动态生成，TTFB ~10ms；</p>
+        <p>(3) <strong>HTTP/3</strong>—— mobile 网络下 RTT 减少；</p>
+        <p>(4) <strong>SSR 性能优化</strong>—— DB index / 缓存 / 减少嵌套 RPC；</p>
+        <p>(5) <strong>Streaming SSR</strong>—— 不等整个 HTML 生成完发，边生成边发。Next.js / Remix / SvelteKit 都支持。</p>
+
+        <h3>FCP（First Contentful Paint）：第一个像素</h3>
+        <p><strong>FCP</strong>是<strong>浏览器第一次绘制任何内容</strong>（文字 / 图像 / SVG / canvas）的时间。比 LCP 早。</p>
+        <p>阈值：<strong>≤ 1.8s 是 "good"</strong>，3s+ 是 "poor"。</p>
+        <p>FCP 取决于：</p>
+        <p>(1) <strong>TTFB</strong>—— FCP 不可能比 TTFB 早；</p>
+        <p>(2) <strong>关键 CSS 下载 + parse</strong>—— FCP 必须等关键 CSS（render-blocking）；</p>
+        <p>(3) <strong>JS 阻塞</strong>—— 同步 script 阻塞 first paint。</p>
+        <p>优化：</p>
+        <p>(1) <strong>Critical CSS inline</strong>—— 把首屏关键 CSS 放在 HTML head 的 <code>&lt;style&gt;</code> 标签里，不需要额外 round-trip 下载；</p>
+        <p>(2) <strong>非关键 CSS 异步加载</strong>—— <code>&lt;link rel="stylesheet" media="print" onload="this.media='all'"&gt;</code> hack 或 modern preload 技巧；</p>
+        <p>(3) <strong>JS 用 defer / module</strong>—— 不阻塞 HTML parsing；</p>
+        <p>(4) <strong>SSR + 流式响应</strong>—— 让 HTML 顶部立即渲染。</p>
+
+        <h3>LCP（Largest Contentful Paint）：最大内容</h3>
+        <p><strong>LCP</strong>是<strong>视口内最大内容元素绘制完成</strong>的时间。最大内容元素的判定：</p>
+        <p>(1) <code>&lt;img&gt;</code> / <code>&lt;svg&gt; image</code> / <code>&lt;video poster&gt;</code> / 背景图（<code>background-image: url</code>）。</p>
+        <p>(2) <code>&lt;p&gt;</code> / <code>&lt;h1&gt;</code> / 等文本块（含至少一个 child node）。</p>
+        <p>(3) 元素必须在视口内。</p>
+        <p>(4) "最大"按渲染面积算（width × height）。</p>
+        <p>阈值：<strong>≤ 2.5s 是 "good"</strong>，4s+ 是 "poor"。</p>
+        <p>典型 LCP 元素场景：</p>
+        <p><strong>(1) 电商 / 媒体网站</strong>—— LCP 通常是 hero image / 商品大图。</p>
+        <p><strong>(2) 博客 / 文档</strong>—— LCP 是主标题 <code>&lt;h1&gt;</code> 或第一段 <code>&lt;p&gt;</code>。</p>
+        <p><strong>(3) Dashboard</strong>—— LCP 是首屏最大的 widget。</p>
+        <p><strong>(4) 视频站</strong>—— LCP 是视频 poster image。</p>
+        <p>测 LCP 元素：用 <strong>web-vitals 库</strong>—— <code>onLCP((metric) =&gt; console.log(metric.element, metric.value))</code> 直接报告 LCP element + 时间。</p>
+
+        <h3>LCP 优化路径</h3>
+        <p>LCP 优化的关键<strong>四步</strong>：</p>
+        <p><strong>(1) 减少 TTFB</strong>—— 见上文。CDN + 缓存 + HTTP/3。</p>
+        <p><strong>(2) Critical CSS inline + 非关键 CSS 异步</strong>—— FCP / LCP 都受 render-blocking CSS 影响。</p>
+        <p><strong>(3) 关键资源 preload + fetchpriority</strong>—— 提前下载 LCP image / 关键 font。</p>
+        <p><strong>(4) 图片优化</strong>—— 格式（AVIF / WebP）+ 大小（responsive image）+ 懒加载（below-fold）。</p>
+        <p>具体每步：</p>
+
+        <h4>LCP image preload</h4>
+        <p>LCP image 通常是 hero image。优化：</p>
+        <pre class="code"><code class="lang-html">&lt;head&gt;
+  &lt;!-- 提前 preload，浏览器立即下载 --&gt;
+  &lt;link rel="preload" href="/hero.jpg" as="image" fetchpriority="high"&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;img src="/hero.jpg" alt="hero" fetchpriority="high"&gt;
+  &lt;!-- 注：img 上加 fetchpriority="high" 也行 --&gt;
+&lt;/body&gt;</code></pre>
+        <p>效果：浏览器解析 head 时立即下载 hero.jpg，不用等到 body 的 img。LCP 通常提升 200-500ms。</p>
+
+        <h4>图片格式优化</h4>
+        <p>现代图片格式：</p>
+        <p><strong>AVIF (2020+)</strong>—— 当前最佳压缩比。比 JPEG 小 50%+。Chrome 85+ / Firefox 93+ / Safari 16.4+ 支持。</p>
+        <p><strong>WebP (2010)</strong>—— 比 JPEG 小 25-35%。全引擎支持（Safari 14+）。</p>
+        <p><strong>JPEG / PNG</strong>—— 老格式 fallback。</p>
+        <p>用 <code>&lt;picture&gt;</code> 提供多格式：</p>
+        <pre class="code"><code class="lang-html">&lt;picture&gt;
+  &lt;source srcset="/hero.avif" type="image/avif"&gt;
+  &lt;source srcset="/hero.webp" type="image/webp"&gt;
+  &lt;img src="/hero.jpg" alt="hero" width="1200" height="600"&gt;
+&lt;/picture&gt;</code></pre>
+        <p>浏览器选第一个支持的格式。Chrome → AVIF, Safari 14 → WebP, IE → JPEG。</p>
+
+        <h4>Responsive image：不下载用户用不到的尺寸</h4>
+        <p>不要给所有用户下载同一张大图——给 mobile 小图，desktop 大图：</p>
+        <pre class="code"><code class="lang-html">&lt;img
+  srcset="
+    /hero-400.jpg 400w,
+    /hero-800.jpg 800w,
+    /hero-1600.jpg 1600w,
+  "
+  sizes="(max-width: 600px) 400px,
+         (max-width: 1200px) 800px,
+         1600px"
+  src="/hero-800.jpg"
+  alt="hero"
+  fetchpriority="high"
+&gt;</code></pre>
+        <p>浏览器根据 viewport 选合适尺寸。Mobile 用户拿 400px 图，desktop 拿 1600px 图。Mobile 节省的字节量巨大。</p>
+
+        <h4>Lazy loading：below-the-fold 图片不立即下</h4>
+        <pre class="code"><code class="lang-html">&lt;img src="/below-fold.jpg" loading="lazy" alt="..."&gt;
+&lt;iframe src="..." loading="lazy"&gt;&lt;/iframe&gt;</code></pre>
+        <p><code>loading="lazy"</code> 让浏览器在<strong>元素接近视口时才下载</strong>。可以省下大量首屏带宽给真正关键的资源（LCP image）。</p>
+        <p><strong>但首屏图片不要 lazy</strong>—— LCP image 需要 <code>loading="eager"</code> + <code>fetchpriority="high"</code>。</p>
+
+        <h3>fetchpriority 完整用法</h3>
+        <p><strong><code>fetchpriority</code> 属性</strong>（Chrome 102+）让你显式调整资源优先级。值：</p>
+        <p><strong><code>high</code></strong>—— 高于浏览器默认。给 LCP image / 关键 font / above-fold 资源用。</p>
+        <p><strong><code>low</code></strong>—— 低于浏览器默认。给 below-fold image / 第三方分析 SDK 用。</p>
+        <p><strong><code>auto</code></strong>（默认）—— 浏览器自决。</p>
+        <p>具体场景：</p>
+        <pre class="code"><code class="lang-html">&lt;!-- LCP image：高优先级 --&gt;
+&lt;img src="/hero.jpg" fetchpriority="high" alt="..."&gt;
+
+&lt;!-- below-fold image：低优先级 --&gt;
+&lt;img src="/footer.jpg" fetchpriority="low" loading="lazy" alt="..."&gt;
+
+&lt;!-- 关键 font preload --&gt;
+&lt;link rel="preload" href="/font-bold.woff2" as="font"
+      type="font/woff2" crossorigin fetchpriority="high"&gt;
+
+&lt;!-- 第三方分析（异步 + 低优先级）--&gt;
+&lt;script async fetchpriority="low" src="https://gtm.example.com/..."&gt;&lt;/script&gt;</code></pre>
+
+        <h3>preconnect / dns-prefetch / preload：三层 hint</h3>
+        <p>不同层级的资源 hint：</p>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 24%">Hint</th>
+              <th style="width: 30%">含义</th>
+              <th style="width: 22%">成本</th>
+              <th style="width: 24%">用例</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>dns-prefetch</code></td>
+              <td>提前 DNS resolve</td>
+              <td>极低</td>
+              <td>不重要的第三方 origin</td>
+            </tr>
+            <tr>
+              <td><code>preconnect</code></td>
+              <td>提前 TCP + TLS 握手</td>
+              <td>低（一次握手）</td>
+              <td>关键第三方 API / CDN</td>
+            </tr>
+            <tr>
+              <td><code>preload</code></td>
+              <td>提前下载具体资源</td>
+              <td>中（占带宽）</td>
+              <td>LCP image / 关键 CSS / font</td>
+            </tr>
+            <tr>
+              <td><code>prefetch</code></td>
+              <td>下次导航的资源</td>
+              <td>低（idle 时下）</td>
+              <td>下一页可能用到的资源</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>用法层级：dns-prefetch &lt; preconnect &lt; preload，从轻到重。一般首屏关键资源用 preload，第三方 origin 用 preconnect，不重要的第三方用 dns-prefetch。</p>
+        <p>注意 preconnect 不要滥用——浏览器限制最多 ~6-10 个 preconnect origin，超过被忽略。</p>
+
+        <h3>HTTP/2 vs HTTP/3 协议层影响</h3>
+        <p><strong>HTTP/2 (2015)</strong>：</p>
+        <p>(1) 单连接多路复用——一个 TCP 连接处理多个请求；</p>
+        <p>(2) HEADERS 压缩 (HPACK)；</p>
+        <p>(3) Server Push（已废弃）。</p>
+        <p>对 LCP 影响：连接复用让多资源下载快，但 mobile 网络高延迟下单 TCP 仍受 head-of-line blocking 影响（一个丢包卡所有 streams）。</p>
+        <p><strong>HTTP/3 (2022)</strong>：</p>
+        <p>(1) 基于 QUIC（UDP 上）—— 不是 TCP；</p>
+        <p>(2) 没有 head-of-line blocking——每个 stream 独立；</p>
+        <p>(3) 0-RTT 重连——熟悉的 server 重连不需要新握手；</p>
+        <p>(4) 更好的 connection migration——切换 WiFi / 4G 不断连接。</p>
+        <p>对 LCP 影响：mobile 网络下显著改善（10-30%）。WiFi / 良好网络下差距小（&lt; 5%）。</p>
+        <p>实操：用 CDN 提供的 HTTP/3 支持（Cloudflare / Fastly / CloudFront 都默认开）。Server 自家配置 HTTP/3 仍较复杂。</p>
+
+        <h3>测 LCP 的工具链</h3>
+        <p>测 LCP 的工具：</p>
+        <p><strong>(1) Field data（实地数据）：CrUX</strong>—— Chrome User Experience Report，Google 收集真实用户的 Web Vitals。是 SEO ranking signal 的源数据。</p>
+        <p><strong>(2) PageSpeed Insights</strong>—— Google 综合 lab + field data 的工具。给出 LCP / FCP / TTFB 等数字 + 优化建议。</p>
+        <p><strong>(3) Lighthouse</strong>—— Chrome DevTools 内置 + 独立 CLI。Lab 数据（受 lab 环境限制，不一定反映用户实际体验）。</p>
+        <p><strong>(4) web-vitals 库</strong>—— Google 出品的 JS 库，在生产收集真实用户 LCP/FCP/etc.，发到自家 RUM (Real User Monitoring) 系统。</p>
+        <p><strong>(5) Chrome DevTools Performance Insights</strong>—— Performance panel 录制后看 "LCP element" + 优化建议。</p>
+        <p>实战流程：(1) PageSpeed Insights 看公开页面 lab + field data；(2) DevTools Performance 录制看 timeline 找 LCP 元素；(3) web-vitals 库收集生产真实数据。</p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 A · 给电商首页做 LCP 优化（最经典场景）</h3>
+          <p>电商首页 LCP 是 hero banner image / 商品大图——这是 LCP 优化的最典型场景。<strong>具体步骤</strong>：(1) <strong>识别 LCP element</strong>—— 用 PageSpeed Insights 或 web-vitals 库；(2) <strong>preload + fetchpriority="high"</strong>—— 让浏览器立即下载；(3) <strong>用 AVIF / WebP 格式</strong>—— responsive image (srcset/sizes)；(4) <strong>用 CDN + HTTP/3</strong>—— 全球用户都快；(5) <strong>测试 + 监控</strong>—— 生产部署后用 web-vitals 库监控真实 LCP，确认改善生效。<strong>典型效果</strong>：LCP 从 4s 降到 1.5s，conversion 提升 8-15%。这是 ROI 最高的性能优化之一。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 B · 排查「为什么我们的 LCP 仍然慢」</h3>
+          <p>已经做了 preload + 图片优化，LCP 仍 &gt; 3s——分层排查：(1) <strong>TTFB 慢</strong>？— 看 PageSpeed Insights TTFB 数字。&gt; 800ms 是源头问题，要先解决（CDN / SSR 优化）。(2) <strong>FCP 慢</strong>？—— 看是不是 render-blocking CSS / 同步 JS。Critical CSS inline + JS defer。(3) <strong>FCP 快但 LCP 慢</strong>？—— LCP image 没 preload；或 preload 了但被其他资源挤占带宽。检查 fetchpriority。(4) <strong>image 下载完但绘制慢</strong>？—— 图片格式不对（PNG 用了 1MB）；或 image 在独立 layer 触发额外 paint。换 AVIF + 检查 layer。每层都用 DevTools Network + Performance panel 验证。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 C · 给 SSR 框架项目用 streaming SSR</h3>
+          <p>项目用 Next.js / Remix / SvelteKit 做 SSR——传统模式 server 等所有数据生成完整 HTML 再发，TTFB / LCP 慢。<strong>Streaming SSR</strong>解决：(1) Server 立即发 HTML head + above-fold shell；(2) 慢数据用 Suspense fallback 占位；(3) 数据来后流式发到浏览器。<strong>实操</strong>：Next.js App Router 默认 streaming（用 Suspense boundary）；Remix 用 <code>defer</code>；SvelteKit 用 streaming load function。<strong>效果</strong>：TTFB 不变（仍要等服务器 setup），但 FCP / LCP 显著快——shell 立即可见，数据后续填充。这是现代 SSR 框架的标配优化。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 D</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 D · 用 web-vitals 库收集生产 LCP 数据</h3>
+          <p>项目要持续监控生产 Web Vitals——用 Google web-vitals 库 + 自家 RUM 系统：<code>onLCP((m) =&gt; sendToAnalytics(m))</code> 收集真实用户 LCP，发到 Datadog / NewRelic / 自家系统。<strong>关键设计</strong>：(1) <strong>采样率</strong>—— 每个 metric 不一定都发（高流量 site 可能 1%-10% 采样）；(2) <strong>用户分群</strong>—— 按 device / network / country 分群，看不同维度的 LCP 分布；(3) <strong>P75 / P95 是关键</strong>—— Web Vitals 阈值是 P75（75% 用户达到 "good"）；P95 反映长尾用户体验；(4) <strong>关联业务 metric</strong>—— LCP 改善对 conversion / bounce rate 的影响。这套监控让你<strong>"性能改善"和"业务效果"建立量化关系</strong>。</p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
         <div class="code-block">
           <span class="code-label">javascript</span>
-<pre class="code"><code class="lang-js">// 正文待写</code></pre>
+<pre class="code"><code class="lang-js">// 用 web-vitals 库收集 Web Vitals
+import { onLCP, onFCP, onCLS, onINP, onTTFB } from 'web-vitals';
+
+function sendToAnalytics(metric) {
+  // 发到你的 RUM 系统
+  navigator.sendBeacon('/api/rum', JSON.stringify({
+    name: metric.name,
+    value: metric.value,
+    id: metric.id,
+    delta: metric.delta,
+    rating: metric.rating,  // 'good' / 'needs-improvement' / 'poor'
+    navigationType: metric.navigationType,
+    url: location.href,
+  }));
+}
+
+onLCP(sendToAnalytics);
+onFCP(sendToAnalytics);
+onCLS(sendToAnalytics);
+onINP(sendToAnalytics);
+onTTFB(sendToAnalytics);
+
+// LCP 还能拿到具体元素
+onLCP((metric) =&gt; {
+  console.log('LCP element:', metric.element);
+  console.log('LCP value:', metric.value, 'ms');
+  console.log('rating:', metric.rating);
+});</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">html</span>
+<pre class="code"><code class="lang-html">&lt;!-- 完整的现代 LCP 优化模板 --&gt;
+&lt;!doctype html&gt;
+&lt;html&gt;
+&lt;head&gt;
+  &lt;!-- 1. preconnect 关键 origin --&gt;
+  &lt;link rel="preconnect" href="https://api.example.com"&gt;
+  &lt;link rel="preconnect" href="https://cdn.example.com"&gt;
+
+  &lt;!-- 2. preload LCP image (high priority) --&gt;
+  &lt;link rel="preload" href="/hero.avif" as="image"
+        type="image/avif" fetchpriority="high"&gt;
+
+  &lt;!-- 3. preload critical font --&gt;
+  &lt;link rel="preload" href="/font-bold.woff2" as="font"
+        type="font/woff2" crossorigin&gt;
+
+  &lt;!-- 4. critical CSS inline --&gt;
+  &lt;style&gt;
+    body { margin: 0 }
+    .hero { width: 100%; height: 600px; }
+    .hero img { width: 100%; height: 100%; object-fit: cover }
+  &lt;/style&gt;
+
+  &lt;!-- 5. 非关键 CSS 异步 --&gt;
+  &lt;link rel="stylesheet" href="/non-critical.css" media="print" onload="this.media='all'"&gt;
+
+  &lt;!-- 6. JS defer --&gt;
+  &lt;script type="module" src="/app.js"&gt;&lt;/script&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;div class="hero"&gt;
+    &lt;picture&gt;
+      &lt;source srcset="/hero.avif" type="image/avif"&gt;
+      &lt;source srcset="/hero.webp" type="image/webp"&gt;
+      &lt;img src="/hero.jpg" alt="hero"
+           width="1200" height="600"
+           fetchpriority="high"&gt;
+    &lt;/picture&gt;
+  &lt;/div&gt;
+
+  &lt;!-- below-fold image: lazy + low priority --&gt;
+  &lt;img src="/footer.jpg" loading="lazy" fetchpriority="low" alt="..."&gt;
+&lt;/body&gt;
+&lt;/html&gt;</code></pre>
         </div>
 
         <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
         <div class="pitfall">
-          <div class="pitfall-title">陷阱标题</div>
-          <p><em>正文待写。</em></p>
+          <div class="pitfall-title">忘记 preload LCP image</div>
+          <p>项目首屏有 hero image 但<strong>没 preload</strong>——LCP 显著慢。原因：浏览器要 parse HTML → 找到 img tag → 才开始下载。如果 HTML 大或 head 有 render-blocking CSS，img 下载推迟几百 ms。<strong>规避</strong>：识别 LCP element + preload。Web Vitals 库 / PageSpeed Insights 都告诉你 LCP element 是哪个，照着 preload。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">所有图片用 lazy loading 包括 LCP</div>
+          <p>有人看到 lazy loading 是优化，给所有图片加 <code>loading="lazy"</code>—— 包括 LCP image。<strong>反效果</strong>：浏览器要计算 viewport 才知道图片是否需要下载，比立即下载慢。<strong>规避</strong>：LCP image / above-fold image <strong>不要 lazy</strong>，用 <code>loading="eager"</code>（默认）+ <code>fetchpriority="high"</code>。Below-fold image 才 lazy。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">background-image LCP 不能用 preload 优化</div>
+          <p>LCP element 是 CSS <code>background-image: url('/hero.jpg')</code> 的——浏览器要先 parse CSS 才知道这张图要下载。<strong>preload 仍然能用但效果有限</strong>，因为 preload 后浏览器不知道这是 LCP candidate。<strong>规避</strong>：(1) 把 hero 改成 <code>&lt;img&gt;</code>—— LCP candidate 算法对 img 友好；(2) 仍要 preload + fetchpriority；(3) 如果必须用 background-image，CSS 也要 inline 进 critical CSS（不用额外下载）。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">用 lab data 而不看 field data</div>
+          <p>开发者用 Lighthouse 测 LCP 都是 "good"——但<strong>field data（真实用户）</strong>显示 LCP 差。原因：Lighthouse 是 lab 环境（固定 CPU / 网络），不反映真实用户。真实用户用各种设备 + 网络条件，LCP 分布跨度大。<strong>规避</strong>：(1) 优化时看 PageSpeed Insights field data；(2) 生产部署后用 web-vitals 库 + RUM 系统持续监控；(3) Lab data 用于"是否引入回归"（CI 测试 baseline），field data 用于"用户实际体验"。</p>
         </div>
 
         <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
         <ul>
-          <li><a href="https://web.dev/" target="_blank" rel="noopener">web.dev</a></li>
-          <li>回到主题首页 → <a href="../index.html">浏览器渲染管线深度学习</a></li>
+          <li><a href="https://web.dev/articles/lcp" target="_blank" rel="noopener">web.dev · LCP</a> · 完整指南</li>
+          <li><a href="https://web.dev/articles/optimize-lcp" target="_blank" rel="noopener">web.dev · Optimize LCP</a> · 优化清单</li>
+          <li><a href="https://web.dev/articles/fcp" target="_blank" rel="noopener">web.dev · FCP</a></li>
+          <li><a href="https://web.dev/articles/ttfb" target="_blank" rel="noopener">web.dev · TTFB</a></li>
+          <li><a href="https://github.com/GoogleChrome/web-vitals" target="_blank" rel="noopener">web-vitals npm 库</a></li>
+          <li><a href="https://pagespeed.web.dev/" target="_blank" rel="noopener">PageSpeed Insights</a></li>
+          <li><a href="https://developer.chrome.com/docs/crux/" target="_blank" rel="noopener">CrUX (Chrome User Experience Report)</a></li>
+          <li>下一章 → <a href="02-inp-long-tasks.html">P4.2 · 交互侧 metrics INP / Long Tasks</a></li>
         </ul>
 
         <nav class="chapter-nav" aria-label="章节翻页">
-          <a class="prev" href="../03-crp/03-paint-composite.html"><span class="label">← 上一章</span><span class="title">P3.3 · Paint → Composite</span></a>
+          <a class="prev" href="../03-crp/03-paint-composite.html"><span class="label">← 上一章</span><span class="title">P3.3 · Paint → Composite（GPU 合成）</span></a>
           <a class="next" href="02-inp-long-tasks.html"><span class="label">下一章 →</span><span class="title">P4.2 · 交互侧 metrics INP / Long Tasks</span></a>
         </nav>
       </article>

@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>INP 替代 FID + Long Tasks + scheduler.yield/postTask · P4.2 · 浏览器渲染管线深度学习</title>
-    <meta name="description" content="从用户输入到响应完成的性能。讲透 INP（2024 起替代 FID 的核心 Web Vital ≤ 200ms）+ Long Tasks（&gt; 50ms 阻塞主线程）+ PerformanceObserver API + scheduler.yield()（Chrome 129+ 让出主线程）+ scheduler.postTask（精细调度 user-blocking/visible/background）+ Event 处理链 + isInputPending + requestIdleCallback。" />
+    <title>交互侧 metrics：INP / Long Tasks · P4.2 · 浏览器渲染管线深度学习</title>
+    <meta name="description" content="从用户输入到响应完成的性能。INP（2024 起替代 FID 的核心 Web Vital ≤ 200ms）+ Long Tasks（&gt; 50ms 阻塞主线程）+ PerformanceObserver API + scheduler.yield()（Chrome 129+）+ scheduler.postTask + Event 处理链 + isInputPending + requestIdleCallback。" />
     <link rel="stylesheet" href="../../assets/styles.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234285F4'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EB%3C/text%3E%3C/svg%3E" />
   </head>
@@ -27,9 +27,9 @@
         <h3>P4 · Web Vitals 与性能</h3>
         <ul>
           <li><a href="index.html">阶段概览</a></li>
-          <li><a href="01-load-metrics.html">01 · 载入侧 metrics：LCP / FCP / TTFB</a></li>
-          <li><a href="02-inp-long-tasks.html" class="active">02 · 交互侧 metrics：INP / Long Tasks</a></li>
-          <li><a href="03-cls-animation.html">03 · CLS + 动画性能（fps + jank）</a></li>
+          <li><a href="01-load-metrics.html">01 · 载入侧 metrics LCP / FCP / TTFB</a></li>
+          <li><a href="02-inp-long-tasks.html" class="active">02 · 交互侧 metrics INP / Long Tasks</a></li>
+          <li><a href="03-cls-animation.html">03 · CLS + 动画性能</a></li>
         </ul>
         <h3>其他阶段</h3>
         <ul>
@@ -44,65 +44,299 @@
           <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
           <a href="../index.html">浏览器渲染</a><span class="breadcrumb-sep">/</span>
           <a href="index.html">P4 · Web Vitals 与性能</a><span class="breadcrumb-sep">/</span>
-          <span>02 · 交互侧 metrics：INP / Long Tasks</span>
+          <span>02 · 交互侧 metrics INP / Long Tasks</span>
         </nav>
-        <h1>INP 替代 FID + Long Tasks + scheduler.yield/postTask</h1>
+        <h1>交互侧 metrics：INP / Long Tasks</h1>
         <p class="lead">
-          从用户输入到响应完成的性能。讲透 INP（2024 起替代 FID 的核心 Web Vital ≤ 200ms）+ Long Tasks（&gt; 50ms 阻塞主线程）+ PerformanceObserver API + scheduler.yield()（Chrome 129+ 让出主线程）+ scheduler.postTask（精细调度 user-blocking/visible/background）+ Event 处理链 + isInputPending + requestIdleCallback。
+          从用户输入到响应完成的性能。<strong>INP（Interaction to Next Paint）</strong>是 2024 起替代 FID 的核心 Web Vital——目标 ≤ 200ms。讲透 INP vs FID 差异 + Long Tasks（&gt; 50ms 阻塞主线程）+ PerformanceObserver API 监听 + <strong>scheduler.yield()</strong>（Chrome 129+ 让出主线程）+ <strong>scheduler.postTask</strong>（精细调度 user-blocking/visible/background）+ Event 处理链 + isInputPending + requestIdleCallback。<strong>关键洞察</strong>：INP 是大部分应用真正卡顿的根源——FID 只看首次，INP 看所有交互。
         </p>
         <div class="chapter-meta">
           <span><strong>阅读时长</strong> ~30 分钟</span>
-          <span><strong>前置</strong> P4.1</span>
-          <span><strong>主要来源</strong> web.dev/inp · web.dev/optimize-long-tasks · scheduler API</span>
-        </div>
-
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>本章为<strong>骨架</strong>。已完成大纲与关键知识点列表（见各段标题下的 bullet），正文撰写中。可参考 <a href="../outline.md">outline.md</a> 了解完整覆盖范围。</p>
+          <span><strong>前置</strong> P4.1 + <a href="../../ecma/07-execution/03-event-loop-async.html">ECMA P7.3 Event Loop</a></span>
+          <span><strong>主要来源</strong> web.dev/inp · web.dev/optimize-long-tasks · scheduler API spec</span>
         </div>
 
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
-          <li><em>正文待写。</em></li>
+          <li><strong>INP 在 2024 替代 FID 成为核心 Web Vital</strong>——FID 只看首次交互，INP 看所有交互的最差延迟。很多页面 FID 好但 INP 差——开始很快但后续越来越卡。</li>
+          <li><strong>Long Tasks（&gt; 50ms）是主线程阻塞的标志</strong>——单个 long task 让所有交互延迟。常见来源：大 React reconcile / 大 JSON.parse / 同步 layout flushing。</li>
+          <li><strong>scheduler.yield() 是 2024+ 的关键 API</strong>——比 setTimeout(0) 更优的"让出主线程 + 立即继续"。让长任务能 cooperative yield，提升 INP。</li>
         </ol>
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
-        <p><em>正文待写。本章覆盖：INP ≤ 200ms · FID 已弃用 · Long Tasks &gt; 50ms · PerformanceObserver · scheduler.yield · scheduler.postTask · isInputPending · requestIdleCallback</em></p>
+
+        <h3>FID → INP：为什么 2024 替换</h3>
+        <p><strong>FID (First Input Delay)</strong>是 2020-2023 核心 Web Vital。定义：第一次用户交互（click / tap / key）到事件 handler 开始执行的时间。</p>
+        <p>FID 的<strong>问题</strong>：</p>
+        <p><strong>(1) 只看首次交互</strong>—— 之后所有交互不算。很多 SPA 首次加载好但用户后续操作越来越卡，FID 完全察觉不到。</p>
+        <p><strong>(2) 只看 input delay 不看 processing</strong>—— FID 只是"事件触发到 handler 开始"，不包括 handler 执行时间。但用户感知是 input → 看到响应的全部时间。</p>
+        <p><strong>(3) 大部分页面 FID 都好</strong>—— FID &lt; 100ms 是 "good"，2023 数据 90%+ 页面达标。这让 FID 成为不能区分的 metric。</p>
+        <p>2024 年 Google 把核心 Web Vital 从 FID 替换为 <strong>INP (Interaction to Next Paint)</strong>。</p>
+
+        <h3>INP 定义：从输入到下一次 paint</h3>
+        <p><strong>INP</strong>是<strong>用户交互（click / tap / keydown）到下一次浏览器 paint</strong>的全部时间。包含：</p>
+        <p>(1) <strong>Input delay</strong>—— 事件触发到 handler 开始（旧 FID）；</p>
+        <p>(2) <strong>Processing time</strong>—— event handler 执行 + 任何 JS 工作；</p>
+        <p>(3) <strong>Presentation delay</strong>—— handler 完成到下一次 paint（包括 React 重 render / Layout / Paint）。</p>
+        <p>INP 报告整个会话<strong>最差的</strong>交互延迟（98th percentile，长会话用 P98 防 outlier）。</p>
+        <p>阈值：<strong>≤ 200ms 是 "good"</strong>，500ms+ 是 "poor"。</p>
+        <p>典型场景：</p>
+        <p>(1) <strong>用户点按钮</strong>——按钮高亮 + 弹窗显示。INP = 点击到弹窗可见。</p>
+        <p>(2) <strong>用户输入文字</strong>——每个 keydown 触发 INP；输入框响应慢直接体现。</p>
+        <p>(3) <strong>用户滚动</strong>——scroll 不算 INP（性能模型不同），但 scroll 触发的 onClick / hover 算。</p>
+
+        <h3>Long Tasks：主线程被阻塞的标志</h3>
+        <p><strong>Long Task</strong>是<strong>主线程上跑 &gt; 50ms 的连续任务</strong>。50ms 是浏览器规范定义的阈值——主线程被卡 50ms+ 就感知到延迟。</p>
+        <p>Long Task 期间：</p>
+        <p>(1) <strong>用户输入排队</strong>—— click / keydown 触发但 handler 不执行（等当前 task 完成）；</p>
+        <p>(2) <strong>渲染暂停</strong>—— 下一帧不绘制（默认 60fps = 16.67ms / 帧，long task 直接掉帧）；</p>
+        <p>(3) <strong>动画卡</strong>—— 主线程动画卡（CSS animation 部分受影响）；只有 composite-only 动画（transform/opacity）不卡（因为 Compositor 独立线程）。</p>
+        <p>常见 Long Task 来源：</p>
+        <p><strong>(1) JS 长任务</strong>—— 大循环 / 复杂正则 / 同步 array 操作 / 复杂 React reconcile。</p>
+        <p><strong>(2) JSON.parse 大数据</strong>—— 1MB+ JSON parse 容易 50ms+。</p>
+        <p><strong>(3) 同步 layout flushing</strong>—— 在 JS 中读 layout 属性触发 forced reflow。</p>
+        <p><strong>(4) GC pause</strong>—— V8 GC 可能 stop-the-world 几十 ms。详见 <a href="../../v8/04-memory/02-orinoco-gc.html">V8 P4.2 Orinoco GC</a>。Orinoco 大幅降低暂停时间，但仍可能有 long task。</p>
+        <p><strong>(5) 大 DOM 操作</strong>—— 一次性插入几千个 DOM 节点。</p>
+
+        <h3>用 PerformanceObserver 监听 Long Tasks</h3>
+        <p>用 <strong>PerformanceObserver</strong> API 监听 Long Tasks：</p>
+        <pre class="code"><code class="lang-js">new PerformanceObserver((list) =&gt; {
+  for (const entry of list.getEntries()) {
+    console.log('Long Task:', entry.duration + 'ms', entry.attribution);
+    // 发到 RUM 系统
+  }
+}).observe({ entryTypes: ['longtask'] });</code></pre>
+        <p>每个 long task entry 有 <code>attribution</code>—— 哪个 frame / iframe 触发，但不告诉你<strong>具体代码位置</strong>。要定位代码用 DevTools Performance Recording。</p>
+        <p>Long Tasks API 的<strong>升级版</strong>：<strong>Long Animation Frames API (LoAF)</strong>（Chrome 123+）—— 不只看 long task，看整个"animation frame"（包括 layout / paint）。给出更完整的 INP 归因数据。</p>
+
+        <h3>scheduler.yield()：让出主线程</h3>
+        <p><strong><code>scheduler.yield()</code></strong>（Chrome 129+ 稳定）让任务<strong>"让出主线程一下，立即继续"</strong>。</p>
+        <pre class="code"><code class="lang-js">async function processItems(items) {
+  for (const item of items) {
+    process(item);  // 假设每个 process 5ms
+
+    // 每处理 10 个 item 让出一次主线程
+    if (items.indexOf(item) % 10 === 0) {
+      await scheduler.yield();
+      // 让浏览器处理用户输入 / 渲染下一帧
+      // 然后 yield resolve，继续循环
+    }
+  }
+}</code></pre>
+        <p>对比传统方式：</p>
+        <p><strong>传统：<code>setTimeout(fn, 0)</code></strong>—— 让任务排到下一个 task。但<strong>下个 task 可能被其他高优先级任务挤后</strong>，恢复时间不可控。</p>
+        <p><strong>scheduler.yield()</strong>—— 高优先级让出，浏览器处理完用户输入 + 渲染后<strong>立即恢复</strong>。延迟最低。</p>
+        <p>这是<strong>2024+ 优化 INP 的关键 API</strong>。Long task 改成 cooperative：处理一段 → yield → 继续。即使总耗时不变，INP 显著改善（用户输入不被阻塞）。</p>
+        <p>注意：scheduler.yield() 只 Chrome 129+ 支持。Safari / Firefox 未支持。<strong>Polyfill</strong>：用 <code>setTimeout(0)</code> 或 <code>scheduler.postTask({ priority: 'user-blocking' })</code> 作 fallback。</p>
+
+        <h3>scheduler.postTask()：精细调度</h3>
+        <p><strong><code>scheduler.postTask()</code></strong>提供<strong>3 个优先级</strong>调度任务：</p>
+        <p><strong><code>user-blocking</code></strong>—— 阻塞用户感知的任务（如响应点击）。最高优先级。</p>
+        <p><strong><code>user-visible</code></strong>（默认）—— 用户可见但不立即（如更新 dashboard 数据）。中等优先级。</p>
+        <p><strong><code>background</code></strong>—— 后台任务（如 analytics / 缓存预热）。最低优先级。</p>
+        <pre class="code"><code class="lang-js">// 高优先级：处理点击
+scheduler.postTask(() =&gt; updateUI(), { priority: 'user-blocking' });
+
+// 中优先级：渲染列表
+scheduler.postTask(() =&gt; renderList(), { priority: 'user-visible' });
+
+// 低优先级：发 analytics
+scheduler.postTask(() =&gt; sendAnalytics(), { priority: 'background' });</code></pre>
+        <p>浏览器自动按优先级调度——高优先级任务先跑。<strong>这套 API 替代了之前用 setTimeout 0 / requestIdleCallback / Promise.then 等不同 idiom 来表达不同优先级的混乱状态</strong>。</p>
+        <p>支持：Chrome 94+ 稳定。Safari / Firefox 未支持。Polyfill 用 <code>setTimeout</code> 模拟。</p>
+
+        <h3>Event 处理链：浏览器内部时序</h3>
+        <p>当用户点击按钮，浏览器内部的处理时序（影响 INP）：</p>
+        <p><strong>(1) Input event 投递到主线程</strong>（input delay 阶段）。如果主线程在跑 long task，事件排队等。</p>
+        <p><strong>(2) Event handler 执行</strong>（processing 阶段）。你的 onClick handler。</p>
+        <p><strong>(3) Microtasks drain</strong>—— Promise.then 等。在 handler 之后立即跑。</p>
+        <p><strong>(4) Rendering steps</strong>—— Style / Layout / Paint。</p>
+        <p><strong>(5) Composite + paint to screen</strong>—— Compositor thread 完成最终输出。</p>
+        <p>INP = 步骤 (1)-(5) 的全部时间。</p>
+        <p>优化点：</p>
+        <p><strong>(1) 减少 input delay</strong>—— 让主线程不被 long task 阻塞（scheduler.yield 让 long work cooperative）；</p>
+        <p><strong>(2) 减少 processing</strong>—— 复杂 handler 拆分（重 work async 处理）；</p>
+        <p><strong>(3) 减少 presentation delay</strong>—— React 重 render 用 useTransition 标记 non-urgent；layout 改动用 contain。</p>
+
+        <h3>requestIdleCallback：低优先级任务</h3>
+        <p><strong><code>requestIdleCallback(fn)</code></strong>（旧 API，Chrome 47+）让任务<strong>在浏览器空闲时跑</strong>—— 没有 long task / 没有 pending render 的间隙。</p>
+        <pre class="code"><code class="lang-js">requestIdleCallback((deadline) =&gt; {
+  // deadline.timeRemaining() 给你 ms 数表示剩余空闲时间
+  while (deadline.timeRemaining() &gt; 0 &amp;&amp; tasks.length) {
+    processTask(tasks.shift());
+  }
+});</code></pre>
+        <p>用例：(1) prefetch 下一页资源；(2) 预渲染 / 预算计算；(3) analytics 上报。</p>
+        <p>scheduler.postTask({ priority: 'background' }) 是更现代的替代，但 requestIdleCallback 仍广泛使用。</p>
+
+        <h3>isInputPending：让长任务能"中途让出"</h3>
+        <p><strong><code>navigator.scheduling.isInputPending()</code></strong>（Chrome 87+）让你检查<strong>是否有 pending 用户输入</strong>。如果有，立即让出。</p>
+        <pre class="code"><code class="lang-js">function processItems(items) {
+  for (const item of items) {
+    process(item);
+
+    if (navigator.scheduling.isInputPending()) {
+      // 有用户输入等着 → 让出主线程
+      await new Promise(r =&gt; setTimeout(r, 0));
+    }
+  }
+}</code></pre>
+        <p>对比 scheduler.yield()：isInputPending 是<strong>条件性让出</strong>（仅在有 input 时让），yield 是<strong>无条件让出</strong>。前者更精细但需要更多代码。</p>
+
+        <h3>React 18 Concurrent Mode：framework 级别 INP 优化</h3>
+        <p>React 18 Concurrent Mode 大幅改善 INP：</p>
+        <p><strong>(1) <code>useTransition</code></strong>—— 标记 state update 为 non-urgent。React 把这种 update 放低优先级，不阻塞用户输入：</p>
+        <pre class="code"><code class="lang-js">const [isPending, startTransition] = useTransition();
+
+function handleSearch(query) {
+  // 紧急：输入框立即更新
+  setQuery(query);
+
+  // 非紧急：搜索结果可以稍后渲染
+  startTransition(() =&gt; {
+    setSearchResults(filterItems(query));
+  });
+}</code></pre>
+        <p><strong>(2) Time slicing</strong>—— React 把大 reconcile 切成小片，每片间检查是否有 user input，有就让出。</p>
+        <p><strong>(3) Suspense + Streaming SSR</strong>—— 数据没到时显示 fallback，不阻塞。</p>
+        <p>这套机制让 React 应用<strong>大幅改善 INP</strong>—— 大 list 渲染 / 复杂表单 / heavy 状态更新都受益。</p>
+
+        <h3>测 INP 的工具</h3>
+        <p>类似 LCP，工具链：</p>
+        <p><strong>(1) PageSpeed Insights</strong>—— 公开页面 lab + field data。</p>
+        <p><strong>(2) Chrome DevTools Performance Insights</strong>—— 录制后看 INP 元素 + 优化建议。</p>
+        <p><strong>(3) web-vitals 库</strong>—— <code>onINP((m) =&gt; ...)</code> 收集生产真实 INP。</p>
+        <p><strong>(4) Long Animation Frames API</strong>—— 详细归因。</p>
+        <p>实战：先 PageSpeed Insights 看 INP 数字，再用 DevTools Performance 录制慢交互，定位代码。</p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 A · 用 scheduler.yield() 改善搜索框 INP</h3>
+          <p>项目搜索框：用户输入 → 立即过滤 10000 个 item 显示——每次输入都触发 long task → INP 差。优化：用 scheduler.yield() 让 filter 过程 cooperative：<code>for (const item of items) { process(item); if (i % 100 === 0) await scheduler.yield() }</code>—— 每处理 100 个 item 让出一次。<strong>效果</strong>：用户输入不被阻塞，前几百 item 立即显示，剩下的逐步显示。INP 从 500ms+ 降到 100ms 内。<strong>注意</strong>：(1) yield 只 Chrome 支持，Safari / Firefox fallback setTimeout(0)；(2) yield 增加总时间但 INP 大幅改善——是 trade-off；(3) 配合 React 18 useTransition 效果更好。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 B · 排查「用户报某个按钮点击慢」</h3>
+          <p>用户报"点这个按钮要等 1 秒才反应"——分层排查：(1) <strong>DevTools Performance 录制</strong>这次点击——看 INP 几个组成（input delay / processing / presentation）哪个大；(2) <strong>Input delay 大</strong>—— 主线程在跑 long task。看 long task 来源（哪个函数）。(3) <strong>Processing 大</strong>—— Event handler 太重。拆分 + scheduler.yield。(4) <strong>Presentation 大</strong>—— React 重 render 慢 / Layout 复杂。用 useTransition / contain。<strong>最常见根因</strong>是处理函数里读 layout 属性触发 forced reflow，或同步 fetch（不该有）。这套排查流程让你定位 INP 瓶颈。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 C · 给 React 18 项目用 useTransition 改善大 list</h3>
+          <p>React 项目有<strong>大 list（10000+ items）</strong>—— 改 filter 触发整 list 重 render，主线程卡 200-500ms。改用 <code>useTransition</code>：filter input 的 setState 是紧急（输入框立即更新），filtered list 的 setState 是 transition（标记 non-urgent）。React 把 transition update 放低优先级，主线程不被阻塞，用户输入立即响应。<strong>实测效果</strong>：INP 从 300ms 降到 100ms 内。<strong>配合 virtualization</strong>（react-window / react-virtual）只渲染屏幕内 item，性能进一步改善。这种"useTransition + virtualization"是 React 大 list 的标配优化。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 D</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 D · 用 Web Worker 把重 JS 移出主线程</h3>
+          <p>项目有<strong>CPU 密集任务</strong>（图像处理 / 加密 / 大量计算）—— 在主线程跑直接卡死。用 <strong>Web Worker</strong>：把任务移到 worker 跑，主线程只接收结果。具体：(1) <code>const worker = new Worker('worker.js')</code>；(2) <code>worker.postMessage({ task, data })</code>；(3) <code>worker.onmessage = (e) =&gt; updateUI(e.data)</code>。<strong>但 Worker 不能操作 DOM</strong>—— 计算结果传回主线程后再更新 UI。<strong>典型场景</strong>：(1) Excel-like spreadsheet 计算；(2) image filter / 处理；(3) 复杂数据 transform。Worker 让 INP 不受这些工作影响。<strong>限制</strong>：(1) postMessage 有 structured clone 开销；(2) 大数据用 SharedArrayBuffer 共享（详见 P2.2 cross-origin isolated）；(3) Worker 启动开销 ~10ms，简单任务不值得。</p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
         <div class="code-block">
           <span class="code-label">javascript</span>
-<pre class="code"><code class="lang-js">// 正文待写</code></pre>
+<pre class="code"><code class="lang-js">// 用 scheduler.yield() 让长任务 cooperative
+async function processBigList(items) {
+  const results = [];
+
+  for (let i = 0; i &lt; items.length; i++) {
+    results.push(processItem(items[i]));
+
+    // 每 50 个 item 让出主线程
+    if (i % 50 === 0 &amp;&amp; i &gt; 0) {
+      // 现代写法：scheduler.yield (Chrome 129+)
+      if ('scheduler' in self &amp;&amp; 'yield' in scheduler) {
+        await scheduler.yield();
+      } else {
+        // Fallback for Safari / Firefox
+        await new Promise(r =&gt; setTimeout(r, 0));
+      }
+    }
+  }
+
+  return results;
+}
+
+// 调用
+const results = await processBigList(items);
+console.log('done, results:', results.length);
+
+// 期间 INP 保持 &lt; 200ms（用户点击 / 输入有响应）</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// scheduler.postTask 精细调度
+async function loadDashboard() {
+  // 紧急：用户立即看到 shell
+  await scheduler.postTask(() =&gt; renderShell(), { priority: 'user-blocking' });
+
+  // 中优先级：主要 widget
+  scheduler.postTask(() =&gt; loadMainWidget(), { priority: 'user-visible' });
+
+  // 低优先级：后台 prefetch
+  scheduler.postTask(() =&gt; prefetchNextPage(), { priority: 'background' });
+}
+
+// 用 AbortController 取消任务
+const controller = new AbortController();
+scheduler.postTask(longTask, { signal: controller.signal });
+// 用户离开页面时取消
+window.addEventListener('pagehide', () =&gt; controller.abort());</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// 监控生产 INP
+import { onINP } from 'web-vitals';
+
+onINP((metric) =&gt; {
+  console.log('INP:', metric.value, 'ms');
+  console.log('rating:', metric.rating);
+  console.log('attribution:', metric.attribution);
+  // attribution 包含 interaction target / event type / processing time / etc.
+
+  // 发到 RUM 系统
+  navigator.sendBeacon('/api/rum', JSON.stringify({
+    name: 'INP',
+    value: metric.value,
+    rating: metric.rating,
+    attribution: metric.attribution,
+  }));
+});
+
+// 监听 long tasks
+new PerformanceObserver((list) =&gt; {
+  for (const entry of list.getEntries()) {
+    if (entry.duration &gt; 200) {
+      // 长 long task → 报警
+      console.warn('Long Task:', entry.duration, 'ms');
+    }
+  }
+}).observe({ entryTypes: ['longtask'] });</code></pre>
         </div>
 
         <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
         <div class="pitfall">
-          <div class="pitfall-title">陷阱标题</div>
-          <p><em>正文待写。</em></p>
+          <div class="pitfall-title">把 INP 当成 FID 优化</div>
+          <p>有人把"INP 优化"理解为"减少 input delay"——只看 input delay 不看 processing / presentation。<strong>错误</strong>—— INP 是全链路（input + processing + presentation）。Processing（你的 handler 跑）和 presentation（重 render + layout）都计入。<strong>规避</strong>：(1) 用 web-vitals 库看 INP attribution，知道时间花在哪段；(2) 短 handler + 用 useTransition + 让 long work async 是综合优化；(3) 不要只优化 input delay 假装"INP 改善了"。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">用 setTimeout(0) 替代 scheduler.yield 没有等价效果</div>
+          <p><code>setTimeout(0)</code> 让任务排到下一个 task—— 但<strong>下个 task 可能被其他高优先级任务挤后</strong>，恢复时间可能 100ms+。<code>scheduler.yield()</code> 是<strong>"让出 + 立即恢复"</strong>，恢复延迟通常 &lt; 10ms。在 INP 敏感场景差异显著。<strong>规避</strong>：现代 Chrome 用 scheduler.yield；fallback Safari / Firefox 用 setTimeout(0) 但接受延迟更高；测试 INP 比较两种实现差异。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">用 requestAnimationFrame 替代 scheduler.yield</div>
+          <p><code>requestAnimationFrame(fn)</code>是<strong>"下一帧渲染前调用"</strong>——和 yield 不同。rAF 适合<strong>动画 / 视觉更新</strong>（每帧调用），不适合"长任务 cooperative yield"。如果你长任务用 rAF 让出，每帧只跑一段，总时间可能延长很多。<strong>规避</strong>：(1) 长任务用 scheduler.yield 或 setTimeout(0)；(2) 视觉更新用 rAF；(3) 不要混用。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">认为 React 18 自动解决所有 INP 问题</div>
+          <p>React 18 Concurrent Mode 改善 INP——但<strong>不自动</strong>。要正确使用 useTransition / Suspense / startTransition 才能拿到收益。如果你<strong>所有 setState 都是同步更新</strong>，React 仍会同步处理，INP 不变。<strong>规避</strong>：(1) 标记 non-urgent state update 为 transition；(2) 大 list 用 virtualization；(3) 重计算用 useMemo / useDeferredValue；(4) 用 React DevTools Profiler 看 reconcile 时间。</p>
         </div>
 
         <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
         <ul>
-          <li><a href="https://web.dev/" target="_blank" rel="noopener">web.dev</a></li>
-          <li>回到主题首页 → <a href="../index.html">浏览器渲染管线深度学习</a></li>
+          <li><a href="https://web.dev/articles/inp" target="_blank" rel="noopener">web.dev · INP</a> · 完整指南</li>
+          <li><a href="https://web.dev/articles/optimize-long-tasks" target="_blank" rel="noopener">web.dev · Optimize long tasks</a></li>
+          <li><a href="https://web.dev/articles/optimize-inp" target="_blank" rel="noopener">web.dev · Optimize INP</a></li>
+          <li><a href="https://wicg.github.io/scheduling-apis/" target="_blank" rel="noopener">Scheduler API spec</a></li>
+          <li><a href="https://developer.chrome.com/docs/web-platform/long-animation-frames" target="_blank" rel="noopener">Long Animation Frames API</a></li>
+          <li>对照 Event Loop → <a href="../../ecma/07-execution/03-event-loop-async.html">ECMA P7.3 Event Loop</a></li>
+          <li>对照 V8 GC pause → <a href="../../v8/04-memory/02-orinoco-gc.html">V8 P4.2 Orinoco GC</a></li>
+          <li>下一章 → <a href="03-cls-animation.html">P4.3 · CLS + 动画性能</a></li>
         </ul>
 
         <nav class="chapter-nav" aria-label="章节翻页">

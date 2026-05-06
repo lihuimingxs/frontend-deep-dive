@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>CLS ≤ 0.1 + 60fps 硬约束 + transform vs top/left · P4.3 · 浏览器渲染管线深度学习</title>
-    <meta name="description" content="视觉稳定性 + 流畅性。讲透 CLS（≤ 0.1）+ 常见 CLS 来源（未声明尺寸图片 / 异步广告 / Web font 替换）+ width/height + aspect-ratio + font-display 策略 + 60fps 硬约束（16.67ms/frame）+ Jank（连续多帧 &gt; 16.67ms）+ DevTools Performance panel + Animation worklet / OffscreenCanvas + transform/opacity 黄金动画路径。" />
+    <title>CLS + 动画性能（fps + jank）· P4.3 · 浏览器渲染管线深度学习</title>
+    <meta name="description" content="视觉稳定性 + 流畅性。CLS（≤ 0.1）+ 常见 CLS 来源（未声明尺寸图片 / 异步广告 / Web font 替换）+ width/height + aspect-ratio + font-display 策略 + 60fps 硬约束（16.67ms/frame）+ Jank + DevTools Performance panel + Animation worklet + transform/opacity 黄金动画路径。" />
     <link rel="stylesheet" href="../../assets/styles.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234285F4'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EB%3C/text%3E%3C/svg%3E" />
   </head>
@@ -27,9 +27,9 @@
         <h3>P4 · Web Vitals 与性能</h3>
         <ul>
           <li><a href="index.html">阶段概览</a></li>
-          <li><a href="01-load-metrics.html">01 · 载入侧 metrics：LCP / FCP / TTFB</a></li>
-          <li><a href="02-inp-long-tasks.html">02 · 交互侧 metrics：INP / Long Tasks</a></li>
-          <li><a href="03-cls-animation.html" class="active">03 · CLS + 动画性能（fps + jank）</a></li>
+          <li><a href="01-load-metrics.html">01 · 载入侧 metrics LCP / FCP / TTFB</a></li>
+          <li><a href="02-inp-long-tasks.html">02 · 交互侧 metrics INP / Long Tasks</a></li>
+          <li><a href="03-cls-animation.html" class="active">03 · CLS + 动画性能</a></li>
         </ul>
         <h3>其他阶段</h3>
         <ul>
@@ -44,70 +44,364 @@
           <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
           <a href="../index.html">浏览器渲染</a><span class="breadcrumb-sep">/</span>
           <a href="index.html">P4 · Web Vitals 与性能</a><span class="breadcrumb-sep">/</span>
-          <span>03 · CLS + 动画性能（fps + jank）</span>
+          <span>03 · CLS + 动画性能</span>
         </nav>
-        <h1>CLS ≤ 0.1 + 60fps 硬约束 + transform vs top/left</h1>
+        <h1>CLS + 动画性能（fps + jank）</h1>
         <p class="lead">
-          视觉稳定性 + 流畅性。讲透 CLS（≤ 0.1）+ 常见 CLS 来源（未声明尺寸图片 / 异步广告 / Web font 替换）+ width/height + aspect-ratio + font-display 策略 + 60fps 硬约束（16.67ms/frame）+ Jank（连续多帧 &gt; 16.67ms）+ DevTools Performance panel + Animation worklet / OffscreenCanvas + transform/opacity 黄金动画路径。
+          视觉稳定性 + 流畅性。<strong>CLS（Cumulative Layout Shift）</strong>测量视口内元素位置移动量——目标 ≤ 0.1。讲透常见 CLS 来源（未声明尺寸图片 / 异步广告 / Web font 替换 / 异步注入内容）+ width/height + aspect-ratio + font-display 策略 + <strong>60fps 硬约束（16.67ms / frame）</strong>+ Jank + DevTools Performance panel + Animation worklet / OffscreenCanvas 高级方案 + transform/opacity 黄金动画路径回顾。<strong>关键洞察</strong>：CLS 优化的核心是「占位」—— 浏览器需要知道元素的最终尺寸才能不 shift。
         </p>
         <div class="chapter-meta">
           <span><strong>阅读时长</strong> ~30 分钟</span>
-          <span><strong>前置</strong> P4.2</span>
+          <span><strong>前置</strong> P4.2 + <a href="../../v8/04-memory/02-orinoco-gc.html">V8 P4.2 GC</a>（GC pause 作 jank 来源）</span>
           <span><strong>主要来源</strong> web.dev/cls · web.dev/animations-guide · DevTools docs</span>
-        </div>
-
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>本章为<strong>骨架</strong>。已完成大纲与关键知识点列表（见各段标题下的 bullet），正文撰写中。可参考 <a href="../outline.md">outline.md</a> 了解完整覆盖范围。</p>
         </div>
 
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
-          <li><em>正文待写。</em></li>
+          <li><strong>CLS ≤ 0.1 是 "good"</strong>—— 测量页面生命周期内元素意外位移的累积量。常见来源是未声明尺寸的图片 / 异步加载的广告 / Web font 替换让文字 reflow。</li>
+          <li><strong>CLS 优化核心是「占位」</strong>—— width/height 属性 + CSS aspect-ratio + Web font 用 size-adjust 让 fallback font 与 web font 字号尺寸一致。这些预留空间让异步加载的资源不"挤"已渲染内容。</li>
+          <li><strong>60fps 是硬约束（16.67ms/frame）</strong>—— 主线程任务超过这个就掉帧。transform/opacity 动画走 Compositor 不受主线程影响（详见 P3.3）。Jank 来源主要是 long task / GC pause / 走 layout 路径的动画。</li>
         </ol>
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
-        <p><em>正文待写。本章覆盖：CLS ≤ 0.1 · width/height + aspect-ratio · font-display · 60fps 硬约束 · Jank · transform vs top/left · DevTools Performance · Animation worklet</em></p>
+
+        <h3>CLS 定义：「累积」位移量</h3>
+        <p><strong>CLS</strong>是<strong>页面整个生命周期内元素意外位移的累积量</strong>—— 不是单次 shift，是<strong>所有 shift 的累积值</strong>。</p>
+        <p>计算公式：</p>
+        <p><strong>CLS = sum(impact fraction × distance fraction)</strong></p>
+        <p><strong>Impact fraction</strong>：shift 影响的视口面积占总视口的比例（0-1）。</p>
+        <p><strong>Distance fraction</strong>：shift 距离占视口最大尺寸的比例（0-1）。</p>
+        <p><strong>关键</strong>：用户输入触发的 shift（点击 / 滚动）<strong>不计入</strong>—— 用户预期的变化不算 unstable。500ms 内的连续 shift 累积成一次"session window"。</p>
+        <p>阈值：<strong>≤ 0.1 是 "good"</strong>，0.25+ 是 "poor"。</p>
+        <p>实测：用 web-vitals 库 <code>onCLS((m) =&gt; ...)</code> 收集生产数据。</p>
+
+        <h3>CLS 5 大常见来源</h3>
+        <p><strong>(1) 未声明尺寸的图片</strong>—— <code>&lt;img src="..."&gt;</code> 不写 width/height。图片加载完后浏览器才知道实际尺寸 → 后续内容被推下去。</p>
+        <p><strong>规避</strong>：always 写 width/height（HTML 属性，不是 CSS）：<code>&lt;img src="..." width="800" height="600"&gt;</code>。浏览器根据比例预留空间。</p>
+        <p><strong>(2) 异步加载的广告 / iframe</strong>—— 广告 SDK 异步插入 iframe，没有占位。一来就把内容推下去。</p>
+        <p><strong>规避</strong>：广告位用<strong>固定高度 placeholder</strong>。即使广告没加载或没卖掉，placeholder 仍占位。</p>
+        <p><strong>(3) Web font 替换</strong>—— 网页用 web font（Google Fonts），加载前用 fallback font。Web font 加载完后字符尺寸变化 → 文本 reflow → CLS。</p>
+        <p><strong>规避</strong>：(a) <code>font-display: optional</code>（如果 web font 100ms 内没加载，永远不用 web font，避免替换）；(b) 用 CSS Font Loading API 的 <code>size-adjust</code> + <code>ascent-override</code> 调整 fallback font 让它与 web font 字号一致。</p>
+        <p><strong>(4) 异步注入的 banner / cookie consent</strong>—— 顶部 cookie consent 弹出把内容推下去。</p>
+        <p><strong>规避</strong>：(a) 顶部 banner 用 <code>position: fixed</code> 不影响 layout；(b) 如果必须 push 内容，<strong>固定高度 placeholder</strong>—— 加载前后高度一致；(c) 一旦显示就别让用户关闭后再次出现引发新 shift。</p>
+        <p><strong>(5) 异步加载的 dynamic content</strong>—— React / Vue 等 SPA 异步 fetch 数据后渲染长 list，把页脚推下去。</p>
+        <p><strong>规避</strong>：(a) skeleton screen 占位与最终内容尺寸一致；(b) 用固定高度 + scroll；(c) <code>content-visibility: auto</code> + <code>contain-intrinsic-size</code> 预留空间。</p>
+
+        <h3>aspect-ratio：现代 CLS 优化</h3>
+        <p>CSS <code>aspect-ratio</code> 属性（CSS 2021+）让你声明元素宽高比，浏览器自动按比例算高度——避免图片 / video / iframe 加载前后尺寸跳变：</p>
+        <pre class="code"><code class="lang-css">.video {
+  width: 100%;
+  aspect-ratio: 16 / 9;  /* 自动算 height */
+}
+
+.avatar {
+  width: 60px;
+  aspect-ratio: 1;  /* 圆形头像 */
+}
+
+.responsive-image {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+}</code></pre>
+        <p>这是<strong>替代 padding-bottom hack</strong>的现代写法。Padding-bottom hack 是几年前流行的占位方案：<code>.aspect-16-9 { position: relative; padding-bottom: 56.25% }</code>—— 写起来累且语义不清。aspect-ratio 一行解决。</p>
+        <p>支持：Chrome 88+ / Safari 15+ / Firefox 89+。2026 年全引擎稳定。</p>
+
+        <h3>font-display 策略</h3>
+        <p><code>@font-face</code> 的 <code>font-display</code> 属性控制 web font 加载期间的行为：</p>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 18%">值</th>
+              <th style="width: 40%">行为</th>
+              <th style="width: 42%">CLS 影响</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>auto</code></td>
+              <td>浏览器默认（多数 = block）</td>
+              <td>有 CLS（替换时 shift）</td>
+            </tr>
+            <tr>
+              <td><code>block</code></td>
+              <td>3s 内不显示（show invisible），3s 后用 fallback；web font 来后立即替换</td>
+              <td>有 CLS（替换 shift）</td>
+            </tr>
+            <tr>
+              <td><code>swap</code></td>
+              <td>立即用 fallback；web font 来后替换</td>
+              <td>有 CLS（替换 shift）+ FOUT（Flash of Unstyled Text）</td>
+            </tr>
+            <tr>
+              <td><code>fallback</code></td>
+              <td>100ms 内不显示，之后 fallback；3s 内 web font 来替换，否则永远 fallback</td>
+              <td>少 CLS（多数情况不替换）</td>
+            </tr>
+            <tr>
+              <td><code>optional</code></td>
+              <td>100ms 内不显示，之后 fallback；web font 100ms 内没来就<strong>永远不用</strong></td>
+              <td>无 CLS（不替换）</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>实战推荐：</p>
+        <p><strong>(1) <code>font-display: optional</code></strong>—— 如果 web font 是装饰用（不影响品牌识别），用这个。100ms 内没加载就用 fallback，无 CLS。</p>
+        <p><strong>(2) <code>font-display: swap</code> + size-adjust</strong>—— 如果 web font 是品牌识别核心（如自家 logo font），用 swap + 调整 fallback 字号让 swap 时不 shift。</p>
+        <pre class="code"><code class="lang-css">@font-face {
+  font-family: 'MyFont';
+  src: url('/myfont.woff2');
+  font-display: swap;
+}
+
+/* fallback font 调整尺寸匹配 MyFont */
+@font-face {
+  font-family: 'MyFont-fallback';
+  src: local('Arial');
+  size-adjust: 105%;  /* Arial 比 MyFont 略小，调到 105% */
+  ascent-override: 90%;
+  descent-override: 22%;
+  line-gap-override: 0%;
+}
+
+body {
+  font-family: 'MyFont', 'MyFont-fallback', sans-serif;
+}</code></pre>
+        <p>这套配置让 fallback font 视觉与 web font 接近，swap 时几乎无 shift。</p>
+
+        <h3>60fps 硬约束</h3>
+        <p>显示器主流刷新率是 60Hz（部分游戏 / mobile 设备 90Hz / 120Hz / 144Hz）。每帧的预算：</p>
+        <p><strong>60Hz: 16.67ms / frame</strong></p>
+        <p><strong>90Hz: 11.11ms / frame</strong></p>
+        <p><strong>120Hz: 8.33ms / frame</strong></p>
+        <p>浏览器要在每帧预算内完成所有工作（Style / Layout / Paint / Composite + JS）才能不掉帧。</p>
+        <p>其中浏览器自家工作约占 4-6ms（depending on complexity）。<strong>JS 的预算只有 ~10ms / frame</strong>。如果你的 frame 内 JS 超 10ms，下一帧延迟。连续多帧 jank（不顺滑）。</p>
+        <p>实战意义：</p>
+        <p>(1) <strong>scroll handler 必须 &lt; 10ms</strong>—— 否则 scroll 卡。</p>
+        <p>(2) <strong>动画每帧的工作必须 &lt; 10ms</strong>—— 否则动画掉帧。</p>
+        <p>(3) <strong>大计算用 Worker 或 yield</strong>—— 不能在主线程 hot path 跑。</p>
+        <p>这是<strong>现代 web 性能的硬约束</strong>—— 不能突破物理（屏幕刷新率）。</p>
+
+        <h3>Jank：可感知的卡顿</h3>
+        <p><strong>Jank</strong>是<strong>用户感知到的卡顿</strong>—— 通常是连续多帧 &gt; 16.67ms。常见来源：</p>
+        <p><strong>(1) Long Task 主线程</strong>—— 详见 P4.2。</p>
+        <p><strong>(2) GC pause</strong>—— V8 GC 可能 stop-the-world 几十 ms。详见 <a href="../../v8/04-memory/02-orinoco-gc.html">V8 P4.2</a>。Orinoco 大幅降低暂停，但 major GC 仍可能 pause。</p>
+        <p><strong>(3) 走 layout 路径的动画</strong>—— width / height / margin 改动 → 触发 reflow + paint + composite，每帧 50ms+。</p>
+        <p><strong>(4) Forced reflow</strong>—— JS 在循环里读 layout 属性，每次强制 layout（详见 P3.2）。</p>
+        <p><strong>(5) GPU driver 慢</strong>—— 极少情况但确实有，硬件加速没启用导致 composite 走 CPU。</p>
+        <p>诊断 jank：DevTools Performance Recording → 看 timeline 上每帧时间 → 红色 / 橙色帧是 jank。</p>
+
+        <h3>DevTools Performance panel：jank 排查工具</h3>
+        <p>Chrome DevTools Performance panel 是<strong>jank 排查的核心工具</strong>。常用功能：</p>
+        <p><strong>(1) Recording</strong>—— 录制一段时间的性能数据。包括 JS / Layout / Paint / Composite / Network。</p>
+        <p><strong>(2) Frame chart</strong>—— 每帧的耗时可视化。绿帧 = 顺；橙帧 = 慢；红帧 = jank。</p>
+        <p><strong>(3) Main thread flame chart</strong>—— 主线程的函数调用栈，看每个函数耗时。</p>
+        <p><strong>(4) Network</strong>—— 资源加载时序。</p>
+        <p><strong>(5) Bottom-up / Call tree</strong>—— 聚合调用，找最耗时的函数。</p>
+        <p><strong>(6) Performance Insights</strong>（Chrome 102+ 新工具）—— 自动分析录制 + 给出优化建议（"Forced reflow" / "Long task" / "INP candidate" 等）。</p>
+        <p>实战流程：</p>
+        <p>(1) 重现卡顿场景；</p>
+        <p>(2) DevTools 开 Performance panel + 点 Record；</p>
+        <p>(3) 操作页面（点击 / 滚动 / 输入）；</p>
+        <p>(4) 停 Record，看时间线；</p>
+        <p>(5) 找 jank 帧 → 看是什么原因（long task / forced reflow / 大 paint）；</p>
+        <p>(6) 修复 + 再 Record 验证。</p>
+
+        <h3>CSS Animations vs JS Animations</h3>
+        <p>CSS animations 和 JS-driven animations 性能不同：</p>
+        <p><strong>CSS Animations / Transitions</strong>：浏览器原生支持。如果是 transform/opacity 动画 → 走 Compositor thread，主线程不影响。如果是 layout 属性 → 走主线程，受 jank 影响。</p>
+        <p><strong>JS animations（requestAnimationFrame）</strong>：JS 控制每帧。即使做 transform 改动，仍要在主线程跑 JS → 主线程卡时动画卡。但 JS 灵活——能做物理引擎 / 复杂插值。</p>
+        <p><strong>Web Animations API (WAAPI)</strong>：JS API 但底层走 Compositor（如果属性合适）。比 requestAnimationFrame 更优。</p>
+        <pre class="code"><code class="lang-js">// Web Animations API：JS 控制 + Compositor 加速
+element.animate(
+  [
+    { transform: 'translateX(0)' },
+    { transform: 'translateX(500px)' }
+  ],
+  { duration: 1000, iterations: Infinity }
+);
+// 这种走 Compositor，主线程不影响</code></pre>
+        <p>实战推荐：</p>
+        <p>(1) <strong>简单动画用 CSS transition / animation</strong>——transform/opacity 走 Compositor。</p>
+        <p>(2) <strong>复杂插值用 WAAPI</strong>——比 requestAnimationFrame 性能好。</p>
+        <p>(3) <strong>物理 / 游戏用 requestAnimationFrame + canvas</strong>——主线程不可避免。</p>
+
+        <h3>Animation Worklet + OffscreenCanvas：高级方案</h3>
+        <p>对于<strong>极复杂动画</strong>（科学可视化 / 大型 dashboard / 游戏）—— 主线程根本承担不了。两个高级 API：</p>
+        <p><strong>Animation Worklet</strong>（Chrome 实验，未稳定）—— JS 在<strong>独立线程</strong>跑动画逻辑。比 Worker 轻量，专为动画设计。在 Compositor thread 跑。</p>
+        <p><strong>OffscreenCanvas</strong>（Chrome 69+ / Firefox 105+ / Safari 16.4+）—— 把 canvas 移到 Worker。Worker 用 OffscreenCanvas 的 2D / WebGL context 渲染 → 不阻塞主线程。</p>
+        <pre class="code"><code class="lang-js">// 主线程：把 canvas 移交给 Worker
+const canvas = document.querySelector('canvas');
+const offscreen = canvas.transferControlToOffscreen();
+const worker = new Worker('canvas-worker.js');
+worker.postMessage({ canvas: offscreen }, [offscreen]);
+
+// canvas-worker.js
+self.onmessage = (e) =&gt; {
+  const ctx = e.data.canvas.getContext('2d');
+  function frame() {
+    // 在 worker 跑渲染，主线程不被阻塞
+    ctx.clearRect(0, 0, e.data.canvas.width, e.data.canvas.height);
+    ctx.fillRect(...);
+    self.requestAnimationFrame(frame);
+  }
+  frame();
+};</code></pre>
+        <p>用例：复杂数据可视化、游戏、AR/VR、实时图像处理。OffscreenCanvas 让 60fps 动画即使主线程满载也能保持。</p>
+
+        <h3>CrUX 真实数据 + 业务关联</h3>
+        <p>CLS 优化的<strong>业务效果</strong>：</p>
+        <p>电商场景的研究：CLS 从 0.25 降到 0.05 通常带来：</p>
+        <p>(1) bounce rate 降低 5-10%；</p>
+        <p>(2) session duration 增加 10-15%；</p>
+        <p>(3) conversion rate 提升 2-5%（电商场景）。</p>
+        <p>原因：CLS 让用户烦——点击按钮但内容跳走点错；阅读到一半内容跳让人懊恼。这种"小烦恼"累积起来影响用户留存。</p>
+        <p>这是<strong>"性能即业务"</strong>的好例子——CLS 不是技术 metric 是用户体验 metric，直接影响业务指标。</p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 A · 给电商网站做 CLS 全面优化</h3>
+          <p>电商页面 CLS 0.3 (poor)——分层修复：(1) <strong>所有图片加 width/height + aspect-ratio</strong>—— 商品图 / 用户头像 / banner 全部声明尺寸。(2) <strong>广告位预留固定高度</strong>—— 即使没卖出广告也保留 placeholder。(3) <strong>Web font 用 font-display: optional 或 swap + size-adjust</strong>—— 减少替换 shift。(4) <strong>动态注入的 banner（折扣弹窗）用 position: fixed</strong>—— 不影响 layout。(5) <strong>Skeleton screen 占位</strong>—— 异步加载的商品列表用 skeleton 占位，与最终高度一致。<strong>具体 ROI</strong>：CLS 从 0.3 降到 0.05，conversion 提升 3-7%（电商场景实测）。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 B · 排查「我们的 LCP 好但 CLS 差」</h3>
+          <p>LCP 1.5s (good) 但 CLS 0.2 (needs improvement)——典型场景：内容加载快但布局不稳。<strong>排查</strong>：(1) <strong>用 web-vitals 库 + LayoutShift attribution</strong>—— 看每次 shift 的源元素 / 时机；(2) <strong>定位 shift sources</strong>—— 通常是图片 / 广告 / web font / cookie banner；(3) <strong>逐个修复</strong>—— 每修一个 source，重测 CLS。常见结论：80% CLS 来自 1-3 个特定源（如某个第三方广告 SDK 或某个未声明尺寸的图片）。<strong>修复优先级</strong>：先修最大来源（用 attribution data 排序），再修小的。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 C · 给做实时 dashboard 的 60fps 动画</h3>
+          <p>项目是实时数据 dashboard（金融 / 监控）—— 数据频繁更新 + 动画展示变化。要保持 60fps。<strong>关键策略</strong>：(1) <strong>数据计算用 Web Worker</strong>—— 主线程只接收结果更新 UI；(2) <strong>大量 DOM 更新用 virtualization</strong>—— 只渲染屏幕内的 row；(3) <strong>动画用 transform / opacity</strong>—— Compositor 加速；(4) <strong>Long task 用 scheduler.yield</strong>—— 让 critical update 不被卡；(5) <strong>用 DevTools Performance Recording</strong> 持续监控帧时间，确保 60fps。如果数据极复杂，<strong>OffscreenCanvas + Worker</strong> 是终极方案——主线程几乎只做 input 处理。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 D</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 D · 给团队建立「性能预算」机制</h3>
+          <p>团队规模化后需要持续监控性能 — 引入"性能预算"机制：(1) <strong>设定 baseline</strong>—— LCP &lt; 2.5s, INP &lt; 200ms, CLS &lt; 0.1（核心 Web Vitals "good"）。(2) <strong>CI 集成 Lighthouse CI</strong>—— 每个 PR 跑 Lighthouse，超阈值阻塞 merge。(3) <strong>生产 RUM 持续监控</strong>—— web-vitals 库 + 自家 RUM，每天看 P75 数据。(4) <strong>设性能 OKR</strong>—— Q1 目标 INP P75 &lt; 150ms 等。(5) <strong>性能回归报警</strong>—— 某个版本上线后 P75 LCP 涨 200ms+ → 报警，找回归原因。这套机制让<strong>"性能"从"偶尔注意"变成"持续保证"</strong>—— 是规模化团队 web 性能保持的关键。</p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
         <div class="code-block">
           <span class="code-label">javascript</span>
-<pre class="code"><code class="lang-js">// 正文待写</code></pre>
+<pre class="code"><code class="lang-js">// 收集 CLS + attribution
+import { onCLS } from 'web-vitals';
+
+onCLS((metric) =&gt; {
+  console.log('CLS:', metric.value, metric.rating);
+
+  // attribution 给每次 shift 的详情
+  for (const entry of metric.attribution.entries || []) {
+    console.log('shift source:', entry.sources);
+    console.log('shift value:', entry.value);
+    console.log('time:', entry.startTime);
+  }
+
+  // 发到 RUM
+  navigator.sendBeacon('/api/rum', JSON.stringify({
+    name: 'CLS',
+    value: metric.value,
+    rating: metric.rating,
+    attribution: metric.attribution,
+  }));
+});
+
+// 监听 LayoutShift events 直接（更精细）
+new PerformanceObserver((list) =&gt; {
+  for (const entry of list.getEntries()) {
+    if (!entry.hadRecentInput) {
+      console.log('LayoutShift:', entry.value, entry.sources);
+    }
+  }
+}).observe({ entryTypes: ['layout-shift'] });</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">html</span>
+<pre class="code"><code class="lang-html">&lt;!-- 完整的 CLS 优化模板 --&gt;
+&lt;!-- 1. 图片永远声明 width/height --&gt;
+&lt;img src="/hero.jpg" alt="hero"
+     width="1200" height="600"
+     fetchpriority="high"&gt;
+
+&lt;!-- 2. Video / iframe 用 aspect-ratio --&gt;
+&lt;style&gt;
+  .video-container { width: 100%; aspect-ratio: 16 / 9; }
+  .video-container iframe { width: 100%; height: 100%; }
+&lt;/style&gt;
+&lt;div class="video-container"&gt;
+  &lt;iframe src="..."&gt;&lt;/iframe&gt;
+&lt;/div&gt;
+
+&lt;!-- 3. 广告位预留固定高度 --&gt;
+&lt;style&gt;
+  .ad-slot { height: 250px; background: #f0f0f0; }
+&lt;/style&gt;
+&lt;div class="ad-slot"&gt;
+  &lt;!-- 广告 SDK 异步注入到这 --&gt;
+&lt;/div&gt;
+
+&lt;!-- 4. Web font 用 font-display: optional --&gt;
+&lt;style&gt;
+  @font-face {
+    font-family: 'MyFont';
+    src: url('/myfont.woff2');
+    font-display: optional;  /* 100ms 内没加载就永远不用 */
+  }
+&lt;/style&gt;</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">css</span>
+<pre class="code"><code class="lang-css">/* font size-adjust 让 fallback 字号匹配 web font */
+@font-face {
+  font-family: 'Inter';
+  src: url('/inter.woff2') format('woff2');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter-fallback';
+  src: local('Arial');
+  size-adjust: 107%;        /* Arial 比 Inter 略小 */
+  ascent-override: 90%;
+  descent-override: 22.43%;
+  line-gap-override: 0%;
+}
+
+body {
+  font-family: 'Inter', 'Inter-fallback', sans-serif;
+}
+
+/* 之后 swap 时几乎无 layout shift */</code></pre>
         </div>
 
         <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
         <div class="pitfall">
-          <div class="pitfall-title">陷阱标题</div>
-          <p><em>正文待写。</em></p>
+          <div class="pitfall-title">用 CSS width/height 替代 HTML 属性</div>
+          <p>有人写 <code>&lt;img src="..."&gt;</code> 不写 width/height attribute，但 CSS 设了 <code>img { width: 100%; height: auto }</code>—— 仍然有 CLS。原因：浏览器需要在<strong>HTML parse 阶段</strong>就知道宽高比预留空间，CSS 要 parse 完才生效。<strong>规避</strong>：always 在 HTML img tag 上写 <code>width="800" height="600"</code>—— 浏览器 parse 时立即用比例预留空间。CSS 仍可以 override 让它 responsive。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">font-display: swap 不配 size-adjust</div>
+          <p>用 <code>font-display: swap</code> 但不调 fallback 尺寸——swap 时仍有明显 CLS。<strong>正确</strong>：swap 必须配 size-adjust + ascent-override 让 fallback 与 web font 字号匹配。Google Fonts 现在自动生成这种 fallback declaration（叫 "Adjusted size declarations"），可以参考 / 借用。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">把 Animation 在主线程跑造成 jank</div>
+          <p>用 requestAnimationFrame 写动画，逻辑在主线程跑——主线程被其他工作卡时动画卡。<strong>规避</strong>：(1) 简单动画用 CSS transition / animation（transform/opacity 走 Compositor）；(2) 复杂插值用 Web Animations API（也走 Compositor 如果属性合适）；(3) 极复杂动画用 OffscreenCanvas + Worker。requestAnimationFrame 仅适合"主线程不可避免的动画"（如 canvas 游戏）。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">用 lab data 优化但不验证 field data</div>
+          <p>在 DevTools 本地测 CLS / 60fps 动画都好——但用户报卡。原因：你的本地是高端机器 + 快网络，用户可能低端机器 + 慢网络。<strong>规避</strong>：(1) DevTools throttling（CPU 4x slowdown / 3G 网络模拟）测低端体验；(2) 真机测试低端 mobile 设备；(3) 生产 web-vitals 库 + RUM 看 field data；(4) P75 / P95 是关键指标——P50 好不代表 P75 也好。</p>
         </div>
 
         <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
         <ul>
-          <li><a href="https://web.dev/" target="_blank" rel="noopener">web.dev</a></li>
-          <li>回到主题首页 → <a href="../index.html">浏览器渲染管线深度学习</a></li>
+          <li><a href="https://web.dev/articles/cls" target="_blank" rel="noopener">web.dev · CLS</a> · 完整指南</li>
+          <li><a href="https://web.dev/articles/optimize-cls" target="_blank" rel="noopener">web.dev · Optimize CLS</a></li>
+          <li><a href="https://web.dev/articles/animations-guide" target="_blank" rel="noopener">web.dev · Animations guide</a></li>
+          <li><a href="https://developer.chrome.com/docs/devtools/performance/" target="_blank" rel="noopener">Chrome DevTools · Performance panel</a></li>
+          <li><a href="https://web.dev/articles/vitals-tools" target="_blank" rel="noopener">Web Vitals tools overview</a></li>
+          <li><a href="https://github.com/GoogleChromeLabs/font-fallback-tool" target="_blank" rel="noopener">Font Fallback Tool</a> · size-adjust 自动生成</li>
+          <li>对照 V8 GC pause → <a href="../../v8/04-memory/02-orinoco-gc.html">V8 P4.2 Orinoco GC</a></li>
+          <li>下一章 → <a href="../05-modern-platform/01-modern-features.html">P5 · 现代 Web Platform 特性</a></li>
         </ul>
 
         <nav class="chapter-nav" aria-label="章节翻页">
           <a class="prev" href="02-inp-long-tasks.html"><span class="label">← 上一章</span><span class="title">P4.2 · 交互侧 metrics</span></a>
-          <a class="next" href="../05-modern-platform/01-modern-features.html"><span class="label">下一章 →</span><span class="title">P5.1 · 现代 Web Platform</span></a>
+          <a class="next" href="../05-modern-platform/01-modern-features.html"><span class="label">下一章 →</span><span class="title">P5 · 现代 Web Platform 特性</span></a>
         </nav>
       </article>
       <aside class="on-page-toc" aria-label="本页目录"><h3>本页目录</h3><ul></ul></aside>
