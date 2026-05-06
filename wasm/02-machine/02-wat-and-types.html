@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>wat 文本格式与类型系统 · P2.2 · WebAssembly 深度学习</title>
+    <meta name="description" content="wat (WebAssembly Text format) 是 wasm 的「汇编」：S-expression 语法、与二进制 1:1 对应。类型系统含数值类型（i32/i64/f32/f64）、向量类型（v128，2.0 正式）、引用类型（funcref/externref）。结构化控制流（block/loop/if/br/br_if）让 load-time validation 简单 + 编译器易优化。multi-value 让多返回值成为一等公民。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23654ff0'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EWA%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>WebAssembly 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.22 290); color: #fff">WASM</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · 机器模型与格式</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-binary-stack-machine.html">01 · 二进制格式与栈机器</a></li>
+          <li><a href="02-wat-and-types.html" class="active">02 · wat 文本格式与类型系统</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">WebAssembly</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · 机器模型</a><span class="breadcrumb-sep">/</span>
+          <span>02 · wat 文本格式与类型系统</span>
+        </nav>
+        <h1>wat 文本格式与类型系统</h1>
+        <p class="lead">
+          wat（WebAssembly Text format）是 wasm 的"汇编"——<strong>S-expression 语法 + 与二进制 1:1 对应</strong>。给人看 / 调试 / 学习 / 手写小模块用。<strong>类型系统</strong>分三层：(1) <strong>数值类型</strong> i32/i64/f32/f64（MVP）+ <strong>向量类型</strong> v128（2.0）+ <strong>引用类型</strong> funcref/externref（2.0）。<strong>结构化控制流</strong>（block/loop/if/br/br_if）让 wasm 区别于 NaCl 的任意 jump，是 load-time validation 简单的根基。<strong>multi-value</strong>（2.0）让多返回值不必通过 linear memory 中转。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P2.1（栈机器 + 二进制格式）</span>
+          <span><strong>主要来源</strong> WebAssembly Core Spec · WABT · MDN wasm 文档</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>wat 是 wasm 的"汇编 + S-expression"</strong>—— 给人看的格式，与二进制 1:1 对应。生产部署的是 <code>.wasm</code>，wat 用于学习 / 调试 / 反汇编。开发者很少手写 wat（用 Rust / C++ 编译），但读懂 wat 是 debug 必备技能。</li>
+          <li><strong>类型系统三层</strong>—— 数值（i32/i64/f32/f64）+ 向量（v128，SIMD）+ 引用（funcref/externref）。MVP 只有数值；2.0 引入向量和引用；GC 提案再加 struct/array/i31ref（详见 <a href="../05-advanced/02-gc-tail-eh-jspi.html">P5.2</a>）。</li>
+          <li><strong>结构化控制流</strong>—— 没有任意 goto，只有 block / loop / if-else / br / br_if / br_table。<strong>br N 跳到第 N 层 block 末尾</strong>，类似 break to label，但用相对深度。这种限制让 load-time validation 简单 + 编译器优化更激进。</li>
+          <li><strong>函数签名 = 参数列表 → 返回列表</strong>—— MVP 时单返回值；2.0 multi-value 让多返回值一等公民。<code>(func (param i32 i32) (result i32 i32) ...)</code> 同时返回和差。</li>
+          <li><strong>引用类型让 wasm 能持有 JS 对象</strong>—— MVP 时 wasm 只能存数值，要存 JS 对象要绕道 memory + 自己管 ID；<code>externref</code>（2.0）让 JS 对象作 opaque 引用直接传给 wasm，与 GC barrier 无缝集成。</li>
+          <li><strong>类型检查是 load-time + 一次完成的</strong>—— 不允许"运行到某条指令才发现类型错"；module load 即验证完成。这种设计让 wasm sandbox 成本极低。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>wat 语法基础：S-expression</h3>
+        <p>wat 用 <strong>S-expression</strong>（Lisp 风格）：<code>(operator operand1 operand2 ...)</code>。每个 expression 用括号包裹。</p>
+        <p>最简 module：</p>
+        <pre class="code"><code class="lang-text">(module)</code></pre>
+        <p>带一个函数的 module：</p>
+        <pre class="code"><code class="lang-text">(module
+  (func $hello))</code></pre>
+        <p>函数加参数 / 返回值 / 局部变量：</p>
+        <pre class="code"><code class="lang-text">(module
+  (func $add (param $x i32) (param $y i32) (result i32)
+    local.get $x
+    local.get $y
+    i32.add))</code></pre>
+        <p>命名 vs 索引：<code>$add</code> / <code>$x</code> 是<strong>名字</strong>（仅 wat 用，二进制只有索引）。可以用索引代替：</p>
+        <pre class="code"><code class="lang-text">(module
+  (func (param i32) (param i32) (result i32)
+    local.get 0  ;; 第一个参数
+    local.get 1  ;; 第二个参数
+    i32.add))</code></pre>
+        <p>注释：<code>;;</code> 行注释、<code>(; ... ;)</code> 块注释。</p>
+        <p><strong>两种语法风格</strong>：</p>
+        <p><strong>线性风格（stack-based）</strong>：</p>
+        <pre class="code"><code class="lang-text">local.get $x
+local.get $y
+i32.add</code></pre>
+        <p><strong>嵌套风格（folded / S-expression）</strong>：</p>
+        <pre class="code"><code class="lang-text">(i32.add (local.get $x) (local.get $y))</code></pre>
+        <p>两者等价；嵌套风格更接近"表达式树"，可读性高；线性风格更接近实际栈操作，调试时直观。混用也允许。</p>
+
+        <h3>数值类型（MVP，4 种）</h3>
+        <p>wasm MVP 只有 4 种<strong>数值类型</strong>：</p>
+        <table>
+          <thead>
+            <tr><th>类型</th><th>含义</th><th>大小</th><th>对应 JS</th><th>对应 Rust</th><th>对应 C</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>i32</code></td><td>32 位整数</td><td>4 字节</td><td>Number（&lt; 2^32）</td><td>i32 / u32</td><td>int32_t / uint32_t</td></tr>
+            <tr><td><code>i64</code></td><td>64 位整数</td><td>8 字节</td><td>BigInt</td><td>i64 / u64</td><td>int64_t / uint64_t</td></tr>
+            <tr><td><code>f32</code></td><td>32 位浮点（IEEE 754）</td><td>4 字节</td><td>Number（精度损失）</td><td>f32</td><td>float</td></tr>
+            <tr><td><code>f64</code></td><td>64 位浮点（IEEE 754）</td><td>8 字节</td><td>Number</td><td>f64</td><td>double</td></tr>
+          </tbody>
+        </table>
+        <p><strong>关键观察</strong>：</p>
+        <p><strong>(1) 没有 sign / unsigned 类型区分</strong>—— wasm 只有 i32 / i64，签名性由<strong>指令</strong>决定。<code>i32.div_s</code>（signed divide）vs <code>i32.div_u</code>（unsigned divide）。让指令多但类型少。</p>
+        <p><strong>(2) 没有 i8 / i16 / u8 / u16</strong>—— 所有小整数操作 zero / sign extend 到 i32。但内存读写有专门指令：<code>i32.load8_s</code>（读 1 字节符号扩展）/ <code>i32.load8_u</code>（无符号）/ <code>i32.load16_s</code> 等。</p>
+        <p><strong>(3) i64 在 JS API 用 BigInt</strong>—— 因为 JS Number 只能精确表示 2^53；wasm i64 与 JS 互操作必须 BigInt（2.0 后默认）。</p>
+        <p><strong>(4) bool 不是独立类型</strong>—— 用 i32（0=false / 非 0=true）。比较指令 <code>i32.eq</code> 等返回 i32 0/1。</p>
+
+        <h3>向量类型 v128（2.0 正式）</h3>
+        <p>v128 = 128 位向量，可解释为：</p>
+        <ul>
+          <li><code>i8x16</code>—— 16 个 8 位整数</li>
+          <li><code>i16x8</code>—— 8 个 16 位整数</li>
+          <li><code>i32x4</code>—— 4 个 32 位整数</li>
+          <li><code>i64x2</code>—— 2 个 64 位整数</li>
+          <li><code>f32x4</code>—— 4 个 32 位浮点</li>
+          <li><code>f64x2</code>—— 2 个 64 位浮点</li>
+        </ul>
+        <p>SIMD 指令操作 v128（详见 <a href="../05-advanced/01-threads-simd.html">P5.1</a>）。例如：</p>
+        <pre class="code"><code class="lang-text">;; 加载 4 个 f32 → 同时相加
+(v128.load (local.get $aPtr))    ;; 4 个 f32 from a
+(v128.load (local.get $bPtr))    ;; 4 个 f32 from b
+f32x4.add                        ;; 同时 4 路加法
+(v128.store (local.get $cPtr))   ;; 同时存 4 个</code></pre>
+        <p>v128 在 x86 映射到 SSE / AVX 寄存器；ARM 映射到 NEON 寄存器；都是<strong>免费</strong>性能。</p>
+
+        <h3>引用类型 funcref / externref（2.0 正式）</h3>
+        <p>MVP 时 wasm 只能存数值；引用类型让 wasm 能<strong>opaque 持有</strong>函数 / JS 对象。</p>
+        <p><strong>funcref</strong>—— 函数引用；用于 table（间接调用）+ <code>ref.func</code> 指令</p>
+        <p><strong>externref</strong>—— 外部引用（通常是 JS 对象）；wasm 不能 deref 它，但可以传递 / 存储 / 作为参数返回值</p>
+        <p>例子：</p>
+        <pre class="code"><code class="lang-text">(module
+  (func (export "store_obj") (param $obj externref) (result externref)
+    local.get $obj   ;; 直接返回，wasm 不知道 obj 内部结构但能持有
+  ))</code></pre>
+        <p>JS 端：</p>
+        <pre class="code"><code class="lang-javascript">const obj = { name: "alice" };
+const result = instance.exports.store_obj(obj);
+// result === obj （引用相等，wasm 透明传递）</code></pre>
+        <p>这解决了 MVP 的"wasm 怎么持有 JS 对象"问题。之前要绕道：JS 端维护 ID → object Map，wasm 端只存 ID，用 ID 调 JS 函数操作对象。<strong>externref 让这一切自动化</strong>。</p>
+
+        <h3>函数签名 + multi-value</h3>
+        <p>函数签名 = 参数类型列表 → 返回类型列表。MVP 时只能 0 或 1 个返回值；<strong>multi-value（2.0）</strong>允许多返回值。</p>
+        <p>例子（multi-value）：</p>
+        <pre class="code"><code class="lang-text">(module
+  (func $divmod (param $a i32) (param $b i32) (result i32 i32)
+    local.get $a
+    local.get $b
+    i32.div_s   ;; 商
+    local.get $a
+    local.get $b
+    i32.rem_s)  ;; 余数
+  (export "divmod" (func $divmod)))</code></pre>
+        <p>JS 端调用：</p>
+        <pre class="code"><code class="lang-javascript">const [quotient, remainder] = instance.exports.divmod(17, 5);
+// quotient = 3, remainder = 2</code></pre>
+        <p><strong>multi-value 也用于 block</strong>—— block 不只能 push 一个结果，还能 push 多个：</p>
+        <pre class="code"><code class="lang-text">(block (result i32 i32)
+  i32.const 1
+  i32.const 2)
+;; 栈状态：[1, 2]</code></pre>
+        <p>这让"返回 struct"可以不通过 linear memory 中转 —— 直接栈传递两个 / 多个值。</p>
+
+        <h3>局部变量 + 参数</h3>
+        <p>wasm 函数有<strong>局部变量</strong>（locals），包括参数（参数也算 locals，按声明顺序索引）+ 显式声明的 local。</p>
+        <pre class="code"><code class="lang-text">(func $foo (param $a i32) (param $b i32) (local $tmp i32) (result i32)
+  ;; locals: 0=$a, 1=$b, 2=$tmp
+  local.get $a
+  local.get $b
+  i32.add
+  local.set $tmp     ;; 存到 local 2
+
+  local.get $tmp
+  local.get $tmp
+  i32.mul)           ;; tmp * tmp</code></pre>
+        <p><strong>local declarations 优化</strong>：wat 允许<strong>合并相同类型 locals</strong>：</p>
+        <pre class="code"><code class="lang-text">(func (local i32 i32 i32 f64 f64)
+  ;; 等价二进制（更紧凑）：
+  ;; local count groups: [(3, i32), (2, f64)]
+  )</code></pre>
+        <p>编译器实际把 locals 映射到 native 寄存器；frequent locals 不会真的"进栈"。</p>
+
+        <h3>结构化控制流</h3>
+        <p>wasm 没有 goto。控制流由 5 类构造组成：</p>
+        <p><strong>(1) block</strong>—— 引入一个嵌套层，可被 br 跳出（跳到 block 末尾）</p>
+        <pre class="code"><code class="lang-text">(block $outer
+  (block $inner
+    br $inner   ;; 跳到 $inner 末尾
+  )
+  ;; $inner 块外
+)</code></pre>
+        <p><strong>(2) loop</strong>—— 引入一个嵌套层，可被 br 回到 loop 开头（不是末尾！这是关键）</p>
+        <pre class="code"><code class="lang-text">(loop $L
+  ;; 计算
+  br_if $L (some condition)  ;; 条件回到 loop 开头
+)</code></pre>
+        <p><strong>(3) if-else</strong>—— 条件分支</p>
+        <pre class="code"><code class="lang-text">(if (i32.lt_s (local.get $x) (i32.const 0))
+  (then
+    i32.const -1)
+  (else
+    i32.const 1))</code></pre>
+        <p><strong>(4) br / br_if / br_table</strong>—— 分支：</p>
+        <ul>
+          <li><code>br N</code>—— 无条件跳到第 N 层（外层）的 block 末尾或 loop 开头</li>
+          <li><code>br_if N</code>—— 条件跳（栈顶非 0 时跳）</li>
+          <li><code>br_table</code>—— switch 风格分发到多个目标</li>
+        </ul>
+        <p>关键点：<strong>br N 是相对深度</strong>，不是绝对 label。<code>br 0</code> 跳最内层，<code>br 1</code> 跳外一层。这让验证简单。</p>
+        <p><strong>(5) return / call / call_indirect</strong>—— 函数级控制流</p>
+        <p>没有 goto / 任意 jump 的好处：</p>
+        <ul>
+          <li>load-time validation 可一次推导整个函数的栈类型</li>
+          <li>编译器知道每个 block 的入口 / 出口，优化（DCE / inlining / SSA 转换）容易</li>
+          <li>不会跳到指令中间（不像 x86 / ELF 可能 jump 到任意地址）</li>
+        </ul>
+
+        <h3>类型检查规则（验证算法）</h3>
+        <p>wasm validation 是<strong>线性时间</strong>的（不像 JVM 的复杂 dataflow）。算法概要：</p>
+        <p><strong>初始</strong>：函数入口栈类型 = 参数类型反序（最后一个参数在栈顶）</p>
+        <p><strong>每条指令推导</strong>：</p>
+        <ul>
+          <li><code>i32.const N</code>—— 栈顶 push i32</li>
+          <li><code>i32.add</code>—— 栈顶必须 [i32, i32]，弹出两个，push i32</li>
+          <li><code>local.get $i</code>—— push local 类型</li>
+          <li><code>local.set $i</code>—— 弹出，必须匹配 local 类型</li>
+          <li><code>call $f</code>—— 弹出 $f 参数类型，push 返回类型</li>
+          <li><code>br N</code>—— 检查目标 block 的"出口栈类型"匹配；标记当前点 unreachable（之后指令栈类型可任意，因为永远不会执行到）</li>
+        </ul>
+        <p><strong>函数末尾</strong>：栈类型必须 == 返回类型</p>
+        <p><strong>失败例子</strong>：</p>
+        <pre class="code"><code class="lang-text">(func (result i32)
+  i32.const 1
+  i64.const 2   ;; 栈：[i32, i64]
+  i32.add)      ;; ❌ i32.add 期望 [i32, i32]，但栈是 [i32, i64]</code></pre>
+        <p>这种 module 在 load 时就被拒绝，永远不会运行到这条指令。</p>
+
+        <h3>导入 / 导出（imports / exports）</h3>
+        <p>wat 中：</p>
+        <pre class="code"><code class="lang-text">(module
+  ;; 从 "env" 模块导入函数 "log"，签名 (i32) -&gt; ()
+  (import "env" "log" (func $log (param i32)))
+
+  ;; 从 "env" 导入 memory（最少 1 页）
+  (import "env" "mem" (memory 1))
+
+  (func $main
+    (call $log (i32.const 42)))
+
+  (export "main" (func $main))
+  (export "memory" (memory 0)))   ;; 也可以重新导出</code></pre>
+        <p>JS 端 instantiate 时提供 imports：</p>
+        <pre class="code"><code class="lang-javascript">const importObject = {
+  env: {
+    log: (n) =&gt; console.log("wasm logs:", n),
+    mem: new WebAssembly.Memory({ initial: 1 })
+  }
+};
+const { instance } = await WebAssembly.instantiate(wasmBytes, importObject);
+instance.exports.main();  // 输出 "wasm logs: 42"</code></pre>
+        <p>详见 <a href="../03-host-interop/02-imports-exports.html">P3.2</a>。</p>
+
+        <h3>tables + 间接调用</h3>
+        <p>table 是<strong>函数引用数组</strong>，用 <code>call_indirect</code> 索引调用（动态分发的基础）：</p>
+        <pre class="code"><code class="lang-text">(module
+  (type $sig (func (param i32) (result i32)))
+  (table 2 funcref)
+  (elem (i32.const 0) $double $square)
+
+  (func $double (param i32) (result i32)
+    (i32.mul (local.get 0) (i32.const 2)))
+
+  (func $square (param i32) (result i32)
+    (i32.mul (local.get 0) (local.get 0)))
+
+  (func (export "dispatch") (param $i i32) (param $x i32) (result i32)
+    (call_indirect (type $sig)
+      (local.get $x)
+      (local.get $i))))</code></pre>
+        <p>JS 端：</p>
+        <pre class="code"><code class="lang-javascript">instance.exports.dispatch(0, 5);  // double(5) = 10
+instance.exports.dispatch(1, 5);  // square(5) = 25</code></pre>
+        <p>C/C++ 的 vtable / 函数指针 / 动态分发都编译到 table + call_indirect。详见 <a href="../03-host-interop/01-memory-tables.html">P3.1</a>。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · 调试 wasm 性能问题：读 wat</h3>
+        <p>性能怀疑 Rust 编译的 wasm 没用 SIMD，或某个热函数没 inline。<strong>读 wat 是必备技能</strong>：</p>
+        <pre class="code"><code class="lang-bash">$ wasm-tools print my.wasm | grep -A 20 "func \$hot_function"</code></pre>
+        <p>看是否有 <code>v128</code> 指令、<code>call</code> 是否被 inline、控制流是否合理。</p>
+        <p>典型 issue：</p>
+        <ul>
+          <li>编译没启用 SIMD：wat 里全是 <code>i32.add</code> / <code>f32.add</code>，没 <code>i32x4</code> / <code>f32x4</code></li>
+          <li>没 inline：本应内联的小函数仍是 <code>call</code></li>
+          <li>多余 bounds check：每个 <code>i32.load</code> 前后插了运行时检查</li>
+        </ul>
+
+        <h3>场景 B · 手写小工具（gas counter / instrument）</h3>
+        <p>有时需要给 wasm module 注入额外指令（如 fuel metering / coverage）。直接在二进制操作复杂；wat 操作直观：</p>
+        <pre class="code"><code class="lang-bash">$ wasm2wat my.wasm -o my.wat
+# 编辑 my.wat，每个函数入口插入 (call $consume_gas (i32.const 1))
+$ wat2wasm my.wat -o my-instrumented.wasm</code></pre>
+
+        <h3>场景 C · 教学 / 学习 wasm 设计</h3>
+        <p>读 wat 是学 wasm 最快路径。比看 Rust 源码或二进制都直观：每条指令对栈做什么、控制流如何流转一目了然。</p>
+
+        <h3>场景 D · 跨工具链 / 跨语言调试</h3>
+        <p>你 Rust + wasm-bindgen 编了 wasm，但运行时报错"function signature mismatch"。读 wat 看 Rust 编译出的实际签名，对比 JS 端期望，定位差异。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：手写 wat 进阶</span></h2>
+
+        <h3>例 1：递归 fib</h3>
+        <pre class="code"><code class="lang-text">(module
+  (func $fib (param $n i32) (result i32)
+    (if (result i32) (i32.lt_s (local.get $n) (i32.const 2))
+      (then
+        local.get $n)
+      (else
+        (i32.add
+          (call $fib (i32.sub (local.get $n) (i32.const 1)))
+          (call $fib (i32.sub (local.get $n) (i32.const 2)))))))
+  (export "fib" (func $fib)))</code></pre>
+
+        <h3>例 2：循环求和（loop + br_if）</h3>
+        <pre class="code"><code class="lang-text">(module
+  (func $sum_to_n (param $n i32) (result i32)
+    (local $i i32)
+    (local $acc i32)
+    (local.set $i (i32.const 1))
+    (local.set $acc (i32.const 0))
+    (loop $L
+      ;; acc += i
+      (local.set $acc (i32.add (local.get $acc) (local.get $i)))
+      ;; i++
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      ;; 如果 i &lt;= n 继续
+      (br_if $L (i32.le_s (local.get $i) (local.get $n))))
+    local.get $acc)
+  (export "sum_to_n" (func $sum_to_n)))</code></pre>
+
+        <h3>例 3：multi-value 返回 quotient + remainder</h3>
+        <pre class="code"><code class="lang-text">(module
+  (func $divmod (param $a i32) (param $b i32) (result i32 i32)
+    ;; 同时返回商和余数
+    local.get $a
+    local.get $b
+    i32.div_s
+    local.get $a
+    local.get $b
+    i32.rem_s)
+  (export "divmod" (func $divmod)))</code></pre>
+        <p>JS 端：</p>
+        <pre class="code"><code class="lang-javascript">const [q, r] = instance.exports.divmod(17, 5);
+// q = 3, r = 2</code></pre>
+
+        <h3>例 4：用 externref 持有 JS 对象</h3>
+        <pre class="code"><code class="lang-text">(module
+  (table $objs 10 externref)
+  (func $store (param $i i32) (param $obj externref)
+    (table.set $objs (local.get $i) (local.get $obj)))
+  (func $load (param $i i32) (result externref)
+    (table.get $objs (local.get $i)))
+  (export "store" (func $store))
+  (export "load" (func $load)))</code></pre>
+        <p>JS 端用 wasm 作 typed object store：</p>
+        <pre class="code"><code class="lang-javascript">const alice = { name: "alice" };
+const bob = { name: "bob" };
+instance.exports.store(0, alice);
+instance.exports.store(1, bob);
+
+const obj = instance.exports.load(0);
+console.log(obj === alice);  // true</code></pre>
+
+        <h3>例 5：用 SIMD 加速向量加法</h3>
+        <pre class="code"><code class="lang-text">(module
+  (memory (export "mem") 1)
+  (func $add_vec_simd (param $aPtr i32) (param $bPtr i32) (param $cPtr i32) (param $n i32)
+    (local $i i32)
+    (local.set $i (i32.const 0))
+    (loop $L
+      ;; load 4 个 f32 from a
+      ;; load 4 个 f32 from b
+      ;; f32x4.add
+      ;; store 4 个 f32 to c
+      (v128.store
+        (i32.add (local.get $cPtr) (local.get $i))
+        (f32x4.add
+          (v128.load (i32.add (local.get $aPtr) (local.get $i)))
+          (v128.load (i32.add (local.get $bPtr) (local.get $i)))))
+      ;; i += 16 (4 个 f32)
+      (local.set $i (i32.add (local.get $i) (i32.const 16)))
+      (br_if $L (i32.lt_s (local.get $i) (i32.shl (local.get $n) (i32.const 2)))))
+  )
+  (export "add_vec_simd" (func $add_vec_simd)))</code></pre>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：以为 br 是跳到 label</h3>
+        <p>wasm 的 <code>br N</code> 是<strong>相对深度</strong>，不是 label 名。</p>
+        <pre class="code"><code class="lang-text">(block $A
+  (block $B
+    br 0   ;; 跳到 $B 末尾（最内层）
+    br 1   ;; 跳到 $A 末尾（外一层）
+  )
+)</code></pre>
+        <p>wat 允许用名字 <code>br $A</code> / <code>br $B</code>，编译时转成索引。<strong>但二进制只有索引</strong>。</p>
+
+        <h3>陷阱 2：loop 的 br 跳的不是末尾</h3>
+        <p>关键差别：</p>
+        <ul>
+          <li><code>br</code> 在 <code>block</code> 内 → 跳到 <strong>block 末尾</strong>（forward）</li>
+          <li><code>br</code> 在 <code>loop</code> 内 → 跳到 <strong>loop 开头</strong>（backward，构成循环）</li>
+        </ul>
+        <p>这是 wasm 表达循环的方式：用 <code>loop</code> + <code>br_if</code> 形成"条件跳回"。loop 自己不会自动循环，必须显式 <code>br</code> 回去。</p>
+
+        <h3>陷阱 3：忘记栈平衡</h3>
+        <p>每个 block / function 末尾，栈类型必须匹配 result 类型。多压一个值不弹会失败：</p>
+        <pre class="code"><code class="lang-text">(func (result i32)
+  i32.const 1
+  i32.const 2)   ;; ❌ 栈：[i32, i32]，期望 [i32]</code></pre>
+        <p>用 <code>drop</code> 弹值不消费：</p>
+        <pre class="code"><code class="lang-text">(func (result i32)
+  i32.const 1
+  i32.const 2
+  drop)          ;; ✅ 栈：[i32]，弹掉栈顶 2，剩 1</code></pre>
+
+        <h3>陷阱 4：i64 与 JS 互操作忘记 BigInt</h3>
+        <p>wasm 函数返回 i64 时，JS 端必须用 BigInt 接收：</p>
+        <pre class="code"><code class="lang-javascript">// wasm: (func (result i64) (i64.const 999999999999))
+const result = instance.exports.big_num();
+console.log(result);          // 999999999999n（BigInt）
+console.log(typeof result);   // "bigint"
+console.log(Number(result));  // 转 Number 可能精度损失</code></pre>
+        <p>如果 wasm 函数 export 接受 i64 参数，JS 也必须传 BigInt：<code>instance.exports.foo(123n)</code>。传 Number 会 throw。</p>
+
+        <h3>陷阱 5：手写 wat 忘了 export</h3>
+        <p>新手常见 bug：函数定义了但没 export，JS 端 <code>instance.exports.foo</code> 是 undefined。</p>
+        <pre class="code"><code class="lang-text">(module
+  (func $hidden (param i32) (result i32)
+    local.get 0))   ;; ❌ 没 export，外部访问不到</code></pre>
+        <p>修复：</p>
+        <pre class="code"><code class="lang-text">(module
+  (func $visible (export "visible") (param i32) (result i32)
+    local.get 0))   ;; ✅ inline export 语法</code></pre>
+        <p>或：</p>
+        <pre class="code"><code class="lang-text">(module
+  (func $foo (param i32) (result i32) local.get 0)
+  (export "foo" (func $foo)))</code></pre>
+
+        <h3>陷阱 6：以为 unsigned 类型是单独类型</h3>
+        <p>wasm 没有 u32 / u64 类型，只有 i32 / i64。<strong>签名性由指令决定</strong>：</p>
+        <ul>
+          <li><code>i32.div_s</code>—— signed divide（-6/2 = -3）</li>
+          <li><code>i32.div_u</code>—— unsigned divide（0xFFFFFFFE / 2 = 0x7FFFFFFF）</li>
+          <li><code>i32.lt_s</code> vs <code>i32.lt_u</code>—— 同样区别</li>
+          <li><code>i32.shr_s</code>（算术右移）vs <code>i32.shr_u</code>（逻辑右移）</li>
+        </ul>
+        <p>编译器（Rust / C++）选择正确的指令；手写 wat 时要自己判断。</p>
+
+        <h3>陷阱 7：滥用 multi-value</h3>
+        <p>multi-value 看似方便（返回多值不通过 memory），但<strong>跨 JS-WASM 边界仍是开销</strong>：每个返回值要生成 JS array entry。返回 5+ 值时不如让 wasm 写到 linear memory，JS 端 read 一次。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范</h3>
+        <ul>
+          <li><a href="https://webassembly.github.io/spec/core/text/index.html" target="_blank" rel="noopener">WebAssembly Core Spec · Text Format</a></li>
+          <li><a href="https://webassembly.github.io/spec/core/syntax/types.html" target="_blank" rel="noopener">WebAssembly Core Spec · Types</a></li>
+          <li><a href="https://github.com/WebAssembly/multi-value" target="_blank" rel="noopener">Multi-value 提案</a></li>
+          <li><a href="https://github.com/WebAssembly/reference-types" target="_blank" rel="noopener">Reference Types 提案</a></li>
+        </ul>
+
+        <h3>教程</h3>
+        <ul>
+          <li><a href="https://developer.mozilla.org/en-US/docs/WebAssembly/Understanding_the_text_format" target="_blank" rel="noopener">MDN · Understanding WebAssembly text format</a></li>
+          <li><a href="https://wasmbyexample.dev/" target="_blank" rel="noopener">Wasm By Example</a> · 实战教程</li>
+          <li><a href="https://github.com/WebAssembly/wabt/blob/main/docs/wat2wasm.md" target="_blank" rel="noopener">wabt wat2wasm 文档</a></li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="../03-host-interop/01-memory-tables.html">P3.1 Linear Memory + Tables</a> · 内存模型</li>
+          <li><a href="../03-host-interop/02-imports-exports.html">P3.2 Imports / Exports + 跨边界调用</a> · 与 JS 互操作</li>
+          <li><a href="../05-advanced/01-threads-simd.html">P5.1 Threads + SIMD</a> · v128 详细使用</li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../v8/06-wasm/01-wasm-pipeline.html">V8 P6.1 V8 Wasm 编译流水线</a></li>
+          <li><a href="../../ecma/04-types/01-primitive-types.html">ECMA P4.1 原始类型</a> · JS 类型系统对照</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

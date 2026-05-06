@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>二进制格式与栈机器执行模型 · P2.1 · WebAssembly 深度学习</title>
+    <meta name="description" content="WebAssembly 机器模型的核心：wasm32 是栈机器（指令在隐式操作数栈 push/pop），二进制 module 由 magic header + 12 类 sections 组成（LEB128 编码 + length prefix → streaming compilation），load-time validation 是 wasm 安全模型的基石——不允许「先 load 后逐渐发现错误」。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23654ff0'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EWA%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>WebAssembly 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.22 290); color: #fff">WASM</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · 机器模型与格式</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-binary-stack-machine.html" class="active">01 · 二进制格式与栈机器</a></li>
+          <li><a href="02-wat-and-types.html">02 · wat 文本格式与类型系统</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">WebAssembly</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · 机器模型</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 二进制格式与栈机器</span>
+        </nav>
+        <h1>二进制格式与栈机器执行模型</h1>
+        <p class="lead">
+          wasm32 是<strong>栈机器</strong>（不是寄存器机器）：所有指令在隐式操作数栈上 push / pop。<strong>为什么这样设计</strong>—— (1) 二进制紧凑（不编寄存器号）、(2) 验证简单（typing 推导）、(3) 引擎自由（实际 V8 / wasmtime 都把它再编译成寄存器机器）。<strong>二进制 module</strong> = magic + version + 12 类 sections（每个 LEB128 + length prefix），让<strong>streaming compilation</strong>成为可能。<strong>load-time validation</strong> 是 wasm 安全的基石——module 整个验证通过才执行，要么直接拒绝。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P1（项目史 + 同代人）</span>
+          <span><strong>主要来源</strong> WebAssembly Core Spec · WABT · v8.dev/blog</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>wasm32 是栈机器</strong>—— 指令隐式从操作数栈取参数、压结果。<code>i32.const 5; i32.const 3; i32.add</code> 把 5 / 3 push 后 add 弹出两值相加压回 8。栈机器的紧凑性 + 易验证是 wasm 设计核心。</li>
+          <li><strong>二进制 module 自描述、流式可读</strong>—— magic <code>\0asm</code> + version + 12 类 sections，每个 section 有 length prefix 和 LEB128 编码。引擎能<strong>边下载边 parse 边验证</strong>，不必等整个 module 到位。</li>
+          <li><strong>load-time validation 是 wasm 安全模型核心</strong>—— wasm 不允许"先 load 后逐渐发现类型错误"。每条指令的栈类型变化是确定的，逐条推导即可验证整个函数。<strong>失败的 module 直接拒绝</strong>，没有"运行到一半发现 bug"。</li>
+          <li><strong>结构化控制流</strong>—— 没有任意 goto；只有 block / loop / if / br / br_if / return。这让验证 + 编译器优化都简单。NaCl 的 SFI 验证器要处理任意 jump，wasm 不需要。</li>
+          <li><strong>抽象栈机器 vs 实际寄存器执行</strong>—— spec 定义抽象栈，但实际引擎（V8 / wasmtime）把它重编译成 register-based JIT 跑。<strong>性能心智不能基于"栈操作多慢"</strong>。</li>
+          <li><strong>双层管道（V8 模型）</strong>—— Liftoff（baseline，1:1 翻译，~5 µs/KB）+ TurboFan（optimizing，~50 µs/KB）+ Tier-up；wasmtime 用 Cranelift 一次编译到位。详见 <a href="../../v8/06-wasm/01-wasm-pipeline.html">V8 P6.1</a>。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>栈机器 vs 寄存器机器：为什么 wasm 选栈</h3>
+        <p>计算机执行模型有两种：</p>
+        <p><strong>寄存器机器</strong>（x86 / ARM / RISC-V / JVM 后端）—— 指令显式指定寄存器编号（<code>add r0, r1, r2</code>）；CPU 自然映射；操作快但二进制要编寄存器号</p>
+        <p><strong>栈机器</strong>（JVM 字节码 / .NET CIL / wasm）—— 指令操作隐式栈；<code>push 5; push 3; add</code>；二进制紧凑但 CPU 不直接映射</p>
+        <p><strong>wasm 选栈机器的 4 个理由</strong>：</p>
+        <p><strong>(1) 二进制紧凑</strong>—— 寄存器机器每条指令至少要编 1-3 个寄存器号；栈机器只要操作码。wasm 的 <code>i32.add</code> 是 1 字节（0x6a）。同样的"两数相加"，wasm 比 x86 紧凑 2-3x</p>
+        <p><strong>(2) 类型推导简单</strong>—— 栈机器每条指令的栈变化是确定的：<code>i32.add</code> 弹两个 i32、压一个 i32。逐条推导即可知道函数任意点的栈类型；寄存器机器要 dataflow 分析才能推断类型</p>
+        <p><strong>(3) 引擎自由</strong>—— 抽象栈机器不约束执行模型。V8 / SpiderMonkey / wasmtime 都把栈机器再编译成 register-based JIT，根据 CPU 寄存器分配；不同引擎可以采用不同策略</p>
+        <p><strong>(4) 历史经验</strong>—— JVM / .NET 都用栈机器，证明可行。wasm 借鉴这两个的设计经验</p>
+        <p><strong>栈机器的代价</strong>：</p>
+        <p>抽象栈机器在 CPU 上不能直接跑（CPU 是寄存器机器）。所以引擎必须做一次编译（栈 → 寄存器），不能像 x86 ELF 那样直接执行。这是 wasm 启动需要"compile"步骤的根因。</p>
+
+        <h3>wasm 指令集结构</h3>
+        <p>wasm 指令分类（MVP + 2.0）：</p>
+        <p><strong>(1) 数值常量</strong>—— <code>i32.const N</code> / <code>i64.const N</code> / <code>f32.const N</code> / <code>f64.const N</code>；把常数压栈</p>
+        <p><strong>(2) 局部变量访问</strong>—— <code>local.get $i</code>（读到栈）/ <code>local.set $i</code>（从栈写）/ <code>local.tee $i</code>（写但不弹）</p>
+        <p><strong>(3) 全局变量访问</strong>—— <code>global.get $i</code> / <code>global.set $i</code></p>
+        <p><strong>(4) 算术 / 比较 / 位操作</strong>—— <code>i32.add</code> / <code>i32.sub</code> / <code>i32.mul</code> / <code>i32.div_s</code> / <code>i32.eq</code> / <code>i32.lt_s</code> / <code>i32.and</code> / <code>i32.or</code> / <code>i32.shl</code> / 等</p>
+        <p><strong>(5) 类型转换</strong>—— <code>i32.wrap_i64</code> / <code>i64.extend_i32_s</code> / <code>f32.convert_i32_s</code> / 等</p>
+        <p><strong>(6) 内存访问</strong>—— <code>i32.load</code> / <code>i32.store</code>（带对齐 + 偏移参数）；从 linear memory 读 / 写</p>
+        <p><strong>(7) 控制流</strong>—— <code>block</code> / <code>loop</code> / <code>if</code> / <code>else</code> / <code>end</code> / <code>br</code> / <code>br_if</code> / <code>br_table</code> / <code>return</code> / <code>call</code> / <code>call_indirect</code></p>
+        <p><strong>(8) 引用类型操作</strong>（2.0 正式）—— <code>ref.null</code> / <code>ref.is_null</code> / <code>ref.func</code></p>
+        <p><strong>(9) SIMD</strong>（2.0 正式，v128）—— <code>v128.load</code> / <code>v128.store</code> / <code>i32x4.add</code> / <code>f32x4.mul</code> / 等 200+ 指令</p>
+        <p><strong>(10) 表 / 内存批量操作</strong>（2.0）—— <code>memory.copy</code> / <code>memory.fill</code> / <code>table.get</code> / <code>table.set</code></p>
+        <p>总指令数：<strong>MVP 约 170 条；2.0 含 SIMD 约 400+；提案中含 GC / EH 约 500+</strong>。比 x86（数千条）小一个数量级。</p>
+
+        <h3>二进制 module 结构</h3>
+        <p>wasm 二进制 module 由 <strong>magic header + version + sections</strong> 组成：</p>
+        <pre class="code"><code class="lang-text">magic:    [0x00 0x61 0x73 0x6D]   ← "\0asm"
+version:  [0x01 0x00 0x00 0x00]   ← 当前是 1（包括 wasm 1.0 + 2.0）
+
+然后是 N 个 sections，每个：
+  section_id:  1 byte（0-12）
+  section_size: LEB128 编码的字节数
+  section_body: section_size 字节</code></pre>
+        <p><strong>12 类 sections</strong>（按通常顺序）：</p>
+        <table>
+          <thead>
+            <tr><th>ID</th><th>名称</th><th>内容</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>0</td><td>Custom</td><td>自定义元数据（如 name section / debug info）；引擎忽略未识别的</td></tr>
+            <tr><td>1</td><td>Type</td><td>函数签名列表（<code>(i32, i32) -&gt; i32</code> 等）</td></tr>
+            <tr><td>2</td><td>Import</td><td>导入的函数 / memory / table / global 声明</td></tr>
+            <tr><td>3</td><td>Function</td><td>函数到 type 的索引映射（声明每个 function 用哪个 type）</td></tr>
+            <tr><td>4</td><td>Table</td><td>表声明（funcref / externref 数组）</td></tr>
+            <tr><td>5</td><td>Memory</td><td>内存声明（初始页 + max 页 + shared 标志）</td></tr>
+            <tr><td>6</td><td>Global</td><td>全局变量声明 + 初始值</td></tr>
+            <tr><td>7</td><td>Export</td><td>导出列表（function / memory / table / global 名 → 索引）</td></tr>
+            <tr><td>8</td><td>Start</td><td>module 加载后自动调用的函数（可选）</td></tr>
+            <tr><td>9</td><td>Element</td><td>初始化 table 内容（funcref 列表）</td></tr>
+            <tr><td>10</td><td>Code</td><td>函数体（local 声明 + 字节码）—— <strong>占 90%+ 体积</strong></td></tr>
+            <tr><td>11</td><td>Data</td><td>初始化 memory 内容（byte segments）</td></tr>
+            <tr><td>12</td><td>DataCount</td><td>data segments 数量（用于 bulk memory ops 验证）</td></tr>
+          </tbody>
+        </table>
+        <p><strong>section 顺序约定</strong>：除 Custom 外，其他 sections 必须按 ID 升序出现。这让流式 parse 有确定顺序。</p>
+
+        <h3>LEB128 编码（变长整数）</h3>
+        <p>wasm 大量使用 <strong>LEB128（Little-Endian Base-128）</strong>编码整数。LEB128 是变长编码：小数用 1-2 字节，大数用更多字节。</p>
+        <p>规则：每字节 7 bit 数据 + 1 bit "继续标志"（高位）。最后一字节高位为 0，前面字节高位为 1。</p>
+        <p>例子（unsigned）：</p>
+        <pre class="code"><code class="lang-text">     0 → 0x00                  （1 字节）
+   127 → 0x7F                   （1 字节）
+   128 → 0x80 0x01              （2 字节）
+ 16383 → 0xFF 0x7F              （2 字节）
+ 16384 → 0x80 0x80 0x01         （3 字节）
+624485 → 0xE5 0x8E 0x26         （3 字节）</code></pre>
+        <p><strong>带符号 LEB128</strong>用类似规则但最后一字节最高数据位是符号位。<code>i32.const -1</code> 编码为 <code>0x7F</code>（1 字节）。</p>
+        <p><strong>为什么用 LEB128</strong>：</p>
+        <ul>
+          <li>大多数偏移 / 索引 / 函数 ID 是小数（&lt; 128），1 字节；体积优化</li>
+          <li>不需要预先声明字段大小（自描述）</li>
+          <li>parse 简单</li>
+        </ul>
+        <p>代价：编码 / 解码慢于定长（要逐字节判断），但 wasm parse 不是性能瓶颈。</p>
+
+        <h3>典型 module 二进制 dump</h3>
+        <p>最简 wasm module（导出一个 add(i32, i32) -&gt; i32 函数）：</p>
+        <p><strong>wat 源</strong>：</p>
+        <pre class="code"><code class="lang-text">(module
+  (func $add (param $x i32) (param $y i32) (result i32)
+    local.get $x
+    local.get $y
+    i32.add)
+  (export "add" (func $add)))</code></pre>
+        <p><strong>对应二进制（41 字节）</strong>：</p>
+        <pre class="code"><code class="lang-text">00 61 73 6D                 ; magic "\0asm"
+01 00 00 00                 ; version 1
+
+01 07                       ; Type section, 7 bytes
+01                          ; 1 type
+60 02 7F 7F 01 7F           ; func type: (i32, i32) -&gt; (i32)
+                            ;   60 = func；02 = 2 params；7F = i32；
+                            ;   01 = 1 result；7F = i32
+
+03 02                       ; Function section, 2 bytes
+01 00                       ; 1 function；type index 0
+
+07 07                       ; Export section, 7 bytes
+01                          ; 1 export
+03 61 64 64                 ; "add"（length=3 + chars）
+00 00                       ; export kind 0 (func)；func index 0
+
+0A 09                       ; Code section, 9 bytes
+01                          ; 1 function
+07                          ; func body length 7
+00                          ; 0 local declarations
+20 00                       ; local.get 0
+20 01                       ; local.get 1
+6A                          ; i32.add
+0B                          ; end</code></pre>
+        <p>整个 module 41 字节。同样功能 asm.js ~150 字节、x86 ELF 几 KB。</p>
+
+        <h3>load-time validation：wasm 安全模型核心</h3>
+        <p><strong>问题</strong>：wasm 模块来自不可信源（用户上传 / 第三方），如何保证它不会破坏宿主？</p>
+        <p><strong>NaCl 方案</strong>：SFI 在每条指令插入运行时检查；性能损失大、验证器复杂</p>
+        <p><strong>JVM 方案</strong>：load 时部分验证 + lazy verification（首次执行某 method 才完整验证）；造成"运行时发现 bug"</p>
+        <p><strong>wasm 方案</strong>：<strong>load 时完整验证</strong>，验证通过才能执行；失败的 module 直接拒绝</p>
+        <p>wasm validation 包括：</p>
+        <p><strong>(1) Module structure</strong>—— sections 顺序 / 索引边界 / 类型一致</p>
+        <p><strong>(2) 每个函数的类型推导</strong>—— 逐条指令推导栈类型；任何点栈类型必须确定</p>
+        <p><strong>(3) 内存 / table 边界</strong>—— 偏移 + 大小不能越界（编译时 + 运行时双重检查）</p>
+        <p><strong>(4) 控制流嵌套</strong>—— block / loop / if 配对；br 索引必须在合法范围</p>
+        <p>关键属性：<strong>验证一次，永远安全</strong>。运行时不会发现"原来类型错了"或"原来栈不平衡"。</p>
+        <p><strong>为什么 wasm validation 简单</strong>：</p>
+        <ul>
+          <li>栈机器：栈类型变化确定，逐条推导即可</li>
+          <li>结构化控制流：没有任意 goto，只有嵌套 block / loop / if</li>
+          <li>强类型：每条指令期望/产生确定类型</li>
+          <li>没有"动态加载代码"：module 内容固定，不允许 self-modifying</li>
+        </ul>
+
+        <h3>Streaming compilation：边下载边编译</h3>
+        <p>因为 sections 有 length prefix，引擎能<strong>不等整个 module 下载完</strong>就开始 parse + 编译。</p>
+        <p>典型流程：</p>
+        <p><strong>(1) 浏览器开始 fetch wasm</strong></p>
+        <p><strong>(2) 收到 magic + Type section + Function section</strong> → 引擎开始 baseline 编译第一批函数</p>
+        <p><strong>(3) 边下载边编译</strong> → 当 module 下载完时，大部分函数已经编译好</p>
+        <p><strong>(4) instantiate</strong> → 链接 imports，几乎瞬时</p>
+        <p>API：<code>WebAssembly.compileStreaming(fetch(url))</code> / <code>WebAssembly.instantiateStreaming(fetch(url), imports)</code>。</p>
+        <p>对比："非流式" <code>WebAssembly.instantiate(arrayBuffer)</code> 必须等整个 module 下载完才能开始编译。</p>
+
+        <h3>双层管道（V8 模型）</h3>
+        <p>V8 的 wasm 实现采用<strong>双层管道</strong>（详见 <a href="../../v8/06-wasm/01-wasm-pipeline.html">V8 P6.1</a>，这里短重述）：</p>
+        <p><strong>(1) Liftoff（baseline）</strong>—— 一次扫描，每条 wasm 指令直接生成 native 指令；不做寄存器分配 / inlining；编译速度极快（~5 µs/KB），可以与下载并行。</p>
+        <p><strong>(2) TurboFan（optimizing）</strong>—— 复杂 IR + 寄存器分配 + inlining + 死代码消除；编译慢（~50 µs/KB）但代码质量高。</p>
+        <p><strong>(3) Tier-up</strong>—— 函数热度高时从 Liftoff 升级到 TurboFan；类似 JS 的 Ignition → TurboFan。</p>
+        <p>SpiderMonkey 类似（<strong>WasmBaseline + Ion</strong>）；JSC 也类似（<strong>BBQ + OMG</strong>）。<strong>wasmtime 不分双层</strong>，直接用 Cranelift 一次编译到位（适合服务端，因为可 AOT 缓存）。</p>
+
+        <h3>抽象栈 vs 实际寄存器执行</h3>
+        <p><strong>spec 定义抽象栈机器</strong>，但 V8 / wasmtime 实际把它编译成 register-based。</p>
+        <p>例子：</p>
+        <pre class="code"><code class="lang-text">wasm:
+  local.get 0
+  local.get 1
+  i32.add
+  local.set 2
+
+抽象栈机器执行：
+  栈：[]
+  push x0  → 栈: [x0]
+  push x1  → 栈: [x0, x1]
+  add      → 栈: [x0+x1]
+  pop → x2 → 栈: []
+
+V8 编译后（x86_64 简化）：
+  mov  rax, [rsp+0]    ; load local 0
+  mov  rbx, [rsp+8]    ; load local 1
+  add  eax, ebx        ; eax = eax + ebx
+  mov  [rsp+16], rax   ; store local 2
+
+或更优（如果 locals 已在寄存器）：
+  add  eax, ebx        ; 直接寄存器运算</code></pre>
+        <p>所以"栈操作"在抽象层；真实执行不会真的 push / pop。</p>
+        <p><strong>性能心智的影响</strong>：</p>
+        <ul>
+          <li>不要担心"local.get / local.set 多用是否慢" —— 编译器会消除冗余</li>
+          <li>不要担心"用栈顶值 vs 用 local 是否快" —— 都会变成寄存器操作</li>
+          <li>真正影响性能的：函数大小（影响 inlining）/ 控制流复杂度（影响优化）/ 内存访问模式（影响 cache）/ SIMD 使用 / 类型选择（i32 vs i64）</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · 调试 wasm：从二进制还原 wat</h3>
+        <p>开发中遇到 <code>.wasm</code> 文件想看里面是什么，用 <strong>WABT (WebAssembly Binary Toolkit)</strong>：</p>
+        <pre class="code"><code class="lang-bash">$ npm install -g wabt
+$ wasm2wat my.wasm -o my.wat
+$ cat my.wat
+(module
+  (func $add (param i32 i32) (result i32)
+    local.get 0
+    local.get 1
+    i32.add)
+  (export "add" (func $add)))</code></pre>
+        <p>反向（写 wat 学习）：</p>
+        <pre class="code"><code class="lang-bash">$ wat2wasm my.wat -o my.wasm</code></pre>
+        <p>生产中：<code>wasm-tools print my.wasm</code>（bytecodealliance 工具，更现代）。</p>
+
+        <h3>场景 B · 优化 wasm 体积</h3>
+        <p>Rust + wasm-pack 默认输出 hello world ~150KB。<strong>关键优化</strong>：</p>
+        <p><strong>(1) <code>panic = "abort"</code></strong> —— Cargo.toml 中设置；省略 panic unwinding 代码（~30KB）</p>
+        <p><strong>(2) <code>lto = "fat"</code></strong> —— Link Time Optimization；跨 crate 内联（~20% 体积）</p>
+        <p><strong>(3) <code>codegen-units = 1</code></strong> —— 单线程编译让 LTO 更彻底</p>
+        <p><strong>(4) <code>opt-level = "z"</code> 或 <code>"s"</code></strong> —— 优化体积（z 极致 / s 平衡）</p>
+        <p><strong>(5) 跑 wasm-opt -O3</strong>（binaryen）—— Binaryen 后处理，再压 30-40%</p>
+        <p><strong>(6) wasm-strip</strong> —— 去 debug symbols + custom sections</p>
+        <p>典型 Cargo.toml：</p>
+        <pre class="code"><code class="lang-toml">[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true</code></pre>
+        <p>压缩工具链 + 简单 hello world 后能压到 ~10KB。</p>
+
+        <h3>场景 C · 在 Worker 里 streaming compile + 不阻塞主线程</h3>
+        <pre class="code"><code class="lang-javascript">// 主线程
+const worker = new Worker('wasm-worker.js');
+worker.postMessage({ url: '/big-module.wasm' });
+worker.onmessage = (e) =&gt; {
+  console.log('result:', e.data.result);
+};
+
+// wasm-worker.js
+self.onmessage = async ({ data: { url } }) =&gt; {
+  // streamingInstantiate 不阻塞主线程
+  const { instance } = await WebAssembly.instantiateStreaming(fetch(url));
+  const result = instance.exports.compute();
+  self.postMessage({ result });
+};</code></pre>
+        <p><strong>为什么用 streamingInstantiate 而不是先 fetch 再 instantiate</strong>：</p>
+        <ul>
+          <li>streamingInstantiate 边下载边编译，wallclock 时间短</li>
+          <li>非 streaming 必须等下载完才能开始编译，浪费 download 与 compile 的并行</li>
+          <li>大 module（5MB+）能省 30-50% 启动时间</li>
+        </ul>
+
+        <h3>场景 D · 用 wasm-tools 检查 module 合规性</h3>
+        <pre class="code"><code class="lang-bash"># 验证 module 符合 spec
+$ wasm-tools validate my.wasm
+
+# 查看 module 的 sections
+$ wasm-tools dump my.wasm
+   0x00 | 00 61 73 6d | version 1 (Module)
+   0x04 | 01 00 00 00 |
+   0x08 | 01 07       | type section
+   ...
+
+# 反汇编（更详细）
+$ wasm-tools print --no-strip my.wasm</code></pre>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：手写最小 wasm</span></h2>
+
+        <h3>纯字节数组手写一个 add module</h3>
+        <p>不用任何工具链，直接写出二进制：</p>
+        <pre class="code"><code class="lang-javascript">// 41 字节的 wasm，导出 add(i32, i32) -&gt; i32
+const wasmBytes = new Uint8Array([
+  // magic + version
+  0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+
+  // Type section: id=1, size=7
+  0x01, 0x07,
+  0x01,                        // 1 type
+  0x60, 0x02, 0x7F, 0x7F, 0x01, 0x7F,  // func: (i32, i32) -&gt; (i32)
+
+  // Function section: id=3, size=2
+  0x03, 0x02,
+  0x01, 0x00,                  // 1 function；type index 0
+
+  // Export section: id=7, size=7
+  0x07, 0x07,
+  0x01,                        // 1 export
+  0x03, 0x61, 0x64, 0x64,      // name "add"
+  0x00, 0x00,                  // export kind=func；func index=0
+
+  // Code section: id=10, size=9
+  0x0A, 0x09,
+  0x01,                        // 1 function
+  0x07,                        // func body length 7
+  0x00,                        // 0 local declarations
+  0x20, 0x00,                  // local.get 0
+  0x20, 0x01,                  // local.get 1
+  0x6A,                        // i32.add
+  0x0B                         // end
+]);
+
+const { instance } = await WebAssembly.instantiate(wasmBytes);
+console.log(instance.exports.add(2, 3));  // 5</code></pre>
+        <p>这是<strong>能跑的最小 wasm</strong>。理解每个字节的含义后，wasm 二进制不再神秘。</p>
+
+        <h3>用 streaming API 加速大 module 加载</h3>
+        <pre class="code"><code class="lang-javascript">// 良好实践
+async function loadLargeWasm(url, importObject) {
+  // streamingInstantiate 比 instantiate 快 30-50%（大 module）
+  return WebAssembly.instantiateStreaming(fetch(url), importObject);
+}
+
+// 反例（非 streaming）
+async function slowLoad(url, importObject) {
+  const response = await fetch(url);
+  const buffer = await response.arrayBuffer();
+  return WebAssembly.instantiate(buffer, importObject);  // 必须等下载完才编译
+}</code></pre>
+        <p>注意：<code>fetch</code> 必须返回 <code>Content-Type: application/wasm</code>，否则 streaming 不工作（浏览器会回退到非流式）。Nginx 配置：</p>
+        <pre class="code"><code class="lang-text">types {
+  application/wasm wasm;
+}</code></pre>
+
+        <h3>module caching：编译一次、多处复用</h3>
+        <pre class="code"><code class="lang-javascript">// 编译 module（耗时一次）
+const module = await WebAssembly.compileStreaming(fetch('/heavy.wasm'));
+
+// 多次 instantiate（瞬时；imports 可不同）
+const instance1 = await WebAssembly.instantiate(module, imports1);
+const instance2 = await WebAssembly.instantiate(module, imports2);
+const instance3 = await WebAssembly.instantiate(module, imports3);
+
+// 跨 worker 共享 module（postMessage 传 module）
+worker.postMessage({ module });  // module 是 transferable</code></pre>
+        <p><strong>关键</strong>：编译只做一次（昂贵，~10-100ms 中等 module），instantiate 多次（便宜，~1ms）。在多 worker / 多 instance 场景下能省大量启动时间。</p>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：以为"栈操作多 = 性能差"</h3>
+        <p>抽象层是栈，真实执行是寄存器。<code>local.get</code> / <code>local.set</code> 编译后基本免费。</p>
+        <p><strong>正确性能心智</strong>：函数大小（&lt; 50 行更易 inline）+ 控制流（避免深嵌套）+ 内存访问局部性（避免随机访问 GB 级 memory）+ SIMD 使用。</p>
+
+        <h3>陷阱 2：忘记设置 application/wasm MIME type</h3>
+        <p>常见症状：<code>WebAssembly.instantiateStreaming(fetch(url))</code> 报警 "incorrect Content-Type"，回退到非 streaming。后端没配置 .wasm 的 MIME type 是常见原因。</p>
+        <p>检查：<code>curl -I https://your-site/foo.wasm</code> 看 Content-Type 是否 application/wasm。</p>
+
+        <h3>陷阱 3：手写 wasm 不验证就上线</h3>
+        <p>wasm 二进制看似简单（41 字节小 module），但<strong>section 大小 / LEB128 / type index 任何错都让 module 拒绝</strong>。手写 wasm 必须经 wat2wasm 或 wasm-tools 验证：</p>
+        <pre class="code"><code class="lang-bash">$ wasm-tools validate my.wasm  # 不输出即通过；有错会指出位置</code></pre>
+
+        <h3>陷阱 4：以为 validation 失败 = bug 报告</h3>
+        <p>wasm validation 失败<strong>是 spec 行为</strong>。如果 module 类型错 / 控制流不平衡 / 索引越界，引擎必须拒绝。这不是 V8 bug 是 module bug。</p>
+        <p>调试：先用 wasm-tools validate 离线验证；通过后再担心引擎差异。</p>
+
+        <h3>陷阱 5：忽略 module 大小对启动的影响</h3>
+        <p>"我的 wasm 才 5MB" —— 5MB 在 4G 网络上要 5+ 秒下载，移动设备是严重启动瓶颈。<strong>体积优化是 wasm 工程的第一关</strong>：</p>
+        <ul>
+          <li>wasm-opt -Oz</li>
+          <li>strip debug symbols</li>
+          <li>code splitting（按需 instantiate 子模块）</li>
+          <li>Brotli 压缩（wasm 二进制 Brotli 通常压 70-80%）</li>
+        </ul>
+
+        <h3>陷阱 6：不用 streaming + 不缓存 module</h3>
+        <p>典型反模式：每次访问页面都从 0 编译 wasm。<strong>HTTP cache + module caching</strong> 让二次访问几乎瞬时。</p>
+        <p>HTTP cache：设 <code>Cache-Control: public, max-age=31536000, immutable</code>（hash 文件名 + 永久缓存）。</p>
+        <p>引擎缓存：浏览器自动缓存编译后的 wasm（V8 Isolate cache）；二次 instantiate 跳过编译。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范</h3>
+        <ul>
+          <li><a href="https://webassembly.github.io/spec/core/binary/index.html" target="_blank" rel="noopener">WebAssembly Core Spec · Binary Format</a></li>
+          <li><a href="https://webassembly.github.io/spec/core/exec/index.html" target="_blank" rel="noopener">WebAssembly Core Spec · Execution</a></li>
+          <li><a href="https://webassembly.github.io/spec/core/valid/index.html" target="_blank" rel="noopener">WebAssembly Core Spec · Validation</a></li>
+        </ul>
+
+        <h3>工具</h3>
+        <ul>
+          <li><a href="https://github.com/WebAssembly/wabt" target="_blank" rel="noopener">WABT · WebAssembly Binary Toolkit</a>（wat2wasm / wasm2wat / wasm-objdump）</li>
+          <li><a href="https://github.com/bytecodealliance/wasm-tools" target="_blank" rel="noopener">wasm-tools</a>（现代工具，bytecodealliance）</li>
+          <li><a href="https://github.com/WebAssembly/binaryen" target="_blank" rel="noopener">Binaryen</a>（wasm-opt 优化器）</li>
+        </ul>
+
+        <h3>深度文章</h3>
+        <ul>
+          <li><a href="https://hacks.mozilla.org/2017/03/where-is-webassembly-now-and-whats-next/" target="_blank" rel="noopener"><em>Where is WebAssembly now and what's next?</em></a> · Mozilla 2017</li>
+          <li><a href="https://v8.dev/blog/liftoff" target="_blank" rel="noopener"><em>Liftoff: a new baseline compiler for WebAssembly</em></a> · V8 2018</li>
+          <li><a href="https://v8.dev/blog/wasm-decompile" target="_blank" rel="noopener"><em>wasm-decompile</em></a> · V8 2020</li>
+          <li>Andreas Rossberg, Ben L. Titzer et al., <em>Bringing the Web up to Speed with WebAssembly</em>（PLDI 2017）· wasm spec 论文</li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="02-wat-and-types.html">P2.2 wat 文本格式与类型系统</a> · 类型 + 控制流 + multi-value</li>
+          <li><a href="../03-host-interop/01-memory-tables.html">P3.1 Linear Memory + Tables</a> · 内存模型与函数指针替身</li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../v8/06-wasm/01-wasm-pipeline.html">V8 P6.1 V8 Wasm 编译流水线</a> · Liftoff + TurboFan + Tier-up 详细实现</li>
+          <li><a href="../../v8/02-pipeline/01-pipeline-overview.html">V8 P2.1 V8 编译流水线</a> · JS 编译流水线对照</li>
+          <li><a href="../../ecma/03-spec-reading/01-spec-grammar.html">ECMA P3.1 规范文法</a> · 规范语言阅读训练</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
