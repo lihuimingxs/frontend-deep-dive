@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>构建工具项目史（1976-2026）· P1.1 · Vite & 构建工具深度学习</title>
+    <meta name="description" content="构建工具 50 年史。Make 1976 → Grunt 2012 → Browserify 2013 → Webpack 2014 → Rollup 2015 → 浏览器原生 ESM 2016 → Parcel 2018 → esbuild + Vite + SWC 2020 → Webpack 主流退场 2022-2023 → Turbopack/Rspack/Rolldown/Bun build 2024+。回答「构建工具范式怎么走到 Vite 双模架构 + Rust bundler」的根因——每次范式转移都有具体技术原因。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23bd34fe'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Vite & 构建工具深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.25 305); color: #fff">Vite</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P1 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · 构建工具是谁</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html" class="active">01 · 构建工具项目史</a></li>
+          <li><a href="02-landscape.html">02 · 同代人横评</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Vite & 构建工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · 构建工具是谁</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 构建工具项目史</span>
+        </nav>
+        <h1>构建工具项目史（1976-2026）</h1>
+        <p class="lead">
+          把构建工具 50 年史讲成一条主线 —— 不是按工具版本，按"<strong>每次范式转移及其根因</strong>"。<strong>核心问题</strong>：构建工具怎么从 1976 Make 演化到 2026 Vite + Rust bundler？答案藏在三次范式转移：(1) Make 看文件 → Webpack 看模块（CommonJS）；(2) Webpack 全量打包 → Vite 不打包 dev + 浏览器原生 ESM；(3) JS bundler → Rust/Go bundler。每次都有具体技术原因，不是"工具流行的轮换"。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> 无</span>
+          <span><strong>主要来源</strong> 各工具官方 + 作者博客（Evan You / Rich Harris / Tobias Koppers / Evan W）</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>构建工具 50 年由 3 次范式转移组成</strong>—— (1) <strong>Make 看文件 → Webpack 看模块</strong>（2014）；(2) <strong>Webpack 全量打包 → Vite 不打包 dev + 浏览器原生 ESM</strong>（2020）；(3) <strong>JS bundler → Rust/Go bundler</strong>（2020-2024）。每次转移都有具体技术原因。</li>
+          <li><strong>2014-2022 是 Webpack 主导期</strong>—— "什么都是模块"哲学统治。但代价是配置爆炸（webpack.config.js 几百行常见）+ 启动慢（10-60s 大项目）+ 维护停滞（核心团队走了）。</li>
+          <li><strong>2016 浏览器原生 ESM</strong>—— Chrome 61 / Safari 10.1 / Firefox 60 默认支持 <code>&lt;script type="module"&gt;</code>。这<strong>奠定了 Vite 设计基础</strong>——dev mode 不打包成为可能。</li>
+          <li><strong>2020 是构建工具大爆发年</strong>—— esbuild（Go）/ Vite（JS+esbuild）/ SWC（Rust）三连发。esbuild 证明"compiler 用 Go 写能快 100x"；Vite 证明"dev 不打包是对的"；SWC 让 Rust 进入 JS 工具链。</li>
+          <li><strong>2022-2023 Webpack 退场不可逆</strong>—— Tobias Koppers（Webpack 原作者）跳槽 Vercel 做 Turbopack；CRA 2023 弃用；新项目几乎没人选 Webpack。Rspack（字节跳动）是给"Webpack 大型企业项目"的 Rust 兼容版替代。</li>
+          <li><strong>2024+ 进入 Rust bundler 时代</strong>—— Turbopack（Next.js stable）/ Rspack 1.0 / Rolldown alpha / Bun build / Farm。每个绑定一个生态：Turbopack→Next.js / Rspack→Webpack 迁移 / Rolldown→Vite / Bun build→Bun。<strong>2026 趋势：Vite + Rolldown 是 app dev/build 双标准</strong>。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>前史：Make · 1976 · "基于文件依赖图编译"模式起源</h3>
+        <p>1976 年 Stuart Feldman 在贝尔实验室发明 <strong>Make</strong>。原始动机：C/C++ 项目编译时不想每次都全量重编 —— 要"<strong>只重编修改过的文件</strong>"。</p>
+        <p>Make 的核心 idea：</p>
+        <p><strong>(1) Makefile 描述依赖图</strong>—— "<code>foo.o 依赖 foo.c bar.h</code>"；变化时只重编受影响的部分</p>
+        <p><strong>(2) 任务驱动</strong>—— Make 不只是编译，是"<strong>声明依赖 + 执行命令</strong>"框架；可以 build / clean / test / install</p>
+        <p><strong>(3) timestamp-based 增量</strong>—— 用文件 mtime 判断"是否需要重做"</p>
+        <p>这套模型至今是 C/C++/Go 等系统语言的标配（Bazel / Ninja / cmake 都从 Make 演化）。<strong>对 JS bundler 的影响</strong>：所有现代 bundler 内部都有"依赖图 + 增量编译"概念，源头在 Make。</p>
+
+        <h3>2006-2009 · 早期 JS 构建：手工与脚本</h3>
+        <p>jQuery 时代（2006-2010），JS 项目通常：</p>
+        <ul>
+          <li>手写多个 .js 文件，HTML 里 <code>&lt;script&gt;</code> 引一堆</li>
+          <li>用 <strong>YUI Compressor</strong>（2007，Yahoo）/ <strong>Closure Compiler</strong>（2009，Google）做压缩</li>
+          <li>没有"模块"概念 —— 全局变量到处飞 + 命名空间靠 <code>window.foo = {...}</code></li>
+        </ul>
+        <p>这个阶段的"构建"是<strong>手工脚本拼接 + 压缩</strong>，没有真正的工具。</p>
+
+        <h3>2012 · Grunt · 第一个流行的 JS 任务化构建</h3>
+        <p>2012-01 Ben Alman 发布 <strong>Grunt</strong>。设计：JS 版的 Make + 配置插件化。</p>
+        <p>Grunt 的核心：</p>
+        <ul>
+          <li><strong>Gruntfile.js</strong>—— 配置驱动（不是命令式）</li>
+          <li><strong>插件 ecosystem</strong>—— grunt-contrib-uglify / grunt-contrib-concat / grunt-contrib-jshint</li>
+          <li><strong>任务（task）抽象</strong>—— <code>grunt build</code> / <code>grunt test</code></li>
+        </ul>
+        <p>Grunt 2013-2014 主流；之后被 <strong>Gulp</strong>（2013-10, Eric Schoffstall）替代——Gulp 的"流式 + 代码胜过配置"更符合 Node 流派。</p>
+        <p><strong>但 Grunt 和 Gulp 都没解决"模块"问题</strong>—— 它们仍是<strong>任务编排</strong>，不是真正的 bundler。要做模块化，需要 Browserify / Webpack。</p>
+
+        <h3>2013-07 · Browserify · 把 Node 的 CJS 带到浏览器</h3>
+        <p>2013 年 7 月 James Halliday 发布 <strong>Browserify</strong>。核心 idea：<strong>让你在浏览器写 <code>require('module')</code></strong>。</p>
+        <p>Node 已有 CommonJS 模块系统（<code>module.exports</code> / <code>require</code>），但浏览器没有。Browserify 做的：</p>
+        <p><strong>(1) 静态分析 require 调用</strong>—— 找出所有依赖</p>
+        <p><strong>(2) 把所有模块打包进单个 bundle.js</strong>—— 模块代码包装在 <code>function(require, module, exports) {...}</code> 里</p>
+        <p><strong>(3) 运行时 require shim</strong>—— bundle 启动时注入 require 函数模拟 Node 行为</p>
+        <p>Browserify <strong>启动了 "JS bundler" 时代</strong>。但有限制：(1) 仅支持 CJS 模块（不支持 AMD / 当时尚未存在的 ESM）；(2) 配置不够灵活；(3) 不擅长 CSS / image 等非 JS 资源。</p>
+
+        <h3>2014-03 · Webpack 1 · "什么都是模块"哲学</h3>
+        <p>2014 年 3 月 Tobias Koppers 发布 <strong>Webpack 1.0</strong>。核心 idea：把 Browserify 的"模块"概念扩展 —— <strong>JS / CSS / image / font 都是 module</strong>。</p>
+        <p>Webpack 的设计创新：</p>
+        <p><strong>(1) Loader 系统</strong>—— 每种文件用对应 loader 转换（css-loader / file-loader / babel-loader）；让 <code>import './style.css'</code> 这种成为可能</p>
+        <p><strong>(2) Plugin 系统</strong>—— 在编译生命周期注入逻辑（DefinePlugin / HtmlWebpackPlugin / MiniCssExtractPlugin）</p>
+        <p><strong>(3) 多种模块语法支持</strong>—— CJS / AMD / ESM / Webpack 自家 require</p>
+        <p><strong>(4) Code splitting</strong>—— dynamic import → 自动分 chunk</p>
+        <p><strong>(5) Dev server + HMR</strong>—— webpack-dev-server 内置；HMR 概念在此发明</p>
+        <p>Webpack 在 2016-2018 年成为<strong>事实标准</strong>：</p>
+        <ul>
+          <li>create-react-app（2016 Facebook）默认 Webpack</li>
+          <li>Vue CLI 默认 Webpack</li>
+          <li>Angular CLI 默认 Webpack</li>
+          <li>Next.js（早期）基于 Webpack</li>
+        </ul>
+        <p>但 Webpack 的代价 2018 后越来越明显：</p>
+        <ul>
+          <li><strong>配置复杂度爆炸</strong>—— 一个完整 webpack.config.js 几百行常见；entry / output / module rules / plugins / optimization / resolve / 等几十个配置项</li>
+          <li><strong>启动慢</strong>—— 大项目 dev 启动 30-60s（要全量解析依赖图）</li>
+          <li><strong>构建慢</strong>—— production build 几分钟级</li>
+          <li><strong>JS 实现性能瓶颈</strong>—— V8 单线程 + JS 字符串处理 + 没有 native 优化</li>
+        </ul>
+
+        <h3>2015-05 · Rollup · 专注 ESM + Tree Shaking</h3>
+        <p>2015 年 5 月 Rich Harris（Svelte 作者）发布 <strong>Rollup</strong>。<strong>动机</strong>：Webpack 太重，不适合<strong>库</strong>打包。库需要：(1) 输出干净 ESM；(2) tree shaking；(3) 简洁配置。</p>
+        <p>Rollup 的设计：</p>
+        <p><strong>(1) 专注 ESM 静态分析</strong>—— 只支持 ESM 输入（CJS 通过 plugin 转）；让 tree shaking 第一公民化</p>
+        <p><strong>(2) 范围提升（scope hoisting）</strong>—— 把所有模块的代码"提升"到同一作用域（Webpack 后来跟进，叫 "module concatenation"）</p>
+        <p><strong>(3) 无 dev server / 无 HMR</strong>—— 库不需要</p>
+        <p><strong>(4) 多种输出格式</strong>—— ESM / CJS / UMD / IIFE 同时产出</p>
+        <p>2015-2025 Rollup 成为<strong>库打包事实标准</strong>：</p>
+        <ul>
+          <li>React / Vue / Svelte / Lodash / D3 / RxJS / Three.js 等大量主流库用 Rollup</li>
+          <li>Vite build mode 内置 Rollup（2020+）</li>
+          <li>Rolldown（2024+）是它的 Rust 兼容继任者</li>
+        </ul>
+        <p>Rich Harris 的著名文章 <em>Tree-shaking versus dead code elimination</em>（2015）首次提出 "tree shaking" 概念，深刻影响 Webpack 等所有 bundler。</p>
+
+        <h3>2016 · 浏览器原生 ESM · 为 Vite 设计奠基</h3>
+        <p>2016-2017 年浏览器开始原生支持 ESM：</p>
+        <ul>
+          <li>Chrome 61（2017-09）默认开启</li>
+          <li>Safari 10.1（2017-03）</li>
+          <li>Firefox 60（2018-05）</li>
+        </ul>
+        <p>语法：</p>
+        <pre class="code"><code class="lang-html">&lt;script type="module" src="./main.js"&gt;&lt;/script&gt;
+&lt;!-- main.js 里可以 import './foo.js' 浏览器自己解析 --&gt;</code></pre>
+        <p>这看似小特性<strong>颠覆了 dev server 设计</strong>：以前 dev server 必须"全量打包成一个 bundle 给浏览器"；现在浏览器自己懂 ESM，dev server 可以"<strong>不打包，让浏览器逐个请求模块</strong>"。</p>
+        <p>Evan You 在 2019-2020 年正是从这里得到 Vite 的核心 idea。但 2017-2019 大部分人没意识到这个机会 —— 还在用 Webpack 全量打包 dev mode。</p>
+
+        <h3>2018 · Parcel · 零配置挑战</h3>
+        <p>Devon Govett 发布 <strong>Parcel 1.0</strong>（2017 年首发，2018 v1 稳定）。<strong>核心卖点</strong>：零配置（不需要 webpack.config.js）。</p>
+        <p>Parcel 1 用 JS 实现；Parcel 2（2021）转 Rust 后端。</p>
+        <p><strong>Parcel 的局限</strong>：</p>
+        <ul>
+          <li>plugin ecosystem 不及 Webpack</li>
+          <li>"零配置" 在小项目好用，大项目仍需要配置（不如 Vite 渐进式配置）</li>
+          <li>2020 后 Vite 出来抢走"零配置 + 现代化"位置</li>
+        </ul>
+        <p>2026 Parcel 仍存活但小众，主要用户是简单项目或对配置敏感的团队。</p>
+
+        <h3>2020-01 · esbuild · Go 实现 + 100x 速度</h3>
+        <p>2020 年 1 月 <strong>Evan W</strong>（前 Figma 工程师，化名 evanw）发布 <strong>esbuild 0.1</strong>。<strong>声称</strong>：比当时主流工具快 10-100x。</p>
+        <p>esbuild 的设计创新：</p>
+        <p><strong>(1) Go 实现</strong>—— Goroutine 让真正多核并行（V8 单线程）</p>
+        <p><strong>(2) 自家 AST in memory</strong>—— 不依赖现有 parser 库；为速度极致优化</p>
+        <p><strong>(3) 单遍 parse + transform + bundle</strong>—— 不是"parse → transform → bundle"三遍</p>
+        <p><strong>(4) 零依赖</strong>—— 自己实现 minifier / tree shaker / sourcemap</p>
+        <p><strong>实测速度（典型 React 项目）</strong>：</p>
+        <table>
+          <thead>
+            <tr><th>工具</th><th>build 时间</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Webpack 4 + Babel</td><td>~30s</td></tr>
+            <tr><td>Rollup + Babel</td><td>~15s</td></tr>
+            <tr><td>esbuild</td><td>~0.5s</td></tr>
+          </tbody>
+        </table>
+        <p>esbuild <strong>不是完整 bundler 替代</strong>—— 它的 plugin 系统弱（不能改 AST）/ HMR 弱 / code splitting 简单。但它<strong>极适合做"compiler 子组件"</strong>：Vite dev mode 用 esbuild 预构建 + transform；Snowpack 用；Bun build 内部参考其设计。</p>
+        <p>Evan W 的 essay <em>"Why is esbuild fast?"</em> 是构建工具领域经典必读。</p>
+
+        <h3>2020-04 · Vite 1.0 · 颠覆 dev server</h3>
+        <p>2020 年 4 月 <strong>尤雨溪</strong>（Vue 作者）发布 <strong>Vite 1.0</strong>。<strong>核心 idea</strong>：</p>
+        <p><strong>Dev mode 不打包 + Build mode 打包</strong></p>
+        <p>具体：</p>
+        <ul>
+          <li><strong>Dev mode</strong>：浏览器原生 ESM + esbuild 预构建依赖 + on-demand transform</li>
+          <li><strong>Build mode</strong>：Rollup 生产打包</li>
+        </ul>
+        <p>启动效果对比：</p>
+        <table>
+          <thead>
+            <tr><th>项目大小</th><th>Webpack dev start</th><th>Vite dev start</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>100 文件</td><td>3-5s</td><td>&lt; 500ms</td></tr>
+            <tr><td>1000 文件</td><td>15-30s</td><td>&lt; 1s</td></tr>
+            <tr><td>5000 文件</td><td>60s+（OOM 常见）</td><td>~1s</td></tr>
+          </tbody>
+        </table>
+        <p>Vite 2.0（2021-02）从 Vue-only 扩展到框架无关；2022-2023 大量框架迁移：</p>
+        <ul>
+          <li>Vue 3 默认 Vite</li>
+          <li>SvelteKit 用 Vite</li>
+          <li>SolidJS 用 Vite</li>
+          <li>Astro 用 Vite</li>
+          <li>Nuxt 3 用 Vite</li>
+          <li>React 项目大量从 CRA 迁移到 Vite</li>
+        </ul>
+        <p>Vite 6（2024-11）引入 Environment API（让 SSR / RSC / Edge 都跑同一 Vite）+ Rolldown 实验性集成。Vite 7（预计 2026-Q2）默认 Rolldown。</p>
+
+        <h3>2020-12 · SWC · Rust 进入 JS 工具链</h3>
+        <p>2020 年底 <strong>DongYoon Kang</strong>（Donny Wong）发布 <strong>SWC 1.0</strong>。<strong>定位</strong>：Rust 实现的 JS/TS compiler，Babel 替代品。</p>
+        <p>SWC vs Babel：</p>
+        <ul>
+          <li><strong>SWC 速度</strong>：~100x Babel</li>
+          <li><strong>SWC 兼容性</strong>：90%+ Babel preset 覆盖</li>
+          <li><strong>SWC plugin</strong>：用 Rust 写编译成 wasm；性能损失小（详见 <a href="../06-compilers/01-esbuild-swc.html">P6.1</a>）</li>
+        </ul>
+        <p>2022 年 <strong>Next.js 12 默认切换到 SWC</strong>（替代 Babel），Vercel 雇 Donny Wong 全职做 SWC。Deno / Parcel 2 / 多个 Rspack 实验也用 SWC。</p>
+        <p>SWC 把 Rust 带入 JS 工具链，奠定后续 Turbopack / Rspack / Rolldown 都是 Rust 的趋势。</p>
+
+        <h3>2022-2023 · Webpack 退场不可逆</h3>
+        <p>2022 年发生几件事让 Webpack 退场不可逆：</p>
+        <p><strong>(1) 2022-10 Tobias Koppers 跳槽 Vercel</strong>—— Webpack 原作者去做 Turbopack；Webpack 失去核心维护者</p>
+        <p><strong>(2) 2022-11 Turbopack alpha 发布</strong>—— 声称 Webpack 700x 快；Vercel 重金推</p>
+        <p><strong>(3) 2023-03 Rspack 0.1</strong>—— 字节跳动发布；让 Webpack 项目"换上即加速"；大型企业开始迁移</p>
+        <p><strong>(4) 2023-04 CRA 弃用</strong>—— React 官方不再推荐 CRA，建议用 Vite / Next.js / Remix</p>
+        <p><strong>(5) 2023 大量项目从 Webpack 迁 Vite</strong>—— Vue / Svelte / Solid 等社区先行；React 社区也大量跟进</p>
+        <p>2024-2026：Webpack 仍有大量存量（数百万项目），但<strong>新项目几乎没人选 Webpack</strong>。Webpack 6 长期"路线图中"但没真正发布。</p>
+
+        <h3>2023-08 · Rolldown · Vite team 自家 Rust bundler</h3>
+        <p>2023-08 尤雨溪团队（Vite 团队 + 多名贡献者）启动 <strong>Rolldown</strong>。目标：<strong>Rust 实现的 Rollup 兼容 bundler，接管 Vite build mode</strong>。</p>
+        <p>设计选择：</p>
+        <ul>
+          <li><strong>Rollup plugin API 兼容</strong>—— 让用户切换时 plugin 不需改</li>
+          <li><strong>Rust + 并行</strong>—— 速度目标 10x Rollup</li>
+          <li><strong>逐步替换</strong>—— Vite 6 实验性，Vite 7+ 默认</li>
+        </ul>
+        <p>2024 Rolldown 进入 Vite 6 实验阶段；2026-Q2 预期 stable。<strong>对 Rolldown 影响</strong>：成为 app + 库的统一 build 后端。</p>
+
+        <h3>2024-09 · Bun build · 第三种语言（Zig）的 bundler</h3>
+        <p>2024-09 Bun 发布 <strong>bun build</strong>。差异：用 <strong>Zig</strong> 实现（不是 Rust），与 Bun runtime（基于 JSC）深度集成。详见 <a href="../../bun/04-toolchain/03-bun-build.html">Bun P4.3</a>。</p>
+        <p>2026 Bun build 主要服务 Bun 项目用户；非 Bun 项目用 Vite / Turbopack 等。</p>
+
+        <h3>2024-2026 · Rust bundler 时代成型</h3>
+        <p>2026-05 现状：</p>
+        <ul>
+          <li><strong>Vite 6+</strong>（JS+esbuild+Rollup → 接 Rolldown）</li>
+          <li><strong>Turbopack</strong>（Vercel, Rust, Next.js 15+ stable）</li>
+          <li><strong>Rspack 1+</strong>（字节跳动, Rust, Webpack 兼容）</li>
+          <li><strong>Rolldown alpha</strong>（Vite team, Rust, Rollup 兼容）</li>
+          <li><strong>Bun build</strong>（Bun team, Zig）</li>
+          <li><strong>Farm</strong>（中国社区, Rust）</li>
+          <li><strong>Webpack 5+</strong>（仍主流但增长停滞）</li>
+        </ul>
+        <p>趋势：每个新项目几乎都用 Rust/Go 实现的 bundler；JS bundler（Webpack / Rollup）退到"维护已有项目 + 库打包"。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景：从历史看决策</span></h2>
+
+        <h3>场景 A · 评估"我的项目要不要从 Webpack 迁移"</h3>
+        <p>2026 看是否迁移，<strong>历史给的判据</strong>：</p>
+        <p><strong>(1) Webpack 启动慢（&gt; 10s）严重影响 dev 体验？</strong> → 迁</p>
+        <p><strong>(2) build 慢（&gt; 1 分钟）严重影响 CI？</strong> → 迁</p>
+        <p><strong>(3) 配置 webpack.config.js 复杂到没人懂？</strong> → 迁</p>
+        <p><strong>(4) 项目仍在快速迭代 + 新人加入多？</strong> → 迁（Vite 学习成本低）</p>
+        <p><strong>(5) 上面都不是 + 项目稳定不变？</strong> → 不迁（迁移成本不值得）</p>
+        <p>迁移目标选择：</p>
+        <ul>
+          <li>项目复杂 / 用了大量 Webpack 特定 loader → <strong>Rspack</strong>（Webpack 兼容，成本最低）</li>
+          <li>项目相对简单 / 想现代化 → <strong>Vite</strong>（生态最好）</li>
+          <li>项目是 Next.js → <strong>Turbopack</strong>（自然升级）</li>
+        </ul>
+
+        <h3>场景 B · 选语言：JS bundler vs Rust bundler</h3>
+        <p>2026 一般规则：</p>
+        <ul>
+          <li><strong>新 app 项目</strong>：Vite（JS+Rolldown）</li>
+          <li><strong>新库</strong>：Rollup（即将 Rolldown 接班）</li>
+          <li><strong>Next.js app</strong>：Turbopack</li>
+          <li><strong>大型 Webpack 迁移</strong>：Rspack</li>
+          <li><strong>Bun runtime 项目</strong>：Bun build</li>
+          <li><strong>极致快 + 简单</strong>：esbuild（直接用，不要再套 Vite）</li>
+        </ul>
+
+        <h3>场景 C · 长期投资判断</h3>
+        <p>从历史看：</p>
+        <p><strong>Webpack 仍存活但持续退场</strong>—— 2030 预期仍有大量 legacy 项目用 Webpack，但新项目几乎不选</p>
+        <p><strong>Vite + Rolldown 是 2026-2030 默认</strong>—— Vue/Svelte/Solid/Astro/SvelteKit/Nuxt 都已 Vite-first；React 社区大量迁移</p>
+        <p><strong>Turbopack 绑定 Next.js</strong>—— 不会成为通用 bundler；但 Next.js 用户多，Turbopack 影响大</p>
+        <p><strong>Rust bundler 占新项目 90%+</strong>（包括 Vite 内的 Rolldown）—— 不可逆</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：版本时间线对照</span></h2>
+
+        <h3>同样的"打包 React app"在不同时代</h3>
+
+        <h4>2014 · Browserify + Gulp（早期前端 bundler 启程）</h4>
+        <pre class="code"><code class="lang-javascript">// gulpfile.js
+const gulp = require('gulp');
+const browserify = require('browserify');
+const source = require('vinyl-source-stream');
+
+gulp.task('bundle', function() {
+  return browserify('./src/main.js')
+    .transform('babelify', { presets: ['react'] })
+    .bundle()
+    .pipe(source('bundle.js'))
+    .pipe(gulp.dest('./dist'));
+});</code></pre>
+        <p>典型项目结构：手动 require + Babel + Gulp 任务</p>
+
+        <h4>2017 · Webpack 4 + Babel（主流期）</h4>
+        <pre class="code"><code class="lang-javascript">// webpack.config.js
+module.exports = {
+  entry: './src/index.js',
+  module: {
+    rules: [
+      { test: /\.jsx?$/, exclude: /node_modules/, use: { loader: 'babel-loader' }},
+      { test: /\.css$/, use: ['style-loader', 'css-loader'] },
+      { test: /\.(png|jpg)$/, use: ['file-loader'] }
+    ]
+  },
+  resolve: { extensions: ['.js', '.jsx'] },
+  devServer: { hot: true, port: 3000 },
+  // ... 配置 100+ 行省略
+};</code></pre>
+        <p>典型 Webpack 4 项目：webpack.config.js 100-300 行，需要专门"webpack 工程师"</p>
+
+        <h4>2026 · Vite + Rolldown（现代）</h4>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()]
+});</code></pre>
+        <p>3 行配置 + 默认起步。需要时再加配置项（build target / chunks / proxy 等）。</p>
+
+        <h3>启动速度演化</h3>
+        <pre class="code"><code class="lang-text">2017 Webpack 4 + Babel:    dev start ~30s, hot reload ~3-5s
+2019 Webpack 5 + esbuild:  dev start ~15s, hot reload ~1-2s
+2020 Vite 1:               dev start ~1s,  hot reload ~50ms
+2024 Vite 6:               dev start ~500ms, hot reload ~30ms
+2026 Vite 7 + Rolldown:    dev start ~300ms, build 5x faster</code></pre>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：以为"Webpack 死了应该立刻迁"</h3>
+        <p>Webpack 没死，只是不增长。<strong>稳定运行的 Webpack 项目不要为了迁移而迁移</strong>—— 迁移成本（plugin / loader 重写 + 配置重学 + 兼容性测试）通常 1-3 周；如果 dev / build 速度还能接受，不值得迁。</p>
+        <p>典型迁移触发点：CI 太慢拖累团队 / 新人吐槽 dev 启动慢 / 大版本升级时顺势迁。</p>
+
+        <h3>陷阱 2：用 esbuild 当完整 bundler</h3>
+        <p>esbuild 设计是<strong>compiler 子组件</strong>，不是完整 bundler。它的 plugin 弱（不能改 AST）/ HMR 弱 / code splitting 简单。<strong>除非项目极简单</strong>，否则用 Vite（内置 esbuild dev + Rollup build）更合适。</p>
+
+        <h3>陷阱 3：以为 Vite 等于 esbuild</h3>
+        <p>常见误解。Vite dev mode 用 esbuild 预构建依赖 + transform；<strong>但 Vite build mode 用 Rollup（即将切到 Rolldown）不用 esbuild</strong>。这是 Vite 双模架构的精髓（详见 <a href="../02-vite-architecture/index.html">P2</a>）。</p>
+
+        <h3>陷阱 4：选 Turbopack 但不用 Next.js</h3>
+        <p>Turbopack 与 Next.js 强绑定 —— 独立用 Turbopack 的项目极罕见，文档 / 生态都围绕 Next.js。<strong>不用 Next.js 不要选 Turbopack</strong>，选 Vite。</p>
+
+        <h3>陷阱 5：以为"Rust bundler 就是快"</h3>
+        <p>Rust 实现速度上限高，但<strong>实际速度还要看具体优化</strong>。早期 Turbopack alpha 版本在某些场景比 Vite 慢；Farm 声称比 Vite 快 5-10x 但部分场景实测差距小。<strong>看实测 benchmark 而不是营销</strong>。</p>
+
+        <h3>陷阱 6：执着"零配置"</h3>
+        <p>Parcel "零配置"卖点 2018 时强；2026 Vite 已"轻配置"+ 大量默认正确。<strong>真正的工程项目几乎都需要配置</strong>（build target / proxy / env / aliases / plugin 等）。Vite 的"按需配置"比 Parcel "零配置"更适合复杂项目。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>项目史关键文章</h3>
+        <ul>
+          <li><a href="https://medium.com/@Rich_Harris/tree-shaking-versus-dead-code-elimination-d3765df85c80" target="_blank" rel="noopener">Rich Harris · <em>Tree-shaking versus dead code elimination</em></a>（2015）· tree shaking 概念起源</li>
+          <li><a href="https://esbuild.github.io/faq/#why-is-esbuild-fast" target="_blank" rel="noopener">Evan W · <em>Why is esbuild fast?</em></a> · 构建工具性能必读</li>
+          <li><a href="https://vitejs.dev/guide/why.html" target="_blank" rel="noopener">尤雨溪 · <em>Why Vite</em></a> · Vite 设计哲学</li>
+          <li><a href="https://vercel.com/blog/turbopack-2-0" target="_blank" rel="noopener">Vercel · <em>Turbopack 2.0</em></a></li>
+          <li><a href="https://www.rspack.dev/blog/announcing-rspack-1-0" target="_blank" rel="noopener">Rspack · <em>Announcing Rspack 1.0</em></a></li>
+        </ul>
+
+        <h3>各工具官方</h3>
+        <ul>
+          <li><a href="https://vitejs.dev/" target="_blank" rel="noopener">vitejs.dev</a></li>
+          <li><a href="https://rollupjs.org/" target="_blank" rel="noopener">rollupjs.org</a></li>
+          <li><a href="https://esbuild.github.io/" target="_blank" rel="noopener">esbuild.github.io</a></li>
+          <li><a href="https://swc.rs/" target="_blank" rel="noopener">swc.rs</a></li>
+          <li><a href="https://rolldown.rs/" target="_blank" rel="noopener">rolldown.rs</a></li>
+          <li><a href="https://turbo.build/pack" target="_blank" rel="noopener">turbo.build/pack</a></li>
+          <li><a href="https://rspack.dev/" target="_blank" rel="noopener">rspack.dev</a></li>
+          <li><a href="https://webpack.js.org/" target="_blank" rel="noopener">webpack.js.org</a></li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="02-landscape.html">P1.2 同代人横评</a> · 10 个工具全维度对比</li>
+          <li><a href="../02-vite-architecture/01-dev-mode.html">P2.1 Vite Dev mode</a> · Vite 设计核心</li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../bun/04-toolchain/03-bun-build.html">Bun P4.3 Bun build</a> · Bun 自家 bundler</li>
+          <li><a href="../../bun/01-overview/01-history.html">Bun P1.1 Bun 项目史</a> · 与构建工具史平行</li>
+          <li><a href="../../v8/01-overview/01-history.html">V8 P1.1 V8 项目史</a></li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
