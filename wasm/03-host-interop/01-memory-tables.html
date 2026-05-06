@@ -1,0 +1,579 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Linear Memory + Tables · P3.1 · WebAssembly 深度学习</title>
+    <meta name="description" content="WebAssembly 内存模型核心：Linear Memory 是连续 byte 数组（64KB 页粒度，初始/max 页声明），WebAssembly.Memory.buffer 是 ArrayBuffer 可被 TypedArray view；memory.grow 动态扩容；Memory64 让 SQLite-WASM/DuckDB-WASM 突破 4GB 限制。Tables 是函数引用 / externref 数组，用于 call_indirect（动态分发）。bulk memory ops 加速大块内存操作。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23654ff0'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EWA%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>WebAssembly 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.22 290); color: #fff">WASM</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · 与宿主互操作</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-memory-tables.html" class="active">01 · Linear Memory + Tables</a></li>
+          <li><a href="02-imports-exports.html">02 · Imports / Exports + 跨边界调用</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">WebAssembly</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · 与宿主互操作</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Linear Memory + Tables</span>
+        </nav>
+        <h1>Linear Memory + Tables</h1>
+        <p class="lead">
+          wasm 的"内存模型"由两部分组成。<strong>Linear Memory</strong>：连续 byte 数组、64KB 页粒度、初始/max 页声明、<code>memory.grow</code> 动态扩容；JS 端 <code>WebAssembly.Memory.buffer</code> 就是 <code>ArrayBuffer</code>，可被 TypedArray view。<strong>Tables</strong>：另一种"内存"，元素是函数引用（funcref）或 JS 对象引用（externref），通过 <code>call_indirect</code> 实现间接调用——C/C++ 函数指针 / vtable / 动态分发的编译目标。<strong>Memory64</strong>（phase 4）让 SQLite-WASM / DuckDB-WASM 突破 4GB 限制。<strong>Bulk memory ops</strong>（2.0 正式）让大块拷贝 / 填充走优化路径。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P2（栈机器 + 类型系统）</span>
+          <span><strong>主要来源</strong> WebAssembly Core Spec · MDN WebAssembly.Memory · v8.dev/blog/memory64</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Linear Memory 是连续 byte 数组</strong>—— wasm module 默认 1 块 memory（multi-memory 提案 phase 4 让多块），64KB 页粒度，初始 N 页 + max 页声明。指令 <code>i32.load</code> / <code>i32.store</code> 带对齐 + 偏移参数。bounds check 现代引擎用 mmap + guard pages 几乎零成本。</li>
+          <li><strong>WebAssembly.Memory.buffer 就是 ArrayBuffer</strong>—— JS 端能直接 view：<code>new Uint8Array(memory.buffer)</code>。这是 wasm-JS 数据交换的核心机制。<strong>但</strong> wasm 端 memory.grow 后旧 buffer 可能 detach，需要重新 view。</li>
+          <li><strong>Tables 是函数指针的替身</strong>—— wasm 不暴露函数地址（安全），动态调用必须通过 table 索引 + <code>call_indirect</code>。C/C++ vtable / 函数指针都编译到 table。table 支持 funcref / externref（2.0+）。</li>
+          <li><strong>Memory64 突破 4GB 限制</strong>—— 默认 i32 索引 → 4GB 上限；Memory64（V8 11+，phase 4）i64 索引 → 16EB 理论上限。SQLite-WASM 处理大数据库 / DuckDB-WASM 跑 100GB OLAP 都需要这个。代价：64-bit pointer 让代码体积增加。</li>
+          <li><strong>Bulk memory ops（2.0 正式）</strong>—— <code>memory.copy</code> / <code>memory.fill</code> / <code>memory.init</code> / <code>memory.drop</code>。替代 MVP 时 hand-rolled loop；引擎用 SIMD + cache-aware 实现，比纯 wasm 循环快 10x+。</li>
+          <li><strong>wasm 内存与 JS 堆完全隔离</strong>—— wasm linear memory 是独立 ArrayBuffer，不在 V8 GC 堆里。这让 wasm GC 不会触发 V8 GC，也让 JS 不能直接访问 wasm 对象（必须通过 memory view）。详见 <a href="../../v8/04-memory/01-heap-and-objects.html">V8 P4.1</a>。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Linear Memory：模型</h3>
+        <p>wasm linear memory = <strong>连续 byte 数组</strong>。和 C 的 malloc / heap 一样的物理模型，但有几个关键约束：</p>
+        <p><strong>(1) 单块（MVP）</strong>—— 每模块默认 1 个 memory；multi-memory 提案让多块，但 2026 还在 phase 4，主流 runtime 实现不齐</p>
+        <p><strong>(2) 页粒度 64KB</strong>—— 1 page = 65536 bytes。所有 grow / 初始 / max 都以 page 为单位</p>
+        <p><strong>(3) 初始 + 最大声明</strong>：</p>
+        <pre class="code"><code class="lang-text">(memory $mem 1 100)   ;; 初始 1 页 (64KB)，最大 100 页 (6.4MB)
+(memory $mem 1)       ;; 初始 1 页，无 max 限制（最大 4GB）
+(memory $mem 1 1 shared)  ;; threads 用，shared memory</code></pre>
+        <p><strong>(4) i32 索引（默认）</strong>—— 偏移用 i32，理论上限 4GB（2^32 bytes）</p>
+        <p><strong>(5) Memory64 提案</strong>—— i64 索引，上限 16EB（理论；实际 OS 限制）</p>
+
+        <h3>memory.grow + memory.size</h3>
+        <p>动态扩容：</p>
+        <pre class="code"><code class="lang-text">(memory.grow (i32.const 1))   ;; 增加 1 页；返回旧 size 或 -1（失败）
+(memory.size)                 ;; 返回当前 size（页数）</code></pre>
+        <p>JS 端：</p>
+        <pre class="code"><code class="lang-javascript">const memory = new WebAssembly.Memory({ initial: 1, maximum: 100 });
+console.log(memory.buffer.byteLength);  // 65536 (1 page)
+memory.grow(2);                          // 增 2 页
+console.log(memory.buffer.byteLength);  // 196608 (3 pages)</code></pre>
+        <p><strong>关键陷阱：grow 后旧 buffer detach</strong>—— grow memory 时浏览器可能要 realloc（实际不一定，看实现），JS 端持有的旧 ArrayBuffer<strong>变成 detached state</strong>，访问会 throw。必须重新 <code>memory.buffer</code>：</p>
+        <pre class="code"><code class="lang-javascript">// 反例
+const view = new Uint8Array(memory.buffer);
+memory.grow(1);
+view[0] = 42;  // ❌ 可能 throw "ArrayBuffer is detached"
+
+// 正确
+let view = new Uint8Array(memory.buffer);
+memory.grow(1);
+view = new Uint8Array(memory.buffer);  // 重新创建 view
+view[0] = 42;</code></pre>
+
+        <h3>i32.load / i32.store + 对齐 + 偏移</h3>
+        <p>从 memory 读 / 写指令：</p>
+        <pre class="code"><code class="lang-text">i32.load offset=0 align=2
+;; 从栈顶（i32 地址）读 4 字节，按 4 字节对齐</code></pre>
+        <p>load 指令家族：</p>
+        <ul>
+          <li><code>i32.load</code> / <code>i64.load</code> / <code>f32.load</code> / <code>f64.load</code>—— 全宽度读</li>
+          <li><code>i32.load8_s</code> / <code>i32.load8_u</code>—— 读 1 byte 符号 / 无符号扩展到 i32</li>
+          <li><code>i32.load16_s</code> / <code>i32.load16_u</code>—— 读 2 bytes 扩展到 i32</li>
+          <li><code>i64.load8_s</code> / <code>i64.load8_u</code> / <code>i64.load16_s</code> / 等—— 类似但 i64</li>
+          <li><code>v128.load</code>（SIMD）—— 读 16 bytes 到 v128</li>
+        </ul>
+        <p>store 类似但少 sign 区分（store 不需要扩展）：<code>i32.store</code> / <code>i32.store8</code> / <code>i32.store16</code> / <code>i64.store</code> / 等。</p>
+        <p><strong>对齐参数</strong>：<code>align=N</code> 是<strong>提示</strong>，不是要求。引擎可用更高效路径如果对齐；不对齐时仍可工作（但慢）。<code>align=2</code> 表示 2^2 = 4 字节对齐。</p>
+        <p><strong>偏移参数</strong>：<code>offset=N</code> 在栈上地址外加常量偏移。便利常量偏移（不需多一条 i32.add）。</p>
+
+        <h3>Bounds check：现代引擎几乎零成本</h3>
+        <p>每次 memory 读 / 写需检查不越界。MVP 时这是真的成本（每次 load 加 cmp + jmp）。<strong>现代引擎</strong>用 mmap + guard pages 让它免费：</p>
+        <p><strong>方案 A · 软件 bounds check</strong>（旧）：</p>
+        <pre class="code"><code class="lang-text">if (addr + 4 &gt; memory_size) trap;
+load i32 at addr</code></pre>
+        <p><strong>方案 B · mmap + guard pages</strong>（V8 / wasmtime 现代）：</p>
+        <ul>
+          <li>分配 8GB 虚拟地址（i32 索引最大 4GB + 4GB guard）</li>
+          <li>实际只 commit 需要的页；其余是 reserved 不可访问</li>
+          <li>load 不做软件 check；如果地址越界，CPU page fault → 引擎拦截 → trap</li>
+        </ul>
+        <p>结果：<strong>正常情况零成本</strong>（不查界），仅越界时 page fault。这是 wasm 性能接近 native 的关键。</p>
+        <p>注意：mmap + guard pages 只在 64-bit OS 上 work。32-bit OS（极罕见 2026）回退到软件 check。Memory64 因为 i64 上限太大无法 mmap 全部，回退软件 check（性能损失）。</p>
+
+        <h3>Memory64 提案（phase 4，V8 11+）</h3>
+        <p>MVP 限制：i32 索引 → 4GB 内存上限。对于 SQLite / DuckDB / 大型 ML 模型不够用。</p>
+        <p>Memory64 提案（2024 phase 4）：</p>
+        <ul>
+          <li>memory 声明加 <code>i64</code> 标志：<code>(memory i64 1 1024)</code>（页数 i64）</li>
+          <li>load / store 指令偏移变 i64：<code>i32.load offset=0</code>（地址 i64）</li>
+          <li>JS API：<code>new WebAssembly.Memory({ index: "i64", initial: 1n, maximum: 1024n })</code></li>
+        </ul>
+        <p><strong>实现状态</strong>：</p>
+        <ul>
+          <li>V8 11+（2023）—— 实现完整</li>
+          <li>SpiderMonkey / JSC—— 实现中或部分</li>
+          <li>wasmtime / wasmer—— 完整支持</li>
+        </ul>
+        <p><strong>典型用户</strong>：</p>
+        <ul>
+          <li>SQLite-WASM 处理 &gt; 4GB 数据库</li>
+          <li>DuckDB-WASM 跑大规模 OLAP</li>
+          <li>Pyodide 加载大型科学计算数据</li>
+          <li>wasm-shop 跑 LLM 推理（模型权重几 GB）</li>
+        </ul>
+        <p><strong>代价</strong>：</p>
+        <ul>
+          <li>64-bit pointer 让代码体积增加 ~10-30%</li>
+          <li>不能用 mmap + guard pages 优化（虚拟地址不够），bounds check 软件实现，性能损失 ~5-10%</li>
+          <li>在 32-bit 平台不可用（其实 2026 也没人在 32-bit 平台跑 wasm）</li>
+        </ul>
+
+        <h3>Bulk memory operations（2.0 正式）</h3>
+        <p>MVP 时大块内存操作要写 wasm 循环：</p>
+        <pre class="code"><code class="lang-text">;; 复制 N 字节，慢
+(loop $L
+  (i32.store8
+    (i32.add (local.get $dst) (local.get $i))
+    (i32.load8_u (i32.add (local.get $src) (local.get $i))))
+  (local.set $i (i32.add (local.get $i) (i32.const 1)))
+  (br_if $L (i32.lt_s (local.get $i) (local.get $n))))</code></pre>
+        <p>Bulk memory（2.0）提供原生指令：</p>
+        <pre class="code"><code class="lang-text">;; memory.copy: dst, src, size
+(memory.copy
+  (local.get $dst)
+  (local.get $src)
+  (local.get $n))
+
+;; memory.fill: dst, value, size
+(memory.fill
+  (local.get $dst)
+  (i32.const 0)
+  (local.get $n))
+
+;; memory.init: dst, src_offset_in_data_segment, size
+(memory.init $dataSeg
+  (local.get $dst)
+  (i32.const 0)
+  (local.get $n))
+
+;; data.drop: 释放 data segment（不再需要）
+(data.drop $dataSeg)</code></pre>
+        <p>引擎实现用 SIMD + cache-aware copy，比纯 wasm loop 快 10x+。所有现代 wasm 编译器（Rust / Emscripten）的 <code>memcpy</code> / <code>memset</code> 都编译到这些指令。</p>
+
+        <h3>Tables：函数指针的替身</h3>
+        <p>wasm 不暴露函数地址（安全考虑：让任意指针调用很难做 SFI）。动态调用必须通过 <strong>table</strong>：</p>
+        <pre class="code"><code class="lang-text">(table $t 10 funcref)   ;; 声明 table，10 个 funcref 槽
+(elem (i32.const 0) $f1 $f2 $f3)   ;; 初始化 0/1/2 槽
+
+(call_indirect (type $sig) (...args...) (local.get $idx))
+;; 用 idx 索引 table；类型必须匹配 $sig；否则运行时 trap</code></pre>
+        <p>关键属性：</p>
+        <p><strong>(1) 类型签名匹配检查</strong>—— call_indirect 必须显式声明期望签名 <code>(type $sig)</code>；运行时检查 table[idx] 函数签名是否一致；不一致 trap</p>
+        <p><strong>(2) 索引边界检查</strong>—— idx 越界 trap</p>
+        <p><strong>(3) null 检查</strong>—— table[idx] 是 null（未初始化）trap</p>
+        <p>所以 call_indirect 仍是<strong>安全</strong>的：错误的索引或签名不会跑到任意代码。</p>
+        <p><strong>典型应用</strong>：</p>
+        <ul>
+          <li>C++ vtable —— 编译器为每个虚函数表分配 table 槽，方法调用变 call_indirect</li>
+          <li>函数指针 —— C 的 <code>void (*fp)(int)</code> 编译成 i32 索引；调用 fp 变 call_indirect</li>
+          <li>switch / dispatch table</li>
+          <li>plugin / hot reload —— 通过 <code>table.set</code> 动态替换函数引用</li>
+        </ul>
+
+        <h3>externref + table</h3>
+        <p>2.0 后 table 也可以装 externref（JS 对象引用）：</p>
+        <pre class="code"><code class="lang-text">(table $objs 10 externref)
+(func $store (param $i i32) (param $obj externref)
+  (table.set $objs (local.get $i) (local.get $obj)))
+(func $load (param $i i32) (result externref)
+  (table.get $objs (local.get $i)))</code></pre>
+        <p>这让 wasm 能管理一个"JS 对象池"，用 i32 索引访问。比 wasm-bindgen 早期的 "ID → object Map" hack 干净。</p>
+
+        <h3>多个 tables（reference types 提案带来）</h3>
+        <p>2.0 后 module 可有多个 tables：</p>
+        <pre class="code"><code class="lang-text">(table $funcs 10 funcref)
+(table $objs 10 externref)
+(call_indirect $funcs (type $sig) ...)   ;; 显式指定哪个 table</code></pre>
+        <p>典型用：funcs table 给 C++ vtable，objs table 给 JS 对象池。</p>
+
+        <h3>JS 端 view memory：TypedArray + DataView</h3>
+        <p>JS 端把 wasm memory 当 ArrayBuffer，用 TypedArray view 访问：</p>
+        <pre class="code"><code class="lang-javascript">const memory = instance.exports.memory;
+
+// 不同 typed view（共享底层 buffer）
+const u8 = new Uint8Array(memory.buffer);
+const u16 = new Uint16Array(memory.buffer);
+const u32 = new Uint32Array(memory.buffer);
+const f32 = new Float32Array(memory.buffer);
+const f64 = new Float64Array(memory.buffer);
+
+// 写入
+u32[0] = 0xDEADBEEF;
+console.log(u8[0]);  // 0xEF (little-endian)
+console.log(u8[3]);  // 0xDE
+
+// 大端 / 小端 / 显式控制：用 DataView
+const view = new DataView(memory.buffer);
+view.setUint32(0, 0xDEADBEEF, false);  // big-endian
+view.setUint32(0, 0xDEADBEEF, true);   // little-endian (wasm 默认)</code></pre>
+        <p><strong>wasm 是 little-endian</strong>—— 跨平台一致；不像 C 取决于宿主 CPU。<code>i32.load</code> 写入的字节顺序确定。</p>
+
+        <h3>linear memory 与 V8 堆的关系</h3>
+        <p>wasm linear memory 是<strong>独立 ArrayBuffer</strong>，不在 V8 GC 堆里（详见 <a href="../../v8/04-memory/01-heap-and-objects.html">V8 P4.1</a>）。</p>
+        <ul>
+          <li>wasm allocate 不触发 V8 GC</li>
+          <li>V8 GC 不扫描 wasm linear memory</li>
+          <li>JS 持有 wasm Memory 对象的引用 → wasm memory 不被回收</li>
+          <li>wasm 不能直接访问 V8 堆里的 JS 对象（必须通过 externref 间接）</li>
+        </ul>
+        <p>这是 wasm 性能可预测的一个原因：wasm 内的内存管理与 JS 堆解耦，wasm hot path 不会被 JS GC 中断。</p>
+
+        <h3>WasmGC 对象（短重述链回 P5.2 / V8 P6）</h3>
+        <p>WasmGC 提案（2023 phase 5）引入 <code>struct</code> / <code>array</code> / <code>i31ref</code> 等 GC managed 类型。这些<strong>不在 linear memory 里</strong>，由引擎 GC 管理（V8 用 Orinoco）。</p>
+        <p>三层内存模型：</p>
+        <ul>
+          <li><strong>Linear Memory</strong>—— wasm 自己管的 ArrayBuffer；C/C++/Rust 等系统语言用</li>
+          <li><strong>WasmGC heap</strong>—— 引擎 GC 管理；Java/Kotlin/Dart 等托管语言用</li>
+          <li><strong>JS heap</strong>—— V8 GC；JS 对象 + externref 持有的 JS 对象</li>
+        </ul>
+        <p>详见 <a href="../05-advanced/02-gc-tail-eh-jspi.html">P5.2</a>。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · 让 Rust wasm 与 JS 交换大量数据</h3>
+        <p>方案：JS 端写入 wasm memory，wasm 端处理，JS 端读结果。</p>
+        <pre class="code"><code class="lang-javascript">// Rust wasm 导出 process(ptr, len) 处理一段 memory
+// JS 端：
+const memory = instance.exports.memory;
+const ptr = instance.exports.alloc(1024);  // wasm 端分配
+const buffer = new Uint8Array(memory.buffer, ptr, 1024);
+
+// 写入数据
+const text = new TextEncoder().encode("hello");
+buffer.set(text);
+
+// 调用 wasm 处理
+const result_ptr = instance.exports.process(ptr, text.length);
+
+// 读结果
+const result = new Uint8Array(memory.buffer, result_ptr, /* len */).slice();
+const decoded = new TextDecoder().decode(result);
+
+// 释放
+instance.exports.free(ptr, 1024);
+instance.exports.free(result_ptr, /* len */);</code></pre>
+        <p>这是<strong>wasm-bindgen 自动做的事</strong>。手写时容易出错（对齐 / 释放 / endian），用 wasm-bindgen 让宏自动生成 marshalling 代码。详见 <a href="02-imports-exports.html">P3.2</a>。</p>
+
+        <h3>场景 B · 用 SharedArrayBuffer 做 wasm threads</h3>
+        <p>详见 <a href="../05-advanced/01-threads-simd.html">P5.1</a>。简短：</p>
+        <pre class="code"><code class="lang-javascript">// 主线程
+const memory = new WebAssembly.Memory({
+  initial: 10,
+  maximum: 100,
+  shared: true       // ← 关键
+});
+// 必须 cross-origin isolated 才能用
+
+// 多个 worker 共享同一 memory
+const worker1 = new Worker('w.js');
+worker1.postMessage({ memory });
+
+const worker2 = new Worker('w.js');
+worker2.postMessage({ memory });</code></pre>
+
+        <h3>场景 C · C++ vtable 编译到 wasm table</h3>
+        <p>C++ 源：</p>
+        <pre class="code"><code class="lang-cpp">class Animal {
+public:
+  virtual void speak() = 0;
+};
+class Dog : public Animal {
+public:
+  void speak() override { puts("woof"); }
+};
+class Cat : public Animal {
+public:
+  void speak() override { puts("meow"); }
+};
+
+void doSpeak(Animal* a) { a-&gt;speak(); }</code></pre>
+        <p>Emscripten 编译后 wasm（简化）：</p>
+        <pre class="code"><code class="lang-text">(table $vtable 4 funcref)
+(elem (i32.const 0) $Dog_speak $Cat_speak ...)
+
+(func $Dog_speak ...)
+(func $Cat_speak ...)
+
+(func $doSpeak (param $a i32)   ;; a 是 Animal* (i32 ptr)
+  ;; 读对象的 vtable_index 字段（假设偏移 0）
+  (local $vtable_idx i32)
+  (local.set $vtable_idx (i32.load (local.get $a)))
+  ;; 间接调用
+  (call_indirect (type $speak_sig) (local.get $a) (local.get $vtable_idx)))</code></pre>
+
+        <h3>场景 D · 用 Memory64 跑 SQLite 大数据库</h3>
+        <pre class="code"><code class="lang-javascript">// 加载 SQLite WASM Memory64 版本
+import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
+
+const sqlite3 = await sqlite3InitModule({
+  // 显式启用 i64 索引
+  memoryConfig: { index: "i64" }
+});
+
+// 现在能开 &gt; 4GB 数据库
+const db = new sqlite3.oo1.OpfsDb('large.db');
+db.exec('CREATE TABLE big (id INTEGER, data BLOB);');
+// ... 插入 GB 级数据 ...</code></pre>
+
+        <h3>场景 E · 用 bulk memory 加速大块清零</h3>
+        <pre class="code"><code class="lang-rust">// Rust + wasm-bindgen
+#[wasm_bindgen]
+pub fn clear_buffer(ptr: *mut u8, len: usize) {
+    unsafe {
+        std::ptr::write_bytes(ptr, 0, len);
+        // 编译到 wasm 是 memory.fill 指令（如果 target 启用 bulk-memory）
+    }
+}</code></pre>
+        <p>启用 bulk memory：<code>RUSTFLAGS="-C target-feature=+bulk-memory"</code>。性能比手写循环快 10x+。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：内存 + table 完整示例</span></h2>
+
+        <h3>例 1：wat 完整 module（memory + alloc + free）</h3>
+        <pre class="code"><code class="lang-text">(module
+  (memory $mem (export "memory") 1)
+
+  ;; 简单 bump allocator
+  (global $heap_top (mut i32) (i32.const 0))
+
+  (func $alloc (export "alloc") (param $size i32) (result i32)
+    (local $ptr i32)
+    (local.set $ptr (global.get $heap_top))
+    (global.set $heap_top
+      (i32.add (global.get $heap_top) (local.get $size)))
+    ;; 检查越界，必要时 grow
+    (if (i32.ge_s
+          (global.get $heap_top)
+          (i32.mul (memory.size) (i32.const 65536)))
+      (then
+        (drop (memory.grow (i32.const 1)))))
+    local.get $ptr)
+
+  ;; bump allocator 不真正 free，仅占位
+  (func $free (export "free") (param $ptr i32) (param $size i32)
+    nop))</code></pre>
+
+        <h3>例 2：在 wasm memory 里实现一个 ring buffer</h3>
+        <pre class="code"><code class="lang-text">(module
+  (memory $mem 1)
+  (global $head (mut i32) (i32.const 0))
+  (global $tail (mut i32) (i32.const 0))
+  (global $cap i32 (i32.const 1024))
+
+  (func $push (param $val i32) (result i32)
+    (local $next i32)
+    (local.set $next
+      (i32.rem_s
+        (i32.add (global.get $head) (i32.const 1))
+        (global.get $cap)))
+    (if (i32.eq (local.get $next) (global.get $tail))
+      (then
+        ;; full
+        (return (i32.const -1))))
+    (i32.store
+      (i32.mul (global.get $head) (i32.const 4))
+      (local.get $val))
+    (global.set $head (local.get $next))
+    (i32.const 0))   ;; success
+
+  (func $pop (result i32 i32)   ;; multi-value (status, value)
+    (if (i32.eq (global.get $head) (global.get $tail))
+      (then
+        ;; empty
+        (return (i32.const -1) (i32.const 0))))
+    (i32.const 0)   ;; status
+    (i32.load (i32.mul (global.get $tail) (i32.const 4)))   ;; value
+    (global.set $tail
+      (i32.rem_s
+        (i32.add (global.get $tail) (i32.const 1))
+        (global.get $cap))))
+
+  (export "push" (func $push))
+  (export "pop" (func $pop)))</code></pre>
+
+        <h3>例 3：Rust 通过 wasm-bindgen 暴露 memory + alloc</h3>
+        <pre class="code"><code class="lang-rust">use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+pub fn alloc(size: usize) -&gt; *mut u8 {
+    let mut buf = Vec::with_capacity(size);
+    let ptr = buf.as_mut_ptr();
+    std::mem::forget(buf);
+    ptr
+}
+
+#[wasm_bindgen]
+pub fn dealloc(ptr: *mut u8, size: usize) {
+    unsafe { Vec::from_raw_parts(ptr, 0, size); }
+}
+
+#[wasm_bindgen]
+pub fn process(ptr: *mut u8, len: usize) -&gt; usize {
+    let slice = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
+    // 处理 slice
+    for byte in slice.iter_mut() {
+        *byte = byte.wrapping_add(1);
+    }
+    len
+}</code></pre>
+
+        <h3>例 4：JS 端 high-level wrapper</h3>
+        <pre class="code"><code class="lang-javascript">class WasmHelper {
+  constructor(instance) {
+    this.instance = instance;
+    this.memory = instance.exports.memory;
+    this.alloc = instance.exports.alloc;
+    this.dealloc = instance.exports.dealloc;
+  }
+
+  // 把 JS string 写入 wasm memory，返回 (ptr, len)
+  writeString(str) {
+    const bytes = new TextEncoder().encode(str);
+    const ptr = this.alloc(bytes.length);
+    new Uint8Array(this.memory.buffer, ptr, bytes.length).set(bytes);
+    return { ptr, len: bytes.length };
+  }
+
+  // 从 wasm memory 读 string
+  readString(ptr, len) {
+    const bytes = new Uint8Array(this.memory.buffer, ptr, len);
+    return new TextDecoder().decode(bytes);
+  }
+
+  // 释放
+  free(ptr, len) {
+    this.dealloc(ptr, len);
+  }
+}</code></pre>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：grow 后忘记重新 view ArrayBuffer</h3>
+        <p>最常见 bug。<code>memory.grow()</code> 后旧 TypedArray 可能 detach，访问 throw <code>"ArrayBuffer is detached"</code>。</p>
+        <p>解决：每次需要 view 时<strong>重新创建</strong>，不要缓存：</p>
+        <pre class="code"><code class="lang-javascript">function getView() {
+  return new Uint8Array(memory.buffer);
+}
+
+// 每次用 getView() 不缓存
+const view = getView();
+view[0] = 42;</code></pre>
+
+        <h3>陷阱 2：Rust / C++ alloc 出来的内存忘记 free</h3>
+        <p>wasm 内存泄漏不会让浏览器 OOM 立刻（linear memory 上限 4GB），但长期跑会触发 grow + 内存膨胀。</p>
+        <p>解决：成对管理 alloc / dealloc；用 wasm-bindgen 的自动管理；或用 try-finally：</p>
+        <pre class="code"><code class="lang-javascript">const { ptr, len } = helper.writeString("hello");
+try {
+  return helper.process(ptr, len);
+} finally {
+  helper.free(ptr, len);
+}</code></pre>
+
+        <h3>陷阱 3：跨边界传字符串忘记编码</h3>
+        <p>wasm memory 是 byte 数组；JS string 是 UTF-16。<strong>必须显式编码</strong>：</p>
+        <pre class="code"><code class="lang-javascript">// ❌ 直接拷不行
+const view = new Uint8Array(memory.buffer);
+const str = "hello";
+for (let i = 0; i &lt; str.length; i++) {
+  view[i] = str.charCodeAt(i);  // 只对 ASCII work，多字节字符错
+}
+
+// ✅ 用 TextEncoder
+const bytes = new TextEncoder().encode(str);
+new Uint8Array(memory.buffer, ptr, bytes.length).set(bytes);</code></pre>
+
+        <h3>陷阱 4：以为 align 参数是要求</h3>
+        <p><code>i32.load align=2</code> 不是说"必须 4 字节对齐"，是<strong>提示</strong>。不对齐时仍能 load，但慢。</p>
+        <p>但<strong>声明的 align 不能超过指令的自然对齐</strong>：<code>i32.load align=4</code>（&gt; 自然对齐 align=2）会被引擎拒绝。</p>
+
+        <h3>陷阱 5：不释放 data segment</h3>
+        <p>data segment 用于初始化 memory。初始化后<strong>不再需要</strong>就用 <code>data.drop $seg</code> 释放。否则编译产物里存了一份冗余 data。</p>
+        <p>Rust / Emscripten 编译器自动处理。手写 wasm 要注意。</p>
+
+        <h3>陷阱 6：以为 memory 是隔离每个 instance 的</h3>
+        <p>多次 instantiate 同一 module 得到独立 memory（默认）。<strong>但</strong>如果 import memory 共享：</p>
+        <pre class="code"><code class="lang-javascript">const sharedMem = new WebAssembly.Memory({ initial: 1 });
+
+const i1 = await WebAssembly.instantiate(module, { env: { memory: sharedMem }});
+const i2 = await WebAssembly.instantiate(module, { env: { memory: sharedMem }});
+// i1 和 i2 共享 sharedMem，互相能看见对方写入</code></pre>
+        <p>这是 wasm 多 instance 共享数据的方式（不需要 SAB），但要小心数据竞态。</p>
+
+        <h3>陷阱 7：Memory64 性能损失</h3>
+        <p>开 Memory64 让 bounds check 走软件路径（不能 mmap guard pages），<strong>每次 load 性能损失 ~5-10%</strong>。只在真需要 &gt; 4GB 时启用。SQLite-WASM / DuckDB-WASM 等大数据应用值得；普通应用不要 default 开。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范</h3>
+        <ul>
+          <li><a href="https://webassembly.github.io/spec/core/exec/runtime.html#memories" target="_blank" rel="noopener">WebAssembly Spec · Memories</a></li>
+          <li><a href="https://webassembly.github.io/spec/core/exec/runtime.html#tables" target="_blank" rel="noopener">WebAssembly Spec · Tables</a></li>
+          <li><a href="https://github.com/WebAssembly/memory64" target="_blank" rel="noopener">Memory64 提案</a></li>
+          <li><a href="https://github.com/WebAssembly/bulk-memory-operations" target="_blank" rel="noopener">Bulk memory operations 提案</a></li>
+          <li><a href="https://github.com/WebAssembly/multi-memory" target="_blank" rel="noopener">Multi-memory 提案</a></li>
+        </ul>
+
+        <h3>实现深度</h3>
+        <ul>
+          <li><a href="https://v8.dev/blog/wasm-memory64" target="_blank" rel="noopener">V8: Memory64</a></li>
+          <li><a href="https://hacks.mozilla.org/2017/07/memory-in-webassembly-and-why-its-safer-than-you-think/" target="_blank" rel="noopener">Mozilla: Memory in WebAssembly</a> · 沙箱机制详细</li>
+          <li><a href="https://docs.wasmtime.dev/contributing-architecture.html" target="_blank" rel="noopener">wasmtime architecture</a></li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="02-imports-exports.html">P3.2 Imports / Exports + 跨边界调用</a> · 跨边界数据交换详解</li>
+          <li><a href="../05-advanced/01-threads-simd.html">P5.1 Threads + SIMD</a> · shared memory + atomic ops</li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../v8/04-memory/01-heap-and-objects.html">V8 P4.1 V8 堆与对象</a> · wasm memory vs V8 heap 的隔离</li>
+          <li><a href="../../javascript/06-network-storage/" target="_blank">JS P6 网络与存储</a> · ArrayBuffer / TypedArray</li>
+          <li><a href="../../v8/06-wasm/01-wasm-pipeline.html">V8 P6.1 V8 Wasm 编译流水线</a></li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

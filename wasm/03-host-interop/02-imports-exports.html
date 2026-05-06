@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Imports / Exports + 跨边界调用 · P3.2 · WebAssembly 深度学习</title>
+    <meta name="description" content="WebAssembly 与宿主交换代码 + 数据。Imports/Exports = 模块声明依赖与暴露，instantiate 时由宿主提供。JS-WASM 跨边界调用两边性能不对称（JS-to-WASM 几乎免费，WASM-to-JS 有 marshalling 开销）。复杂数据（字符串/对象/数组）穿越 linear memory ↔ JS 堆的「序列化税」是 wasm 性能心智核心。wasm-bindgen / Embind 标准化了 marshalling 模式。externref 直传让 JS 对象不必序列化。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23654ff0'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EWA%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>WebAssembly 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.22 290); color: #fff">WASM</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · 与宿主互操作</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-memory-tables.html">01 · Linear Memory + Tables</a></li>
+          <li><a href="02-imports-exports.html" class="active">02 · Imports / Exports + 跨边界调用</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">WebAssembly</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · 与宿主互操作</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Imports / Exports + 跨边界调用</span>
+        </nav>
+        <h1>Imports / Exports + 跨边界调用</h1>
+        <p class="lead">
+          wasm 模块通过 <strong>Imports</strong>（声明依赖：函数 / memory / table / global）+ <strong>Exports</strong>（声明暴露），与宿主交换"代码 + 数据"。<strong>跨边界调用两边性能不对称</strong>：JS-to-WASM 几乎免费（直接 native call），WASM-to-JS 需要寄存器搬运 + GC barrier 处理，开销大。<strong>复杂数据交换的"序列化税"</strong>是 wasm 性能心智核心 —— 字符串 / 对象 / 数组必须穿越 linear memory ↔ JS 堆，typical 方案 wasm-bindgen / Embind 自动生成 glue。<strong>externref 直传</strong>（2.0）让 JS 对象作 opaque 引用直接传给 wasm，不必序列化。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P3.1（Linear Memory + Tables）</span>
+          <span><strong>主要来源</strong> WebAssembly JS API · wasm-bindgen 文档 · Emscripten Embind 文档 · v8.dev/blog</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Imports / Exports 是 wasm 模块的契约</strong>—— 模块声明 imports（外部要提供什么），通过 instantiate 时的 importObject 注入；声明 exports（暴露给外部）。失败的 imports 让 instantiate throw。</li>
+          <li><strong>WebAssembly.instantiate / instantiateStreaming 是核心 API</strong>—— 二者签名 <code>(buffer | module | response, importObject) =&gt; Promise&lt;{module, instance}&gt;</code>。Streaming 版边下载边编译，大 module 节省 30-50% 启动。</li>
+          <li><strong>跨边界调用两边性能不对称</strong>—— JS-to-WASM 现代引擎接近零成本（直接 native call）；WASM-to-JS 需要寄存器搬运 + JS calling convention + 处理 GC barrier，每次调用 ~10-50ns；高频反向调用是性能反模式。</li>
+          <li><strong>"序列化税"是 wasm 工程化第一难题</strong>—— 字符串 / 对象 / 数组在 linear memory 与 JS 堆之间穿越，必须 marshalling。手写易错，<strong>wasm-bindgen（Rust）/ Embind（C++）</strong>自动生成 glue 是行业标配。</li>
+          <li><strong>externref（2.0）解决"wasm 持有 JS 对象"问题</strong>—— 不必再用 ID + Map hack；JS 对象作 opaque 引用直接传，与 GC barrier 集成。复杂场景（DOM 操作 / 事件系统）依赖此特性。</li>
+          <li><strong>WebAssembly.compile vs instantiate 解耦</strong>—— compile 只 parse + 验证 + 编译（可缓存）；instantiate 给定 imports 创建 instance（瞬时）。"编译一次、多处实例化"在 Web Worker 多 worker / 服务端 multi-tenant 都是关键。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Imports：声明依赖</h3>
+        <p>wat 中 imports 写法：</p>
+        <pre class="code"><code class="lang-text">(module
+  ;; 从 "env" 模块导入函数 "log"，签名 (i32) -&gt; ()
+  (import "env" "log" (func $log (param i32)))
+
+  ;; 从 "env" 导入 memory（最少 1 页）
+  (import "env" "mem" (memory 1))
+
+  ;; 从 "env" 导入 table（10 个 funcref 槽）
+  (import "env" "tbl" (table 10 funcref))
+
+  ;; 从 "env" 导入 global
+  (import "env" "g" (global i32))
+
+  (func $main
+    (call $log (i32.const 42)))
+  (start $main))</code></pre>
+        <p>JS 端 importObject：</p>
+        <pre class="code"><code class="lang-javascript">const importObject = {
+  env: {
+    log: (n) =&gt; console.log("wasm:", n),
+    mem: new WebAssembly.Memory({ initial: 1 }),
+    tbl: new WebAssembly.Table({ initial: 10, element: "anyfunc" }),
+    g: new WebAssembly.Global({ value: "i32", mutable: false }, 0)
+  }
+};
+
+const { instance } = await WebAssembly.instantiate(wasmBytes, importObject);</code></pre>
+        <p><strong>关键约束</strong>：</p>
+        <p><strong>(1) 名称必须匹配</strong>—— wasm 声明 <code>(import "env" "log" ...)</code>，JS 端必须提供 <code>importObject.env.log</code>；缺失 throw <code>LinkError</code></p>
+        <p><strong>(2) 类型必须匹配</strong>—— wasm 声明 <code>(func (param i32) -&gt; ())</code>，JS 端 log 必须是 function（不能 number）；类型不符 throw</p>
+        <p><strong>(3) instantiate 是 fail-fast</strong>—— 任何 import 失败让整个 module 不能用</p>
+
+        <h3>Exports：声明暴露</h3>
+        <p>wat 中 exports：</p>
+        <pre class="code"><code class="lang-text">(module
+  (memory $mem 1)
+  (table $tbl 10 funcref)
+  (global $g (mut i32) (i32.const 0))
+
+  (func $add (param i32 i32) (result i32)
+    (i32.add (local.get 0) (local.get 1)))
+
+  (export "add" (func $add))
+  (export "memory" (memory $mem))
+  (export "table" (table $tbl))
+  (export "globalCounter" (global $g)))</code></pre>
+        <p>JS 端访问：</p>
+        <pre class="code"><code class="lang-javascript">const { instance } = await WebAssembly.instantiate(wasmBytes);
+
+instance.exports.add(2, 3);                     // 5
+instance.exports.memory;                        // WebAssembly.Memory
+instance.exports.table;                         // WebAssembly.Table
+instance.exports.globalCounter.value;           // 0（mutable global）
+instance.exports.globalCounter.value = 10;      // 设置</code></pre>
+        <p>四种导出类型 + JS 包装：</p>
+        <ul>
+          <li><strong>function</strong>—— JS 函数（自动 marshalling 数值类型）</li>
+          <li><strong>memory</strong>—— <code>WebAssembly.Memory</code> 对象（.buffer 是 ArrayBuffer）</li>
+          <li><strong>table</strong>—— <code>WebAssembly.Table</code> 对象（.get / .set / .grow / .length）</li>
+          <li><strong>global</strong>—— <code>WebAssembly.Global</code> 对象（.value getter / setter）</li>
+        </ul>
+
+        <h3>WebAssembly.instantiate 完整 API</h3>
+        <pre class="code"><code class="lang-typescript">// 形式 1：从 buffer / module
+WebAssembly.instantiate(
+  buffer | module: BufferSource | WebAssembly.Module,
+  importObject?: object
+): Promise&lt;{ module: WebAssembly.Module, instance: WebAssembly.Instance }&gt;
+
+// 形式 2：streaming（从 Response，浏览器 / Deno / Bun 有）
+WebAssembly.instantiateStreaming(
+  source: Response | Promise&lt;Response&gt;,
+  importObject?: object
+): Promise&lt;{ module, instance }&gt;
+
+// 形式 3：仅编译，不实例化
+WebAssembly.compile(buffer): Promise&lt;WebAssembly.Module&gt;
+WebAssembly.compileStreaming(source): Promise&lt;WebAssembly.Module&gt;</code></pre>
+        <p><strong>三种使用模式</strong>：</p>
+        <p><strong>(1) 一次性 instantiate</strong>—— 最常见，编译 + 实例化合一</p>
+        <pre class="code"><code class="lang-javascript">const { instance } = await WebAssembly.instantiateStreaming(
+  fetch('module.wasm'),
+  importObject
+);</code></pre>
+        <p><strong>(2) compile 一次 + instantiate 多次</strong>—— Web Worker 多 worker / 服务端 multi-tenant</p>
+        <pre class="code"><code class="lang-javascript">// 一次编译
+const module = await WebAssembly.compileStreaming(fetch('module.wasm'));
+
+// 多次实例化（不同 imports）
+const i1 = await WebAssembly.instantiate(module, imports1);
+const i2 = await WebAssembly.instantiate(module, imports2);
+const i3 = await WebAssembly.instantiate(module, imports3);
+
+// 跨 worker 传 module（transferable）
+worker.postMessage({ module });</code></pre>
+        <p><strong>(3) 同步 API（极少用，性能差）</strong>—— <code>new WebAssembly.Module(buffer)</code> + <code>new WebAssembly.Instance(module, imports)</code>。<strong>主线程禁用大 module 的同步 API</strong>（&gt; 4KB），浏览器会 throw。Worker 内可用。</p>
+
+        <h3>跨边界调用：两边性能不对称</h3>
+        <p>wasm 与 JS 互调的<strong>两个方向性能不一样</strong>：</p>
+        <h4>JS-to-WASM（JS 调 wasm 导出函数）</h4>
+        <p>开销：</p>
+        <ul>
+          <li>参数数值类型（i32 / i64 / f32 / f64）—— 直接放寄存器</li>
+          <li>没有 GC barrier（wasm 内存不在 V8 堆）</li>
+          <li>没有 type check（wasm 函数签名固定）</li>
+        </ul>
+        <p>结果：<strong>现代引擎几乎零成本</strong>，~5ns 每次调用。V8 Tier-up 后甚至能 inline wasm 函数到 turbofan IR，开销 0。</p>
+        <h4>WASM-to-JS（wasm 调导入的 JS 函数）</h4>
+        <p>开销：</p>
+        <ul>
+          <li>把 wasm 寄存器值搬到 JS 调用约定（每参数 number 转 V8 SMI / HeapNumber）</li>
+          <li>GC barrier（如果传 externref 给 JS）</li>
+          <li>JS 函数本身的执行开销（解释器 / Ignition / TurboFan）</li>
+          <li>返回值反向 marshalling</li>
+        </ul>
+        <p>结果：<strong>每次调用 ~10-50ns</strong>。如果 JS 函数本身复杂，更慢。</p>
+        <h4>性能对照</h4>
+        <table>
+          <thead>
+            <tr><th>调用</th><th>开销/次</th><th>1M 次开销</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>纯 JS 函数调用</td><td>~1-2ns</td><td>~2ms</td></tr>
+            <tr><td>JS-to-WASM</td><td>~5ns</td><td>~5ms</td></tr>
+            <tr><td>WASM-to-WASM (内部)</td><td>~1ns</td><td>~1ms</td></tr>
+            <tr><td>WASM-to-JS</td><td>~20ns</td><td>~20ms</td></tr>
+            <tr><td>WASM-to-JS-to-WASM (perform DOM op)</td><td>~50-100ns</td><td>~50-100ms</td></tr>
+          </tbody>
+        </table>
+        <p><strong>性能心智核心规则</strong>：</p>
+        <p><strong>"在 wasm 内做大块 work，少跨边界"</strong>。典型反模式：JS 端循环每次调 wasm 单步 → 跨边界开销吃掉所有性能收益。</p>
+
+        <h3>序列化税：复杂数据怎么穿越边界</h3>
+        <p>数值类型（i32/f64/...）跨边界几乎免费。<strong>复杂数据是难题</strong>：</p>
+        <p><strong>问题 1：字符串</strong>—— wasm memory 是 byte array；JS string 是 UTF-16；必须编码 / 解码</p>
+        <p><strong>问题 2：对象</strong>—— wasm 没有"对象"概念；要在 linear memory 里手工序列化字段</p>
+        <p><strong>问题 3：数组</strong>—— 类似对象，更多元素</p>
+        <p><strong>问题 4：所有权 / 释放</strong>—— wasm 端 alloc 的内存什么时候由谁 free？</p>
+        <p>三种方案：</p>
+        <h4>方案 A · 手工 marshalling</h4>
+        <p>JS 端编码 + 写 memory + 调 wasm + 解码 + free。出错率高，重复劳动：</p>
+        <pre class="code'><code class="lang-javascript">function callWasmWithString(str) {
+  const bytes = new TextEncoder().encode(str);
+  const ptr = instance.exports.alloc(bytes.length);
+  new Uint8Array(memory.buffer, ptr, bytes.length).set(bytes);
+  const result_ptr = instance.exports.process(ptr, bytes.length);
+  // ... 读 result ...
+  instance.exports.free(ptr, bytes.length);
+  return result;
+}</code></pre>
+
+        <h4>方案 B · wasm-bindgen（Rust 主流）</h4>
+        <p>Rust 端用 <code>#[wasm_bindgen]</code> 宏：</p>
+        <pre class="code"><code class="lang-rust">use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+pub fn greet(name: &amp;str) -&gt; String {
+    format!("Hello, {}!", name)
+}</code></pre>
+        <p>JS 端自动得到 marshalling 后的接口：</p>
+        <pre class="code"><code class="lang-javascript">import { greet } from './pkg/my_wasm.js';
+const result = greet("alice");  // wasm-bindgen 自动 alloc / encode / call / decode / free
+console.log(result);  // "Hello, alice!"</code></pre>
+        <p>wasm-bindgen 生成的 glue 处理：</p>
+        <ul>
+          <li>字符串 UTF-8 编码 / 解码</li>
+          <li>memory alloc / free（用 Rust 的 std::alloc）</li>
+          <li>JS object &lt;-&gt; Rust struct 通过 ID + Map（旧方案）或 externref（新方案）</li>
+          <li>异常传播（Rust panic → JS Error）</li>
+          <li>Promise / Future（async wasm 函数）</li>
+        </ul>
+
+        <h4>方案 C · Embind（C++ 主流）</h4>
+        <p>C++ 用 Embind 宏：</p>
+        <pre class="code"><code class="lang-cpp">#include &lt;emscripten/bind.h&gt;
+using namespace emscripten;
+
+std::string greet(std::string name) {
+    return "Hello, " + name + "!";
+}
+
+EMSCRIPTEN_BINDINGS(my_module) {
+    function("greet", &amp;greet);
+}</code></pre>
+        <p>JS 端：</p>
+        <pre class="code"><code class="lang-javascript">await Module.then(m =&gt; {
+  console.log(m.greet("alice"));  // "Hello, alice!"
+});</code></pre>
+        <p>Embind 比 wasm-bindgen 重（依赖 Emscripten runtime），但功能丰富（C++ class / inheritance / smart pointers）。</p>
+
+        <h3>externref 直传：从 ID hack 到一等公民</h3>
+        <p>MVP 时 wasm 持有 JS 对象用 ID + Map：</p>
+        <pre class="code"><code class="lang-javascript">// 旧方案
+const objMap = new Map();
+let nextId = 0;
+
+function jsToWasm(obj) {
+  const id = nextId++;
+  objMap.set(id, obj);
+  return id;
+}
+
+function wasmToJs(id) {
+  return objMap.get(id);
+}
+
+// wasm 调 JS 函数处理 obj
+const id = jsToWasm({ name: "alice" });
+instance.exports.processObj(id);  // wasm 拿到 i32 id
+// wasm 端调 import "deref"(id) 用 wasmToJs 拿到 obj</code></pre>
+        <p>问题：</p>
+        <ul>
+          <li>obj 不会被 GC（被 objMap 引用）—— 内存泄漏</li>
+          <li>需要手动管理生命周期（释放 id）</li>
+          <li>跨 module 共享 id 不可能</li>
+        </ul>
+        <p>2.0 后 <code>externref</code>：</p>
+        <pre class="code"><code class="lang-text">(module
+  (import "env" "process" (func $process (param externref)))
+
+  (func (export "main") (param $obj externref)
+    (call $process (local.get $obj))))</code></pre>
+        <p>JS 端：</p>
+        <pre class="code"><code class="lang-javascript">const obj = { name: "alice" };
+instance.exports.main(obj);  // 直接传，不用 ID</code></pre>
+        <p>引擎自动处理：</p>
+        <ul>
+          <li>obj 仍在 V8 堆，由 V8 GC 管理</li>
+          <li>wasm 持有 externref（V8 内是带类型的 tagged pointer）</li>
+          <li>wasm 不能 deref externref（不能读字段）；只能传给其他 import 函数</li>
+          <li>obj 被 wasm 引用时不会被 V8 GC（V8 知道 wasm 持有它）</li>
+          <li>wasm 不再持有时 obj 可被 V8 GC</li>
+        </ul>
+        <p>这让"wasm 操作 DOM / 事件 / 任意 JS 对象"自然，不需要 ID hack。</p>
+
+        <h3>JSPI：让同步 wasm 调异步 JS（短重述链回 V8）</h3>
+        <p>典型问题：你把 SQLite C 代码编译成 wasm，SQLite 内部用同步 IO 假设（read / write 同步）。但浏览器的 IndexedDB / fetch 是异步。怎么办？</p>
+        <p>MVP 方案：把所有 SQLite 代码改成异步（要用 Asyncify hack 转换栈）。</p>
+        <p>JSPI 方案（phase 4，Chrome 137+）：</p>
+        <pre class="code"><code class="lang-javascript">const sqliteWasm = await WebAssembly.instantiateStreaming(fetch('sqlite.wasm'), {
+  env: {
+    // 这个函数返回 Promise，但 wasm 端调它是同步语义
+    fs_read: WebAssembly.promising(async (fd, buf, len) =&gt; {
+      const data = await idb.read(fd, len);
+      // ... 写 buf ...
+      return data.length;
+    })
+  }
+});
+
+// wasm 端调 fs_read，看起来同步但底层 await
+sqliteWasm.exports.exec_query("SELECT * FROM users");</code></pre>
+        <p>底层用 <strong>stack switching</strong>：wasm 栈被保存，JS 主线程继续；Promise 完成后栈恢复。详见 <a href="../../v8/06-wasm/01-wasm-pipeline.html">V8 P6.1</a>。</p>
+
+        <h3>module caching：编译产物复用</h3>
+        <p>WebAssembly.compile 产出 <code>WebAssembly.Module</code> 是 transferable（postMessage 可传）+ structuredClone-able + 可序列化（implicit 浏览器缓存）。</p>
+        <p><strong>浏览器自动缓存编译产物</strong>—— 第二次 fetch 同 URL wasm，引擎直接复用上次编译结果。Chrome / Firefox / Safari 都实现 IDB-backed wasm cache。</p>
+        <p><strong>跨 worker 共享 module</strong>—— 主线程编译一次，postMessage 给所有 worker 共用：</p>
+        <pre class="code"><code class="lang-javascript">// 主线程
+const module = await WebAssembly.compileStreaming(fetch('worker.wasm'));
+for (let i = 0; i &lt; 8; i++) {
+  const w = new Worker('w.js');
+  w.postMessage({ module });
+}
+
+// worker
+self.onmessage = async ({ data: { module } }) =&gt; {
+  const instance = await WebAssembly.instantiate(module, imports);
+  // 编译已完成，instantiate 几乎瞬时
+};</code></pre>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · Rust 库通过 wasm-bindgen 暴露给 JS</h3>
+        <p>典型项目结构（Cargo.toml）：</p>
+        <pre class="code"><code class="lang-toml">[package]
+name = "my-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["console", "Document", "Window"] }
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"</code></pre>
+        <p>Rust 代码：</p>
+        <pre class="code"><code class="lang-rust">use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+pub fn process_array(input: &amp;[f64]) -&gt; Vec&lt;f64&gt; {
+    input.iter().map(|x| x * 2.0).collect()
+}
+
+#[wasm_bindgen]
+pub struct Counter {
+    value: i32,
+}
+
+#[wasm_bindgen]
+impl Counter {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -&gt; Self { Self { value: 0 } }
+    pub fn increment(&amp;mut self) { self.value += 1; }
+    pub fn get(&amp;self) -&gt; i32 { self.value }
+}</code></pre>
+        <p>构建：</p>
+        <pre class="code"><code class="lang-bash">$ wasm-pack build --target web --release</code></pre>
+        <p>JS 使用：</p>
+        <pre class="code"><code class="lang-javascript">import init, { process_array, Counter } from './pkg/my_wasm.js';
+await init();
+
+const result = process_array([1.0, 2.0, 3.0]);  // [2, 4, 6]
+
+const counter = new Counter();
+counter.increment();
+counter.increment();
+console.log(counter.get());  // 2</code></pre>
+
+        <h3>场景 B · 不用 wasm-bindgen 直接手工 marshalling（极简场景）</h3>
+        <p>简单纯数值函数不需要 wasm-bindgen（额外体积 + 工具链复杂度）：</p>
+        <pre class="code"><code class="lang-rust">// no_std lib，无 wasm-bindgen
+#[no_mangle]
+pub extern "C" fn add(x: i32, y: i32) -&gt; i32 {
+    x + y
+}</code></pre>
+        <p>编译：</p>
+        <pre class="code"><code class="lang-bash">$ rustc --target wasm32-unknown-unknown -O --crate-type cdylib lib.rs</code></pre>
+        <p>JS 直接调（&lt; 1KB wasm）：</p>
+        <pre class="code"><code class="lang-javascript">const { instance } = await WebAssembly.instantiateStreaming(fetch('lib.wasm'));
+console.log(instance.exports.add(2, 3));  // 5</code></pre>
+
+        <h3>场景 C · 多 worker 共享编译产物</h3>
+        <pre class="code"><code class="lang-javascript">// 主线程：编译一次
+const heavyModule = await WebAssembly.compileStreaming(fetch('heavy.wasm'));
+
+// 4 个 worker 共享
+const workers = Array.from({ length: 4 }, () =&gt; new Worker('worker.js'));
+for (const w of workers) {
+  w.postMessage({ module: heavyModule });
+}
+
+// worker.js
+self.onmessage = async ({ data: { module } }) =&gt; {
+  // 不需重编，instantiate 瞬时
+  const instance = await WebAssembly.instantiate(module, imports);
+  // ... 处理任务 ...
+};</code></pre>
+        <p>对比"每个 worker 自己 compile"：节省 ~80% wasm 启动时间（4 worker × 200ms compile = 800ms → 200ms 主线程一次编译）。</p>
+
+        <h3>场景 D · 用 externref 操作 DOM</h3>
+        <pre class="code"><code class="lang-text">(module
+  (import "dom" "querySelector" (func $qs (param externref) (result externref)))
+  (import "dom" "setTextContent" (func $setText (param externref) (param externref)))
+
+  (func (export "updateTitle") (param $doc externref) (param $newText externref)
+    (call $setText
+      (call $qs (local.get $doc) (... selector externref ...))
+      (local.get $newText))))</code></pre>
+        <p>JS 端：</p>
+        <pre class="code"><code class="lang-javascript">const importObject = {
+  dom: {
+    querySelector: (parent, selector) =&gt; parent.querySelector(selector),
+    setTextContent: (el, text) =&gt; { el.textContent = text; }
+  }
+};</code></pre>
+        <p><strong>实际上</strong>：直接 wasm 操作 DOM 跨边界税重，开销不低于纯 JS 操作。<strong>典型应用仍把 DOM 操作放 JS</strong>，wasm 只算"DOM 该是什么状态"。Yew / Leptos 等 Rust SPA 框架就是这种架构。</p>
+
+        <h3>场景 E · JSPI 让同步 SQLite 调异步 OPFS</h3>
+        <pre class="code"><code class="lang-javascript">const opfsRoot = await navigator.storage.getDirectory();
+const fileHandle = await opfsRoot.getFileHandle('db.sqlite', { create: true });
+const accessHandle = await fileHandle.createSyncAccessHandle();
+
+const sqliteWasm = await WebAssembly.instantiateStreaming(fetch('sqlite.wasm'), {
+  env: {
+    // 同步语义包装异步 IO
+    fs_read: WebAssembly.promising(async (fd, buf_ptr, len) =&gt; {
+      const buf = new Uint8Array(memory.buffer, buf_ptr, len);
+      return accessHandle.read(buf, { at: ... });
+    }),
+    fs_write: WebAssembly.promising(async (fd, buf_ptr, len) =&gt; {
+      const buf = new Uint8Array(memory.buffer, buf_ptr, len);
+      return accessHandle.write(buf, { at: ... });
+    })
+  }
+});
+
+// SQLite C 代码看起来在做同步 IO，实际底层 await
+sqliteWasm.exports.execute_query("SELECT * FROM users");</code></pre>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：完整项目</span></h2>
+
+        <h3>例 1：image processing wasm（Rust + wasm-bindgen）</h3>
+        <pre class="code"><code class="lang-rust">use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+pub fn grayscale(input: &amp;[u8], width: u32, height: u32) -&gt; Vec&lt;u8&gt; {
+    let mut output = Vec::with_capacity(input.len());
+    for chunk in input.chunks(4) {
+        // RGBA → grayscale
+        let r = chunk[0] as u32;
+        let g = chunk[1] as u32;
+        let b = chunk[2] as u32;
+        let gray = ((r * 299 + g * 587 + b * 114) / 1000) as u8;
+        output.extend_from_slice(&amp;[gray, gray, gray, chunk[3]]);
+    }
+    output
+}</code></pre>
+        <p>JS 调用：</p>
+        <pre class="code"><code class="lang-javascript">import init, { grayscale } from './pkg/img.js';
+await init();
+
+// 从 canvas 读 ImageData
+const imageData = ctx.getImageData(0, 0, w, h);
+// 调 wasm 处理（自动 marshalling Uint8Array ↔ Vec&lt;u8&gt;）
+const grayBytes = grayscale(imageData.data, w, h);
+// 写回 canvas
+const newImageData = new ImageData(new Uint8ClampedArray(grayBytes), w, h);
+ctx.putImageData(newImageData, 0, 0);</code></pre>
+
+        <h3>例 2：Counter class（带 state）</h3>
+        <pre class="code"><code class="lang-rust">use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+pub struct Counter {
+    count: i32,
+    history: Vec&lt;i32&gt;,
+}
+
+#[wasm_bindgen]
+impl Counter {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -&gt; Self { Self { count: 0, history: Vec::new() } }
+
+    pub fn increment(&amp;mut self) {
+        self.count += 1;
+        self.history.push(self.count);
+    }
+
+    pub fn decrement(&amp;mut self) {
+        self.count -= 1;
+        self.history.push(self.count);
+    }
+
+    pub fn get(&amp;self) -&gt; i32 { self.count }
+    pub fn history_len(&amp;self) -&gt; usize { self.history.len() }
+}</code></pre>
+        <p>JS：</p>
+        <pre class="code"><code class="lang-javascript">const c = new Counter();
+c.increment();
+c.increment();
+c.decrement();
+console.log(c.get());           // 1
+console.log(c.history_len());   // 3</code></pre>
+
+        <h3>例 3：双向回调（wasm 持有 JS 函数）</h3>
+        <pre class="code"><code class="lang-rust">use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+pub fn run_with_callback(items: Vec&lt;i32&gt;, cb: &amp;js_sys::Function) {
+    for item in items {
+        let this = JsValue::null();
+        let arg = JsValue::from(item);
+        let _ = cb.call1(&amp;this, &amp;arg);
+    }
+}</code></pre>
+        <p>JS：</p>
+        <pre class="code"><code class="lang-javascript">run_with_callback([1, 2, 3, 4, 5], (item) =&gt; {
+  console.log(`got: ${item}`);
+});</code></pre>
+        <p><strong>性能注意</strong>：每次 cb.call1 是 wasm-to-JS 跨边界 ~20ns；5 次 ok，但<strong>1M 次会很慢</strong>。在 wasm 内做大块 work，最后只回调 1 次更优。</p>
+
+        <h3>例 4：手写 import / export（不用 bindgen）</h3>
+        <pre class="code"><code class="lang-text">(module
+  (import "console" "log" (func $log (param i32)))
+  (import "math" "random" (func $rand (result f64)))
+
+  (memory $mem (export "memory") 1)
+
+  (func (export "test")
+    ;; 调 import
+    (call $log (i32.const 42))
+    ;; 调 import 拿 random
+    (drop (call $rand))))</code></pre>
+        <p>JS：</p>
+        <pre class="code"><code class="lang-javascript">const { instance } = await WebAssembly.instantiate(wasmBytes, {
+  console: {
+    log: (n) =&gt; console.log("wasm logs:", n)
+  },
+  math: {
+    random: () =&gt; Math.random()
+  }
+});
+
+instance.exports.test();
+// 输出 "wasm logs: 42"</code></pre>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：高频跨边界调用</h3>
+        <p>反模式：</p>
+        <pre class="code"><code class="lang-javascript">// JS 端循环每次调 wasm
+for (let i = 0; i &lt; 1_000_000; i++) {
+  result += instance.exports.compute_one(input[i]);
+}
+// 1M × ~5ns = 5ms，仅跨边界开销</code></pre>
+        <p>正确：</p>
+        <pre class="code"><code class="lang-javascript">// 把循环移进 wasm
+const result = instance.exports.compute_all(inputArray);
+// 一次跨边界，wasm 内做 1M iter</code></pre>
+        <p>典型 ratio：每 100 行 wasm 工作配 1 次跨边界调用比较健康。</p>
+
+        <h3>陷阱 2：用 wasm-bindgen 但不优化体积</h3>
+        <p>wasm-bindgen 默认生成的 wasm + JS glue 可能 200KB+。<strong>必须配置 release 优化</strong>：</p>
+        <pre class="code"><code class="lang-toml">[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true</code></pre>
+        <p>+ <code>wasm-pack build --release</code> + <code>wasm-opt -Oz</code>。能压到 ~10-50KB。</p>
+
+        <h3>陷阱 3：忘记 importObject 字段</h3>
+        <p>wasm 声明 imports，JS 端 importObject 缺字段 → instantiate throw <code>LinkError</code>。错误信息通常清晰：</p>
+        <pre class="code"><code class="lang-text">LinkError: WebAssembly.instantiate(): Import #0 module="env" function="log" error: function import requires a callable</code></pre>
+
+        <h3>陷阱 4：以为 streamingInstantiate 能处理任意 fetch</h3>
+        <p>streamingInstantiate 要求 <code>Content-Type: application/wasm</code>。后端没配置 → 浏览器警告 + 回退到非流式（性能损失）：</p>
+        <pre class="code"><code class="lang-text">[warning] WebAssembly.instantiateStreaming(): Response has unsupported MIME type 'text/plain' expected 'application/wasm'</code></pre>
+        <p>修复：Nginx <code>types { application/wasm wasm; }</code>；Express <code>app.use(express.static('public', { setHeaders: (res, path) =&gt; { if (path.endsWith('.wasm')) res.set('Content-Type', 'application/wasm'); }}))</code>。</p>
+
+        <h3>陷阱 5：以为 wasm 函数自动 throw JS Error</h3>
+        <p>wasm 内部 trap（除 0 / 越界 / unreachable / call_indirect 类型不匹配）会让导出函数 throw <code>WebAssembly.RuntimeError</code>。<strong>但 Rust panic 不直接 throw</strong>；要配 panic_hook：</p>
+        <pre class="code"><code class="lang-rust">#[wasm_bindgen(start)]
+pub fn main() {
+    console_error_panic_hook::set_once();
+    // 之后 Rust panic 会 console.error + throw JS Error
+}</code></pre>
+
+        <h3>陷阱 6：i64 参数 / 返回值忘记 BigInt</h3>
+        <pre class="code"><code class="lang-javascript">// wasm: (func $foo (param i64) (result i64))
+instance.exports.foo(42);    // ❌ TypeError: Cannot convert 42 to a BigInt
+instance.exports.foo(42n);   // ✅
+const result = instance.exports.foo(42n);  // 返回 BigInt</code></pre>
+
+        <h3>陷阱 7：不释放 wasm-bindgen 创建的 Rust struct</h3>
+        <pre class="code"><code class="lang-javascript">const counter = new Counter();
+// ... 用一段时间 ...
+// 不调 counter.free()，Rust 端的 struct 不会释放
+// 直到 JS 端 counter 变量被 GC（最终会 free，但延迟不可控）
+
+// 良好实践
+counter.free();  // 显式释放</code></pre>
+        <p>新版 wasm-bindgen 支持 FinalizationRegistry 自动释放，但延迟不可控；性能敏感场景显式 free。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范 + API</h3>
+        <ul>
+          <li><a href="https://webassembly.github.io/spec/js-api/index.html" target="_blank" rel="noopener">WebAssembly JavaScript API Spec</a></li>
+          <li><a href="https://developer.mozilla.org/en-US/docs/WebAssembly/JavaScript_interface" target="_blank" rel="noopener">MDN · WebAssembly JavaScript interface</a></li>
+          <li><a href="https://github.com/WebAssembly/JS-Promise-Integration" target="_blank" rel="noopener">JSPI 提案</a></li>
+        </ul>
+
+        <h3>工具链文档</h3>
+        <ul>
+          <li><a href="https://rustwasm.github.io/wasm-bindgen/" target="_blank" rel="noopener">wasm-bindgen 完整文档</a></li>
+          <li><a href="https://emscripten.org/docs/porting/connecting_cpp_and_javascript/embind.html" target="_blank" rel="noopener">Emscripten Embind 文档</a></li>
+          <li><a href="https://rustwasm.github.io/docs/wasm-pack/" target="_blank" rel="noopener">wasm-pack</a></li>
+        </ul>
+
+        <h3>深度文章</h3>
+        <ul>
+          <li><a href="https://hacks.mozilla.org/2018/10/calls-between-javascript-and-webassembly-are-finally-fast-2/" target="_blank" rel="noopener">Mozilla: Calls between JS and WebAssembly are finally fast</a> · 2018 跨边界优化历史</li>
+          <li><a href="https://v8.dev/blog/jspi" target="_blank" rel="noopener">V8: JSPI</a></li>
+          <li><a href="https://surma.dev/things/c-to-webassembly/" target="_blank" rel="noopener">Surma: Compiling C to WebAssembly without Emscripten</a></li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="../04-toolchain/01-systems-langs.html">P4.1 系统语言：Rust / C/C++ / Zig</a></li>
+          <li><a href="../05-advanced/02-gc-tail-eh-jspi.html">P5.2 WasmGC + Tail call + EH + JSPI</a></li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../v8/06-wasm/01-wasm-pipeline.html">V8 P6.1 V8 Wasm 编译流水线</a> · 跨边界 inline 优化的引擎实现</li>
+          <li><a href="../../javascript/03-async/" target="_blank">JS P3 异步</a> · Promise 与 JSPI 的关系</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
