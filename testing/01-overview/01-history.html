@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>测试工具项目史（2011-2026）· P1.1 · 测试工具深度学习</title>
+    <meta name="description" content="JS 测试工具 15 年史。2011 Mocha → 2014 Jest → 2017 Cypress → 2020 Playwright → 2021 Vitest → 2022 Enzyme 死亡 → 2023 Bun test → 2024 MSW 2.0 → 2025 Jest 30 转 OpenJS。回答「为什么有这么多测试工具」的根因——每代都是回应上代某个具体痛点的产物。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2334a853'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ET%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>测试工具深度学习</span><span class="site-title-badge" style="background: oklch(0.6 0.17 150); color: #fff">Test</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P1 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · 测试工具是谁</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html" class="active">01 · 测试工具项目史</a></li>
+          <li><a href="02-landscape.html">02 · 同代人横评</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">测试工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · 测试工具是谁</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 测试工具项目史</span>
+        </nav>
+        <h1>测试工具项目史（2011-2026）</h1>
+        <p class="lead">
+          把 JS 测试工具 15 年史讲成一条主线 —— 不是按工具版本，按"<strong>每次范式转移及其根因</strong>"。核心问题：测试工具怎么从 2011 年的 Mocha 一统天下演化到 2026 年的 Vitest + Testing Library + MSW + Playwright 这套现代默认？答案藏在四次范式转移：(1) BDD 描述语法（Mocha/Jasmine 2011-2014）；(2) 零配置全家桶（Jest 2014）；(3) 测行为不测实现（Testing Library 2018，Enzyme 退场）；(4) ESM 原生 + 多浏览器 e2e（Vitest + Playwright 2020-2024）。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> 写过单元测试</span>
+          <span><strong>主要来源</strong> Kent C. Dodds / Anthony Fu / Andrey Lushnikov 公开文章 + 各家官方公告</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>测试工具 15 年由 4 次范式转移组成 —— BDD 语法（Mocha 2011 / Jasmine）→ 零配置 Jest（2014，自带 mock + snapshot + 并行）→ 测行为不测实现（Testing Library 2018，淘汰 Enzyme）→ 现代默认（Vitest + Playwright + MSW，2020-2024）。每次转移都有具体痛点驱动。</li>
+          <li>2011-2014 是 Mocha / Jasmine 主导期 —— BDD 语法（<code>describe / it / expect</code>）成为后续所有 runner 的 API 模板。但需要自己组合 chai + sinon + nyc 才有完整能力。</li>
+          <li>2014 Jest 用"<strong>零配置全家桶</strong>"打破组合工具范式 —— Facebook 出品；自带 expect / mock / snapshot / coverage / 并行 / watch；React 默认；后来 React Native / Next.js / Babel 全跟进。Jest 在 2016-2020 年是绝对主流。</li>
+          <li>2018 Kent C. Dodds 推出 Testing Library —— 标志着"测行为不测实现"哲学的落地。Enzyme 的 shallow rendering 路线被边缘化，最终 2022 年正式停止维护。</li>
+          <li>2017 Cypress 开启<strong>真浏览器 e2e</strong>时代 —— 第一个有 GUI runner + time-travel debugging 的 e2e 工具。但单浏览器、跨域受限，2020 年 Playwright 接班。</li>
+          <li>2020 Playwright 由前 Puppeteer 团队推出 —— 三协议统一抽象（CDP + WebDriver BiDi + WebKit Inspector）+ auto-wait + trace viewer + 真并行。2026 年是新项目 e2e 默认。</li>
+          <li>2021 Vitest 出生 —— Anthony Fu 起步；Vite 生态需要原生 ESM runner；Jest 兼容 API + Vite 复用让它在 2024-2026 年成为新项目默认。</li>
+          <li>2023-09 Bun test 跟进 —— Jest 兼容 + Bun 速度。但生态仍以 Vitest 为主。详见 <a href="../../bun/04-toolchain/04-bun-test.html">Bun P4.4</a>。</li>
+          <li>2024 三个里程碑 —— node:test 进入 Node 22 LTS（轻量内置）；MSW 2.0 重写（Service Worker + Node + WebSocket 三模一统）；Vitest browser mode GA（真浏览器组件测试）。</li>
+          <li>2025 Jest 30 转 OpenJS 治理 —— Facebook 退出维护；社区接管；ESM 改善但仍非 ESM 项目首选。Jest 进入"<strong>存量维护</strong>"阶段。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>前史 · 2009-2010 · jQuery 时代的"测试是奢侈品"</h3>
+        <p>2009 年 Node 诞生前，前端测试基本是奢侈品。jQuery 时代主流做法：</p>
+        <ul>
+          <li>QUnit（2008，jQuery 团队出品）—— 跑在浏览器里测 jQuery 插件</li>
+          <li>YUI Test（Yahoo）—— 跟随 YUI 框架</li>
+          <li>多数项目根本不写测试，靠手动点</li>
+        </ul>
+        <p>这些工具有共同问题：跑在浏览器里、没有 Node 支持、配置零碎。Node 2009 年出来后，"在 Node 里跑 JS 测试"成了新机会，开启了下一代工具的可能性。</p>
+
+        <h3>2010-2014 · Jasmine + Mocha · BDD 语法成型</h3>
+        <p>这两个工具几乎同时定义了"现代 JS 测试"的写法：</p>
+
+        <p>Jasmine（2010 起，Pivotal Labs 出品）—— BDD（Behavior-Driven Development）描述语法的早期主流：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">describe('Calculator', function() {
+  it('should add two numbers', function() {
+    expect(add(1, 2)).toEqual(3);
+  });
+});</code></pre>
+        </div>
+        <p>这套 <code>describe / it / expect</code> 三件套被后续所有 runner 沿用——Mocha / Jest / Vitest / Bun test / node:test 都用这个 API 形状。</p>
+
+        <p>Mocha（2011, TJ Holowaychuk）—— 第一个流行的 Node-first runner。设计哲学是"灵活组合"：</p>
+        <ul>
+          <li>Mocha 只是 runner（跑 describe / it 调用，输出结果）</li>
+          <li>断言库自选：chai（最流行）/ should / power-assert</li>
+          <li>mock 库自选：sinon（最流行）</li>
+          <li>覆盖率自选：nyc（基于 Istanbul）/ Istanbul 直接</li>
+          <li>异步：支持 callback / Promise / async-await</li>
+        </ul>
+        <p>Mocha 2012-2016 年是 Node 生态主流。优点：极度灵活，团队按需组合工具栈。缺点也明显：每个项目都要装 5-6 个包 + 维护配置；不同项目栈不一致，跨项目协作要重学。</p>
+
+        <h3>2014-04 · Jest · "零配置全家桶"打破组合范式</h3>
+        <p>2014 年 Christoph Pojer（后来去 Yarn 团队）在 Facebook 启动 Jest 项目。设计立场与 Mocha 完全相反：把 runner / 断言 / mock / snapshot / 覆盖率 / 并行全部内置，零配置开箱跑：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// jest.config.js 不需要写就能跑
+test('add two numbers', () => {
+  expect(1 + 2).toBe(3);
+});
+
+// mock 内置
+jest.mock('./api');
+const fetchUser = jest.fn().mockResolvedValue({ name: 'Alice' });
+
+// snapshot 内置
+expect(component).toMatchSnapshot();
+
+// 覆盖率内置
+// 跑 jest --coverage 即输出 coverage/</code></pre>
+        </div>
+        <p>Jest 几个关键创新：</p>
+        <ul>
+          <li><strong>parallel by default</strong>——每个测试文件独立 worker 进程，并行跑</li>
+          <li><strong>snapshot 测试</strong>——把渲染输出存成 .snap 文件，下次比对；React UI 测试因此普及</li>
+          <li>jest.mock ——对模块自动打桩，不用手动改源码</li>
+          <li>watch 模式——只重跑变化的相关测试</li>
+          <li>友好 CLI 输出——彩色 + 失败行高亮 + 进度条</li>
+        </ul>
+
+        <p>Jest 2016-2020 年是 React 生态绝对主流。create-react-app（CRA）默认 Jest；React Native 默认 Jest；Babel / Webpack / Next.js 全部以 Jest 为标准。它的成功说明了"开箱即用 + 零配置"是真实开发者诉求，而不是 Mocha 主张的"灵活组合"。</p>
+
+        <p>但 Jest 也埋下了几个长期痛点：</p>
+        <ul>
+          <li>Babel 依赖深——Jest 用 babel-jest 转换源码，build 慢；ESM 时代成为最大瓶颈</li>
+          <li>jsdom 依赖——默认跑 DOM 测试，但 jsdom 性能慢且 spec 不完全</li>
+          <li>mock 模式独特——<code>jest.mock('./api')</code> 用 hoisting 魔法实现，不容易调试</li>
+          <li>ESM 支持长期实验性——2026 年仍需 <code>--experimental-vm-modules</code></li>
+        </ul>
+
+        <h3>2017 · Enzyme · React 测试一度的标准</h3>
+        <p>Enzyme 由 Airbnb 2015 年发布，2017-2020 年是 React 组件测试主流。它的核心特性是 shallow rendering ——只渲染当前组件，不渲染子组件：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// Enzyme 风格（已退场）
+import { shallow } from 'enzyme';
+
+const wrapper = shallow(&lt;Button label="Save" /&gt;);
+expect(wrapper.find('.btn-primary').length).toBe(1);
+expect(wrapper.state('count')).toBe(0);
+wrapper.instance().handleClick();
+expect(wrapper.state('count')).toBe(1);</code></pre>
+        </div>
+        <p>能查 className、能直接调实例方法、能读 state——这是 implementation detail trap 的源头（详见 <a href="../02-mindset/02-behavior-not-implementation.html">P2.2</a>）。组件内部稍微重构，测试就破。</p>
+
+        <p>Enzyme 在 2018-2020 年开始走下坡路，原因：</p>
+        <ul>
+          <li>React 16 的 Fiber 重构改变了内部结构，Enzyme 适配跟不上</li>
+          <li>Hooks 出现后（React 16.8, 2019）class 组件减少；Enzyme 的 instance().method() 不适合 hooks</li>
+          <li>Kent C. Dodds 2018 年起推 Testing Library，<strong>测行为不测实现</strong>哲学逐步主流化（详见 P2.2）</li>
+          <li>React 18（2022）严格模式 + 并发渲染让 Enzyme 完全不工作</li>
+        </ul>
+
+        <p>2022 年 Airbnb 正式声明 Enzyme 进入维护停滞。整个 React 生态在 2020-2022 年完成迁移到 Testing Library。这是一次重大测试哲学的胜利——"测用户能看到的东西"取代了"测组件内部结构"。</p>
+
+        <h3>2017 · Cypress · 真浏览器 e2e 时代开启</h3>
+        <p>Selenium 主导 e2e 自动化十多年，但有几个明显痛点：</p>
+        <ul>
+          <li>需要 WebDriver 协议 + 浏览器 driver 二进制</li>
+          <li>测试代码跑在外部进程，每个 action 通过协议发命令，慢</li>
+          <li>调试困难——出错很难知道发生了什么</li>
+          <li>flaky 严重——网络 / 时序 / 竞态难处理</li>
+        </ul>
+
+        <p>Cypress（2014 启动，2017 GA）抛出一个激进想法：测试代码跑在浏览器内部，不通过 WebDriver 协议。这带来：</p>
+        <ul>
+          <li>极佳调试——time-travel debugging（每个 action 的 DOM snapshot）</li>
+          <li>速度快——同进程通信，不走协议序列化</li>
+          <li>GUI runner——开发者打开窗口看测试跑，鼠标悬停看每步状态</li>
+          <li>自动 wait——内置等元素出现 + 网络请求完成</li>
+        </ul>
+
+        <p>Cypress 2018-2020 年迅速普及。但这套设计也有结构性限制：</p>
+        <ul>
+          <li>只支持 Chromium-based 浏览器（早期）+ Firefox（2020+）；不支持 Safari / WebKit</li>
+          <li>跨域测试受限（同源策略）—— 测试需要 origin 切换时复杂</li>
+          <li>不支持多 tab / 多 window</li>
+          <li>Promise chain DSL（<code>cy.visit().get().click()</code>）—— 看起来流畅但不能用真异步 await，影响调试</li>
+        </ul>
+
+        <p>Cypress 是大胆实验的成功案例，但它的限制也为下一代留下了空间。</p>
+
+        <h3>2017-2020 · Puppeteer → Playwright · 协议驱动 + 多浏览器</h3>
+        <p>Google 团队 2017 年发布 Puppeteer ——直接用 Chrome DevTools Protocol（CDP）控制 Chrome。比 Selenium WebDriver 更直接、更快、更稳定。</p>
+
+        <p>但 Puppeteer 仅 Chrome。Andrey Lushnikov 等核心团队 2019 年从 Google 跳到 Microsoft，2020 年发布 Playwright，目标是跨浏览器：</p>
+        <ul>
+          <li>Chromium / Edge —— 通过 CDP</li>
+          <li>Firefox —— 通过 WebDriver BiDi（W3C 标准）</li>
+          <li>WebKit / Safari —— 通过 WebKit Inspector Protocol</li>
+        </ul>
+        <p>Playwright 在三种协议上做统一抽象层，对外暴露同一套 API。这是 Cypress 单浏览器路线无法做到的。</p>
+
+        <p>Playwright 几个关键创新（详见 <a href="../06-e2e/01-playwright-internals.html">P6.1</a>）：</p>
+        <ul>
+          <li><strong>auto-wait</strong>——每个 action 自动等元素稳定（visible / enabled / not animating）</li>
+          <li>fixtures——测试隔离 + 资源共享（每个 worker 独立 browser context）</li>
+          <li>trace viewer——失败时录制 DOM + console + network 完整回放</li>
+          <li>真并行——进程级；retries 区分 flaky vs 真失败</li>
+        </ul>
+
+        <p>2022-2024 年 Playwright 迅速取代 Cypress 成为新项目 e2e 首选。2026 年的态势：</p>
+        <ul>
+          <li>新项目 70-80% 选 Playwright</li>
+          <li>存量 Cypress 项目继续维护</li>
+          <li>Cypress 团队 2024 年商业化压力 + 团队动荡，增长停滞</li>
+        </ul>
+
+        <h3>2018 · Testing Library · 测行为不测实现的哲学胜利</h3>
+        <p>Kent C. Dodds 2016 年开始写一系列 blog 反思 Enzyme 的问题。核心论点："测试应该反映用户体验，不是反映内部实现"。2018 年他发布 react-testing-library，定义了一套全新的 query API：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// Testing Library 风格（2026 年主流）
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+
+render(&lt;LoginForm /&gt;);
+
+// 按 accessibility role 找元素（用户视角）
+const usernameInput = screen.getByLabelText('Username');
+const submitBtn = screen.getByRole('button', { name: 'Sign in' });
+
+// 模拟真实用户操作链
+await userEvent.type(usernameInput, 'alice');
+await userEvent.click(submitBtn);
+
+// 断言用户能看到的结果
+expect(screen.getByText('Welcome, Alice')).toBeInTheDocument();</code></pre>
+        </div>
+        <p>关键差异：不查 className / 不调 instance / 不读 state。所有 query 都是"用户能感知到的方式"——通过 accessibility role、label 文本、页面文字等。</p>
+
+        <p>Testing Library 的影响远超 React。它的核心 API 被移植到所有主流框架：</p>
+        <ul>
+          <li>@testing-library/vue（Vue 2/3）</li>
+          <li>@testing-library/svelte</li>
+          <li>@testing-library/preact</li>
+          <li>@testing-library/dom（框架无关）</li>
+          <li>Playwright 的 getByRole / getByLabel API（直接抄 Testing Library）</li>
+          <li>Vitest 的 expect 用 jest-dom matcher（同样 Testing Library 生态）</li>
+        </ul>
+
+        <p>到 2024 年，Testing Library 已是事实标准。新写的组件测试几乎不再用 Enzyme 风格。详见 <a href="../04-dom-testing/01-testing-library.html">P4.1</a>。</p>
+
+        <h3>2021-10 · Vitest · Vite 生态需要原生 ESM runner</h3>
+        <p>2020-2021 年 Vite 在 Vue / Svelte / Solid 等生态迅速普及（详见 <a href="../../vite/index.html">Vite 主题</a>）。但 Vite 项目用 Jest 测试有几个明显问题：</p>
+        <ul>
+          <li>Jest 用 Babel 转换 ESM → CJS，慢且配置复杂</li>
+          <li>Vite plugin 系统在 Jest 完全不可用</li>
+          <li>Vite 的 ESM resolution 在 Jest 失效</li>
+          <li>需要双份配置（vite.config 和 jest.config）</li>
+        </ul>
+
+        <p>Anthony Fu（Vite / unocss / Slidev 等多个项目核心维护者）2021 年 10 月发布 Vitest 0.0.1，核心立场：复用 Vite dev server 的所有能力，让 Vite 项目"零配置"测试。</p>
+
+        <p>Vitest 关键设计：</p>
+        <ul>
+          <li>Jest 兼容 API ——describe / test / expect / vi.mock / vi.fn 几乎可直接迁移</li>
+          <li><strong>Vite 复用</strong>——dev server 编译 + plugin + HMR + ESM resolution 全部直接用</li>
+          <li>原生 ESM ——不需要 Babel；TypeScript / JSX 通过 esbuild 转换</li>
+          <li>Tinypool 进程池——基于 piscina，比 Jest worker 启动快</li>
+          <li>watch 模式——HMR 启发的"改一个文件只重跑相关"</li>
+        </ul>
+
+        <p>Vitest 在 2022-2024 年迅速主流化。关键里程碑：</p>
+        <ul>
+          <li>2022 年 Vue 生态全切 Vitest（Vue 自家 / Vue Router / Pinia 等）</li>
+          <li>2023 年 Astro / Nuxt / SvelteKit / Solid 跟进</li>
+          <li>2024 年 Vitest 2.0 + browser mode GA（真浏览器组件测试）</li>
+          <li>2024-2025 年大量 React 项目从 Jest 迁 Vitest（性能 3-5x）</li>
+          <li>2026 年 Vitest 3 是 Vite 6 配套主线</li>
+        </ul>
+
+        <p>详见 <a href="../03-vitest-unit/01-vitest-internals.html">P3.1</a>。</p>
+
+        <h3>2023-09 · Bun test · 一体化工具链中的 runner</h3>
+        <p>Bun 1.0（2023-09）GA 时已包含 <code>bun test</code>——Jest 兼容 API + Bun 速度。详见 <a href="../../bun/04-toolchain/04-bun-test.html">Bun P4.4</a>。</p>
+
+        <p>Bun test 的设计立场：install / run / build / test 是同一个产品的 4 个面，共享 parser + 共享缓存。这与 Jest / Vitest 都不同——它们是独立 runner。</p>
+
+        <p>2026 年 Bun test 现状：</p>
+        <ul>
+          <li>已用 Bun runtime 的项目首选 Bun test</li>
+          <li>速度比 Vitest 略快（启动 + 装包）</li>
+          <li>但功能仍在补——snapshot / coverage / mock 完整度落后 Vitest</li>
+          <li>无 browser mode（Bun 不能跑真浏览器）</li>
+          <li>大型 React 生态项目仍倾向 Vitest</li>
+        </ul>
+
+        <h3>2024 · 三个里程碑 · node:test / MSW 2.0 / Vitest browser mode</h3>
+
+        <p>node:test 进 Node 22 LTS——Node 22+ 内置 test runner（详见 <a href="../../node/06-modern/01-modern-node.html">Node P6.1</a>）。</p>
+        <ul>
+          <li>API 与 Jest / Vitest 兼容（describe / test / expect）</li>
+          <li>不需要装依赖；最低门槛</li>
+          <li>但功能轻量：无 mock / 无 snapshot / 无 coverage（要配合 c8）</li>
+          <li>适合：小型 lib（不引依赖测试）/ Node 内部工具</li>
+        </ul>
+
+        <p>MSW 2.0 重写（2024-01）—— 把网络 mock 从单一浏览器/Node 模式变成三模一统：</p>
+        <ul>
+          <li>浏览器 —— Service Worker 拦截 fetch/XHR</li>
+          <li>Node —— undici interceptor（不再 polyfill）</li>
+          <li>WebSocket —— 全新 interceptor（MSW 2.0 重大新增）</li>
+        </ul>
+        <p>详见 <a href="../05-network-mock/01-msw.html">P5.1</a>。MSW 2.0 是"同一份 handlers 服务 dev / test / Storybook 三场景"的事实标准。</p>
+
+        <p>Vitest browser mode GA（2024-Q3）—— 在真浏览器（Chromium / Firefox / WebKit via Playwright）跑 Vitest，与 jsdom / happy-dom 形成第三选项。详见 <a href="../04-dom-testing/02-jsdom-vs-browser.html">P4.2</a>。这模糊了"单元测试 vs e2e"的边界——组件测试可以跑在真浏览器。</p>
+
+        <h3>2025 · Jest 30 · 转 OpenJS 治理，进入存量维护期</h3>
+        <p>Facebook 2022 年宣布 Jest 转 OpenJS Foundation。2025 年 Jest 30 发布，由社区维护团队（含 Christoph Pojer 兼职）继续推进。</p>
+
+        <p>Jest 30 改进：</p>
+        <ul>
+          <li>ESM 改善（仍非首选 ESM 项目）</li>
+          <li>性能优化（启动时间缩短）</li>
+          <li>支持 TypeScript native（experimental）</li>
+        </ul>
+
+        <p>但 Jest 已经进入存量维护期：</p>
+        <ul>
+          <li>新项目几乎不选 Jest（Vitest / Bun test 是默认）</li>
+          <li>大量存量 React 项目仍用 Jest（迁移成本）</li>
+          <li>Next.js 仍推荐 Jest（出于历史 + 团队偏好，不是技术）</li>
+          <li>Babel 依赖让性能始终不及 Vitest</li>
+        </ul>
+
+        <p>这与 Yarn classic / Cypress 类似——它们曾是事实标准，但被新工具的范式转移超越后，进入"遗留维护"阶段。</p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 历史规律：每代都是回应上代某个具体痛点</div>
+          <p>看 15 年史可以总结一条规律：新一代不是"更好的 X"，而是"针对 X 某个具体痛点的解"。</p>
+          <ul>
+            <li>Jest → 解 Mocha 组合痛苦（零配置全家桶）</li>
+            <li>Cypress → 解 Selenium 调试困难（GUI runner + time-travel）</li>
+            <li>Playwright → 解 Cypress 单浏览器 + 跨域受限（多协议抽象）</li>
+            <li>Testing Library → 解 Enzyme 测实现细节（测行为）</li>
+            <li>Vitest → 解 Jest ESM 痛苦 + Vite 项目双配置（Vite 复用）</li>
+            <li>Bun test → 解 npm install + 跑测试两次启动（一体化）</li>
+            <li>MSW → 解"测试代码 mock fetch + 生产代码不一样"（网络层拦截）</li>
+            <li>node:test → 解"小项目装 Vitest 太重"（内置零依赖）</li>
+          </ul>
+          <p>选型时不该问"最新的最好吗"，应问"它解的是不是我的痛点"。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 老项目从 Jest 迁 Vitest 评估</h3>
+          <p><strong>背景</strong>：5 年的 React + Webpack 项目，500+ Jest 测试，用 enzyme 写的居多。CI 跑测试要 8 分钟，团队抱怨"改一行代码 watch 重跑也要 30 秒"。</p>
+          <p><strong>分析</strong>：</p>
+          <ul>
+            <li>Vitest 兼容 Jest API，迁移成本主要在 enzyme 测试改写</li>
+            <li>enzyme 在 React 18 已不工作，迟早要改</li>
+            <li>Webpack 项目可保留——Vitest 自带 Vite 编译，不需要改 Webpack 配置</li>
+            <li>预期收益：CI 时间 8 分钟 → 2-3 分钟；watch 30s → 2-3s</li>
+          </ul>
+          <p><strong>建议路径</strong>：</p>
+          <ul>
+            <li>第 1 周：把 Jest 测试从 enzyme 迁到 Testing Library（这是最大块工作）</li>
+            <li>第 2 周：把测试 runner 从 Jest 切到 Vitest（兼容 API 让大部分文件无需改）</li>
+            <li>第 3 周：CI 集成 + 性能验证</li>
+          </ul>
+          <p>典型 ROI：3 周投入换长期生产力提升 + 测试代码可维护性大幅改善。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · 新创业项目的测试栈选型</h3>
+          <p><strong>背景</strong>：3 人小团队，做 SaaS。React + Next.js 14 + Bun runtime。要从零搭测试栈。</p>
+          <p><strong>建议</strong>：</p>
+          <ul>
+            <li>单元测试：Vitest（不是 Bun test，因为生态完整度更好）</li>
+            <li>组件测试：Vitest + Testing Library + happy-dom</li>
+            <li>集成测试：Vitest + Testing Library + MSW（mock 后端）</li>
+            <li>E2E：Playwright（覆盖关键用户路径 5-10 个）</li>
+            <li>CI：GitHub Actions + Turborepo cache（详见 <a href="../../pnpm-monorepo/05-orchestration/01-turborepo.html">pnpm P5.1</a>）</li>
+          </ul>
+          <p><strong>不建议什么</strong>：</p>
+          <ul>
+            <li>不用 Jest（新项目无理由选 Jest）</li>
+            <li>不用 enzyme（已退场）</li>
+            <li>不用 Cypress（Playwright 全面更好）</li>
+            <li>不用 nock（MSW 全面更好）</li>
+            <li>不用 jsdom 默认（happy-dom 快 3-5x）</li>
+          </ul>
+          <p>这是 2026 年现代默认。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · "我们用 Cypress 多年要切 Playwright 吗？"</h3>
+          <p><strong>背景</strong>：8 人团队，3 年的 Cypress e2e 测试（200+ 用例），团队都很熟 Cypress GUI runner。但最近发现 Safari 兼容性 bug 没被 Cypress 测出。</p>
+          <p><strong>建议</strong>：</p>
+          <ul>
+            <li>不要全切。Cypress 的 200+ 测试切到 Playwright 要 1-2 个月</li>
+            <li>渐进策略：新增的用例用 Playwright 写；老用例保留 Cypress 直到自然失效</li>
+            <li>Safari / WebKit 测试单独用 Playwright 补（Cypress 仍跑 Chrome）</li>
+            <li>2-3 年后 Cypress 用例自然减少，再决定是否完全切</li>
+          </ul>
+          <p>这种"新增走新路径"策略避免大爆炸式迁移，符合工程理性。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <p>同一个测试用例在不同代工具下的写法对比：</p>
+
+        <div class="code-block">
+          <span class="code-label">2012 Mocha + chai + sinon（组合工具范式）</span>
+          <pre class="code"><code class="lang-js">// 需要装 5 个包：mocha + chai + sinon + nyc + nock
+const chai = require('chai');
+const sinon = require('sinon');
+const nock = require('nock');
+const expect = chai.expect;
+
+describe('UserService', function() {
+  beforeEach(function() {
+    this.api = sinon.stub().resolves({ name: 'Alice' });
+    nock('https://api.example.com').get('/users/1').reply(200, { name: 'Alice' });
+  });
+
+  it('fetches user', async function() {
+    const result = await fetchUser(1);
+    expect(result.name).to.equal('Alice');
+  });
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">2016 Jest + enzyme（零配置 + shallow rendering）</span>
+          <pre class="code"><code class="lang-js">// 装 jest + enzyme 即可
+import { shallow } from 'enzyme';
+import UserCard from './UserCard';
+
+jest.mock('./api');
+import { fetchUser } from './api';
+
+describe('UserCard', () => {
+  it('renders user name', () => {
+    fetchUser.mockResolvedValue({ name: 'Alice' });
+    const wrapper = shallow(&lt;UserCard userId={1} /&gt;);
+    expect(wrapper.find('.user-name').text()).toBe('Alice');  // ❌ 测实现
+    expect(wrapper.state('loading')).toBe(false);              // ❌ 测内部状态
+  });
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">2026 Vitest + Testing Library + MSW（现代默认）</span>
+          <pre class="code"><code class="lang-js">// 装 vitest + @testing-library/react + msw
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { http, HttpResponse } from 'msw';
+import { setupServer } from 'msw/node';
+import UserCard from './UserCard';
+
+const server = setupServer(
+  http.get('https://api.example.com/users/1', () =&gt;
+    HttpResponse.json({ name: 'Alice' })
+  )
+);
+
+beforeAll(() =&gt; server.listen());
+afterEach(() =&gt; server.resetHandlers());
+afterAll(() =&gt; server.close());
+
+test('renders user name', async () =&gt; {
+  render(&lt;UserCard userId={1} /&gt;);
+
+  // ✅ 等用户能看到的内容
+  expect(await screen.findByText('Alice')).toBeInTheDocument();
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">2017 Cypress（Promise chain DSL）</span>
+          <pre class="code"><code class="lang-js">describe('Login flow', () =&gt; {
+  it('logs in', () =&gt; {
+    cy.visit('/login');
+    cy.get('input[name="username"]').type('alice');
+    cy.get('input[name="password"]').type('secret');
+    cy.contains('button', 'Sign in').click();
+    cy.url().should('include', '/dashboard');
+    cy.contains('Welcome, Alice').should('be.visible');
+  });
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">2024 Playwright（async/await + locator + auto-wait）</span>
+          <pre class="code"><code class="lang-js">import { test, expect } from '@playwright/test';
+
+test('logs in', async ({ page }) =&gt; {
+  await page.goto('/login');
+  await page.getByLabel('Username').fill('alice');
+  await page.getByLabel('Password').fill('secret');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+
+  // auto-wait：等元素出现 + URL 改变
+  await expect(page).toHaveURL(/\/dashboard/);
+  await expect(page.getByText('Welcome, Alice')).toBeVisible();
+});</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · "新一代肯定比上一代好"</div>
+          <p>看到 Vitest 火就全员切 Vitest，看到 Playwright 火就全员切 Playwright——这种思路常翻车。每代工具都解某个具体痛点，<strong>选型应基于"它解的是不是我的痛点"</strong>。例如老 Webpack 项目里 200 个 Jest 测试用 enzyme 写的，盲目迁 Vitest 不会自动让 enzyme 测试变好——核心工作是改写 enzyme 到 Testing Library。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 把 Jest 当"零配置"忽视它的 Babel 依赖</div>
+          <p>Jest 的"零配置"是 ES5/Babel 时代的零配置。在 ESM + TypeScript 项目里它需要 babel-jest + ts-jest + 复杂的 transformIgnorePatterns 配置。这恰好是 Vitest 解决的痛点——但很多人没意识到自己已经"配置了一堆 Jest workaround"。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 把 Cypress 的 Promise chain 当"现代异步"</div>
+          <p>Cypress 的 <code>cy.visit().get().click()</code> 看起来像 Promise chain，但它不是真的 Promise ——是 Cypress 自定义的 chainable command queue。你不能 await，不能 try/catch，不能用 async/await 与 cy 命令交错。这是 Cypress 长期被批评的设计点，也是 Playwright 用真 async/await 的根本动机。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 把 Enzyme 的退场看作 React 的问题</div>
+          <p>Enzyme 退场不是因为 React 18 的"问题"，而是因为 Enzyme 设计本身已经过时——shallow rendering 让"测内部"变得太容易。即使 Enzyme 适配了 React 18，"测行为不测实现"的哲学也会让它失去主流地位。Testing Library 取代 Enzyme 是哲学胜利不是技术胜利。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 把"我们公司用 Jest"当作不切的理由</div>
+          <p>"全公司都用 Jest，切了影响协作" —— 实际 Vitest 兼容 Jest API，跨项目协作几乎无影响。真正的协作壁垒是<strong>测试哲学</strong>不是工具选择。如果两个团队一个用 Enzyme 风格一个用 Testing Library 风格，工具一致也协作不了；反过来，工具不同但都遵循"测行为不测实现"，跨团队读测试代码毫无障碍。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://kentcdodds.com/blog/testing-implementation-details" target="_blank" rel="noopener">Kent C. Dodds · Testing Implementation Details（2018）</a></li>
+          <li><a href="https://kentcdodds.com/blog/the-testing-trophy-and-testing-classifications" target="_blank" rel="noopener">Kent C. Dodds · The Testing Trophy（2021）</a></li>
+          <li><a href="https://github.com/enzymejs/enzyme/issues/2429" target="_blank" rel="noopener">Enzyme 官方维护停滞声明（2020）</a></li>
+          <li><a href="https://www.swyx.io/jest-vs-vitest" target="_blank" rel="noopener">Swyx · Jest vs Vitest 迁移分析</a></li>
+          <li><a href="https://playwright.dev/docs/intro" target="_blank" rel="noopener">Playwright 官方介绍</a></li>
+          <li><a href="https://www.youtube.com/watch?v=byT_-CtxWgw" target="_blank" rel="noopener">Andrey Lushnikov · Inside Playwright 演讲</a></li>
+          <li><a href="https://antfu.me/" target="_blank" rel="noopener">Anthony Fu blog（Vitest 主作者）</a></li>
+          <li><a href="https://mswjs.io/blog/introducing-msw-2.0" target="_blank" rel="noopener">MSW 2.0 重写公告（2024-01）</a></li>
+          <li><a href="../../bun/04-toolchain/04-bun-test.html">Bun P4.4 · Bun test 内部（本站）</a></li>
+          <li><a href="../../node/06-modern/01-modern-node.html">Node P6.1 · 现代 Node（含 node:test，本站）</a></li>
+          <li><a href="02-landscape.html">P1.2 · 同代人横评（下一章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="index.html">
+            <span class="label">← 阶段概览</span>
+            <span class="title">P1 · 测试工具是谁</span>
+          </a>
+          <a class="next" href="02-landscape.html">
+            <span class="label">下一章 →</span>
+            <span class="title">02 · 同代人横评</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

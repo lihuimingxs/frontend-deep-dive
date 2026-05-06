@@ -1,0 +1,651 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>同代人横评 · P1.2 · 测试工具深度学习</title>
+    <meta name="description" content="2026 主流 JS 测试工具横评：Vitest 3 / Jest 30 / Mocha / Bun test / node:test / Playwright / Cypress / Testing Library。每家的世界观 + 8 维度对比 + 选型决策矩阵。回答「我的项目应该选哪个」。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2334a853'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ET%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>测试工具深度学习</span><span class="site-title-badge" style="background: oklch(0.6 0.17 150); color: #fff">Test</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P1 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · 测试工具是谁</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html">01 · 测试工具项目史</a></li>
+          <li><a href="02-landscape.html" class="active">02 · 同代人横评</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">测试工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · 测试工具是谁</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 同代人横评</span>
+        </nav>
+        <h1>同代人横评：8 家全维度对比</h1>
+        <p class="lead">
+          横向对照 2026-05 主流测试工具：Vitest 3 / Jest 30 / Mocha / Bun test / node:test / Playwright / Cypress / Testing Library。每家都有"<strong>世界观</strong>"——选错工具不是性能问题，是不匹配场景。本章一次讲清各自定位 + 8 维度对比 + 选型决策矩阵。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P1.1（项目史）</span>
+          <span><strong>主要来源</strong> 各家官方文档 + 实测 benchmark + State of JS 2024 调查</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>没有"通用最佳"测试工具——每家都有 sweet spot：新项目单元测试 → Vitest；存量 React 项目 → Jest；已用 Bun runtime → Bun test；微型 lib 不引依赖 → node:test；e2e → Playwright；DOM 测试 helper → Testing Library（与任意 runner 配合）。<strong>选错 ≠ 性能问题，而是不匹配场景</strong>。</li>
+          <li>2026 主流分布（粗估，State of JS 2024 + 真实项目调查）—— 单元测试：Vitest ~45% / Jest ~35% / Bun test ~10% / Mocha ~5% / 其他 ~5%；E2E：Playwright ~55% / Cypress ~30% / 其他 ~15%。<strong>Vitest 在 2024-2026 完成对 Jest 的反超</strong>；Cypress 增长明显放缓。</li>
+          <li>选型最重要的 3 个维度——(1) ESM 原生支持（Vite 项目 / Bun 项目必须）；(2) 兼容 API 形状（迁移成本）；(3) 生态位置（与 Storybook / Next.js / React 生态的契合度）。性能差距通常不是最重要的——除非 CI 时间紧到秒。</li>
+          <li>"快"的真相——Bun test cold install 最快，但单元测试运行时差距收窄到 1.2-2x（Vitest / Bun test / Jest 30 都"足够快"）。性能数字常被营销夸大；多数项目<strong>选型应优先看生态契合，不是 benchmark</strong>。</li>
+          <li>Jest 30 的现状是"存量维护期"——不再是新项目首选，但 React Native / Next.js / 大量企业项目存量主力。Facebook 退出维护后社区接手；ESM 改善但仍非首选 ESM 项目。</li>
+          <li>Cypress 的现状是"失去新项目份额"——团队 2024 年商业化压力 + 内部动荡；Playwright 5 维度（跨浏览器 / 多 tab / iframes / 网络 / 并行）全面更优。但已有 Cypress 的项目继续维护合理，迁移成本高于收益。</li>
+          <li>Testing Library 是配合品而非独立 runner——它是 query API + jest-dom matcher 集合，必须配 Vitest / Jest 等 runner 用。2026 是 DOM 测试事实标准，跨框架（React / Vue / Svelte / Preact）统一 API。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>8 家全维度对比表（2026-05）</h3>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 110px">工具</th>
+              <th>类型</th>
+              <th>实现</th>
+              <th>ESM 原生</th>
+              <th>配置度</th>
+              <th>API 兼容</th>
+              <th>主要场景</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Vitest 3</strong></td>
+              <td>Unit + 部分 DOM + browser mode</td>
+              <td>JS（基于 Vite）</td>
+              <td>✅ 原生</td>
+              <td>0（Vite 配置）</td>
+              <td>Jest 兼容</td>
+              <td>新项目主流</td>
+            </tr>
+            <tr>
+              <td><strong>Jest 30</strong></td>
+              <td>Unit + DOM</td>
+              <td>JS（基于 Babel）</td>
+              <td>🟡 实验</td>
+              <td>0（自带）</td>
+              <td>—（Jest 自家）</td>
+              <td>存量 React 项目</td>
+            </tr>
+            <tr>
+              <td><strong>Mocha 11</strong></td>
+              <td>Unit（runner only）</td>
+              <td>JS</td>
+              <td>✅</td>
+              <td>重（自配）</td>
+              <td>BDD 通用</td>
+              <td>遗留维护</td>
+            </tr>
+            <tr>
+              <td><strong>Bun test</strong></td>
+              <td>Unit + 部分 DOM</td>
+              <td>Zig（Bun 自家）</td>
+              <td>✅ 原生</td>
+              <td>0（Bun 自带）</td>
+              <td>Jest 兼容</td>
+              <td>已用 Bun runtime</td>
+            </tr>
+            <tr>
+              <td><strong>node:test</strong></td>
+              <td>Unit（轻量）</td>
+              <td>C++（Node 内置）</td>
+              <td>✅ 原生</td>
+              <td>0（不需装）</td>
+              <td>Jest 部分兼容</td>
+              <td>微型 lib / Node 内部</td>
+            </tr>
+            <tr>
+              <td><strong>Playwright</strong></td>
+              <td>E2E + Component</td>
+              <td>JS（CDP/BiDi/WebKit）</td>
+              <td>✅</td>
+              <td>低</td>
+              <td>—</td>
+              <td>新项目 e2e 主流</td>
+            </tr>
+            <tr>
+              <td><strong>Cypress 14</strong></td>
+              <td>E2E</td>
+              <td>JS（浏览器内）</td>
+              <td>✅</td>
+              <td>中</td>
+              <td>—</td>
+              <td>存量 e2e</td>
+            </tr>
+            <tr>
+              <td><strong>Testing Library</strong></td>
+              <td>DOM helper（非 runner）</td>
+              <td>JS</td>
+              <td>✅</td>
+              <td>0</td>
+              <td>跨框架统一</td>
+              <td>DOM 测试默认</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>性能横评（典型中型项目，500 个测试）</h3>
+        <p>需要先标注：测试工具性能数字依硬件 / 项目规模 / ESM/CJS / workspace 维度变化巨大。下面是一个"中型 React 项目（500 测试，TypeScript + happy-dom）"在 macOS / 现代 SSD 的近似数字。复现条件 + 真实 benchmark 见各家官方公告。</p>
+        <table>
+          <thead>
+            <tr>
+              <th>工具</th>
+              <th>cold start（首次跑）</th>
+              <th>watch 重跑（改 1 文件）</th>
+              <th>full re-run（无 cache）</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Jest 30</td>
+              <td>~15-20s</td>
+              <td>~3-5s</td>
+              <td>~12-15s</td>
+            </tr>
+            <tr>
+              <td>Vitest 3</td>
+              <td>~5-8s</td>
+              <td>~0.5-1.5s</td>
+              <td>~4-6s</td>
+            </tr>
+            <tr>
+              <td>Bun test</td>
+              <td>~3-5s</td>
+              <td>~0.3-1s</td>
+              <td>~2-4s</td>
+            </tr>
+            <tr>
+              <td>node:test</td>
+              <td>~4-6s</td>
+              <td>—（无 watch）</td>
+              <td>~3-5s</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>关键观察：</p>
+        <ul>
+          <li>Bun test 是性能标杆，但与 Vitest 差距在 1.5-2x，多数日常开发场景感知不显著</li>
+          <li>Vitest 比 Jest 快 2-3x（在 ESM/TypeScript 项目尤其明显，因为 Jest 要 Babel）</li>
+          <li>watch 重跑差距最大——Jest 的 worker 启动比 Vitest 慢得多</li>
+          <li>node:test 性能不错但缺 watch，开发体验受限</li>
+          <li>差距随项目规模放大：5000+ 测试时 Vitest vs Jest 差距能到 5-10x</li>
+        </ul>
+
+        <div class="callout warn">
+          <div class="callout-title">⚠️ 性能数字读法</div>
+          <p>不要把这些数字当作"绝对真理"。所有工具都在快速演化（Jest 30 比 Jest 28 快 30%；Vitest 3 比 Vitest 1 快 50%）。Benchmark 必须复现：相同项目 / 相同硬件 / 相同 happy-dom 还是 jsdom / 相同 ESM 还是 CJS。营销文章里的"快 30x"通常是 cherry-picked 场景。</p>
+        </div>
+
+        <h3>Vitest 3 · "Vite 生态原生 runner"</h3>
+        <p>世界观：复用 Vite dev server 的所有能力（编译 / plugin / HMR / ESM resolution），让 Vite 项目"零配置"测试。Anthony Fu 主导，2021 年起步，2024-2026 年完成对 Jest 的反超。</p>
+        <p>设计立场：</p>
+        <ul>
+          <li><strong>Jest 兼容 API</strong>——describe / test / expect / vi.mock / vi.fn 几乎可直接迁移</li>
+          <li>原生 ESM——不需要 Babel；TypeScript / JSX 通过 esbuild 转换</li>
+          <li>workspace 模式——vitest.workspace.ts 配多 project（详见 <a href="../03-vitest-unit/01-vitest-internals.html">P3.1</a>）</li>
+          <li>browser mode（2024 GA）——真浏览器 via Playwright；适合 layout / Canvas / 组件库</li>
+          <li>类型测试——expectTypeOf 静态验证类型</li>
+          <li>覆盖率 v8 provider 默认（详见 <a href="../07-visual-coverage-ci/01-visual-coverage-ci.html">P7</a>）</li>
+        </ul>
+        <p>Sweet spot：</p>
+        <ul>
+          <li>新项目（默认选择）</li>
+          <li>Vite / Vue / Svelte / Solid 生态</li>
+          <li>从 Jest 迁移（API 兼容让迁移成本低）</li>
+          <li>大型 monorepo（workspace 模式 + Turborepo cache 详见 <a href="../../pnpm-monorepo/05-orchestration/01-turborepo.html">pnpm P5.1</a>）</li>
+        </ul>
+        <p>避坑：</p>
+        <ul>
+          <li>非 Vite 项目可用但收益降低（复用价值在 Vite 用户身上最大）</li>
+          <li>Next.js 项目兼容存在边界 case（Next.js 官方仍推荐 Jest）</li>
+          <li>browser mode 在 2024 刚 GA，复杂场景可能踩坑</li>
+        </ul>
+
+        <h3>Jest 30 · "存量维护期"</h3>
+        <p>世界观：2014 年 Facebook 出品的"零配置全家桶"。2014-2020 年是 React 生态绝对主流，2025 年后转 OpenJS Foundation 治理，进入存量维护期。</p>
+        <p>2026 现状：</p>
+        <ul>
+          <li>仍有 35-40% 单元测试份额（存量大）</li>
+          <li>新项目几乎不选 Jest</li>
+          <li>Babel 依赖让性能始终不及 Vitest</li>
+          <li>ESM 仍需 <code>--experimental-vm-modules</code>（性能折损）</li>
+          <li>Snapshot / mock / coverage 内置度仍是优势</li>
+        </ul>
+        <p>Sweet spot：</p>
+        <ul>
+          <li>存量 React / React Native 项目（迁移成本高）</li>
+          <li>Next.js 项目（官方推荐）</li>
+          <li>大型企业项目（"我们用了多年了"路径依赖）</li>
+        </ul>
+        <p>避坑：</p>
+        <ul>
+          <li>新项目无理由选 Jest（除非有特殊 React Native 兼容要求）</li>
+          <li>不要把"全公司用 Jest"当作不评估 Vitest 的理由（API 兼容让协作成本低）</li>
+        </ul>
+
+        <h3>Mocha 11 · "灵活组合工具的代表"</h3>
+        <p>世界观：runner only，组合 chai + sinon + nyc 自配工具栈。2011-2016 年是 Node 生态主流，被 Jest "零配置全家桶"取代。</p>
+        <p>2026 现状：</p>
+        <ul>
+          <li>主要剩 Node lib / 工具类项目（无 React / DOM 需求）</li>
+          <li>新项目几乎不选 Mocha（配置成本太高）</li>
+          <li>BDD 描述语法仍是经典</li>
+          <li>插件生态丰富但不再活跃增长</li>
+        </ul>
+        <p>Sweet spot：</p>
+        <ul>
+          <li>Node 后端 lib 维护期</li>
+          <li>团队偏好"组合工具不锁定"哲学</li>
+        </ul>
+        <p>避坑：新项目选 Mocha 几乎总是错误——Vitest / Bun test / node:test 都更省事。</p>
+
+        <h3>Bun test · "一体化工具链中的 runner"</h3>
+        <p>世界观：install / run / build / test 是同一产品的 4 个面，共享 parser + 共享缓存。详见 <a href="../../bun/04-toolchain/04-bun-test.html">Bun P4.4</a>。</p>
+        <p>设计选择：</p>
+        <ul>
+          <li>Jest 兼容 API（迁移成本低）</li>
+          <li>Bun 速度（5-10x of Jest，1.5-2x of Vitest）</li>
+          <li>watch 模式（Bun 1.1+ 优化）</li>
+          <li>无需安装依赖（Bun 自带）</li>
+        </ul>
+        <p>2026 现状：</p>
+        <ul>
+          <li>已用 Bun runtime 的项目首选</li>
+          <li>但功能仍在补——snapshot / coverage / mock 完整度落后 Vitest</li>
+          <li>无 browser mode（Bun 不能跑真浏览器）</li>
+          <li>大型 React 生态项目仍倾向 Vitest（生态成熟度）</li>
+        </ul>
+        <p>Sweet spot：</p>
+        <ul>
+          <li>已用 Bun runtime 的项目（一体化最大化）</li>
+          <li>个人 / 副业项目（"装一个 Bun 替代 Node + npm + Vitest + tsx"）</li>
+          <li>极致 CI 速度需求</li>
+        </ul>
+        <p>避坑：大型 React 生态切 Bun test 之前要做兼容性试跑；少量复杂依赖可能需要 fallback。</p>
+
+        <h3>node:test · "内置零依赖 runner"</h3>
+        <p>世界观：Node 22+ 内置（详见 <a href="../../node/06-modern/01-modern-node.html">Node P6.1</a>）；轻量但功能不全；适合微型 lib 不引外部依赖。</p>
+        <p>2026 现状：</p>
+        <ul>
+          <li>API 与 Jest / Vitest 兼容（describe / test / 但 expect 接口略不同）</li>
+          <li>无 mock 内置（需要外部 lib）</li>
+          <li>无 snapshot 内置</li>
+          <li>无 watch（依赖外部 watcher）</li>
+          <li>覆盖率：通过 c8（V8 coverage）外接</li>
+        </ul>
+        <p>Sweet spot：</p>
+        <ul>
+          <li>微型 lib（"我不引 vitest 这种重依赖"）</li>
+          <li>Node 内部工具 / 脚本</li>
+          <li>追求"不引依赖"哲学的项目</li>
+        </ul>
+        <p>避坑：项目稍微复杂（有 mock / snapshot 需求）就放弃 node:test，直接 Vitest。</p>
+
+        <h3>Playwright · "2026 e2e 事实标准"</h3>
+        <p>世界观：Andrey Lushnikov 等前 Puppeteer 团队从 Google 跳 Microsoft 的二代品。三协议统一抽象（CDP + WebDriver BiDi + WebKit Inspector）+ auto-wait + trace viewer + 真并行。详见 <a href="../06-e2e/01-playwright-internals.html">P6.1</a>。</p>
+        <p>2026 现状：</p>
+        <ul>
+          <li>新项目 70-80% 选 Playwright</li>
+          <li>跨浏览器（特别 Safari / WebKit）能力让它在 SaaS / 公开网站项目无可替代</li>
+          <li>Component Testing（Playwright 1.30+）模糊单元/e2e 边界</li>
+          <li>Vercel / Astro / Vue / shadcn 等旗舰项目都用 Playwright</li>
+        </ul>
+        <p>Sweet spot：</p>
+        <ul>
+          <li>新项目 e2e（默认选择）</li>
+          <li>跨浏览器需求</li>
+          <li>多 tab / 跨域 / 复杂场景</li>
+          <li>需要 trace viewer 调试 flaky</li>
+        </ul>
+        <p>避坑：Component Testing 与 Vitest browser mode 重叠；按团队偏好二选一即可，不要同时用。</p>
+
+        <h3>Cypress 14 · "失去新项目份额"</h3>
+        <p>世界观：测试代码跑在浏览器内部（不外控）；GUI runner + time-travel debugging 是它的护城河。2017-2020 年红极一时，2022-2024 团队动荡 + 商业化压力，2026 进入"失去增量但仍维护存量"阶段。</p>
+        <p>2026 现状：</p>
+        <ul>
+          <li>仍占 30% e2e 份额（存量大）</li>
+          <li>新项目几乎不选 Cypress</li>
+          <li>跨浏览器（特别 Safari）受限是硬伤</li>
+          <li>Promise chain DSL 不能用真 async/await，调试有摩擦</li>
+          <li>Cypress Cloud 付费（并行 / 报告）vs Playwright 内置免费</li>
+        </ul>
+        <p>Sweet spot：</p>
+        <ul>
+          <li>已有大量 Cypress 测试 + 团队熟悉</li>
+          <li>单一 Chrome 场景 + 强调 GUI 调试</li>
+          <li>新项目几乎没有合理理由选 Cypress</li>
+        </ul>
+        <p>避坑：不要把 Cypress 的"GUI runner 漂亮"当成不评估 Playwright 的理由——Playwright UI mode（2024+）已经追平这个体验。</p>
+
+        <h3>Testing Library · "DOM 测试事实标准"</h3>
+        <p>世界观：Kent C. Dodds 主导。"<strong>测行为不测实现</strong>"哲学的落地——不查 className / 不调 instance / 不读 state，所有 query 通过 accessibility role / label 文本 / 页面文字。详见 <a href="../04-dom-testing/01-testing-library.html">P4.1</a>。</p>
+        <p>设计立场：</p>
+        <ul>
+          <li>跨框架统一 API（@testing-library/react / vue / svelte / preact 共享内核）</li>
+          <li>不是 runner——必须配合 Vitest / Jest / Bun test</li>
+          <li>userEvent 模拟真实用户操作链（vs fireEvent 底层 DOM event）</li>
+          <li>jest-dom matcher（toBeInTheDocument / toHaveTextContent 等）</li>
+          <li>2026 是 React / Vue / Svelte 测试默认</li>
+        </ul>
+        <p>Sweet spot：所有 DOM / 组件测试。2026 年没有合理理由不用 Testing Library ——它已经是哲学共识。</p>
+
+        <h3>选型决策矩阵（2026-05）</h3>
+        <p>把上面所有信息收敛成一张决策矩阵：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>场景</th>
+              <th>单元 runner</th>
+              <th>DOM</th>
+              <th>网络 mock</th>
+              <th>E2E</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>新建 React + Vite 项目</td>
+              <td>Vitest 3</td>
+              <td>Testing Library + happy-dom</td>
+              <td>MSW 2.0</td>
+              <td>Playwright</td>
+            </tr>
+            <tr>
+              <td>新建 Vue + Vite 项目</td>
+              <td>Vitest 3</td>
+              <td>Testing Library + happy-dom</td>
+              <td>MSW 2.0</td>
+              <td>Playwright</td>
+            </tr>
+            <tr>
+              <td>新建 Next.js 14 项目</td>
+              <td>Vitest 3 或 Jest 30</td>
+              <td>Testing Library + happy-dom</td>
+              <td>MSW 2.0</td>
+              <td>Playwright</td>
+            </tr>
+            <tr>
+              <td>已用 Bun runtime</td>
+              <td>Bun test</td>
+              <td>Testing Library + happy-dom</td>
+              <td>MSW 2.0</td>
+              <td>Playwright</td>
+            </tr>
+            <tr>
+              <td>存量 Jest 项目维护</td>
+              <td>Jest 30（不动）</td>
+              <td>Testing Library</td>
+              <td>MSW 2.0</td>
+              <td>Playwright（新增 e2e）</td>
+            </tr>
+            <tr>
+              <td>微型 Node lib 不引依赖</td>
+              <td>node:test</td>
+              <td>—</td>
+              <td>—</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td>已有 Cypress 不想动</td>
+              <td>—</td>
+              <td>—</td>
+              <td>—</td>
+              <td>Cypress（维护）+ 新增用 Playwright</td>
+            </tr>
+            <tr>
+              <td>极致 CI 速度需求</td>
+              <td>Bun test</td>
+              <td>—</td>
+              <td>MSW</td>
+              <td>Playwright（并行）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout info">
+          <div class="callout-title">💡 关键洞见：选型不是选"最快的"，是选"匹配场景的"</div>
+          <p>测试工具领域的"快"差距在多数项目中感知不显著（Vitest vs Bun test 差 1.5-2x，日常开发 2-3 秒差距可忽略）。真正决定生产力的是生态契合 + API 兼容 + 团队熟悉度。Vitest 在 Vite 生态里"零配置"是它的护城河；Bun test 在 Bun 项目里"一体化"是它的护城河；Jest 在 React Native / Next.js 是路径依赖。选型时优先看场景契合，不是 benchmark。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 新建 SaaS 项目栈选型</h3>
+          <p><strong>背景</strong>：5 人创业团队，做 B2B SaaS。React + Next.js 14 + Hono on Bun 后端 + pnpm monorepo。要从零搭测试栈，未来 1-2 年扩到 30+ 包。</p>
+          <p><strong>建议</strong>：</p>
+          <ul>
+            <li>单元测试：Vitest 3（不是 Bun test，因为 Next.js 兼容性 + 生态成熟）</li>
+            <li>组件测试：Vitest + Testing Library + happy-dom</li>
+            <li>集成测试：Vitest + Testing Library + MSW（mock Hono API）</li>
+            <li>E2E：Playwright（覆盖 5-10 个关键路径）</li>
+            <li>workspace 配 vitest.workspace.ts；CI 配 Turborepo cache</li>
+          </ul>
+          <p>理由：Next.js 14 在 Vitest 上比 Jest 快得多（ESM 友好）；Bun test 虽然快但与 Next.js 兼容仍有边界 case；Playwright 覆盖未来扩到 Safari 用户的需求。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · 老 React + Webpack + Jest 项目升级评估</h3>
+          <p><strong>背景</strong>：5 年的项目，500+ Jest 测试。CI 跑测试 8 分钟，团队抱怨慢。考虑迁 Vitest。</p>
+          <p><strong>分析</strong>：</p>
+          <ul>
+            <li>Vitest 兼容 Jest API，绝大部分测试代码可不改</li>
+            <li>Webpack 项目不需要切 Vite——Vitest 自带 Vite 编译，与 Webpack 共存</li>
+            <li>预期 CI 时间 8 → 2-3 分钟（5x 改善）</li>
+            <li>风险：jest.config 中复杂的 transformIgnorePatterns / moduleNameMapper 需要在 vitest.config 重写</li>
+          </ul>
+          <p><strong>建议路径</strong>：先在一个独立 workspace 试跑 Vitest（保留 Jest 主线），验证 1-2 周后逐步切。不要全部一次性切。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · 评估"Cypress 切 Playwright"</h3>
+          <p><strong>背景</strong>：8 人团队，3 年的 Cypress（200+ 用例）。最近发现 Safari bug 没被测出，且 Cypress 团队动荡让人担心长期支持。</p>
+          <p><strong>建议</strong>：渐进迁移，<strong>不要全切</strong>。</p>
+          <ul>
+            <li>新增的 e2e 用例用 Playwright 写</li>
+            <li>关键 Safari / 跨域场景用 Playwright 补</li>
+            <li>老 Cypress 用例继续维护（直到自然失效或显著价值时再迁）</li>
+            <li>2-3 年后 Cypress 用例自然减少，再决定是否完全切</li>
+          </ul>
+          <p>理由：200 个 Cypress 用例切 Playwright 要 1-2 个月人力；如果项目没 Safari 必需性，渐进策略 ROI 更高。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <p>同一个测试在 4 家单元 runner 下的写法对比：</p>
+
+        <div class="code-block">
+          <span class="code-label">Vitest 3</span>
+          <pre class="code"><code class="lang-js">import { describe, test, expect, vi } from 'vitest';
+import { add } from './math';
+
+describe('add', () =&gt; {
+  test('adds two numbers', () =&gt; {
+    expect(add(1, 2)).toBe(3);
+  });
+
+  test('mocks dependency', () =&gt; {
+    const fn = vi.fn().mockReturnValue(42);
+    expect(fn()).toBe(42);
+  });
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">Jest 30</span>
+          <pre class="code"><code class="lang-js">// 与 Vitest API 几乎相同！只是 import 来源不同
+const { add } = require('./math');
+
+describe('add', () =&gt; {
+  test('adds two numbers', () =&gt; {
+    expect(add(1, 2)).toBe(3);
+  });
+
+  test('mocks dependency', () =&gt; {
+    const fn = jest.fn().mockReturnValue(42);
+    expect(fn()).toBe(42);
+  });
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">Bun test</span>
+          <pre class="code"><code class="lang-js">import { describe, test, expect, mock } from 'bun:test';
+import { add } from './math';
+
+describe('add', () =&gt; {
+  test('adds two numbers', () =&gt; {
+    expect(add(1, 2)).toBe(3);
+  });
+
+  test('mocks dependency', () =&gt; {
+    const fn = mock(() =&gt; 42);
+    expect(fn()).toBe(42);
+  });
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">node:test（Node 22+）</span>
+          <pre class="code"><code class="lang-js">import { describe, test, mock } from 'node:test';
+import assert from 'node:assert';   // expect 不内置
+import { add } from './math.js';
+
+describe('add', () =&gt; {
+  test('adds two numbers', () =&gt; {
+    assert.strictEqual(add(1, 2), 3);   // 不是 expect().toBe()
+  });
+
+  test('mocks dependency', () =&gt; {
+    const fn = mock.fn(() =&gt; 42);
+    assert.strictEqual(fn(), 42);
+  });
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">Playwright（e2e）</span>
+          <pre class="code"><code class="lang-js">import { test, expect } from '@playwright/test';
+
+test('user can log in', async ({ page }) =&gt; {
+  await page.goto('/login');
+  await page.getByLabel('Username').fill('alice');
+  await page.getByLabel('Password').fill('secret');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+
+  // auto-wait + 真 async/await
+  await expect(page).toHaveURL('/dashboard');
+  await expect(page.getByText('Welcome, Alice')).toBeVisible();
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">Cypress（e2e，promise chain DSL）</span>
+          <pre class="code"><code class="lang-js">describe('Login', () =&gt; {
+  it('user can log in', () =&gt; {
+    cy.visit('/login');
+    cy.get('input[name="username"]').type('alice');
+    cy.get('input[name="password"]').type('secret');
+    cy.contains('button', 'Sign in').click();
+
+    // 不是真 Promise；不能 await
+    cy.url().should('include', '/dashboard');
+    cy.contains('Welcome, Alice').should('be.visible');
+  });
+});</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 用"快"作为唯一选型依据</div>
+          <p>测试工具营销战激烈，"我比 X 快 N 倍"是常见话术。但实际开发中，单元测试速度差距通常不是决定性——你日常 watch 重跑差几百毫秒不那么戏剧。选型应优先看生态契合 + API 兼容 + 团队熟悉度，性能是次要维度。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 把 Jest 30 当"零配置"忽视它的 Babel 依赖</div>
+          <p>Jest 的"零配置"是 ES5 / Babel 时代的零配置。在 ESM + TypeScript 项目里它需要 babel-jest + ts-jest + 复杂的 transformIgnorePatterns 配置。这恰好是 Vitest 解决的痛点——但很多人没意识到自己已经"配置了一堆 Jest workaround"。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 在 Next.js 项目里强切 Vitest</div>
+          <p>Next.js 官方在 2026 年仍推荐 Jest，原因是 Next.js 内部某些 server-only 模块在 Vitest 下兼容性边界 case 较多。可以切，但要做好踩坑准备。除非有具体 ESM / 性能痛点，Next.js 项目用 Jest 仍合理。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 用 Cypress 测跨域 / 多 tab 场景</div>
+          <p>Cypress 跨域受同源策略限制；多 tab / 多 window 完全不支持。如果你的项目有 OAuth 重定向 / 第三方登录 / 多 tab 协作场景，Cypress 会逼你用 hack（cy.origin）或干脆不测。Playwright 这些场景原生支持。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 把 node:test 当 Jest 替代</div>
+          <p>看到 Node 22 自带 test runner 兴奋切，结果发现 mock / snapshot / coverage 都要外接，配置成本不比装 Vitest 低。node:test 的 sweet spot 是"微型 lib 不想引依赖"，不是"通用替代 Jest"。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://vitest.dev/" target="_blank" rel="noopener">Vitest 官方文档</a></li>
+          <li><a href="https://jestjs.io/" target="_blank" rel="noopener">Jest 官方文档</a></li>
+          <li><a href="https://mochajs.org/" target="_blank" rel="noopener">Mocha 官方文档</a></li>
+          <li><a href="https://bun.com/docs/cli/test" target="_blank" rel="noopener">Bun test 官方</a></li>
+          <li><a href="https://nodejs.org/api/test.html" target="_blank" rel="noopener">node:test 官方</a></li>
+          <li><a href="https://playwright.dev/" target="_blank" rel="noopener">Playwright 官方</a></li>
+          <li><a href="https://docs.cypress.io/" target="_blank" rel="noopener">Cypress 官方</a></li>
+          <li><a href="https://testing-library.com/" target="_blank" rel="noopener">Testing Library 官方</a></li>
+          <li><a href="https://2024.stateofjs.com/en-US/libraries/testing/" target="_blank" rel="noopener">State of JS 2024 · Testing 数据</a></li>
+          <li><a href="../../bun/04-toolchain/04-bun-test.html">Bun P4.4 · Bun test 内部（本站）</a></li>
+          <li><a href="../03-vitest-unit/02-runner-comparison.html">P3.2 · Vitest vs Jest vs Bun test vs node:test 横评（详细，下下章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-history.html">
+            <span class="label">← 上一章</span>
+            <span class="title">01 · 测试工具项目史</span>
+          </a>
+          <a class="next" href="../02-mindset/index.html">
+            <span class="label">下一阶段 →</span>
+            <span class="title">P2 · 测试心智</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
