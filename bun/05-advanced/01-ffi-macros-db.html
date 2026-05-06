@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>bun:ffi · Macros · bun:sqlite · Bun.sql · Bun.redis · P5 · Bun 深度学习</title>
-    <meta name="description" content="高级特性章。这些不是入门必须，但 Bun 能在某些「超 Node 范畴」的场景胜出靠这些。<strong>关键洞察</strong>：FFI vs N-API 不是替代关系——FFI 灵活、不需要编译，适合「调系统库」；N-API 兼容性好（Node 也能跑），适合「复用 npm 生态」。Bun 同时支持两者。" />
+    <title>FFI / Macros / 内置 SQLite + Redis · P5.1 · Bun 深度学习</title>
+    <meta name="description" content="高级特性章。bun:ffi（dlopen 风格）+ Macros（编译期代码）+ bun:sqlite + Bun.sql + Bun.redis + HTML imports。FFI vs N-API 取舍：FFI 灵活不需编译、N-API 兼容 Node 生态。" />
     <link rel="stylesheet" href="../../assets/styles.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23fbf0df'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23000'%3EB%3C/text%3E%3C/svg%3E" />
   </head>
@@ -45,64 +45,381 @@
           <a href="index.html">P5 · 高级与生产决策</a><span class="breadcrumb-sep">/</span>
           <span>01 · FFI / Macros / 内置 SQLite + Redis</span>
         </nav>
-        <h1>bun:ffi · Macros · bun:sqlite · Bun.sql · Bun.redis</h1>
+        <h1>FFI / Macros / 内置 SQLite + Redis</h1>
         <p class="lead">
-          高级特性章。这些不是入门必须，但 Bun 能在某些「超 Node 范畴」的场景胜出靠这些。<strong>关键洞察</strong>：FFI vs N-API 不是替代关系——FFI 灵活、不需要编译，适合「调系统库」；N-API 兼容性好（Node 也能跑），适合「复用 npm 生态」。Bun 同时支持两者。
+          高级特性章。这些不是入门必须，但 Bun 能在某些"<strong>超 Node 范畴</strong>"的场景胜出靠这些。<strong>关键洞察</strong>：FFI vs N-API 不是替代关系——FFI 灵活、不需要编译，适合"调系统库"；N-API 兼容性好（Node 也能跑），适合"复用 npm 生态"。Bun 同时支持两者。这一章讲透 bun:ffi（dlopen 风格调系统共享库）、Macros（编译期代码生成）、bun:sqlite（内置 SQLite）、Bun.sql（Postgres）、Bun.redis、HTML imports。
         </p>
         <div class="chapter-meta">
           <span><strong>阅读时长</strong> ~25 分钟</span>
-          <span><strong>前置</strong> P3 + Node P5.2 N-API</span>
+          <span><strong>前置</strong> P3 + <a href="../../node/05-multicore-native/02-n-api.html">Node P5.2 N-API</a></span>
           <span><strong>主要来源</strong> bun.com/docs/api/ffi · bun.com/docs/api/sqlite · bun.com/docs/api/sql</span>
-        </div>
-
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>本章为<strong>骨架</strong>。已完成大纲与关键知识点列表（见各段标题下的 bullet），正文撰写中。可参考 <a href="../../bun/outline.md">outline.md</a> 了解完整覆盖范围。</p>
         </div>
 
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
-          <li><em>正文待写。</em></li>
+          <li><strong>bun:ffi 是「不编译就能调 native」的快速通道</strong>——比 N-API 写起来简单（不用编 C++ + node-gyp），但每次调用有 marshal 开销，比 N-API 慢。适合调系统库 / Rust/Zig 库 / 快速原型。</li>
+          <li><strong>Macros 是 JS 版的编译期代码生成</strong>——build 时跑某些函数把结果嵌进产物（如 SVG → 组件、版本号注入）。比 Zig comptime 弱（JS 表达力限制），但比 babel-plugin / TS transformer 简单。</li>
+          <li><strong>内置 DB 客户端的争议</strong>——bun:sqlite + Bun.sql + Bun.redis 给低门槛体验，但锁定 API 风格；如果未来需求超出（要 ORM / 高级特性），仍要 fallback npm 包。</li>
         </ol>
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
-        <p><em>正文待写。本章覆盖：bun:ffi · dlopen 风格 · Macros · bun:sqlite · Bun.sql · Bun.redis · HTML imports · FFI vs N-API 取舍</em></p>
+
+        <h3>bun:ffi：调 native 库的快速通道</h3>
+        <p><strong>bun:ffi</strong> 是 Bun 提供的<strong>外部函数接口</strong>——能在 JS 里直接调用共享库（<code>.so</code> / <code>.dylib</code> / <code>.dll</code>）的函数，不需要写 C++ 包装。</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">import { dlopen, FFIType } from 'bun:ffi';
+
+// 加载 SQLite 共享库（系统已装）
+const lib = dlopen('libsqlite3.dylib', {
+  sqlite3_libversion: {
+    args: [],
+    returns: FFIType.cstring  // 返回 C string
+  },
+  sqlite3_open: {
+    args: [FFIType.cstring, FFIType.ptr],
+    returns: FFIType.i32
+  }
+});
+
+// 直接调
+console.log(lib.symbols.sqlite3_libversion());
+// 输出：3.45.0 或类似版本</code></pre>
+        </div>
+        <p>对照 Node 的 native 集成：</p>
+        <p><strong>Node N-API 路径</strong>（详见 <a href="../../node/05-multicore-native/02-n-api.html">Node P5.2 N-API</a>）：(1) 写 C++ 包装代码用 N-API 暴露 JS 接口；(2) 写 binding.gyp 描述编译；(3) <code>node-gyp rebuild</code> 编译成 .node 文件；(4) require 这个 .node。<strong>每个 native module 都是一个独立 npm 包，要发布维护</strong>。</p>
+        <p><strong>Bun FFI 路径</strong>：(1) <code>dlopen</code> 已存在的共享库；(2) 声明函数签名；(3) 直接调。<strong>不需要编译、不需要发布、不需要维护额外包</strong>。</p>
+        <p>这种差异让<strong>"调系统库"和"快速试 native"</strong>场景下 Bun FFI 远胜 N-API。比如：</p>
+        <p><strong>(1) 调系统库</strong>—— OpenSSL / SQLite / libcurl / libgit2 / libpq 这些系统已装的共享库。Bun FFI 一行 <code>dlopen</code> 就能用，不用 npm 包装。</p>
+        <p><strong>(2) 调 Rust / Zig 写的库</strong>—— 把 Rust crate 编译成 <code>cdylib</code>，Bun FFI 直接调。Rust 不需要写 N-API binding 代码（<code>napi-rs</code> 那套），就是普通 <code>extern "C"</code>。</p>
+        <p><strong>(3) 快速原型</strong>—— 试一下"调 X 库能不能跑"，FFI 5 分钟搞定；N-API 要写 C++ + 编译，半天起步。</p>
+        <p><strong>FFI 的劣势</strong>：</p>
+        <p><strong>(1) 调用开销比 N-API 高</strong>—— FFI 每次调用要 marshal 参数（JS 类型 → C 类型），返回值也要 marshal。N-API 编译时已经把 marshal 内联了。Hot path（每秒百万次调用）上 FFI 慢 2-5x。</p>
+        <p><strong>(2) 类型系统受限</strong>—— FFI 只支持基础 C 类型（i8/i16/i32/i64/f32/f64/ptr/cstring）。复杂结构（C struct / union）需要手动 marshal。N-API 可以用 C++ 模板表达任意类型。</p>
+        <p><strong>(3) 错误处理薄</strong>—— FFI 函数 panic / segfault 直接挂掉整个进程；N-API 有 <code>napi_status</code> 错误传播机制。</p>
+        <p>判断 FFI vs N-API：</p>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 24%">场景</th>
+              <th style="width: 38%">FFI 适合</th>
+              <th style="width: 38%">N-API 适合</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>调系统库</strong></td>
+              <td>✅ 开箱即用</td>
+              <td>⚠️ 要写 C++ 包装</td>
+            </tr>
+            <tr>
+              <td><strong>调 Rust crate</strong></td>
+              <td>✅ <code>cdylib</code> 直接调</td>
+              <td>⚠️ 要 napi-rs</td>
+            </tr>
+            <tr>
+              <td><strong>性能 hot path</strong></td>
+              <td>⚠️ marshal 开销大</td>
+              <td>✅ inline marshal</td>
+            </tr>
+            <tr>
+              <td><strong>复杂 C++ 类型</strong></td>
+              <td>⚠️ 手动 marshal</td>
+              <td>✅ C++ 模板表达</td>
+            </tr>
+            <tr>
+              <td><strong>跨 Node + Bun</strong></td>
+              <td>❌ FFI 是 Bun-only</td>
+              <td>✅ N-API 两边都能跑</td>
+            </tr>
+            <tr>
+              <td><strong>分发到用户</strong></td>
+              <td>⚠️ 用户要装 lib</td>
+              <td>✅ npm 包带 prebuild</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>结论：<strong>本地开发 / 工具 / 内部服务</strong>用 FFI（开发体验好）；<strong>分发 npm 包 / 跨 runtime / hot path</strong>用 N-API（兼容性好 + 性能好）。</p>
+
+        <h3>Macros：JS 版编译期代码生成</h3>
+        <p>Bun Macros 让你在<strong>build 时跑某些 JS 函数 + 把结果嵌入产物</strong>。语法用 import attribute 标记：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// macros.ts —— 在 build 时跑的函数
+export async function readSvgIcon(name: string) {
+  const path = `./icons/${name}.svg`;
+  return await Bun.file(path).text();
+}
+
+export function buildTime() {
+  return Date.now();
+}
+
+// app.ts —— 用 macro
+import { readSvgIcon, buildTime } from './macros.ts' with { type: 'macro' };
+
+// build 时 readSvgIcon('home') 在编译期被调用
+// 产物里直接是 SVG 字符串字面量，不会运行时读文件
+const homeIcon = readSvgIcon('home');
+const compiledAt = buildTime();</code></pre>
+        </div>
+        <p>这种"<strong>编译期跑函数 + 把结果嵌入产物</strong>"在 Rust 里叫宏，Zig 里叫 comptime（详见 <a href="../02-internals/02-zig-system-layer.html">P2.2 Zig 系统层</a>），TS 里叫 transformer。Bun Macros 是 JS 层的简化版。</p>
+        <p>典型用例：</p>
+        <p><strong>(1) 静态资源 inline</strong>—— SVG / 图片 base64 / 字体在 build 时读进产物，运行时不读文件。</p>
+        <p><strong>(2) 编译期常量</strong>—— version / commit hash / build time 嵌入产物，不需要运行时查 git。</p>
+        <p><strong>(3) 数据预处理</strong>—— JSON / YAML 在 build 时 parse + 验证 + 嵌入产物，运行时直接用对象不用 parse。</p>
+        <p><strong>(4) 类型生成</strong>—— 从 schema 生成 TS 类型（虽然这块 zod / valibot 已经做得很好）。</p>
+        <p>Macros 的<strong>限制</strong>：</p>
+        <p><strong>(1) JS 表达力受限</strong>—— Macros 跑的是普通 JS，不能像 Zig comptime 那样做"编译期反射"。复杂场景仍然要 babel plugin / TS transformer。</p>
+        <p><strong>(2) 只能在编译期跑</strong>—— 不能"运行时也能调"。如果你想"build 时优化但 runtime 也能用"要写两份。</p>
+        <p><strong>(3) Bun-only</strong>—— Node + Vite 等其他工具没有这个 import attribute 语法。Macros 的代码不能跨 runtime。</p>
+        <p>Macros 是 Bun 社区<strong>不太常用</strong>的特性——大部分项目不需要编译期生成代码，需要的有 Vite plugin / babel plugin 解决。Macros 的定位是"轻量级编译期助手"，而不是"通用代码生成系统"。</p>
+
+        <h3>bun:sqlite：内置 SQLite 客户端</h3>
+        <p><strong>bun:sqlite</strong> 是 Bun 内置的 SQLite 客户端——底层是 SQLite C 库 + Zig glue。</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">import { Database } from 'bun:sqlite';
+
+// 打开（或创建）数据库
+const db = new Database('./mydb.sqlite');
+
+// 建表
+db.run(`CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  email TEXT UNIQUE
+)`);
+
+// Prepared statement + 参数
+const insert = db.prepare('INSERT INTO users (name, email) VALUES (?, ?)');
+insert.run('Alice', 'alice@example.com');
+insert.run('Bob', 'bob@example.com');
+
+// 查询
+const user = db.query('SELECT * FROM users WHERE name = ?').get('Alice');
+const allUsers = db.query('SELECT * FROM users').all();
+
+// 事务
+const insertMany = db.transaction((users) =&gt; {
+  for (const u of users) insert.run(u.name, u.email);
+});
+insertMany([{ name: 'C', email: 'c@x.com' }, { name: 'D', email: 'd@x.com' }]);</code></pre>
+        </div>
+        <p>API 设计学习自 <strong>better-sqlite3</strong>（npm 上的事实标准 SQLite 客户端），但不需要 native 编译（不需要 node-gyp / Python / g++）。</p>
+        <p>性能与 better-sqlite3 持平：</p>
+        <p><strong>better-sqlite3</strong> 是 N-API 包，内部直接调 SQLite C 库 + 高度优化。在 Node 上跑得很快。</p>
+        <p><strong>bun:sqlite</strong> 是 Bun 内置，Zig 包装 SQLite C 库。性能与 better-sqlite3 几乎相同（都是 native call to SQLite），实测 micro benchmark 差距 &lt; 5%。</p>
+        <p>Bun 的优势是<strong>"不需要编译"</strong>—— Node 用 better-sqlite3 在 Docker 里 install 经常遇到 node-gyp 错（缺 Python / g++ / 内核 header）；Bun 用 bun:sqlite 一切内置。</p>
+        <p>Bun 1.2+ 还在 bun:sqlite 上加了：</p>
+        <p><strong>(1) Stream cursor</strong>—— 大结果集 streaming，不爆内存。</p>
+        <p><strong>(2) WAL mode 默认推荐</strong>—— Write-Ahead Logging，并发性能更好。</p>
+        <p><strong>(3) Type cast</strong>—— 自动把 SQLite 类型映射到 JS（INTEGER → number / TEXT → string / BLOB → Buffer）。</p>
+
+        <h3>Bun.sql：Postgres 客户端</h3>
+        <p><strong>Bun.sql</strong>（Bun 1.2+）是内置 Postgres 客户端。详细介绍在 <a href="../03-runtime/01-builtin-apis.html">P3.1 Bun.serve / Bun.file / Bun.sql</a>，本节简要展开：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">import { sql } from 'bun:sql';
+
+// 默认从 DATABASE_URL 读配置
+const db = sql({ url: 'postgres://user:pwd@localhost/mydb' });
+
+// Tagged template 自动 prepared statement + 防 injection
+const users = await db`SELECT * FROM users WHERE active = ${true}`;
+
+// 事务
+await db.begin(async (tx) =&gt; {
+  await tx`INSERT INTO orders (user_id) VALUES (${userId})`;
+  await tx`UPDATE inventory SET count = count - 1 WHERE id = ${itemId}`;
+});
+
+// 流式 cursor
+for await (const row of db`SELECT * FROM big_table`.cursor(1000)) {
+  process(row);
+}</code></pre>
+        </div>
+        <p>API 学习自 <strong>postgres.js</strong>（社区 ESM-friendly Postgres 客户端），底层是 Bun 自家 Zig 实现 + Postgres 二进制协议直通。性能比 npm pg 包快约 50-100%。</p>
+
+        <h3>Bun.redis：Redis 客户端（实验）</h3>
+        <p><strong>Bun.redis</strong>（Bun 1.2+，实验）是内置 Redis 客户端：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">import { redis } from 'bun';
+
+// 默认从 REDIS_URL 读配置
+await redis.set('user:1', JSON.stringify({ name: 'Alice' }));
+const data = await redis.get('user:1');
+
+// Pipeline
+const pipeline = redis.pipeline();
+pipeline.set('a', 1);
+pipeline.set('b', 2);
+pipeline.set('c', 3);
+await pipeline.exec();
+
+// Pub/Sub
+const sub = redis.subscribe('channel');
+for await (const msg of sub) {
+  console.log('received:', msg);
+}</code></pre>
+        </div>
+        <p>底层是 Zig 实现的 Redis 二进制协议。性能与 ioredis 持平 + 不需要装 npm 包。</p>
+        <p>仍然<strong>实验性</strong>——少数高级特性（Lua scripting / Cluster mode / Sentinel 自动 failover）支持还不完整。生产用 Redis 重度场景仍推荐 ioredis。</p>
+
+        <h3>HTML imports：fullstack 实验路径</h3>
+        <p><strong>HTML imports</strong>（Bun 1.2+）让 Bun 能直接服务 HTML + 自动 bundle 引用的 TSX / CSS / 资源。详见 <a href="../03-runtime/01-builtin-apis.html">P3.1</a>。这里点出几个细节：</p>
+        <p><strong>定位</strong>：Bun 想让用户用<strong>一个 runtime + 一个二进制做完整 fullstack 项目</strong>，不需要 Vite / Webpack / Next.js。</p>
+        <p><strong>当前限制</strong>：(1) 不支持 RSC (React Server Components)；(2) HMR 比 Vite 弱；(3) SSR 需要手动写。</p>
+        <p><strong>适合场景</strong>：(1) 简单内部工具 / dashboard；(2) 学习 / prototype；(3) 技术 demo。</p>
+        <p><strong>不适合</strong>：(1) 复杂前端项目（仍 Next.js / Vite 主流）；(2) 大型团队协作（Bun fullstack 生态薄）。</p>
+
+        <h3>"内置 DB 客户端"的争议</h3>
+        <p>Bun 把 SQLite / Postgres / Redis 客户端做成内置——社区有不同看法：</p>
+        <p><strong>支持方</strong>：(1) 零依赖体验好；(2) 不需要 npm 包 + node-gyp 编译；(3) 性能与社区主流持平或更好；(4) Web 标准 API 风格（Promise / 模板字面量）；(5) 文档统一在 bun.com 上。</p>
+        <p><strong>反对方</strong>：(1) <strong>API 锁定</strong>—— 用 Bun.sql 写的代码 vendor lock-in 到 Bun，切回 Node 要改；(2) <strong>功能不全</strong>—— 高级特性（如 Postgres 的 listen/notify / replication）实现可能不完整；(3) <strong>ORM 仍然要装包</strong>—— Bun.sql 是底层客户端，Prisma / Drizzle 这种 ORM 还是 npm 包；(4) <strong>覆盖范围有限</strong>—— 没有 MySQL / MongoDB / Cassandra 客户端，那些场景仍要 npm 包。</p>
+        <p>这种争议<strong>没有标准答案</strong>——看你的项目场景：(1) 简单 SQLite / Postgres / Redis 的项目，Bun 内置更舒服；(2) 复杂场景或要切回 Node 的灵活性，仍 npm 包。Bun 的策略是"提供选项"——内置 + npm 包都支持，让用户选。</p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 A · 用 bun:ffi 调系统 OpenSSL（不写 native module）</h3>
+          <p>你有个加密 / 哈希 / TLS 相关需求，想直接调系统 OpenSSL（不依赖 npm <code>node-forge</code> 这种纯 JS 实现，也不想写 N-API native module）。Bun FFI 让你 5 分钟搞定：<code>dlopen('/usr/lib/libssl.dylib', { ... })</code> 声明你需要的函数（如 <code>SSL_library_init</code> / <code>SHA256</code> 等），直接调。比 N-API 路径快十倍——不用写 C++ + binding.gyp + 编译。<strong>但要注意</strong>：(1) 系统库版本差异（OpenSSL 1.x vs 3.x ABI 不同）—— 部署到不同 OS 要分别测试；(2) 错误处理薄 —— 调错参数 / 返回值 segfault 整个进程；(3) 二进制依赖 —— 用户要装 OpenSSL（一般都装了，但 musl Linux 容器要确认）。这种场景下 FFI 适合<strong>内部工具 / 临时脚本 / 快速原型</strong>；分发给外部用户的库还是 N-API 稳。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 B · 用 Macros 把 SVG 图标 inline 进 React 组件</h3>
+          <p>前端项目有 100+ SVG 图标，每个图标都要 inline 进 React 组件（<code>&lt;svg&gt;...&lt;/svg&gt;</code> 字面量）。传统方法：用 babel-plugin-inline-svg 或 vite-plugin-svgr 在 build 时转换。Bun Macros 让你不用 plugin：写一个 macro <code>readSvg(name)</code> 在 build 时读文件返回字符串，import with macro attribute → build 时替换为字面量。<strong>具体做法</strong>：(1) 写 <code>icons/macro.ts</code> 函数 <code>readSvg</code>；(2) 组件文件 <code>import { readSvg } from './icons/macro.ts' with { type: 'macro' }</code>；(3) <code>const home = readSvg('home')</code>；(4) <code>bun build</code> 时 readSvg 在编译期跑，产物里直接是 SVG 字面量。这种用法的好处：build 简单（不需要 plugin）+ 产物小（没有运行时读文件代码）。但限制：只能 Bun build 用，Vite / Next.js 不认。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 C · 评估「我们项目能不能用 bun:sqlite 替代 better-sqlite3」</h3>
+          <p>项目用 better-sqlite3 跑 SQLite 5 年了——稳定但 Docker 部署一直踩 node-gyp 编译坑。考虑切 bun:sqlite。判据：(1) <strong>API 兼容</strong>—— bun:sqlite API 80%+ 学习自 better-sqlite3，迁移工作量小；(2) <strong>性能</strong>—— 实测 benchmark 持平（都是直接调 SQLite C 库）；(3) <strong>SQLite extension</strong>—— 用了 sqlite3-extensions（如 spatialite / ICU）的项目，bun:sqlite 是否支持 extension 加载（最新版支持）；(4) <strong>BLOB / 复杂类型</strong>—— 用了 Custom function / aggregate function 的项目，bun:sqlite 实现可能不完整；(5) <strong>Vendor lock-in</strong>—— 切了 bun:sqlite 后切回 Node 不简单（API 不完全一致）。综合后大部分简单 CRUD SQLite 项目可以切；高级 SQLite 用法（custom function / extension）暂不切。但<strong>仅这一个改动就能消除 Docker 部署的 node-gyp 痛点</strong>，ROI 巨大。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 D</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 D · 给做技术决策的架构师：「内置 DB 客户端」是 vendor lock-in 吗</h3>
+          <p>架构师担心：用了 Bun.sql / bun:sqlite 后切回 Node 要改代码——这是 vendor lock-in 吗？技术上<strong>是有锁定但可控</strong>。规避策略：(1) <strong>抽象层</strong>—— 把 Bun.sql 调用包在 <code>db/index.ts</code> 文件里，业务代码只依赖你的抽象接口；切换时只改 db/index.ts，业务不动。(2) <strong>用 Drizzle / Prisma 等 ORM</strong>—— 这些 ORM 用 driver adapter pattern，能从 Bun.sql 切到 pg.js 改一行 driver。(3) <strong>评估实际切换概率</strong>—— 如果你 5 年内不会切回 Node，lock-in 不是真痛点；如果可能切，写抽象层。综合：用 Bun.sql 拿性能 + 简单部署的红利；写 thin abstraction 层避免业务代码硬绑；保持优化路径开放。这是对待"内置一等公民"哲学的成熟态度——<strong>用红利但不裸奔</strong>。</p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
         <div class="code-block">
           <span class="code-label">javascript</span>
-<pre class="code"><code class="lang-js">// 正文待写</code></pre>
+<pre class="code"><code class="lang-js">// FFI 完整示例：调 Rust crate 编译的 cdylib
+import { dlopen, FFIType, suffix } from 'bun:ffi';
+
+// suffix 是 'so' / 'dylib' / 'dll' 自动选
+const path = `./libmycrate.${suffix}`;
+
+const lib = dlopen(path, {
+  add: {
+    args: [FFIType.i32, FFIType.i32],
+    returns: FFIType.i32
+  },
+  hash_string: {
+    args: [FFIType.cstring, FFIType.u64],
+    returns: FFIType.cstring
+  },
+  free_string: {
+    args: [FFIType.ptr],
+    returns: FFIType.void
+  }
+});
+
+// 调用
+console.log(lib.symbols.add(1, 2));  // 3
+
+// 字符串调用 + 手动释放（Rust 用 Box::into_raw 返回的）
+const ptr = lib.symbols.hash_string('hello', 5);
+const result = ptr.toString();  // CString → JS string
+lib.symbols.free_string(ptr);   // 必须释放</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// Macros 完整示例
+// macros.ts
+export async function readSvg(name) {
+  return await Bun.file(`./icons/${name}.svg`).text();
+}
+
+export function gitCommitHash() {
+  // 在 build 时跑，结果嵌入产物
+  const proc = Bun.spawnSync(['git', 'rev-parse', 'HEAD']);
+  return proc.stdout.toString().trim();
+}
+
+// app.ts
+import { readSvg, gitCommitHash } from './macros.ts' with { type: 'macro' };
+
+// build 时这两行被预计算 + 替换
+const homeIcon = readSvg('home');
+const buildVersion = gitCommitHash();
+
+// React component
+export function Header() {
+  return (
+    &lt;header&gt;
+      &lt;div dangerouslySetInnerHTML={{ __html: homeIcon }} /&gt;
+      &lt;span&gt;build {buildVersion}&lt;/span&gt;
+    &lt;/header&gt;
+  );
+}</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// 抽象层 pattern：避免 Bun.sql vendor lock-in
+// db/index.ts
+import { sql as bunSql } from 'bun:sql';
+
+const db = bunSql({ url: process.env.DATABASE_URL });
+
+export async function getUserById(id: number) {
+  const [user] = await db`SELECT * FROM users WHERE id = ${id}`;
+  return user;
+}
+
+export async function createUser(name: string, email: string) {
+  const [user] = await db`
+    INSERT INTO users (name, email)
+    VALUES (${name}, ${email})
+    RETURNING *
+  `;
+  return user;
+}
+
+export async function transaction&lt;T&gt;(fn: (tx) =&gt; Promise&lt;T&gt;): Promise&lt;T&gt; {
+  return await db.begin(fn);
+}
+
+// 业务代码只依赖这个 db 模块
+// 切回 Node 时只改这一个文件，把 bun:sql 换成 postgres.js</code></pre>
         </div>
 
         <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
         <div class="pitfall">
-          <div class="pitfall-title">陷阱标题</div>
-          <p><em>正文待写。</em></p>
+          <div class="pitfall-title">期待 FFI 性能持平 N-API</div>
+          <p>FFI 每次调用要 marshal 参数（JS 类型 → C 类型），这部分开销 N-API 编译时已经 inline 了。Hot path 上（每秒百万次调用）FFI 比 N-API 慢 2-5x。如果你的需求是"调用频率不高"（每秒几千次以下）—— FFI 完全够。如果是 hot path（如游戏 / 实时数据流） —— 用 N-API。<strong>判断标准</strong>：profile 你的代码看 FFI 调用占多少 CPU。占 &gt; 10% 考虑切 N-API；占 &lt; 1% 不用关心。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">Macros 写「依赖运行时环境」的代码</div>
+          <p>Macros 在 build 时跑——不能依赖运行时环境（process.env / 网络请求 / DB）。常见错误：(1) macro 函数 <code>read process.env.API_KEY</code> —— 拿到的是 build 机器的 env，不是 runtime；(2) macro 函数 <code>fetch some-url</code> —— build 时跑可能没网或拿到旧数据；(3) macro 函数 <code>now()</code> —— 拿到的是 build 时间，不是 runtime 时间。规避：明确分清"build time"和"runtime"——build time 适合做静态资源 / 编译期常量；runtime 数据要用普通 import。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">用 bun:sqlite 但不开 WAL mode</div>
+          <p>SQLite 默认是 rollback journal mode，并发写性能差。生产场景<strong>一定开 WAL mode</strong>：<code>db.exec('PRAGMA journal_mode = WAL')</code>。WAL 让多读单写并发性能好 5-10x。Bun docs 推荐 WAL，但默认不开（向后兼容）—— 你要在初始化时显式开启。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">假设 Bun.redis 完全替代 ioredis</div>
+          <p>Bun.redis 在 1.2 仍是实验性，覆盖基础命令（GET / SET / DEL / EXPIRE / Pipeline）但<strong>Cluster mode / Sentinel 自动 failover / Streams API（XADD / XREADGROUP）/ Lua scripting</strong>支持还不完整。生产 Redis 重度用户（特别是用 Cluster / Streams）暂时仍 ioredis。简单 cache 场景可以试 Bun.redis；复杂场景等 Bun.redis 完善（预计 Bun 1.3+）。</p>
         </div>
 
         <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
         <ul>
-          <li><a href="https://bun.com/docs" target="_blank" rel="noopener">bun.com/docs</a></li>
-          <li><a href="https://github.com/oven-sh/bun" target="_blank" rel="noopener">oven-sh/bun GitHub</a></li>
-          <li>回到主题首页 → <a href="../index.html">Bun 深度学习</a></li>
+          <li><a href="https://bun.com/docs/api/ffi" target="_blank" rel="noopener">Bun · FFI docs</a> · 完整 dlopen / FFIType 参考</li>
+          <li><a href="https://bun.com/docs/runtime/macros" target="_blank" rel="noopener">Bun · Macros docs</a> · 编译期代码生成</li>
+          <li><a href="https://bun.com/docs/api/sqlite" target="_blank" rel="noopener">Bun · sqlite docs</a> · 内置 SQLite</li>
+          <li><a href="https://bun.com/docs/api/sql" target="_blank" rel="noopener">Bun · sql docs</a> · 内置 Postgres</li>
+          <li><a href="https://github.com/WiseLibs/better-sqlite3" target="_blank" rel="noopener">better-sqlite3</a> · npm 对照</li>
+          <li><a href="https://github.com/porsager/postgres" target="_blank" rel="noopener">postgres.js</a> · npm 对照</li>
+          <li>对照 Node N-API → <a href="../../node/05-multicore-native/02-n-api.html">Node P5.2 · N-API</a></li>
+          <li>Zig comptime → <a href="../02-internals/02-zig-system-layer.html">P2.2 · Zig 系统层</a></li>
+          <li>下一章 → <a href="02-when-to-bun.html">P5.2 · 何时切 Bun / 何时仍用 Node</a></li>
         </ul>
 
         <nav class="chapter-nav" aria-label="章节翻页">

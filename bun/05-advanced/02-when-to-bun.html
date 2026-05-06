@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>生产决策树：5 维度 + 7 场景 verdict + 风险评估 · P5 · Bun 深度学习</title>
-    <meta name="description" content="决策章。把前面所有内容收束到一张决策树——<strong>production 中怎么判断该不该切 Bun</strong>。基于启动速度敏感性 / npm 生态依赖 / 工具链一体化收益 / 团队工程化能力 / 部署目标 5 维度，给出 CI / monorepo dev / Web API / Lambda / Edge / 遗留项目 / npm 库 7 个典型场景的 verdict。" />
+    <title>何时切 Bun / 何时仍用 Node：生产决策树 · P5.2 · Bun 深度学习</title>
+    <meta name="description" content="决策章。把前面所有内容收束到一张决策树——production 中怎么判断该不该切 Bun。基于启动速度敏感性 / npm 生态依赖 / 工具链一体化收益 / 团队工程化能力 / 部署目标 5 维度，给出 7 个典型场景的 verdict + 风险评估。" />
     <link rel="stylesheet" href="../../assets/styles.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23fbf0df'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23000'%3EB%3C/text%3E%3C/svg%3E" />
   </head>
@@ -45,9 +45,9 @@
           <a href="index.html">P5 · 高级与生产决策</a><span class="breadcrumb-sep">/</span>
           <span>02 · 何时切 Bun / 何时仍用 Node</span>
         </nav>
-        <h1>生产决策树：5 维度 + 7 场景 verdict + 风险评估</h1>
+        <h1>何时切 Bun / 何时仍用 Node：生产决策树</h1>
         <p class="lead">
-          决策章。把前面所有内容收束到一张决策树——<strong>production 中怎么判断该不该切 Bun</strong>。基于启动速度敏感性 / npm 生态依赖 / 工具链一体化收益 / 团队工程化能力 / 部署目标 5 维度，给出 CI / monorepo dev / Web API / Lambda / Edge / 遗留项目 / npm 库 7 个典型场景的 verdict。
+          决策章。把前面所有内容收束到一张决策树——<strong>production 中怎么判断该不该切 Bun</strong>。基于启动速度敏感性 / npm 生态依赖 / 工具链一体化收益 / 团队工程化能力 / 部署目标 <strong>5 维度</strong>，给出 CI / monorepo dev / Web API / Lambda / Edge runtime / 遗留项目 / npm 库 <strong>7 个典型场景</strong>的 verdict + 风险评估。<strong>核心论点</strong>：Bun 不是 Node 替代品，是 Node 加速器——"切 Bun"成本接近 0，回退也容易，应该按"渐进式切换"思路评估。
         </p>
         <div class="chapter-meta">
           <span><strong>阅读时长</strong> ~30 分钟</span>
@@ -55,59 +55,396 @@
           <span><strong>主要来源</strong> bun.com/docs · Oven 商业化博客 · 社区案例</span>
         </div>
 
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>本章为<strong>骨架</strong>。已完成大纲与关键知识点列表（见各段标题下的 bullet），正文撰写中。可参考 <a href="../../bun/outline.md">outline.md</a> 了解完整覆盖范围。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
-          <li><em>正文待写。</em></li>
+          <li><strong>Bun 不是 Node 替代品，是 Node 加速器</strong>——这是评估的起点。Bun 100% Node 兼容意味着"切 Bun"和"切回 Node"成本对称低；不存在"all or nothing"决策，应该按渐进式切换思路评估。</li>
+          <li><strong>5 决策维度</strong>：启动速度敏感性 / npm 生态依赖 / 工具链一体化收益 / 团队工程化能力 / 部署目标。每个项目沿这 5 维度评估，得到自己的 verdict。</li>
+          <li><strong>2026 年的稳定基线</strong>：Bun 1.2+ 在 Linux / macOS / Windows 三平台一级支持，Node 兼容覆盖 95%+ 主流 npm 包，可视为"通用 production ready"。</li>
         </ol>
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
-        <p><em>正文待写。本章覆盖：5 决策维度 · 7 场景 verdict · 启动速度敏感性 · 部署目标 · 渐进切换 · 风险评估 · bus factor</em></p>
+
+        <h3>评估的起点：「切 Bun」不是颠覆性决策</h3>
+        <p>评估"切 Bun"前先<strong>校准心智模型</strong>。常见误读：</p>
+        <p><strong>错位 1 · 把 Bun 当成"另一个 Node"</strong>——以为切 Bun 等于换技术栈、要培训团队、要改大量代码。实际上 Bun 100% Node 兼容（参见 <a href="../03-runtime/02-node-compat.html">P3.2</a>）—— 你的 JS / TS 代码、npm 包、package.json、tsconfig.json 全都不用改。切 Bun 表面看起来"换 runtime"，本质是"换执行二进制"。</p>
+        <p><strong>错位 2 · 把"切 Bun"当成不可逆决策</strong>—— 以为一旦切了就回不去。实际上回退极简单：把 CI / Dockerfile 里 <code>bun</code> 改回 <code>node</code> 就行。代码不动。</p>
+        <p><strong>错位 3 · 把 Bun 看成"all or nothing"</strong>—— 以为要么全公司切要么不切。实际上你可以<strong>一个服务一个服务渐进切</strong>：先切 CI（最低风险）→ 切某个非关键服务的 install + run → 再扩到关键服务 → 最后切 build / test。每一步独立验证。</p>
+        <p>这种"切 Bun 是低风险渐进式"的认识是<strong>评估决策的基本前提</strong>。如果你把 Bun 当成 Deno 那种颠覆式工具来评估，会高估迁移成本 / 低估收益，得出"暂时不切"的保守结论；如果按"加速器"思路评估，更容易看到具体场景的明确 ROI。</p>
+
+        <h3>5 决策维度</h3>
+        <p>每个项目沿这 5 维度评估自己的位置，决定"切多深"：</p>
+
+        <h4>维度 1 · 启动速度敏感性</h4>
+        <p>这是 Bun 优势最强的维度。不同场景的敏感度：</p>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 40%">场景</th>
+              <th style="width: 24%">敏感度</th>
+              <th style="width: 36%">Bun 优势倍数</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Lambda / Serverless（每次冷启）</td>
+              <td>极敏感</td>
+              <td>~10x（30ms → 5ms）</td>
+            </tr>
+            <tr>
+              <td>CI 任务（每次启动多次工具）</td>
+              <td>敏感</td>
+              <td>~3-5x（累积多步骤）</td>
+            </tr>
+            <tr>
+              <td>CLI 工具（每次调用）</td>
+              <td>敏感</td>
+              <td>~10x（30ms → 5ms）</td>
+            </tr>
+            <tr>
+              <td>开发服务器（启动 + watch）</td>
+              <td>中</td>
+              <td>~2-3x</td>
+            </tr>
+            <tr>
+              <td>24/7 web server（启动一次跑几天）</td>
+              <td>不敏感</td>
+              <td>~1x（启动开销不重要）</td>
+            </tr>
+            <tr>
+              <td>批处理 / 后台任务（小时级跑）</td>
+              <td>不敏感</td>
+              <td>~1x</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>判断你的场景属于哪类：(1) 进程启动一次跑多久？秒级 → 敏感；天级 → 不敏感。(2) 进程启动频率？每秒一次 → 极敏感；每月一次 → 不敏感。</p>
+
+        <h4>维度 2 · npm 生态依赖</h4>
+        <p>项目对 npm 包的依赖深度：</p>
+        <p><strong>(1) 纯 JS 依赖</strong>—— Bun 100% 兼容，无 blocker。</p>
+        <p><strong>(2) Top 100 native module（better-sqlite3 / sharp / bcrypt 等）</strong>—— Bun 兼容，但要测试每个包能不能跑。一般能。</p>
+        <p><strong>(3) 中长尾 native module（小众的 N-API 包）</strong>—— 95%+ 能跑，5% 可能踩 corner case。</p>
+        <p><strong>(4) 用 V8 specific API 的包（少见）</strong>—— Bun 不兼容，必须找替代或 fallback Node。</p>
+        <p><strong>(5) 用 Node 内部未公开 API 的包（极少）</strong>—— 可能不兼容，要 case by case。</p>
+        <p>判断你的依赖：<code>cat package.json | jq '.dependencies, .devDependencies'</code> 看一眼，跑 <code>bun install</code> + <code>bun run test</code> 验证。typical 项目 95%+ 直接 work，不 work 的列出来作为切换的 blocker。</p>
+
+        <h4>维度 3 · 工具链一体化收益</h4>
+        <p>"工具链一体化"红利的来源是 install + run + build + test 的总时间节省（参见 <a href="../04-toolchain/03-bun-build.html">P4.3</a>）：</p>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 40%">项目类型</th>
+              <th style="width: 30%">一体化收益</th>
+              <th style="width: 30%">每年估算时间节省</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>大型 monorepo（&gt; 1000 包）</td>
+              <td>极大</td>
+              <td>每开发者 50+ 小时</td>
+            </tr>
+            <tr>
+              <td>中型 monorepo（100-500 包）</td>
+              <td>大</td>
+              <td>每开发者 20-30 小时</td>
+            </tr>
+            <tr>
+              <td>单一服务 / 库（&lt; 100 包）</td>
+              <td>小</td>
+              <td>每开发者 5-10 小时</td>
+            </tr>
+            <tr>
+              <td>个人脚本 / 一次性工具</td>
+              <td>极小</td>
+              <td>~0</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>这个维度的核心信号：<strong>每天工具链相关时间占多少</strong>。如果你 30%+ 时间在等 install / build / test，Bun 一体化 ROI 极高；如果 &lt;5%，差距小。</p>
+
+        <h4>维度 4 · 团队工程化能力</h4>
+        <p>切 Bun 需要团队具备某些能力：</p>
+        <p><strong>(1) 调试 corner case 的耐心</strong>—— Bun 兼容性边界仍在收敛（虽然 1.2+ 大幅稳定）。偶尔遇到包在 Bun 上不工作，要会查 GitHub Issues、写 minimal repro、提 issue 给 Bun 团队。</p>
+        <p><strong>(2) 评估 N-API 兼容性的能力</strong>—— 知道哪些包是 native module，会跑测试验证 Bun 兼容。</p>
+        <p><strong>(3) 接受"工具仍在快速演进"</strong>—— Bun 每两到三周一个 release，破坏性变更不多但 minor 行为变化常见。团队要愿意跟。</p>
+        <p>保守团队（"我们用 LTS 5 年不动" 文化）<strong>不适合切 Bun</strong>—— 仍 Node。激进团队（"用最新工具"文化）<strong>适合早切</strong>。中间团队按"先 dev / CI 切，production 观察"渐进。</p>
+
+        <h4>维度 5 · 部署目标</h4>
+        <p>这是最关键的维度，决定"能不能切"：</p>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 40%">部署目标</th>
+              <th style="width: 22%">支持 Bun</th>
+              <th style="width: 38%">备注</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>自建服务器 / VPS / EC2 / Linode</td>
+              <td>✅</td>
+              <td>装 Bun 二进制即可</td>
+            </tr>
+            <tr>
+              <td>Docker / Kubernetes</td>
+              <td>✅</td>
+              <td>用 oven/bun 官方 image</td>
+            </tr>
+            <tr>
+              <td>AWS Lambda</td>
+              <td>✅</td>
+              <td>Custom runtime + Bun 二进制；Node 默认 runtime 也能跑（但慢）</td>
+            </tr>
+            <tr>
+              <td>Google Cloud Run / Functions</td>
+              <td>✅</td>
+              <td>Cloud Run 用 Docker 没问题；Functions 仅 Node runtime</td>
+            </tr>
+            <tr>
+              <td>Vercel</td>
+              <td>⚠️ 部分</td>
+              <td>Serverless functions 用 Node runtime；Bun 在某些 deployment 类型支持</td>
+            </tr>
+            <tr>
+              <td>Cloudflare Workers</td>
+              <td>❌</td>
+              <td>V8 Isolate 多租户，Bun 不能跑</td>
+            </tr>
+            <tr>
+              <td>Vercel Edge Runtime</td>
+              <td>❌</td>
+              <td>同上</td>
+            </tr>
+            <tr>
+              <td>Deno Deploy</td>
+              <td>❌</td>
+              <td>专为 Deno 设计</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>这个维度<strong>是硬约束</strong>——如果你的项目必须部署到 Edge runtime（Cloudflare Workers / Vercel Edge / Deno Deploy），Bun 不能跑就是不能跑，没有 workaround。</p>
+
+        <h3>7 个典型场景 verdict</h3>
+
+        <h4>场景 1 · CI 加速</h4>
+        <p><strong>Verdict：✅ 强烈推荐切 Bun</strong>。CI 任务（install + lint + test + build）是 Bun 优势最强的场景：(1) 启动速度敏感（每个步骤都启动一次）；(2) 工具链一体化收益最大化；(3) 部署目标无关（CI 不部署）；(4) 风险极低（CI 失败不影响 production）。</p>
+        <p>典型 ROI：CI 时间从 5-8 分钟降到 2-3 分钟。一天提交 50 次 PR 的团队节省 2-4 小时。一个月几十小时。</p>
+        <p>具体做法：(1) GitHub Actions 用 <code>oven-sh/setup-bun@v2</code>；(2) <code>bun install --frozen-lockfile</code>；(3) <code>bun run lint</code> + <code>bun test</code> + <code>bun build</code>。CI 配置可能<strong>10 行内完成</strong>。</p>
+
+        <h4>场景 2 · Monorepo 开发</h4>
+        <p><strong>Verdict：✅ 推荐切 Bun</strong>。大型 monorepo（&gt; 100 packages）是 Bun 工具链一体化的最佳场景：(1) install 比 pnpm 快 2-4x；(2) build / test 共享 parser 加速；(3) Catalogs 简化版本管理。</p>
+        <p>具体做法：(1) <code>bun install</code> 替代 <code>pnpm install</code>；(2) Workspaces 配置兼容；(3) 加 Catalogs 做版本统一；(4) <code>bun run --filter</code> 跑 workspace-specific 命令。</p>
+        <p>注意：(1) 如果用 pnpm patch / .pnpmfile.cjs 做深度定制 → 评估 Bun 等价物；(2) 严格 phantom dep 检测的项目 → 加 <code>strict = true</code> 到 bunfig.toml。</p>
+
+        <h4>场景 3 · 生产 Web API（Docker / VPS）</h4>
+        <p><strong>Verdict：✅ 推荐切 Bun</strong>。自建服务器或 Docker 部署的 Node web service 是 Bun 的甜点场景：(1) 启动速度（Docker 重启 / 滚动升级时受益）；(2) Bun.serve 比 http.createServer 快 2-3x（参见 <a href="../03-runtime/01-builtin-apis.html">P3.1</a>）；(3) 内存占用低（JSC 比 V8 低 ~50%）—— 单台机器扛更高 RPS。</p>
+        <p>具体做法：(1) build 用 <code>bun build src/server.ts --target=bun --outfile=dist/server.js</code>；(2) Dockerfile 用 <code>FROM oven/bun:latest</code>；(3) 启动 <code>bun dist/server.js</code>。</p>
+        <p>风险：渐进切——先切非关键服务跑 1-2 周稳定后再扩到关键服务。</p>
+
+        <h4>场景 4 · 生产 Lambda</h4>
+        <p><strong>Verdict：✅ 决定性推荐切 Bun</strong>。Lambda 是 Bun 优势最决定性的场景—— 启动时间直接转化为成本（按时长计费）+ P50 延迟。</p>
+        <p>典型 ROI：Lambda 冷启动从 ~300ms（Node + 业务代码）降到 ~50-80ms（Bun + 业务代码）。一个高 QPS Lambda 一年节省的 cost 能让"切 Bun 的工程时间"快速回本。</p>
+        <p>具体做法：(1) <code>bun build --compile</code> 打成 Lambda 兼容二进制；(2) 用 AWS Lambda custom runtime；(3) 或用 Lambda Node.js runtime + 把 Bun 当 npm 依赖（速度差一点但简单）。</p>
+
+        <h4>场景 5 · 生产 Edge runtime（Cloudflare Workers / Vercel Edge）</h4>
+        <p><strong>Verdict：❌ 不能切 Bun</strong>。这是硬约束—— Edge runtime 基于 V8 Isolate 多租户模型，Bun 用 JSC 不支持（参见 <a href="../01-overview/02-runtime-landscape.html">P1.2</a>）。</p>
+        <p>规避：(1) Edge 部署的服务保持 Node-compat；(2) 用 Web 标准 API 写代码（fetch handler / Web Crypto / Streams），让代码理论上"既能跑 Bun 也能跑 Edge"；(3) 等 Bun 团队未来支持 Isolate 多租户（公开讨论过但 2026 没具体路线图）。</p>
+
+        <h4>场景 6 · 大型遗留 Node 项目（5+ 年代码）</h4>
+        <p><strong>Verdict：⚠️ 渐进切换</strong>。遗留项目情况复杂，全量切风险高，应按"<strong>install → CI → 非关键服务 → 关键服务</strong>"渐进：</p>
+        <p><strong>第 1 步</strong>：dev 环境切 <code>bun install</code> 替代 npm/yarn/pnpm。零风险——产物 node_modules 与 npm 一致，rollback 简单。</p>
+        <p><strong>第 2 步</strong>：CI 切 <code>bun test</code> + <code>bun run lint</code>。失败的 case 收集起来评估。</p>
+        <p><strong>第 3 步</strong>：选一个非关键服务（内部工具 / 后台 worker）切 Bun runtime，跑 1-2 周观察。</p>
+        <p><strong>第 4 步</strong>：扩到 1-2 个中等服务，再观察。</p>
+        <p><strong>第 5 步</strong>：根据前几步的发现决定要不要切关键服务。可能的结论：核心 70-80% 服务切，剩 20-30% 留 Node（特殊兼容性 / Edge 部署 / 团队偏好）。这是<strong>大部分大公司的实际状态</strong>—— 渐进切是务实路径。</p>
+
+        <h4>场景 7 · 写 npm 库（被很多项目用）</h4>
+        <p><strong>Verdict：⚠️ Bun dev / 测试 / 但 npm 包仍按 Node 标准发</strong>。维护 npm 库的人<strong>不是用 Bun 替代发布工具，是用 Bun 加速 dev + 测试覆盖更多 runtime</strong>：</p>
+        <p>具体做法：</p>
+        <p><strong>(1) Dev 用 Bun</strong>—— <code>bun install</code> + <code>bun run dev</code> + <code>bun test</code>。比 Node + ts-node + nodemon + jest 快得多。</p>
+        <p><strong>(2) 发布产物按 Node 标准</strong>—— 用 tsup / unbuild / tshy 输出 ESM + CJS + types，不要用 <code>bun build</code>（Bun build 优化对 Node 用户不利）。</p>
+        <p><strong>(3) CI 矩阵跑 Node + Bun + Deno</strong>—— GitHub Actions 三 runtime 矩阵确保兼容。</p>
+        <p><strong>(4) README 标"Node + Bun + Deno 兼容"</strong>—— 给不同 runtime 用户信心。</p>
+        <p>这种用法让你<strong>个人享受 Bun dev 速度，库用户继续按 Node 用</strong>—— 双赢。</p>
+
+        <h3>风险评估</h3>
+        <p>切 Bun 的<strong>风险维度</strong>：</p>
+
+        <h4>风险 1 · Bus factor（Jarred 离开）</h4>
+        <p>Bun 核心架构决策长期由 Jarred 主导。如果 Jarred 离开 Oven（健康 / 个人选择 / 公司收购），Bun 演进会有真空期。<strong>评估</strong>：(1) 2026 Bun 团队 ~10-15 人，几位资深开发者独立负责子系统；(2) bus factor 在持续缓解但仍是真实风险；(3) 如果发生，Bun 已发布的二进制不会消失，社区可以 fork。<strong>对你的影响</strong>：核心服务可以切 Bun（你的代码可移植，runtime 倒了能切回 Node）；强依赖 Bun 独有 API 的代码写抽象层方便回退。</p>
+
+        <h4>风险 2 · Bug 率（vs Node 成熟度）</h4>
+        <p>Bun 1.2+ 已经显著稳定，但<strong>仍然比 Node 22 LTS 多 corner case</strong>。<strong>评估</strong>：(1) 1.0+ 后没有大的 breaking change，行为基本稳定；(2) 高频 release 修复快（典型 1-2 周修一个 issue）；(3) 仍偶有 corner case。<strong>对你的影响</strong>：production 启用 monitoring + alerting；新 Bun 版本不要立即上 production，先在 dev / staging 验证；保留 Node fallback 路径。</p>
+
+        <h4>风险 3 · 商业化进展</h4>
+        <p>Oven 是商业公司，靠 VC 钱跑（YC + a16z 种子轮）。如果 Bun Cloud / Enterprise 商业化跑不通，Oven 可能裁员或收缩团队。<strong>评估</strong>：(1) 2025-2026 Oven 公开探索 Bun Cloud + Enterprise，进展尚未明朗；(2) 如果跑通，Bun 进入自我造血状态，长期可持续；(3) 跑不通仍可能继续，但开发节奏放缓。<strong>对你的影响</strong>：商业关系（如选 Bun Cloud 做主力部署）要看 SLA + 退出条款；不要把 Bun 商业产品作为单点依赖；OSS Bun 二进制本身风险低。</p>
+
+        <h4>风险 4 · Edge runtime 长期错位</h4>
+        <p>如果你的项目长期方向是边缘部署（Cloudflare / Vercel / Edge），Bun 在这块短期内不能填位。<strong>评估</strong>：(1) Bun 是否未来支持 Isolate 多租户—— 团队公开讨论过但无路线图；(2) Edge runtime 是趋势，2030 年可能占 JS 部署 50%+；(3) 如果你重度押注 Edge，Bun 不是合适选择。<strong>对你的影响</strong>：Edge 部署的服务用 Web 标准 API + Node-compat 子集；Bun runtime 的服务限于传统部署。</p>
+
+        <h3>2026 年的稳定基线</h3>
+        <p>把所有评估收束到 2026 年的 Bun 状态：</p>
+        <p><strong>(1) 平台支持</strong>—— Linux + macOS + Windows 一级支持（1.1+ 起 Windows 完整）。三平台都 production-ready。</p>
+        <p><strong>(2) Node API 兼容</strong>—— 95%+ 主流 npm 包能直接跑。Top 1000 native module 95%+ 能跑。Edge 部署的 Workers 不能。</p>
+        <p><strong>(3) 工具链</strong>—— install / run / build / test 都成熟。HMR (--hot) 比 Vite 弱，但其他维度成熟。</p>
+        <p><strong>(4) 内置 API</strong>—— Bun.serve / Bun.file / Bun.password / Bun.sql / bun:sqlite 等成熟。Bun.redis 实验性。HTML imports 实验性。</p>
+        <p><strong>(5) 社区生态</strong>—— Discord / GitHub 活跃；Issues 响应快；社区案例增长快；但相比 Node 社区仍小一个数量级。</p>
+        <p>这意味着<strong>2026 年大部分场景下 Bun 是 production-ready 选择</strong>—— 不是"试试看"，是"严肃考虑"。</p>
+
+        <h3>「作者本人的生产决策」</h3>
+        <p>本主题作者本人在生产环境用 Bun（替代 pnpm 做 install）—— 这是<strong>install 维度的最低风险切换</strong>，零风险拿到 install 速度提升 2-4x。runtime / build / test 可以分阶段评估，按渐进切换思路推进。</p>
+        <p>这种"<strong>选最低风险维度先切，其他后看</strong>"的策略适合大部分团队 —— 不是 all or nothing，是按维度逐个切，每一步独立验证 ROI。这就是<strong>"Bun 不是 Node 替代品，是 Node 加速器"</strong>这个核心论点的实践含义。</p>
+
+        <h3>未来 5 年的预判（与 P1.2 呼应）</h3>
+        <p>把 P1.2 中的预判再次收束（详见 <a href="../01-overview/02-runtime-landscape.html">P1.2 Bun 在 JS 服务端生态的位置</a>）：</p>
+        <p><strong>Node 仍主力</strong>（80%+ 份额）—— 17 年生态护城河 + LTS 模型 + 大公司技术债决定的。</p>
+        <p><strong>Bun 持续蚕食</strong>（5-10% → 20-30% 取决于 Oven 商业化）—— 主要在新项目 / monorepo / CI / Lambda 场景。</p>
+        <p><strong>Edge runtime 增长</strong>（边缘 60%+）—— 这是 Bun 短期不能填的生态位。</p>
+        <p>对你的决策的<strong>实操含义</strong>：</p>
+        <p><strong>(1) 不要赌"Bun 颠覆 Node"</strong>—— 不会发生。Bun 长期是 Node 加速器，不是替代品。</p>
+        <p><strong>(2) 不要赌"Bun 死掉切回 Node 痛苦"</strong>—— Bun 已发布二进制不会消失，OSS 路径稳定。</p>
+        <p><strong>(3) 把 Bun 看作"工具池里的一个选项"</strong>—— 适合的场景用，不适合的不用。Edge 部署 / 复杂 Postgres 高级特性 / 团队保守 → 仍 Node。</p>
+        <p><strong>(4) 给团队留切换路径</strong>—— 写代码用 Web 标准 API + Node 兼容形态；Bun 独有 API 写抽象层；CI 矩阵保留 Node + Bun 双跑。</p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 A · 给 CTO：评估「公司全面切 Bun」的决策框架</h3>
+          <p>CTO 关注："我们 50 个 Node 服务能不能切 Bun，benefit 多大？"——这是平台级决策。具体步骤：(1) <strong>盘点服务</strong>—— 把 50 个服务按"部署目标"分类：Edge runtime（不能切）、Lambda（决定性切）、Docker / VPS（推荐切）、Cron job（推荐切）。通常的分布：50 个服务里 5-10 个是 Edge（不切），40-45 个是 Docker / Lambda（可切）。(2) <strong>估算 ROI</strong>—— 启动速度敏感的服务 ~50 个 × 节省 P50 50ms × 1M req/天 = 大量延迟改善 + Lambda 成本节省。(3) <strong>评估风险</strong>—— bus factor / bug 率 / 商业化—— 都是可控风险，不是 blocker。(4) <strong>制定 roadmap</strong>—— Q1 切 CI（最低风险）；Q2 切 dev / install；Q3 切 1-2 非关键服务；Q4 评估扩到关键服务。这种渐进 roadmap 给 CTO 一个清晰的 12 个月计划。综合后通常的结论：可以切 70-80% 服务，剩余按场景留 Node。这是务实的 production decision。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 B · 给个人开发者：「我的下一个项目用 Bun 还是 Node」</h3>
+          <p>个人开发者起新项目（个人博客 / 工具 / SaaS prototype）——选 Bun 还是 Node？判据简单很多：(1) <strong>部署目标</strong>—— Cloudflare Workers / Vercel Edge → Node；其他（Vercel function / Lambda / Docker / VPS）→ Bun。(2) <strong>是否前端 + 后端 fullstack</strong>—— 前端组件测试需要 Vitest（DOM 集成）→ build/test 用 Vitest，runtime 仍可 Bun；纯后端 → 全套 Bun。(3) <strong>团队大小</strong>—— 个人 / 小团队（1-3 人）适合用 Bun（Move fast 文化匹配）；大团队保守。综合：<strong>个人项目大部分场景选 Bun 没问题</strong>—— dev 体验好 + 启动快 + 工具链简单。如果 5 年后想切回 Node，代价低。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 C · 给做技术选型的 PM：怎么向团队 sell 切 Bun</h3>
+          <p>PM 想推动团队切 Bun，需要给业务方 / 工程师 sell。话术框架：(1) <strong>对业务方</strong>—— "Lambda 成本节省 X%、CI 时间节省 Y%、用户体验 P50 latency 改善 Z ms"。具体数字按你的场景算。(2) <strong>对工程师</strong>—— "dev 体验提升（启动 5-10x、--hot 保留状态）、工具链简化（不用装 ts-node / dotenv / tsconfig-paths）、与 Node 兼容（代码不动）"。(3) <strong>对架构师</strong>—— "渐进式切换（不是 all or nothing），先 install / CI 切，关键服务后切；切回 Node 路径明确"。(4) <strong>对运维</strong>—— "Docker image 小（50MB vs 200MB）、启动快（容器冷启快）、内存占用低"。每个 stakeholder 关心的不同，sell 时要分别讲。综合后通常 90%+ 团队会同意切 install + CI（最低风险），其他维度按渐进 roadmap 推进。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 D</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 D · 给 5 年后回看的自己：今天选 Bun 是对的吗</h3>
+          <p>这是个反思场景—— 5 年后（2031）回看 2026 年切 Bun 的决策，怎么评估？三个可能：(1) <strong>Bun 蓬勃发展</strong>（占 20-30% 份额）—— 你的早期投入有 ROI，团队 know-how 是竞争优势。(2) <strong>Bun 停滞</strong>（仍占 5-10%）—— 你的代码可移植到 Node，迁移成本可控；个人项目层面投入未浪费（拿到了 dev 体验好的 5 年）。(3) <strong>Bun 被收购 / 路线调整</strong>—— 不影响已 deploy 的代码；可能影响新 feature 跟进速度。三种情况都<strong>不至于灾难</strong>—— Bun 路线（兼容 Node + 加速）的本质保证了切换成本对称低。这是与早期 Deno / Yarn 2.x 的关键差异—— 那两个项目用户切了之后回不去（生态分裂）。Bun 不是这种风险。综合：<strong>2026 年切 Bun 是合理决策</strong>—— 即使最坏情况，损失也可控；最好情况收益巨大。这种 asymmetric reward 让"渐进切 Bun"在大部分场景下是对的。</p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
         <div class="code-block">
+          <span class="code-label">yaml</span>
+<pre class="code"><code class="lang-yaml"># 渐进切换 Roadmap：Q1 切 CI 的 GitHub Actions 配置
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 切 Bun 替代 Node + npm
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+
+      # install (Bun 比 npm 快 5-10x)
+      - run: bun install --frozen-lockfile
+
+      # lint / format
+      - run: bun run lint
+      - run: bun run format:check
+
+      # test (Bun 比 Jest 快 10x+)
+      - run: bun test --coverage --coverage-reporter=lcov
+
+      # build
+      - run: bun run build
+
+      # upload coverage
+      - uses: codecov/codecov-action@v4
+        with: { files: ./coverage.lcov }</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">dockerfile</span>
+<pre class="code"><code class="lang-dockerfile"># Q3 切非关键服务的 Dockerfile：Bun 多阶段 build
+FROM oven/bun:1 AS builder
+WORKDIR /app
+
+# install + build
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
+
+COPY . .
+RUN bun build src/server.ts \
+    --target=bun \
+    --outfile=dist/server.js \
+    --minify \
+    --sourcemap=external
+
+# Production stage（极简）
+FROM oven/bun:1-slim
+WORKDIR /app
+COPY --from=builder /app/dist /app/dist
+COPY --from=builder /app/node_modules /app/node_modules
+
+USER bun
+EXPOSE 3000
+CMD ["bun", "dist/server.js"]
+
+# 镜像体积 ~150MB（vs Node + node_modules ~250MB）</code></pre>
+        </div>
+        <div class="code-block">
           <span class="code-label">javascript</span>
-<pre class="code"><code class="lang-js">// 正文待写</code></pre>
+<pre class="code"><code class="lang-js">// 写代码兼容多 runtime 的模板（保留切换路径）
+// db/index.ts —— 抽象层
+const driver = await (async () =&gt; {
+  if (typeof Bun !== 'undefined' &amp;&amp; 'sql' in Bun) {
+    // Bun: 用内置 Bun.sql
+    const { sql } = await import('bun:sql');
+    return sql({ url: process.env.DATABASE_URL });
+  } else {
+    // Node: fallback 到 postgres.js
+    const postgres = (await import('postgres')).default;
+    return postgres(process.env.DATABASE_URL);
+  }
+})();
+
+// 业务代码只依赖这个 db 模块
+// 切 Bun ↔ Node 时只改这一个文件，业务不动
+export const db = driver;
+
+// 用法
+import { db } from './db';
+const users = await db`SELECT * FROM users`;
+// 在 Bun 上走 Bun.sql，在 Node 上走 postgres.js</code></pre>
         </div>
 
         <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
         <div class="pitfall">
-          <div class="pitfall-title">陷阱标题</div>
-          <p><em>正文待写。</em></p>
+          <div class="pitfall-title">把「切 Bun」当作 all-or-nothing 决策</div>
+          <p>"我们要不要切 Bun？" —— 这种问法本身就错了。Bun 与 Node 兼容，可以一个服务一个服务渐进切；不是要么全切要么不切。<strong>正确问法</strong>：(1) "我们要不要切 install？" → 大概率 yes（最低风险）；(2) "我们要不要切 CI？" → 大概率 yes；(3) "我们要不要切某个非关键服务的 runtime？" → 看场景；(4) "我们要不要切关键服务？" → 渐进观察。每个问题独立评估，每一步独立验证。一刀切的"全切"或"不切"都是错的决策框架。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">高估 Bun 的「runtime 速度优势」、低估「工具链一体化」</div>
+          <p>很多人评估 Bun 时把焦点放在 "runtime 比 Node 快多少 x"——但<strong>大部分场景这个差距不是决定性的</strong>。runtime 优势在 hot 简单场景（hello world）显著（2-3x），在复杂业务场景压缩到 20-50%。Bun 真正的差异化在 install + run + build + test 的<strong>累积时间</strong>—— 大型 monorepo 上 3-5x 整体提速。如果你只评估 runtime 不评估工具链，结论会偏保守。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">忽视 Edge runtime 部署的硬约束</div>
+          <p>有人评估到一半决定"切 Bun"——上 production 才发现某些服务部署到 Cloudflare Workers / Vercel Edge，Bun 不能跑。<strong>第一步要做的是确认部署目标</strong>—— Edge 部署的服务保持 Node。Bun 评估前先列清楚每个服务的部署目标。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">没有给团队留切换路径</div>
+          <p>"切 Bun"后要有<strong>回退路径</strong>—— 万一 Bun 出问题（重大 bug / 商业化失败 / 团队偏好变化），能切回 Node。<strong>具体做法</strong>：(1) 写代码不依赖 Bun 独有 API，或写抽象层；(2) CI 矩阵保留 Node + Bun 双跑；(3) Production 部署用 Docker，能换 base image；(4) 关键 npm 包都用 Web 标准或 Node 兼容形态。这些设计 0 额外成本，给你长期灵活性。</p>
         </div>
 
         <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
         <ul>
-          <li><a href="https://bun.com/docs" target="_blank" rel="noopener">bun.com/docs</a></li>
-          <li><a href="https://github.com/oven-sh/bun" target="_blank" rel="noopener">oven-sh/bun GitHub</a></li>
+          <li><a href="https://bun.com/docs" target="_blank" rel="noopener">Bun 官方 docs</a></li>
+          <li><a href="https://bun.com/blog" target="_blank" rel="noopener">Bun 官方 blog</a> · 关注 release notes 跟进特性</li>
+          <li><a href="https://github.com/oven-sh/bun/issues" target="_blank" rel="noopener">oven-sh/bun Issues</a> · 兼容性进度</li>
+          <li><a href="https://github.com/apvarun/awesome-bun" target="_blank" rel="noopener">awesome-bun</a> · 社区生态导航</li>
+          <li>对照 Node → <a href="../../node/index.html">Node.js Runtime 主题</a></li>
+          <li>对照 V8 → <a href="../../v8/index.html">V8 Engine 主题</a></li>
           <li>回到主题首页 → <a href="../index.html">Bun 深度学习</a></li>
         </ul>
 
         <nav class="chapter-nav" aria-label="章节翻页">
           <a class="prev" href="01-ffi-macros-db.html"><span class="label">← 上一章</span><span class="title">P5.1 · FFI / Macros / 内置 DB</span></a>
-          <a class="next" href="../index.html"><span class="label">下一章 →</span><span class="title">回到主题首页 → Bun 深度学习</span></a>
+          <a class="next" href="../index.html"><span class="label">回到主题首页 →</span><span class="title">Bun 深度学习</span></a>
         </nav>
       </article>
       <aside class="on-page-toc" aria-label="本页目录"><h3>本页目录</h3><ul></ul></aside>
