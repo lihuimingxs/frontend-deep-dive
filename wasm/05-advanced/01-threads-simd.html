@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Threads + SIMD + Atomics · P5.1 · WebAssembly 深度学习</title>
+    <meta name="description" content="WebAssembly 的并行能力。Threads 提案（phase 4）基于 Web Worker + SharedArrayBuffer，必须 cross-origin isolated；Atomic ops（atomic.wait/notify/rmw）在共享 memory 上做原子操作，与 ECMA §24 内存模型对接。SIMD 提案（v128，2.0 正式）含 200+ 指令，x86 SSE / ARM NEON 都映射到这一抽象。autovectorization vs explicit SIMD intrinsics。FFmpeg.wasm / SQLite WASM 多线程 / 游戏物理引擎是典型用户。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23654ff0'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EWA%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>WebAssembly 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.22 290); color: #fff">WASM</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · 高级特性提案</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-threads-simd.html" class="active">01 · Threads + SIMD + Atomics</a></li>
+          <li><a href="02-gc-tail-eh-jspi.html">02 · WasmGC + Tail / EH / JSPI</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">WebAssembly</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · 高级特性</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Threads + SIMD + Atomics</span>
+        </nav>
+        <h1>Threads + SIMD + Atomics</h1>
+        <p class="lead">
+          wasm 的<strong>并行能力</strong>。<strong>Threads 提案</strong>（phase 4）基于 Web Worker + SharedArrayBuffer，必须 cross-origin isolated（链回浏览器渲染主题 P2.2）。<strong>Atomic ops</strong>（<code>atomic.wait</code> / <code>atomic.notify</code> / <code>atomic.rmw</code>）在共享 memory 上做原子操作，与 ECMA §24 内存模型对接。<strong>SIMD 提案</strong>（v128，2.0 正式）含 200+ 指令；x86 SSE / ARM NEON 都映射到这一抽象。<strong>典型应用</strong>：FFmpeg.wasm 多线程编解码 / SQLite WASM 多线程版 / 游戏物理引擎 / 图像滤镜 / 机器学习推理。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P3（host interop）+ 浏览器渲染 P2.2（COOP/COEP）+ ECMA §24 概念</span>
+          <span><strong>主要来源</strong> WebAssembly threads/simd 提案 · v8.dev/blog · web.dev cross-origin-isolation</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>wasm threads = Web Worker + SharedArrayBuffer</strong>—— wasm spec 没"线程"概念；threads 提案借宿主能力。每个 worker 跑一个 wasm instance，通过 shared memory 通信。<strong>必须 cross-origin isolated</strong>（COOP/COEP），是 wasm threads 在生产中"理论可用、实际罕见"的根因。</li>
+          <li><strong>Atomic ops 是 wasm 内的并发原语</strong>—— <code>atomic.wait</code> / <code>atomic.notify</code> 实现条件等待与唤醒（类似 futex）；<code>atomic.rmw</code>（read-modify-write）实现 atomic add / sub / xor / xchg / cmpxchg。语义对接 ECMA §24 Memory Model（详见 <a href="../../ecma/07-execution/05-memory-model.html">ECMA P7.5</a>）。</li>
+          <li><strong>SIMD v128（2.0 正式）= 跨 CPU 的最小公约数</strong>—— 200+ 指令操作 128-bit 向量；x86 SSE/AVX、ARM NEON、RISC-V Vector 都能映射。<strong>不是性能极致</strong>（AVX-512 / SVE 等更宽向量没法表达），但跨 CPU 一致性 &gt; 单 CPU 极致。</li>
+          <li><strong>autovectorization 是性能金矿</strong>—— 编译器（LLVM / Cranelift）能自动把循环转 SIMD（loop vectorizer）。Rust + <code>opt-level=3</code> + <code>+simd128</code> target-feature 通常能 4x 加速。手写 intrinsics 收益边际递减。</li>
+          <li><strong>threads + SIMD 性能上限</strong>：单线程 SIMD 4x + 4 threads = 16x；接近 native；但启动开销 + 跨边界税让"小任务"用不上这个上限。</li>
+          <li><strong>Spectre 阴影</strong>—— SAB 因 Spectre（2018）默认禁用；cross-origin isolation 是<strong>修复方案</strong>（详见 <a href="../../browser-rendering/02-multi-process/02-site-isolation.html">浏览器渲染 P2.2</a>）。这让 wasm threads 部署门槛高 —— 大量 SaaS 嵌入第三方资源（CDN / 广告 / 分析）开不了 cross-origin isolated。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Threads 提案：基于 SAB + Web Worker</h3>
+        <p>wasm threads 提案（phase 4，2018 起逐步实现）核心：</p>
+        <p><strong>(1) Shared memory</strong>—— 声明 <code>shared</code> 标志的 memory：</p>
+        <pre class="code"><code class="lang-text">(memory $mem (export "memory") 1 100 shared)</code></pre>
+        <p>JS 端：</p>
+        <pre class="code"><code class="lang-javascript">const memory = new WebAssembly.Memory({
+  initial: 1,
+  maximum: 100,
+  shared: true     // ← 关键
+});
+console.log(memory.buffer instanceof SharedArrayBuffer);  // true</code></pre>
+        <p><strong>(2) Atomic ops</strong>—— 在共享 memory 上做原子读 / 写 / RMW / wait / notify</p>
+        <p><strong>(3) Web Worker 跑独立 wasm instance</strong>—— 每个 worker 有自己的 wasm instance，但<strong>共享同一 memory</strong></p>
+        <p>架构：</p>
+        <pre class="code"><code class="lang-text">主线程
+  ├── worker1 (wasm instance 1) ─┐
+  ├── worker2 (wasm instance 2) ─┼─ 都看到同一 SharedArrayBuffer
+  └── worker3 (wasm instance 3) ─┘</code></pre>
+
+        <h3>Cross-Origin Isolation 要求（链回浏览器渲染 P2.2）</h3>
+        <p>SharedArrayBuffer 因 Spectre（2018）默认禁用。要使用 SAB（含 wasm threads），必须 cross-origin isolated（详见 <a href="../../browser-rendering/02-multi-process/02-site-isolation.html">浏览器渲染 P2.2</a>）。</p>
+        <p>简短要求：</p>
+        <p><strong>(1) HTTP 头</strong>：</p>
+        <pre class="code"><code class="lang-text">Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp</code></pre>
+        <p><strong>(2) 所有嵌入资源</strong>（image / font / script / iframe）发：</p>
+        <pre class="code"><code class="lang-text">Cross-Origin-Resource-Policy: same-site (or cross-origin)</code></pre>
+        <p><strong>(3) JS 检测</strong>：<code>self.crossOriginIsolated === true</code></p>
+        <p><strong>实际部署难点</strong>：</p>
+        <ul>
+          <li>CDN 字体 / 图片不发 CORP → 显示失败</li>
+          <li>Google Maps / Stripe 等第三方 iframe 不支持 COEP → 嵌入失败</li>
+          <li>开发服务器要配置（Vite / Webpack 默认不带）</li>
+          <li>2024+ <code>credentialless</code> COEP 让一些第三方资源能用，但仍非全部</li>
+        </ul>
+        <p>这让 wasm threads 在生产中"<strong>理论可用、实际罕见</strong>"。FFmpeg.wasm / SQLite WASM 多线程版用户必须配 cross-origin isolated。</p>
+
+        <h3>Atomic ops 详解</h3>
+        <p>wasm threads 提案的 atomic ops（&lt; 30 条指令）：</p>
+        <h4>原子加载 / 存储</h4>
+        <pre class="code"><code class="lang-text">i32.atomic.load offset=0 align=2     ;; 原子读
+i32.atomic.store offset=0 align=2    ;; 原子写</code></pre>
+        <p>"原子"含义：操作不可被中断；其他线程要么看到完整旧值，要么完整新值，不会看到部分写入。</p>
+        <h4>RMW (Read-Modify-Write) ops</h4>
+        <pre class="code"><code class="lang-text">i32.atomic.rmw.add offset=0 align=2  ;; 原子加并返回旧值
+i32.atomic.rmw.sub                   ;; 原子减
+i32.atomic.rmw.and                   ;; 原子与
+i32.atomic.rmw.or                    ;; 原子或
+i32.atomic.rmw.xor                   ;; 原子异或
+i32.atomic.rmw.xchg                  ;; 原子交换
+i32.atomic.rmw.cmpxchg               ;; 原子 compare-and-swap</code></pre>
+        <p><strong>cmpxchg 是 lock-free 编程基石</strong>：原子检查值 == expected → 写入 desired，返回旧值。</p>
+        <h4>Wait / Notify（条件变量）</h4>
+        <pre class="code"><code class="lang-text">memory.atomic.wait32 offset=0 align=2   ;; 阻塞直到唤醒或超时
+memory.atomic.notify offset=0 align=2   ;; 唤醒 N 个等待者</code></pre>
+        <p>语义：<code>wait32(addr, expected, timeout)</code> 比较 addr 处的值 == expected，相等则阻塞 worker；其他线程调 <code>notify(addr, count)</code> 唤醒至多 count 个等待者。</p>
+        <p>Wait/Notify 实现 mutex / condvar / future 等高层并发原语。<strong>主线程不能调 wait</strong>（会让浏览器卡死），spec 会 throw。Worker 内随便用。</p>
+
+        <h3>ECMA §24 内存模型对接</h3>
+        <p>wasm atomic ops 的内存语义与 ECMA §24（详见 <a href="../../ecma/07-execution/05-memory-model.html">ECMA P7.5</a>）一致 —— 都是<strong>sequential consistency for atomic ops</strong>。这让 wasm threads 与 JS 的 Atomics API 互操作时不会出现意外重排。</p>
+        <p>JS 端 Atomics API 与 wasm atomic ops 互通：</p>
+        <pre class="code"><code class="lang-javascript">const sab = new SharedArrayBuffer(8);
+const view = new Int32Array(sab);
+
+// JS 端原子加
+Atomics.add(view, 0, 5);  // 等价 wasm i32.atomic.rmw.add
+
+// wasm 端读到的值与 JS 写一致
+// 反之 wasm 写，JS 端 Atomics.load 读到</code></pre>
+        <p>因为 wasm <code>WebAssembly.Memory({ shared: true })</code> 的 buffer 就是 SAB，可被 Atomics 直接操作。</p>
+
+        <h3>SIMD 提案：v128 + 200+ 指令</h3>
+        <p>SIMD（Single Instruction, Multiple Data）提案 phase 5（2.0 正式 2025-03）。核心：</p>
+        <p><strong>(1) v128 类型</strong>—— 128-bit 向量；可解释为 2/4/8/16 个不同宽度元素</p>
+        <p><strong>(2) ~200 条 SIMD 指令</strong>—— load / store / shuffle / 算术 / 比较 / 转换 / 等</p>
+        <p><strong>(3) 跨 CPU 抽象</strong>—— x86 SSE/AVX、ARM NEON、RISC-V Vector 都能高效映射</p>
+        <p>常用指令分类：</p>
+        <h4>load / store</h4>
+        <pre class="code"><code class="lang-text">v128.load offset=0 align=4              ;; 读 16 字节
+v128.store offset=0 align=4             ;; 写 16 字节
+v128.load32_zero                        ;; 读 4 字节，高位补 0
+v128.load_lane (lane=0)                 ;; 读单个 lane
+v128.store_lane (lane=2)                ;; 写单个 lane
+v128.load8x8_s / v128.load8x8_u         ;; 读 8 个 i8 扩展到 i16x8
+v128.load16x4_s / v128.load16x4_u       ;; 读 4 个 i16 扩展到 i32x4
+v128.load32x2_s / v128.load32x2_u       ;; 读 2 个 i32 扩展到 i64x2</code></pre>
+        <h4>算术</h4>
+        <pre class="code"><code class="lang-text">i8x16.add / i16x8.add / i32x4.add / i64x2.add    ;; 整数加
+i8x16.sub / i16x8.sub / i32x4.sub / i64x2.sub    ;; 整数减
+i8x16.mul / i16x8.mul / i32x4.mul                ;; 整数乘（i64x2 没有）
+f32x4.add / f32x4.sub / f32x4.mul / f32x4.div    ;; 浮点
+f64x2.add / f64x2.sub / f64x2.mul / f64x2.div
+f32x4.sqrt / f64x2.sqrt
+i32x4.dot_i16x8_s                                ;; 点积</code></pre>
+        <h4>比较 + 选择</h4>
+        <pre class="code"><code class="lang-text">i32x4.eq / i32x4.lt_s / i32x4.gt_s    ;; 元素比较，结果是全 1 或全 0 的 mask
+v128.and / v128.or / v128.xor          ;; 位运算
+v128.bitselect                         ;; mask 选择</code></pre>
+        <h4>shuffle / swizzle</h4>
+        <pre class="code"><code class="lang-text">i8x16.shuffle [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]   ;; 编译期常量 shuffle
+i8x16.swizzle                                            ;; 运行时索引 shuffle</code></pre>
+
+        <h3>autovectorization vs explicit intrinsics</h3>
+        <p><strong>方式 A · autovectorization</strong>（编译器自动）：</p>
+        <pre class="code"><code class="lang-rust">// Rust 用 RUSTFLAGS="-C target-feature=+simd128" 编译
+pub fn add_arrays(a: &amp;[f32], b: &amp;[f32], c: &amp;mut [f32]) {
+    for i in 0..a.len() {
+        c[i] = a[i] + b[i];
+    }
+}
+// LLVM loop vectorizer 自动转 f32x4.add</code></pre>
+        <p>优点：代码可读 + 跨平台</p>
+        <p>缺点：编译器不一定能向量化复杂逻辑（条件 / 不规则访问 / 数据依赖）</p>
+        <p><strong>方式 B · explicit SIMD intrinsics</strong>（手写）：</p>
+        <pre class="code"><code class="lang-rust">use std::arch::wasm32::*;
+
+pub fn add_arrays_explicit(a: &amp;[f32], b: &amp;[f32], c: &amp;mut [f32]) {
+    let n = a.len();
+    let chunks = n / 4;
+    for i in 0..chunks {
+        let idx = i * 4;
+        unsafe {
+            let va = v128_load(a.as_ptr().add(idx) as *const v128);
+            let vb = v128_load(b.as_ptr().add(idx) as *const v128);
+            let vc = f32x4_add(va, vb);
+            v128_store(c.as_mut_ptr().add(idx) as *mut v128, vc);
+        }
+    }
+    // 处理余数
+    for i in chunks * 4..n {
+        c[i] = a[i] + b[i];
+    }
+}</code></pre>
+        <p>优点：精确控制 + 处理复杂场景</p>
+        <p>缺点：unsafe / 难维护 / 平台特定（wasm32 vs x86_64 不同 intrinsics）</p>
+        <p><strong>规则</strong>：先看 autovectorization 够不够用（用 wat dump 检查是否有 v128 指令）；不够再写 explicit intrinsics。</p>
+
+        <h3>SIMD 性能特点</h3>
+        <p>典型加速比：</p>
+        <ul>
+          <li>纯算术（向量加 / 点积）：3-4x（4 路 f32 并行）</li>
+          <li>图像滤镜（per-pixel ops）：3-4x</li>
+          <li>压缩 / 解压：2-3x（依赖分支多寡）</li>
+          <li>字符串处理（搜索 / parse）：2-5x（如果用 swizzle 巧妙）</li>
+          <li>不规则数据：1-2x（甚至慢，因为 shuffle 开销）</li>
+        </ul>
+        <p><strong>不要期望一律 4x</strong>—— 实际取决于 (1) 算法可向量化程度；(2) 数据访问模式；(3) 是否有 branch 让 SIMD 失效。</p>
+
+        <h3>relaxed-simd 提案（phase 4）</h3>
+        <p>relaxed-simd 是 SIMD 的"放松版"——允许编译器用 CPU 特定优化（FMA / dot product），但<strong>不保证跨 CPU bit-identical</strong>。例如 x86 FMA 与 ARM 模拟可能舍入差异。</p>
+        <p>典型 relaxed-simd 指令：</p>
+        <ul>
+          <li><code>f32x4.relaxed_madd</code>—— 融合乘加（FMA），可能 / 可能不真用 FMA</li>
+          <li><code>i8x16.relaxed_swizzle</code>—— 越界行为不严格</li>
+        </ul>
+        <p>性能再提 ~10-30%（CPU 直通）；代价是不能保证完全 bit-deterministic。<strong>金融 / 加密场景慎用</strong>；图像 / 音频 / ML 推理可用。</p>
+
+        <h3>引擎实现状态（2026-05）</h3>
+        <table>
+          <thead>
+            <tr><th>引擎</th><th>Threads</th><th>SIMD (v128)</th><th>relaxed-simd</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>V8 (Chrome)</td><td>✅ 74+</td><td>✅ 91+</td><td>✅ 114+</td></tr>
+            <tr><td>SpiderMonkey (Firefox)</td><td>✅ 79+</td><td>✅ 89+</td><td>✅ 120+</td></tr>
+            <tr><td>JSC (Safari)</td><td>✅ 16.4+</td><td>✅ 16.4+</td><td>实验中</td></tr>
+            <tr><td>wasmtime</td><td>✅</td><td>✅</td><td>✅</td></tr>
+            <tr><td>wasmer</td><td>✅</td><td>✅</td><td>✅</td></tr>
+            <tr><td>wazero</td><td>部分</td><td>✅</td><td>实验</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · FFmpeg.wasm 多线程视频转码</h3>
+        <p>FFmpeg.wasm 多线程版（<code>@ffmpeg/core-mt</code>）使用 wasm threads + SIMD 加速：</p>
+        <pre class="code"><code class="lang-javascript">// 必须 cross-origin isolated
+import { FFmpeg } from '@ffmpeg/ffmpeg';
+
+const ffmpeg = new FFmpeg();
+await ffmpeg.load({
+  coreURL: '/ffmpeg-core-mt.js',  // 多线程版
+  wasmURL: '/ffmpeg-core-mt.wasm',
+  workerURL: '/ffmpeg-core-mt.worker.js'
+});
+
+await ffmpeg.writeFile('input.mp4', inputData);
+await ffmpeg.exec(['-i', 'input.mp4', '-c:v', 'libx264', '-threads', '4', 'output.mp4']);
+const data = await ffmpeg.readFile('output.mp4');</code></pre>
+        <p>性能：4 thread + SIMD 比单线程纯 wasm 快 ~10-15x（接近 native FFmpeg）。</p>
+
+        <h3>场景 B · SQLite WASM 多线程并发查询</h3>
+        <p>SQLite WASM 主分发是单线程版（OPFS 配合）；<strong>多线程版</strong>用 SAB + atomic 协调：</p>
+        <pre class="code"><code class="lang-javascript">import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
+
+const sqlite3 = await sqlite3InitModule({
+  // 必须 cross-origin isolated
+  print: console.log
+});
+
+// 多线程模式
+const db = new sqlite3.oo1.OpfsSAHPoolUtil('mydb.db');
+// 多个 worker 可并发查询同一 DB</code></pre>
+
+        <h3>场景 C · ML 推理（onnxruntime-web）</h3>
+        <p>onnxruntime-web 同时支持 wasm（CPU）+ WebGPU 后端。wasm 后端用 SIMD + threads：</p>
+        <pre class="code"><code class="lang-javascript">import * as ort from 'onnxruntime-web';
+
+// 启用 wasm SIMD + threads（需 cross-origin isolated）
+ort.env.wasm.numThreads = 4;
+ort.env.wasm.simd = true;
+
+const session = await ort.InferenceSession.create('model.onnx', {
+  executionProviders: ['wasm']
+});
+
+const result = await session.run({ input: tensor });</code></pre>
+        <p>SIMD + 4 threads 让 ONNX 模型推理性能接近原生 ONNX Runtime。</p>
+
+        <h3>场景 D · 游戏 / 物理引擎</h3>
+        <p>Bevy / Godot 等 Rust 游戏引擎编译 wasm 时：</p>
+        <ul>
+          <li>SIMD 加速 vector / matrix math</li>
+          <li>多线程跑物理 simulation（rigid body / collision）</li>
+          <li>主线程跑渲染（与 GPU 同步）</li>
+        </ul>
+        <p>实际部署：游戏 demo 通常自己控制环境，能 cross-origin isolated；商业 SaaS 嵌入式游戏（如某些营销 demo）经常因为环境限制只能单线程。</p>
+
+        <h3>场景 E · 浏览器内大数据处理（DuckDB-WASM）</h3>
+        <p>DuckDB-WASM（OLAP 数据库）用多线程 + SIMD 加速 SQL aggregation / join：</p>
+        <pre class="code"><code class="lang-javascript">import * as duckdb from '@duckdb/duckdb-wasm';
+
+const bundle = await duckdb.selectBundle({
+  // 多线程版（需 cross-origin isolated）
+  mt: { ... }
+});
+const worker = await duckdb.createWorker(bundle.mainWorker);
+const db = new duckdb.AsyncDuckDB(logger, worker);
+await db.instantiate(bundle.mainModule, bundle.pthreadWorker);</code></pre>
+        <p>1GB CSV 聚合查询：单线程 ~10s，4 线程 + SIMD ~2.5s。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：完整示例</span></h2>
+
+        <h3>例 1：JS + wasm threads + atomics 实现 mutex</h3>
+        <pre class="code"><code class="lang-text">(module
+  (memory (export "memory") 1 1 shared)
+
+  ;; mutex 在 memory 偏移 0 处（i32）
+  ;; 0 = unlocked, 1 = locked
+
+  (func $lock (export "lock")
+    (local $expected i32)
+    (loop $retry
+      ;; cmpxchg(addr=0, expected=0, desired=1)
+      (local.set $expected (i32.const 0))
+      (i32.atomic.rmw.cmpxchg
+        (i32.const 0)
+        (local.get $expected)
+        (i32.const 1))
+      ;; 如果原值不是 0，等待
+      (if (i32.ne (i32.const 0))   ;; 简化：实际需要保留 cmpxchg 返回值
+        (then
+          ;; atomic.wait until value changes from 1
+          (drop (memory.atomic.wait32
+                  (i32.const 0)
+                  (i32.const 1)
+                  (i64.const -1)))
+          (br $retry)))))
+
+  (func $unlock (export "unlock")
+    ;; store 0 → release lock
+    (i32.atomic.store (i32.const 0) (i32.const 0))
+    ;; notify 一个 waiter
+    (drop (memory.atomic.notify (i32.const 0) (i32.const 1)))))</code></pre>
+
+        <h3>例 2：Rust + SIMD 向量加法（autovectorization）</h3>
+        <pre class="code"><code class="lang-rust">// Cargo.toml
+// [profile.release]
+// opt-level = 3
+// 编译时 RUSTFLAGS="-C target-feature=+simd128"
+
+#[no_mangle]
+pub extern "C" fn add_vec(a: *const f32, b: *const f32, c: *mut f32, n: usize) {
+    let a = unsafe { std::slice::from_raw_parts(a, n) };
+    let b = unsafe { std::slice::from_raw_parts(b, n) };
+    let c = unsafe { std::slice::from_raw_parts_mut(c, n) };
+    for i in 0..n {
+        c[i] = a[i] + b[i];
+    }
+}</code></pre>
+        <p>编译：</p>
+        <pre class="code"><code class="lang-bash">$ RUSTFLAGS="-C target-feature=+simd128" \
+    cargo build --release --target wasm32-unknown-unknown</code></pre>
+        <p>检查产物用了 SIMD：</p>
+        <pre class="code"><code class="lang-bash">$ wasm2wat target/wasm32-unknown-unknown/release/add.wasm | grep f32x4
+# 看到 f32x4.add 即成功</code></pre>
+
+        <h3>例 3：Rust + 显式 SIMD intrinsics（精细控制）</h3>
+        <pre class="code"><code class="lang-rust">use std::arch::wasm32::*;
+
+#[no_mangle]
+pub unsafe extern "C" fn dot_product(a: *const f32, b: *const f32, n: usize) -&gt; f32 {
+    let mut sum = f32x4_splat(0.0);
+    let chunks = n / 4;
+
+    for i in 0..chunks {
+        let idx = i * 4;
+        let va = v128_load(a.add(idx) as *const v128);
+        let vb = v128_load(b.add(idx) as *const v128);
+        sum = f32x4_add(sum, f32x4_mul(va, vb));
+    }
+
+    // horizontal sum: 4 → 1
+    let s0 = f32x4_extract_lane::&lt;0&gt;(sum);
+    let s1 = f32x4_extract_lane::&lt;1&gt;(sum);
+    let s2 = f32x4_extract_lane::&lt;2&gt;(sum);
+    let s3 = f32x4_extract_lane::&lt;3&gt;(sum);
+    let mut result = s0 + s1 + s2 + s3;
+
+    // 处理余数
+    for i in chunks * 4..n {
+        result += *a.add(i) * *b.add(i);
+    }
+
+    result
+}</code></pre>
+
+        <h3>例 4：JS 端 + wasm threads worker pool</h3>
+        <pre class="code"><code class="lang-javascript">// main.js
+async function init() {
+  // 编译 module（一次）
+  const module = await WebAssembly.compileStreaming(fetch('compute.wasm'));
+
+  // 共享 memory
+  const memory = new WebAssembly.Memory({
+    initial: 16,
+    maximum: 256,
+    shared: true
+  });
+
+  // 启动 4 个 worker
+  const workers = [];
+  for (let i = 0; i &lt; 4; i++) {
+    const w = new Worker('worker.js');
+    w.postMessage({ module, memory, workerId: i });
+    workers.push(w);
+  }
+
+  // 准备数据：写到 shared memory
+  const view = new Float32Array(memory.buffer, 0, 1024 * 1024);
+  for (let i = 0; i &lt; view.length; i++) view[i] = Math.random();
+
+  // 让 worker 处理
+  await Promise.all(workers.map(w =&gt; new Promise((resolve) =&gt; {
+    w.onmessage = (e) =&gt; resolve(e.data);
+    w.postMessage({ task: 'compute', start: 0, end: view.length });
+  })));
+}
+
+init();
+
+// worker.js
+self.onmessage = async ({ data: { module, memory, workerId } }) =&gt; {
+  const { instance } = await WebAssembly.instantiate(module, {
+    env: { memory }
+  });
+  // 等待主线程 task
+  self.onmessage = ({ data: { task, start, end } }) =&gt; {
+    if (task === 'compute') {
+      instance.exports.process(start, end);
+      self.postMessage({ done: workerId });
+    }
+  };
+};</code></pre>
+
+        <h3>例 5：检测 SIMD 支持 + 渐进增强</h3>
+        <pre class="code"><code class="lang-javascript">async function detectSimd() {
+  // 极小 wasm module，含一条 v128 指令
+  const simdTestBytes = new Uint8Array([
+    0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+    0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7B,    // type: () -&gt; v128
+    0x03, 0x02, 0x01, 0x00,                      // function
+    0x0A, 0x0A, 0x01, 0x08, 0x00,                // code
+    0xFD, 0x0F,                                  // v128.const
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0x0B
+  ]);
+  try {
+    await WebAssembly.instantiate(simdTestBytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function loadModule() {
+  if (await detectSimd()) {
+    return WebAssembly.instantiateStreaming(fetch('compute-simd.wasm'));
+  } else {
+    return WebAssembly.instantiateStreaming(fetch('compute-fallback.wasm'));
+  }
+}</code></pre>
+        <p>2026 主流浏览器都支持 SIMD（Chrome 91+ / Firefox 89+ / Safari 16.4+），但仍需要 fallback 处理边缘场景。</p>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：忘记 cross-origin isolated</h3>
+        <p>最常见。开发用 wasm threads 但页面没配 COOP/COEP → SAB 不可用 → wasm threads 失败。<strong>必须显式检查</strong>：</p>
+        <pre class="code"><code class="lang-javascript">if (!self.crossOriginIsolated) {
+  console.error('需要 cross-origin isolated 才能用 wasm threads');
+  // 回退单线程版本
+}</code></pre>
+
+        <h3>陷阱 2：主线程调 atomic.wait</h3>
+        <p>主线程不能阻塞（会让浏览器 UI 卡死）。<code>Atomics.wait()</code> 在主线程会 throw；wasm <code>memory.atomic.wait32</code> 也会 trap。<strong>所有 wait 必须在 worker 内</strong>。</p>
+
+        <h3>陷阱 3：以为 SAB grow 后 worker 自动看到新内存</h3>
+        <p>wasm 共享 memory grow 时所有 instance 看到新 size，但<strong>JS 端 view 仍可能 detach</strong>。每个 worker 应在 grow 后重新 view：</p>
+        <pre class="code"><code class="lang-javascript">// worker
+let view = new Float32Array(memory.buffer);
+// 主线程 grow 后...
+view = new Float32Array(memory.buffer);  // 重建</code></pre>
+
+        <h3>陷阱 4：SIMD 没 enable target-feature 不生效</h3>
+        <p>Rust 默认<strong>不</strong>启用 simd128 target-feature。必须显式：</p>
+        <pre class="code"><code class="lang-bash">$ RUSTFLAGS="-C target-feature=+simd128" \
+    cargo build --release --target wasm32-unknown-unknown</code></pre>
+        <p>或者 <code>.cargo/config.toml</code>：</p>
+        <pre class="code"><code class="lang-toml">[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]</code></pre>
+        <p>检查产物：<code>wasm-tools dump my.wasm | grep simd</code> 应有 v128 指令。</p>
+
+        <h3>陷阱 5：以为 SIMD 一律 4x 加速</h3>
+        <p>实际加速取决于：</p>
+        <ul>
+          <li>算法可向量化程度</li>
+          <li>数据访问规则（cache miss 让 SIMD 失效）</li>
+          <li>条件分支多寡（branch divergence）</li>
+        </ul>
+        <p>典型场景 SIMD 1.5-4x 加速，不要预期 4x linear scaling。</p>
+
+        <h3>陷阱 6：threads 数过多反而慢</h3>
+        <p>不是 threads 越多越快。CPU 物理 core 有限（笔记本 4-8、手机 4-8）；超额线程让<strong>OS 调度开销</strong>吃掉收益。常见错误：</p>
+        <ul>
+          <li>笔记本 4 核 → 8 worker 反而慢于 4 worker</li>
+          <li>移动设备 → 1-2 worker 通常最优（电池 + 性能平衡）</li>
+        </ul>
+        <p>用 <code>navigator.hardwareConcurrency</code> 查询 +/- 1 是安全选择。</p>
+
+        <h3>陷阱 7：data race 不会 throw</h3>
+        <p>wasm memory 的 non-atomic 读 / 写在 race 时<strong>不会 throw</strong>，只是看到 undefined 数据（torn read）。debug 难。<strong>共享数据必须 atomic ops</strong>。</p>
+
+        <h3>陷阱 8：以为 cross-origin isolated 是"开了就行"</h3>
+        <p>开了 cross-origin isolated 后，所有第三方资源（image / font / iframe / script）都受影响。<strong>必须每个资源都发 CORP/CORS</strong>，否则资源加载失败。要做：</p>
+        <ul>
+          <li>检查所有 CDN（自家资源加 CORP；第三方有时不支持）</li>
+          <li>iframe（YouTube embed / Google Maps / Stripe Checkout）多数不支持 COEP，会嵌入失败</li>
+          <li>用 <code>credentialless</code> COEP（2024+）放宽要求，但不是所有浏览器版本都支持</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范 + 提案</h3>
+        <ul>
+          <li><a href="https://github.com/WebAssembly/threads" target="_blank" rel="noopener">Threads 提案</a></li>
+          <li><a href="https://github.com/WebAssembly/simd" target="_blank" rel="noopener">SIMD 提案</a></li>
+          <li><a href="https://github.com/WebAssembly/relaxed-simd" target="_blank" rel="noopener">Relaxed SIMD 提案</a></li>
+        </ul>
+
+        <h3>深度文章</h3>
+        <ul>
+          <li><a href="https://v8.dev/blog/wasm-threads" target="_blank" rel="noopener">V8: WebAssembly threads</a></li>
+          <li><a href="https://v8.dev/features/simd" target="_blank" rel="noopener">V8: WebAssembly SIMD</a></li>
+          <li><a href="https://web.dev/articles/coop-coep" target="_blank" rel="noopener">web.dev: Cross-origin isolation</a></li>
+          <li><a href="https://emscripten.org/docs/porting/pthreads.html" target="_blank" rel="noopener">Emscripten pthread support</a></li>
+          <li><a href="https://github.com/WebAssembly/binaryen/blob/main/src/wasm-features.h" target="_blank" rel="noopener">Binaryen wasm-features</a></li>
+        </ul>
+
+        <h3>实战</h3>
+        <ul>
+          <li><a href="https://github.com/ffmpegwasm/ffmpeg.wasm" target="_blank" rel="noopener">FFmpeg.wasm</a></li>
+          <li><a href="https://sqlite.org/wasm/doc/trunk/index.md" target="_blank" rel="noopener">SQLite WASM 文档</a></li>
+          <li><a href="https://onnxruntime.ai/docs/tutorials/web/" target="_blank" rel="noopener">onnxruntime-web</a></li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="02-gc-tail-eh-jspi.html">P5.2 WasmGC + Tail call + EH + JSPI</a></li>
+          <li><a href="../06-wasi-runtime/02-server-runtimes.html">P6.2 服务端 Runtime</a> · 服务端 wasm 的并发模型</li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../browser-rendering/02-multi-process/02-site-isolation.html">浏览器渲染 P2.2 Site Isolation + COOP/COEP</a> · cross-origin isolated 详解</li>
+          <li><a href="../../ecma/07-execution/05-memory-model.html">ECMA P7.5 §24 内存模型</a> · Atomics + SAB</li>
+          <li><a href="../../v8/06-wasm/01-wasm-pipeline.html">V8 P6.1 V8 Wasm 编译流水线</a></li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

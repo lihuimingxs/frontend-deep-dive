@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WasmGC + Tail call + Exception handling + JSPI · P5.2 · WebAssembly 深度学习</title>
+    <meta name="description" content="让 wasm 适配更多语言场景的 4 个提案。WasmGC（phase 5, 2023 正式）引入 struct/array/i31ref + subtyping 让托管语言一等公民。Tail call（phase 5, 2024 正式）让函数式语言（OCaml/Scala/Scheme）的尾递归可正确编译。Exception handling（phase 4）让 C++/Java/JS 异常在 wasm 内可表达。JSPI（phase 4）让同步 wasm 调用异步 JS API（底层 stack switching）。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23654ff0'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EWA%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>WebAssembly 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.22 290); color: #fff">WASM</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · 高级特性提案</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-threads-simd.html">01 · Threads + SIMD</a></li>
+          <li><a href="02-gc-tail-eh-jspi.html" class="active">02 · WasmGC + Tail / EH / JSPI</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">WebAssembly</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · 高级特性</a><span class="breadcrumb-sep">/</span>
+          <span>02 · WasmGC + Tail call + EH + JSPI</span>
+        </nav>
+        <h1>WasmGC + Tail call + Exception handling + JSPI</h1>
+        <p class="lead">
+          让 wasm 适配更多语言场景的 4 个关键提案。<strong>WasmGC</strong>（phase 5, 2023-12 正式）引入 <code>struct</code> / <code>array</code> / <code>i31ref</code> + subtyping，让 Java/Kotlin/Dart/.NET/OCaml 等托管语言<strong>不必带 GC runtime</strong>。<strong>Tail call</strong>（phase 5, 2024 正式）让函数式语言（OCaml/Scala/Scheme）的尾递归可正确编译，不需要 trampoline 模拟。<strong>Exception handling</strong>（phase 4，浏览器 default 开启 2023+）让 C++ / Java / JS 异常在 wasm 内可表达。<strong>JSPI</strong>（phase 4, Chrome 137+）让<strong>同步 wasm 调用异步 JS</strong>，底层用 stack switching 实现——把同步 IO 假设的代码（如 SQLite C 代码）原样跑在浏览器。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P3（host interop）+ P4.2（托管语言）</span>
+          <span><strong>主要来源</strong> WebAssembly proposals · v8.dev/blog/wasm-gc · v8.dev/blog/jspi · spidermonkey blog</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>WasmGC 是 wasm 历史"用户群扩展最大"的单个特性</strong>—— 2023 之前 Java/Kotlin/Dart 编译 wasm 都是工程奇迹（带 JVM/runtime 太重）；2023 后这些语言的 wasm 启动从"秒级"变"毫秒级"。Kotlin/Wasm + Compose Multiplatform / Flutter Web wasm / .NET Blazor NativeAOT 都基于 WasmGC。</li>
+          <li><strong>WasmGC 不是"通用 GC API"</strong>—— spec 不暴露 mark/sweep/compact 控制；引擎自由实现（V8 用现有 Orinoco / SpiderMonkey 用自己的 / JSC 用自己的）。开发者只能用 <code>struct.new</code> / <code>array.new</code> / <code>ref.cast</code> 等高层操作。WasmGC 对象与 linear memory 完全隔离。</li>
+          <li><strong>Tail call 让函数式语言进入 wasm</strong>—— <code>return_call</code> / <code>return_call_indirect</code>。OCaml / Scala / Scheme / 等之前要用 trampoline 模拟尾调（性能差），有 tail call 后达到 native 性能。Phase 5 完成 2024。</li>
+          <li><strong>Exception handling 的 "two-phase" 设计</strong>—— try / catch 的查找阶段 + unwind 阶段分离；和 C++ EH 模型一致；让现有 C++ EH 代码可直接编译。<strong>EH 之前的"模拟"方案</strong>（Emscripten 用 setjmp/longjmp + global trampoline）性能差，已被 EH 替代。</li>
+          <li><strong>JSPI 让 SQLite C 代码原样跑浏览器</strong>—— 之前 SQLite 的同步 read/write 假设要 Asyncify hack 转换；JSPI 后 SQLite C 代码看起来同步，底层 await Promise。Chrome 137+ 默认开启。<strong>底层用 stack switching</strong>：wasm 栈被保存，主线程让出，promise 完成后栈恢复。</li>
+          <li><strong>这 4 个提案共同主题：让"现实世界语言"无损映射到 wasm</strong>—— Java 要 GC、OCaml 要 tail call、C++ 要异常、SQLite 要同步 IO 假设。每个提案都消除一个特定阻塞，让现有代码"原样跑 wasm"成为可能。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>WasmGC：从"自带 runtime"到"宿主管理"</h3>
+        <p>没有 WasmGC 时托管语言两种方案：</p>
+        <p><strong>方案 A · 自带 GC runtime</strong>（如 Go 官方 / 早期 Java TeaVM）—— 在 linear memory 上自己实现 mark / sweep；编译产物大，慢</p>
+        <p><strong>方案 B · 把 JVM 编译进 wasm</strong>（如 CheerpJ）—— 极度笨重，启动 5+ 秒</p>
+        <p>WasmGC（phase 5, 2023-12 正式）方案 C：<strong>spec 直接支持 GC managed 类型</strong>，引擎 GC 接管：</p>
+        <pre class="code"><code class="lang-text">(type $Person (struct
+  (field $name (ref $String))
+  (field $age i32)
+  (field $email (ref null $String))))   ;; nullable
+
+(type $List (array (mut (ref $Person))))
+
+(func $create (param $n (ref $String)) (param $a i32) (result (ref $Person))
+  (struct.new $Person
+    (local.get $n)
+    (local.get $a)
+    (ref.null $String)))</code></pre>
+        <p>关键属性：</p>
+        <p><strong>(1) GC 类型与 linear memory 完全分离</strong>—— struct / array 实例不在 linear memory，由引擎 GC 堆管理</p>
+        <p><strong>(2) 引擎自由实现</strong>—— V8 用 Orinoco（详见 <a href="../../v8/04-memory/02-orinoco-gc.html">V8 P4.2</a>）；SpiderMonkey 用自己的；JSC 用自己的</p>
+        <p><strong>(3) 跨语言 GC 共享</strong>—— Java / Kotlin / Dart 三个 wasm module 共享同一引擎 GC，不会重复扫描</p>
+        <p><strong>(4) 类型安全</strong>—— 编译时检查 struct / array 字段访问；越界 / 错类型 trap</p>
+
+        <h3>WasmGC 类型层级</h3>
+        <p>WasmGC 引入新引用类型层级：</p>
+        <pre class="code"><code class="lang-text">anyref     ← 顶部，能持有任何 GC managed 引用
+  ├── eqref       ← 可 == 比较
+  │     ├── i31ref     ← 31-bit 整数（小整数 unboxed 优化）
+  │     ├── structref  ← struct 实例
+  │     └── arrayref   ← array 实例
+  ├── funcref     ← 函数引用（也在 anyref 下）
+  └── externref   ← 外部宿主对象（JS 对象）</code></pre>
+        <p><strong>i31ref 是性能优化关键</strong>—— 让小整数（&lt; 2^31）能 unboxed（不分配 heap object），与 V8 SMI 类似（详见 <a href="../../v8/04-memory/01-heap-and-objects.html">V8 P4.1</a>）。Java 的 Integer / Kotlin 的 Int? 不会触发 GC alloc。</p>
+
+        <h3>WasmGC 关键指令</h3>
+        <pre class="code"><code class="lang-text">struct.new $T arg1 arg2 ...           ;; 创建 struct 实例
+struct.get $T $field obj               ;; 读字段
+struct.set $T $field obj val           ;; 写字段（mutable 字段）
+
+array.new $T elem n                    ;; 创建 array 长度 n，每个元素 elem
+array.new_default $T n                 ;; 默认值数组
+array.new_fixed $T n e1 e2 ...         ;; 固定长度数组
+array.get $T arr i                     ;; 读元素
+array.set $T arr i val                 ;; 写元素
+array.len arr                          ;; 长度
+
+ref.null $T                            ;; null 引用
+ref.is_null obj                        ;; 测 null
+ref.cast $T obj                        ;; 类型 down-cast；失败 trap
+ref.test $T obj                        ;; 类型测试，返回 i32
+
+i31.new x                              ;; 创建 i31ref
+i31.get_s / i31.get_u                  ;; 读 i31 值（signed / unsigned）</code></pre>
+
+        <h3>WasmGC subtyping</h3>
+        <p>WasmGC 支持 <strong>nominal subtyping</strong>（类似 Java extends）：</p>
+        <pre class="code"><code class="lang-text">(type $Animal (sub (struct (field $name (ref $String)))))
+(type $Dog (sub $Animal (struct
+  (field $name (ref $String))
+  (field $breed (ref $String)))))
+
+;; Dog 是 Animal 的子类
+;; (ref $Dog) &lt;: (ref $Animal)</code></pre>
+        <p><code>ref.cast</code> / <code>ref.test</code> 在运行时检查实际类型 → Java/Kotlin 的 instanceof / cast 直接编译到这。</p>
+
+        <h3>WasmGC 性能</h3>
+        <p>典型场景对比（Java Hello World）：</p>
+        <table>
+          <thead>
+            <tr><th>方案</th><th>体积</th><th>启动</th><th>稳态性能</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>原生 JVM</td><td>50MB+</td><td>200ms</td><td>100%</td></tr>
+            <tr><td>TeaVM 旧（带自家 GC）</td><td>5-10MB</td><td>1-2s</td><td>~30%</td></tr>
+            <tr><td>WasmGC（V8）</td><td>~500KB-1MB</td><td>~100ms</td><td>~70%</td></tr>
+          </tbody>
+        </table>
+        <p>引擎 GC 处理 wasm 对象的开销 ~2x 自带 GC（因为已优化 + 没重复扫描）。</p>
+
+        <h3>Tail call 提案</h3>
+        <p>函数式语言（OCaml / Scala / Scheme / Haskell）大量用<strong>尾递归</strong>表达循环。原始 wasm 没 tail call 优化—— 每次递归占用栈帧，栈溢出风险。</p>
+        <p>没 tail call 时的 trampoline 模拟（慢）：</p>
+        <pre class="code"><code class="lang-text">;; OCaml fact 编译时：
+;; fact n acc = if n = 0 then acc else fact (n-1) (acc*n)
+
+;; trampoline 包装：函数返回 "continue" 或 "done"
+(func $fact_step (param $n i32) (param $acc i32) (result i32 i32)   ;; (continue?, value)
+  ...)
+
+(func $fact (param $n i32) (param $acc i32) (result i32)
+  (loop ...))   ;; loop 反复调 fact_step 直到 done</code></pre>
+        <p>Tail call 提案（phase 5, 2024 正式）：</p>
+        <pre class="code"><code class="lang-text">return_call $fact (i32.sub (local.get $n) (i32.const 1))
+                  (i32.mul (local.get $acc) (local.get $n)))
+;; 等价于：先 pop 当前栈帧，再调 $fact</code></pre>
+        <p>关键：<code>return_call</code> 在调用 callee 之前<strong>先 pop caller 栈帧</strong>，避免栈深度增长。</p>
+        <p>另有 <code>return_call_indirect</code>（间接尾调用）。</p>
+        <p>引擎实现：编译器把 return_call 转 jmp（不是 call）。简单且快。</p>
+        <p><strong>受益语言</strong>：OCaml / Scala（Scala.js Wasm target）/ Scheme / SML / 等。Rust / C++ 也偶尔受益（手写 tail recursion）。</p>
+
+        <h3>Exception Handling 提案</h3>
+        <p>原始 wasm 没 exception。C++ / Java / JS 异常要在 wasm 里实现，早期方案：</p>
+        <p><strong>Emscripten setjmp/longjmp 模拟</strong>—— 用全局 jmp_buf + setjmp 标记 try block；longjmp 跳回。慢且占内存</p>
+        <p>EH 提案（phase 4，2023+ 浏览器默认开启）：</p>
+        <pre class="code"><code class="lang-text">(tag $MyException (param i32))     ;; 定义异常类型
+
+(func $caller
+  (try (result i32)
+    (do
+      (call $maybe_throw)
+      (i32.const 0))     ;; 正常返回
+    (catch $MyException
+      ;; 栈上是异常参数 i32
+      (i32.const -1))))  ;; 异常处理结果
+
+(func $maybe_throw
+  (throw $MyException (i32.const 42)))</code></pre>
+        <p>关键指令：</p>
+        <ul>
+          <li><code>tag $T</code>—— 声明异常 tag（类似 Java exception class）</li>
+          <li><code>throw $T arg</code>—— 抛异常</li>
+          <li><code>try ... catch $T ... end</code>—— 捕获</li>
+          <li><code>rethrow</code>—— 重抛</li>
+          <li><code>delegate N</code>—— 委托给外层 try</li>
+        </ul>
+        <p><strong>Two-phase EH</strong>—— spec 定义两阶段：</p>
+        <p><strong>(1) Search phase</strong>—— 异常抛出，引擎遍历调用栈找匹配 catch；不实际 unwind</p>
+        <p><strong>(2) Unwind phase</strong>—— 找到 handler 后，实际清理栈帧（运行 destructor 等）</p>
+        <p>这与 C++ Itanium EH ABI 一致，让 LLVM 后端容易输出。</p>
+        <p><strong>性能</strong>：</p>
+        <ul>
+          <li>正常路径（不抛异常）：零开销（"zero-cost EH"）</li>
+          <li>抛异常路径：栈搜索 + 清理 ~µs 级</li>
+        </ul>
+        <p>异常应该是<strong>异常情况</strong>，不是控制流；正常路径快是设计目标。</p>
+
+        <h3>JSPI（JS Promise Integration）</h3>
+        <p>典型问题：你把 SQLite C 代码编译成 wasm。SQLite 内部用同步 IO（read / write 同步）。但浏览器的 IndexedDB / fetch / OPFS 是异步。怎么办？</p>
+        <p><strong>原始方案 · Asyncify</strong>（Emscripten）—— 编译时把所有可能 await 的函数转成 state machine + 全局栈保存恢复。性能损失 ~10-30%；体积 +50%。</p>
+        <p><strong>JSPI 方案</strong>（phase 4, Chrome 137+ 默认）：</p>
+        <pre class="code"><code class="lang-javascript">// 把异步 JS 函数包成"看起来同步"的 wasm import
+const fetchSync = WebAssembly.promising(async (urlPtr, urlLen) =&gt; {
+  const url = decodeUrlFromWasm(urlPtr, urlLen);
+  const resp = await fetch(url);
+  const text = await resp.text();
+  return encodeStringToWasm(text);
+});
+
+const wasmInstance = await WebAssembly.instantiate(wasmBytes, {
+  env: { fetch_sync: fetchSync }
+});
+
+// wasm 内部调 fetch_sync 是"同步"语义，底层 await
+wasmInstance.exports.process();  // 这个调用会暂停 wasm 栈，等 Promise，恢复</code></pre>
+        <p>底层用 <strong>stack switching</strong>：</p>
+        <p>(1) wasm 调 fetch_sync</p>
+        <p>(2) 引擎检测它是 promising-wrapped，<strong>保存当前 wasm 栈到 Promise.then 回调</strong></p>
+        <p>(3) 当前 task 让出，主线程继续</p>
+        <p>(4) Promise 完成，引擎在新 task 中<strong>恢复 wasm 栈</strong></p>
+        <p>(5) wasm 看起来 fetch_sync 直接返回了</p>
+        <p>对 wasm 代码完全透明 —— SQLite C 代码以为它在做同步 IO。</p>
+
+        <h3>JSPI 的实现复杂性</h3>
+        <p>"保存 / 恢复 wasm 栈"听起来简单，实际需要引擎层支持：</p>
+        <ul>
+          <li>V8 实现：把 wasm 栈保存到 separate stack（不是主 V8 栈）；详见 <a href="../../v8/06-wasm/01-wasm-pipeline.html">V8 P6.1</a></li>
+          <li>SpiderMonkey 实现：类似 stack switching 机制</li>
+          <li>JSC 实现：计划中</li>
+        </ul>
+        <p><strong>限制</strong>：</p>
+        <ul>
+          <li>只对包装过的 import 生效（必须用 <code>WebAssembly.promising</code>）</li>
+          <li>主线程频繁 stack switching 会让 UI 卡顿（因为每次 switch 让出 main task）；适合"重型同步代码"，不适合每秒上千次 small await</li>
+          <li>调试栈跟踪复杂</li>
+        </ul>
+
+        <h3>JSPI vs Asyncify 性能</h3>
+        <table>
+          <thead>
+            <tr><th>方案</th><th>编译成本</th><th>运行时性能</th><th>体积</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>无 async（手写）</td><td>低</td><td>100%</td><td>baseline</td></tr>
+            <tr><td>Asyncify</td><td>+编译复杂</td><td>~70-90%</td><td>+50%</td></tr>
+            <tr><td>JSPI</td><td>低</td><td>~95-100%</td><td>baseline</td></tr>
+          </tbody>
+        </table>
+        <p>JSPI 是<strong>明显优胜</strong>方案，但需要 Chrome 137+ / 等其他引擎跟进；Asyncify 仍是"兼容 fallback"。</p>
+
+        <h3>四提案对比（受益语言）</h3>
+        <table>
+          <thead>
+            <tr><th>提案</th><th>解决问题</th><th>主要受益语言</th><th>Phase</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>WasmGC</td><td>托管语言不带 GC runtime</td><td>Java / Kotlin / Dart / .NET / OCaml / Scala</td><td>5（2023-12）</td></tr>
+            <tr><td>Tail call</td><td>函数式语言尾递归</td><td>OCaml / Scala / Scheme / Haskell</td><td>5（2024）</td></tr>
+            <tr><td>Exception handling</td><td>异常表达</td><td>C++ / Java / .NET / Python / 大部分有异常的语言</td><td>4（浏览器 default）</td></tr>
+            <tr><td>JSPI</td><td>同步 wasm 调异步 JS</td><td>SQLite C / 任何同步 IO 假设的代码</td><td>4（Chrome 137+）</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · Kotlin 写 wasm SPA（WasmGC + EH）</h3>
+        <p>Kotlin/Wasm 全面用 WasmGC 管理对象 + EH 处理异常：</p>
+        <pre class="code"><code class="lang-kotlin">@JsExport
+class TodoList {
+    private val items = mutableListOf&lt;String&gt;()
+
+    fun add(item: String) {
+        items.add(item)
+    }
+
+    fun remove(index: Int) {
+        if (index !in items.indices) throw IndexOutOfBoundsException("Invalid: $index")
+        items.removeAt(index)
+    }
+
+    fun toJsArray(): Array&lt;String&gt; = items.toTypedArray()
+}</code></pre>
+        <p>编译产物用 WasmGC 表示 List 内部存储 + 用 EH 处理 IndexOutOfBoundsException。JS 端：</p>
+        <pre class="code"><code class="lang-javascript">const list = new TodoList();
+list.add("buy milk");
+list.add("clean house");
+try {
+  list.remove(99);
+} catch (e) {
+  console.error("error:", e);  // Kotlin exception 自动转 JS Error
+}</code></pre>
+
+        <h3>场景 B · OCaml 编译到 wasm（Tail call）</h3>
+        <p>OCaml 5.2+ 支持 wasm target，借 tail call 让递归代码 native 性能：</p>
+        <pre class="code"><code class="lang-ocaml">(* lib.ml *)
+let rec sum acc n =
+  if n = 0 then acc
+  else sum (acc + n) (n - 1)
+;;
+
+let total = sum 0 1_000_000  (* 不会栈溢出 *)</code></pre>
+        <p>编译用 wasm32 target；产物用 <code>return_call</code> 实现 sum 的尾递归。</p>
+
+        <h3>场景 C · SQLite C 代码 + JSPI 跑在浏览器</h3>
+        <p>SQLite WASM 的 OPFS 异步版本用 JSPI（替代旧的 Asyncify）：</p>
+        <pre class="code"><code class="lang-javascript">// JSPI 包装 OPFS 异步 IO 为同步导入
+const opfs = await navigator.storage.getDirectory();
+const fileHandle = await opfs.getFileHandle('db.sqlite');
+const accessHandle = await fileHandle.createSyncAccessHandle();
+
+const sqliteImports = {
+  env: {
+    fs_read: WebAssembly.promising(async (fd, buf_ptr, len) =&gt; {
+      const buf = new Uint8Array(memory.buffer, buf_ptr, len);
+      return accessHandle.read(buf, { at: ... });
+    }),
+    fs_write: WebAssembly.promising(async (fd, buf_ptr, len) =&gt; {
+      const buf = new Uint8Array(memory.buffer, buf_ptr, len);
+      return accessHandle.write(buf, { at: ... });
+    })
+  }
+};
+
+const sqlite3Wasm = await WebAssembly.instantiateStreaming(
+  fetch('sqlite3-jspi.wasm'),
+  sqliteImports
+);
+
+// SQLite C 代码假设同步 IO
+const db = new sqlite3Wasm.exports.Db('mydb.db');
+db.exec('CREATE TABLE users (id INTEGER, name TEXT);');
+db.exec("INSERT INTO users VALUES (1, 'alice');");</code></pre>
+        <p>SQLite 内部 read/write 看起来同步 → JSPI 让它们底层 await OPFS。SQLite 源码不改一行。</p>
+
+        <h3>场景 D · C++ 异常处理在 wasm 里</h3>
+        <pre class="code"><code class="lang-cpp">#include &lt;stdexcept&gt;
+
+extern "C" int divide(int a, int b) {
+    if (b == 0) throw std::runtime_error("division by zero");
+    return a / b;
+}</code></pre>
+        <p>用 EH 编译：</p>
+        <pre class="code"><code class="lang-bash">$ /opt/wasi-sdk/bin/clang++ -O3 -fwasm-exceptions divide.cpp -o divide.wasm</code></pre>
+        <p>JS 端：</p>
+        <pre class="code"><code class="lang-javascript">try {
+  instance.exports.divide(10, 0);
+} catch (e) {
+  // C++ exception 转成 WebAssembly.Exception
+  console.error("got exception:", e);
+}</code></pre>
+        <p>EH 让 C++ 异常和 JS try/catch 互通。</p>
+
+        <h3>场景 E · Dart Flutter Web（WasmGC + EH）</h3>
+        <p>Flutter Web 2024 起的 wasm 部署同时用 WasmGC（Dart 对象）+ EH（Dart 异常）+ Skia/CanvasKit：</p>
+        <pre class="code"><code class="lang-bash">$ flutter build web --wasm</code></pre>
+        <p>产物 ~2-5MB（含 Flutter framework + Skia）；启动 ~500ms-1s。性能与 Flutter desktop 接近。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：手写 wat 用提案特性</span></h2>
+
+        <h3>例 1：WasmGC struct 操作（手写 wat）</h3>
+        <pre class="code"><code class="lang-text">(module
+  (type $Point (struct (field $x f64) (field $y f64)))
+
+  (func (export "create_point") (param $x f64) (param $y f64) (result (ref $Point))
+    (struct.new $Point (local.get $x) (local.get $y)))
+
+  (func (export "distance") (param $p1 (ref $Point)) (param $p2 (ref $Point)) (result f64)
+    (local $dx f64)
+    (local $dy f64)
+    (local.set $dx
+      (f64.sub
+        (struct.get $Point $x (local.get $p1))
+        (struct.get $Point $x (local.get $p2))))
+    (local.set $dy
+      (f64.sub
+        (struct.get $Point $y (local.get $p1))
+        (struct.get $Point $y (local.get $p2))))
+    (f64.sqrt
+      (f64.add
+        (f64.mul (local.get $dx) (local.get $dx))
+        (f64.mul (local.get $dy) (local.get $dy))))))</code></pre>
+
+        <h3>例 2：tail call factorial</h3>
+        <pre class="code"><code class="lang-text">(module
+  (func $fact_helper (param $n i32) (param $acc i32) (result i32)
+    (if (result i32) (i32.eq (local.get $n) (i32.const 0))
+      (then (local.get $acc))
+      (else
+        (return_call $fact_helper
+          (i32.sub (local.get $n) (i32.const 1))
+          (i32.mul (local.get $acc) (local.get $n))))))
+
+  (func (export "factorial") (param $n i32) (result i32)
+    (call $fact_helper (local.get $n) (i32.const 1))))</code></pre>
+        <p>用 <code>return_call</code> 让递归不增长栈深；<code>factorial(1_000_000)</code> 不溢出（虽然 i32 溢出 :)）。</p>
+
+        <h3>例 3：Exception handling</h3>
+        <pre class="code"><code class="lang-text">(module
+  (tag $DivByZero (param i32))
+
+  (func $div (param $a i32) (param $b i32) (result i32)
+    (if (i32.eqz (local.get $b))
+      (then
+        (throw $DivByZero (local.get $a))))
+    (i32.div_s (local.get $a) (local.get $b)))
+
+  (func (export "safe_div") (param $a i32) (param $b i32) (result i32)
+    (try (result i32)
+      (do
+        (call $div (local.get $a) (local.get $b)))
+      (catch $DivByZero
+        (drop)   ;; 弹掉异常参数
+        (i32.const -1)))))   ;; 返回 -1 表示错误</code></pre>
+
+        <h3>例 4：JSPI 包装异步 fetch</h3>
+        <pre class="code"><code class="lang-javascript">// 把 fetch 包成"同步" wasm import
+const fetchSync = WebAssembly.promising(async (urlPtr, urlLen) =&gt; {
+  const url = readStringFromWasm(urlPtr, urlLen);
+  const resp = await fetch(url);
+  const text = await resp.text();
+  return writeStringToWasm(text);
+});
+
+const { instance } = await WebAssembly.instantiate(wasmBytes, {
+  env: { fetch_sync: fetchSync }
+});
+
+// wasm 内部 fetch_sync 看起来同步
+const result = instance.exports.fetch_and_process("/api/data");
+// 实际：wasm 暂停 → fetch await → wasm 恢复 → 返回</code></pre>
+
+        <h3>例 5：Kotlin/Wasm 利用 WasmGC + EH 完整示例</h3>
+        <pre class="code"><code class="lang-kotlin">import kotlin.js.JsExport
+
+@JsExport
+class Stack&lt;T&gt; {
+    private val items = mutableListOf&lt;T&gt;()
+
+    fun push(item: T) { items.add(item) }
+
+    fun pop(): T {
+        if (items.isEmpty()) throw IllegalStateException("Stack is empty")
+        return items.removeAt(items.size - 1)
+    }
+
+    fun peek(): T? = items.lastOrNull()
+
+    val size: Int get() = items.size
+}</code></pre>
+        <p>构建产物用 WasmGC 表示 ArrayList 内部存储 + EH 处理 IllegalStateException。</p>
+        <p>JS 端：</p>
+        <pre class="code"><code class="lang-javascript">const stack = new Stack();
+stack.push("a");
+stack.push("b");
+console.log(stack.pop());  // "b"
+console.log(stack.size);   // 1
+try {
+  stack.pop();
+  stack.pop();   // throws IllegalStateException
+} catch (e) {
+  console.error("Error:", e.message);
+}</code></pre>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：以为 WasmGC 是"通用 GC API"</h3>
+        <p>WasmGC<strong>不暴露</strong> mark/sweep/compact 控制；不能强制 GC（没有 <code>WebAssembly.gc()</code> 这种 API）；不能查看堆使用。引擎实现自由。</p>
+        <p>开发者只能用 <code>struct.new</code> / <code>array.new</code> / <code>ref.cast</code> 这些<strong>类型操作</strong>。GC 行为黑盒。</p>
+
+        <h3>陷阱 2：混用 linear memory 和 WasmGC</h3>
+        <p>linear memory 和 WasmGC 堆<strong>完全分离</strong>。一个 wasm module 可以同时用两者（C++ 部分 + Java 部分），但<strong>互相不能 deref</strong>：</p>
+        <ul>
+          <li>不能把 struct 的 field 写到 linear memory（要先序列化）</li>
+          <li>不能把 linear memory 的指针 cast 成 struct 引用</li>
+        </ul>
+        <p>这是<strong>设计上的隔离</strong>—— GC 不扫描 linear memory，避免性能问题。</p>
+
+        <h3>陷阱 3：tail call 不是所有递归都能用</h3>
+        <p><code>return_call</code> 只在<strong>函数尾部</strong>有效（最后一条指令）。中间的 call（不在 tail position）不能用 <code>return_call</code> 替换。</p>
+        <pre class="code"><code class="lang-text">;; ❌ 错：不在尾部
+(call $foo)
+(call $bar)   ;; 这条 call 在 foo 之后，不能 return_call
+
+;; ✅ 正：在尾部
+(call $foo)
+(return_call $bar)</code></pre>
+
+        <h3>陷阱 4：Exception handling 部署门槛</h3>
+        <p>EH phase 4，浏览器默认开启 2023+；<strong>但</strong>：</p>
+        <ul>
+          <li>旧 Safari（&lt; 16.4）不支持</li>
+          <li>wasmtime 0.40+ 支持，但旧版本不行</li>
+          <li>编译器需要显式启用 <code>-fwasm-exceptions</code>（Emscripten / clang）</li>
+        </ul>
+        <p>fallback 仍要 setjmp/longjmp 或 Asyncify 模拟。</p>
+
+        <h3>陷阱 5：JSPI 主线程频繁 await 性能差</h3>
+        <p>每次 JSPI 调用都让出 main task；频繁 await 让 UI 任务排队，<strong>UI 看起来卡</strong>。</p>
+        <p>规则：</p>
+        <ul>
+          <li>JSPI 适合"重型同步代码 + 偶发 IO"（SQLite 类）</li>
+          <li>不适合"循环每次小 await"（这种用普通 async/await 更好）</li>
+        </ul>
+
+        <h3>陷阱 6：WasmGC 跨 module 共享</h3>
+        <p>WasmGC 对象引用<strong>可以跨 wasm instance 共享</strong>（如果用同一 GC 堆，即同一 V8 isolate / 同一进程）。但<strong>不能跨 worker / 跨进程</strong>—— GC 堆不同。</p>
+        <p>跨 worker 传 GC 对象要序列化（structuredClone）或不直接传，用 SAB + 手工 marshalling。</p>
+
+        <h3>陷阱 7：i31ref 范围有限</h3>
+        <p>i31ref 只能存 31-bit signed 整数（-2^30 ~ 2^30 - 1）。超过范围要用 <code>(ref $Box)</code> 包装。Java Integer.MAX_VALUE（2^31 - 1）<strong>不在 i31ref 范围内</strong>，会 alloc box。</p>
+
+        <h3>陷阱 8：忘记 ref.cast 失败 trap</h3>
+        <pre class="code"><code class="lang-text">;; ref.cast 失败 trap（运行时错误）
+(ref.cast $Dog (local.get $animal))   ;; 如果 animal 不是 Dog 子类型 → trap
+
+;; 安全方案：先 ref.test
+(if (ref.test $Dog (local.get $animal))
+  (then
+    ;; 安全 cast
+    (ref.cast $Dog (local.get $animal))
+    ...))</code></pre>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>提案文档</h3>
+        <ul>
+          <li><a href="https://github.com/WebAssembly/gc" target="_blank" rel="noopener">WasmGC 提案</a></li>
+          <li><a href="https://github.com/WebAssembly/tail-call" target="_blank" rel="noopener">Tail call 提案</a></li>
+          <li><a href="https://github.com/WebAssembly/exception-handling" target="_blank" rel="noopener">Exception handling 提案</a></li>
+          <li><a href="https://github.com/WebAssembly/js-promise-integration" target="_blank" rel="noopener">JSPI 提案</a></li>
+        </ul>
+
+        <h3>实现深度</h3>
+        <ul>
+          <li><a href="https://v8.dev/blog/wasm-gc-porting" target="_blank" rel="noopener">V8: How WasmGC simplified life for compiler engineers</a></li>
+          <li><a href="https://v8.dev/blog/jspi" target="_blank" rel="noopener">V8: JSPI</a></li>
+          <li><a href="https://v8.dev/blog/wasm-exception-handling" target="_blank" rel="noopener">V8: Wasm Exception Handling</a></li>
+          <li><a href="https://hacks.mozilla.org/2018/07/calls-between-javascript-and-webassembly-are-finally-fast-2/" target="_blank" rel="noopener">Mozilla: WasmGC implementation</a></li>
+        </ul>
+
+        <h3>语言生态</h3>
+        <ul>
+          <li><a href="https://kotlinlang.org/docs/wasm-overview.html" target="_blank" rel="noopener">Kotlin/Wasm</a></li>
+          <li><a href="https://docs.flutter.dev/platform-integration/web/wasm" target="_blank" rel="noopener">Flutter Web WASM</a></li>
+          <li><a href="https://github.com/oxalica/ocaml-wasm" target="_blank" rel="noopener">OCaml + wasm + tail call</a></li>
+          <li><a href="https://devblogs.microsoft.com/dotnet/" target="_blank" rel="noopener">.NET Blazor WasmGC</a></li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="../06-wasi-runtime/01-wasi.html">P6.1 WASI Preview 1 / Preview 2</a></li>
+          <li><a href="../07-component-model/01-component-and-apps.html">P7.1 Component Model + 应用</a></li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../v8/04-memory/02-orinoco-gc.html">V8 P4.2 Orinoco GC</a> · 被 WasmGC 复用</li>
+          <li><a href="../../v8/06-wasm/01-wasm-pipeline.html">V8 P6.1 V8 Wasm 流水线</a> · JSPI 引擎实现细节</li>
+          <li><a href="../../javascript/03-async/" target="_blank">JS P3 异步</a> · Promise 与 JSPI</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
