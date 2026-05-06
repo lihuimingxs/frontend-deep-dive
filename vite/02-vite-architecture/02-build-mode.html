@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vite Build mode：Rollup → Rolldown 接班 · P2.2 · Vite & 构建工具深度学习</title>
+    <meta name="description" content="Vite 生产构建。回答「为什么 dev 用 esbuild，build 用 Rollup」：dev 求启动快 + 单文件转换快；build 求代码体积小 + 优化彻底——两个目标方向不同。Rollup 4 优势：成熟 ESM + 优秀 tree shaking + 完善 plugin + 优秀 sourcemap。Vite 在 Rollup 之上加智能 chunk 策略 + CSS code splitting + 资源处理 + minify。Rolldown（Rust Rollup 兼容）2026-Q2 stable 后接班 Vite build mode。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23bd34fe'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Vite & 构建工具深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.25 305); color: #fff">Vite</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · Vite 双模架构</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-dev-mode.html">01 · Dev mode：esbuild 预构建 + 原生 ESM</a></li>
+          <li><a href="02-build-mode.html" class="active">02 · Build mode：Rollup → Rolldown 接班</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Vite & 构建工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · Vite 双模架构</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Build mode</span>
+        </nav>
+        <h1>Vite Build mode：Rollup → Rolldown 接班</h1>
+        <p class="lead">
+          Vite 生产构建。<strong>回答"为什么 dev 用 esbuild，build 用 Rollup"</strong>：dev 求"启动快 + 单文件转换快"，build 求"代码体积小 + 优化彻底"——<strong>两个目标方向不同</strong>，所以工具不同。Rollup 4 优势：成熟 ESM 处理 / 优秀 tree shaking / 完善 plugin ecosystem / 优秀 sourcemap。Vite 在 Rollup 之上加：智能 chunk 分包策略 / CSS code splitting / 资源处理 / 默认 minify（terser）。<strong>Rolldown</strong>（Rust 实现的 Rollup 兼容 bundler）2026-Q2 stable 后接班 Vite build mode，速度 10x+ 提升但 plugin 兼容。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P2.1（Dev mode）+ P1.1（项目史，特别是 Rollup 部分）</span>
+          <span><strong>主要来源</strong> Vite build docs · Rollup docs · Rolldown roadmap</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>"为什么 dev/build 不统一用一个工具"</strong>—— dev 求"启动快 + 单文件转换快"；build 求"代码体积小 + 优化彻底"。两个目标不同，工具自然不同。esbuild 适合前者，Rollup 适合后者。</li>
+          <li><strong>Build mode 仍要 bundle</strong>—— 生产代码要 chunk 分包 / tree shaking / 代码压缩 / sourcemap / 资源优化。这些 esbuild 做得不够好（plugin API 弱 / chunk 策略简单）。</li>
+          <li><strong>Vite 在 Rollup 之上加</strong>：智能 chunk 策略（vendor 分割 + manualChunks）/ CSS code splitting（每个 entry 独立 .css）/ 资源处理（小图 inline base64 / 大图 file + hash）/ 默认 minify（terser 或 esbuild）/ multi-page 支持。</li>
+          <li><strong>Chunk 分包策略</strong>—— 每个 dynamic import 一个 chunk + node_modules 自动 vendor 分割 + manualChunks 自定义。<strong>分包直接影响 LCP</strong>（详见 <a href="../../browser-rendering/04-performance/01-load-metrics.html">浏览器渲染 P4.1</a>）。</li>
+          <li><strong>Rolldown 接班</strong>—— Vite team 自家 Rust bundler，Rollup plugin API 兼容。Vite 6 实验性集成（<code>experimental.rolldown</code>），Vite 7（预计 2026-Q2）默认。<strong>切换无痛</strong>，因为 plugin 不需改。</li>
+          <li><strong>"Bundle 大小决定首屏"是工程化最重要原则</strong>—— production app 的 LCP 直接受 bundle 大小影响（4G 网络下载 200KB 还是 2MB 差别巨大）。chunk 分包 + tree shaking + 资源优化是 LCP 优化第一关。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>为什么 dev/build 不统一</h3>
+        <p>构建工具有<strong>两套工程目标</strong>：</p>
+        <table>
+          <thead>
+            <tr><th>维度</th><th>Dev 目标</th><th>Build 目标</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>速度</td><td>启动快 + HMR 即时</td><td>无所谓（CI 跑一次）</td></tr>
+            <tr><td>体积</td><td>不重要（dev 不部署）</td><td>越小越好（影响 LCP）</td></tr>
+            <tr><td>优化</td><td>不需要 minify / tree shake</td><td>必须最优化</td></tr>
+            <tr><td>调试</td><td>需要 sourcemap + 不变换</td><td>需要 sourcemap + 优化变换</td></tr>
+            <tr><td>format</td><td>每文件单独 ESM</td><td>chunk 合并 + 多 format（ESM/CJS/UMD）</td></tr>
+          </tbody>
+        </table>
+        <p>esbuild 速度极致 —— 适合 dev "快速 transform"。但 plugin API 弱（不能 AST 改写）/ chunk 策略简单 —— 不适合 build "复杂优化"。</p>
+        <p>Rollup 慢但精细 —— ESM 第一公民 + tree shaking 干净 + 多 format 输出 + 优秀 plugin API —— 适合 build。</p>
+        <p>所以 Vite 选 dev=esbuild + build=Rollup。<strong>这是工程务实选择</strong>，不是 ideology。</p>
+
+        <h3>Vite 在 Rollup 之上加的</h3>
+        <p>Vite 不直接暴露 Rollup 给用户。它在 Rollup 之上做了几层增强：</p>
+
+        <h4>1. 智能 chunk 策略</h4>
+        <p>默认行为：</p>
+        <ul>
+          <li>每个 <code>dynamic import</code> 自动一个 chunk（lazy load 的基础）</li>
+          <li>node_modules 里的 import 自动分到 <strong>vendor chunk</strong>（让 user code 改了不让 vendor cache 失效）</li>
+          <li>共享代码自动 dedupe（多个 chunk 共用的 module 提取出来）</li>
+        </ul>
+        <p>用户可自定义：</p>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+export default {
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom'],
+          'ui-vendor': ['@mui/material', '@emotion/react'],
+          'utils': ['lodash-es', 'date-fns']
+        }
+      }
+    }
+  }
+};</code></pre>
+
+        <h4>2. CSS code splitting</h4>
+        <p>每个 entry 的 CSS 独立 .css 文件 + hash filename。让 CSS 也可缓存 + 按需加载。</p>
+        <p>原理：Vite 把 CSS import 变成 module；build 时把所有 CSS module 收集 → 按 entry 切分 → 输出 .css 文件。HTML 里自动注入 <code>&lt;link&gt;</code>。</p>
+
+        <h4>3. 资源处理</h4>
+        <p>图片 / 字体 / 视频等：</p>
+        <ul>
+          <li>< 4KB 默认 inline base64（节省 HTTP 请求）</li>
+          <li>≥ 4KB 输出独立 file + content hash（让 long-term cache）</li>
+          <li>SVG 可以选择 inline 或 file</li>
+        </ul>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+export default {
+  build: {
+    assetsInlineLimit: 4096   // 默认 4096 bytes
+  }
+};</code></pre>
+
+        <h4>4. minify 默认开</h4>
+        <p>Vite 默认用 <strong>esbuild</strong> minify（不是 terser）—— esbuild 比 terser 快 50x，效果接近。</p>
+        <p>用户可改成 terser（更激进的优化但慢）：</p>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+export default {
+  build: {
+    minify: 'terser',   // 'terser' | 'esbuild' | false
+    terserOptions: {
+      compress: { drop_console: true }
+    }
+  }
+};</code></pre>
+
+        <h4>5. multi-page 支持</h4>
+        <p>大型项目多个 HTML 入口：</p>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+export default {
+  build: {
+    rollupOptions: {
+      input: {
+        main: 'index.html',
+        admin: 'admin/index.html',
+        nested: 'nested/page.html'
+      }
+    }
+  }
+};</code></pre>
+
+        <h3>Chunk 分包策略详解</h3>
+        <p>分包目标：<strong>缓存友好 + 按需加载 + 平衡大小</strong>。</p>
+
+        <h4>策略 1：自动 vendor 分割</h4>
+        <p>Vite 默认把 node_modules 里的代码放到独立 chunk：</p>
+        <pre class="code"><code class="lang-text">dist/
+├── assets/
+│   ├── index-abc123.js    ← user code (~50KB)
+│   └── vendor-def456.js   ← node_modules (~150KB)</code></pre>
+        <p>用户改 src/ 代码 → user chunk hash 变；vendor chunk hash 不变 → 浏览器仍用 cache。<strong>缓存命中率高</strong>。</p>
+
+        <h4>策略 2：dynamic import = 独立 chunk</h4>
+        <p>典型 React lazy 路由：</p>
+        <pre class="code"><code class="lang-typescript">const Home = lazy(() =&gt; import('./pages/Home'));
+const About = lazy(() =&gt; import('./pages/About'));
+const Profile = lazy(() =&gt; import('./pages/Profile'));</code></pre>
+        <p>Vite 自动把每个 dynamic import 放到独立 chunk：</p>
+        <pre class="code"><code class="lang-text">dist/assets/
+├── index-abc.js
+├── vendor-def.js
+├── Home-ghi.js          ← lazy load
+├── About-jkl.js         ← lazy load
+└── Profile-mno.js       ← lazy load</code></pre>
+        <p>首屏只下载 index + vendor + 当前 route 对应 chunk。其他 route 在用户访问时按需 fetch。</p>
+
+        <h4>策略 3：manualChunks 精细控制</h4>
+        <p>大型项目可能要更精细：</p>
+        <pre class="code"><code class="lang-javascript">build: {
+  rollupOptions: {
+    output: {
+      manualChunks(id) {
+        if (id.includes('node_modules/react')) return 'react';
+        if (id.includes('node_modules/lodash')) return 'lodash';
+        if (id.includes('node_modules/@mui')) return 'mui';
+        if (id.includes('node_modules')) return 'vendor';
+      }
+    }
+  }
+}</code></pre>
+        <p>这让大依赖（react / mui / lodash）独立 chunk，change 频率不同的依赖不互相影响 cache。</p>
+
+        <h4>策略 4：Vite 6 智能默认（experimental）</h4>
+        <p>Vite 6+ 实验性引入 <code>build.rollupOptions.output.experimentalMinChunkSize</code>：自动合并过小的 chunk（避免 chunk 太碎产生过多 HTTP 请求）。</p>
+
+        <h3>构建产物结构</h3>
+        <pre class="code"><code class="lang-text">dist/
+├── index.html                       ← 入口（自动注入 chunk link）
+├── assets/
+│   ├── index-abc123.js              ← entry chunk
+│   ├── index-abc123.js.map          ← sourcemap
+│   ├── vendor-def456.js             ← node_modules
+│   ├── vendor-def456.js.map
+│   ├── Home-ghi789.js               ← lazy chunks
+│   ├── About-jkl012.js
+│   ├── index-mno345.css             ← entry CSS
+│   ├── logo-pqr678.png              ← 静态资源（hash filename）
+│   └── font-stu901.woff2
+└── favicon.ico                      ← public/ 内容直接复制</code></pre>
+        <p>所有 .js / .css / 资源都带 content hash —— 让 HTTP cache 永久（<code>Cache-Control: max-age=31536000, immutable</code>）。</p>
+
+        <h3>Rollup → Rolldown 接班路径</h3>
+        <p>Rolldown 是 Vite team 2023-08 启动的项目，目标：<strong>Rust 实现的 Rollup 兼容 bundler</strong>。设计选择：</p>
+        <ul>
+          <li><strong>Rollup plugin API 兼容</strong>—— 用户切换时 plugin 不需改</li>
+          <li><strong>Rust + 并行</strong>—— 速度目标 10x Rollup</li>
+          <li><strong>Vite 深度集成</strong>—— Vite team 主导，与 Vite 协调演化</li>
+        </ul>
+        <p>接班路径：</p>
+        <table>
+          <thead>
+            <tr><th>Vite 版本</th><th>状态</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Vite 5（2024-04）</td><td>仅 Rollup</td><td>稳定基线</td></tr>
+            <tr><td>Vite 6（2024-11）</td><td>Rollup 默认 + Rolldown 实验性</td><td><code>experimental.rolldown: true</code> 切换</td></tr>
+            <tr><td>Vite 7（2026-Q2 预计）</td><td>Rolldown 默认 + Rollup fallback</td><td>用户主动 opt-out 才回 Rollup</td></tr>
+            <tr><td>Vite 8+（2027+）</td><td>仅 Rolldown</td><td>Rollup 移除</td></tr>
+          </tbody>
+        </table>
+        <p>对用户的影响：<strong>几乎无感切换</strong>。Vite 6 用户可以现在加 <code>experimental.rolldown</code> 提前体验 build 加速。</p>
+
+        <h3>性能数据</h3>
+        <p>典型 React 项目（500 components, 50 dependencies）build 时间：</p>
+        <table>
+          <thead>
+            <tr><th>工具</th><th>build 时间</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Webpack 5</td><td>~30-60s</td></tr>
+            <tr><td>Vite 6 (Rollup)</td><td>~15-25s</td></tr>
+            <tr><td>Vite 6 (Rolldown 实验)</td><td>~5-8s</td></tr>
+            <tr><td>Turbopack</td><td>~10-15s</td></tr>
+            <tr><td>Bun build</td><td>~3-6s</td></tr>
+            <tr><td>esbuild 直接</td><td>~1-3s（但功能不全）</td></tr>
+          </tbody>
+        </table>
+        <p>注：实测随项目而异。Bun build / esbuild 速度极致但功能 / plugin 不及 Vite。</p>
+
+        <h3>Bundle 大小对 LCP 的影响</h3>
+        <p>生产 app 的 LCP（详见 <a href="../../browser-rendering/04-performance/01-load-metrics.html">浏览器渲染 P4.1</a>）直接受 bundle 大小影响。</p>
+        <p>4G 网络（~10Mbps）下载时间：</p>
+        <table>
+          <thead>
+            <tr><th>Bundle 大小（gzip 后）</th><th>下载时间</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>50KB</td><td>~50ms</td></tr>
+            <tr><td>200KB</td><td>~200ms</td></tr>
+            <tr><td>500KB</td><td>~500ms</td></tr>
+            <tr><td>1MB</td><td>~1s</td></tr>
+            <tr><td>2MB</td><td>~2s</td></tr>
+          </tbody>
+        </table>
+        <p>LCP 目标 ≤ 2.5s。如果 bundle 1MB+ 且没分包 → 用户在 4G 上等 1+ 秒只看到白屏。<strong>chunk 分包让首屏只下载必要部分</strong>。</p>
+        <p>2026 工程实践：</p>
+        <ul>
+          <li>主 entry chunk（首屏代码）目标 &lt; 100KB gzip</li>
+          <li>vendor chunk（react + 核心库）目标 &lt; 200KB gzip</li>
+          <li>其他 routes 用 dynamic import 懒加载</li>
+          <li>大型库（图表 / 富文本编辑器）一定 lazy load</li>
+        </ul>
+
+        <h3>Library mode（库打包）</h3>
+        <p>Vite 6 build 也能用 lib mode 打库（不打 app）：</p>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+export default {
+  build: {
+    lib: {
+      entry: 'src/index.ts',
+      name: 'MyLib',
+      formats: ['es', 'cjs', 'umd', 'iife'],   // 多 format
+      fileName: (format) =&gt; `index.${format}.js`
+    },
+    rollupOptions: {
+      external: ['react', 'react-dom'],
+      output: { globals: { react: 'React', 'react-dom': 'ReactDOM' }}
+    }
+  }
+};</code></pre>
+        <p>但<strong>纯库打包仍推荐直接用 Rollup</strong>（不套 Vite）—— Vite lib mode 是便利，不是首选。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · 优化 LCP / 首屏速度</h3>
+        <p>步骤：</p>
+        <p><strong>(1) 检查当前 bundle 大小</strong>：用 rollup-plugin-visualizer：</p>
+        <pre class="code"><code class="lang-bash">$ npm i -D rollup-plugin-visualizer</code></pre>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+import { visualizer } from 'rollup-plugin-visualizer';
+
+export default {
+  plugins: [react(), visualizer({ open: true })]
+};</code></pre>
+        <pre class="code"><code class="lang-bash">$ vite build
+# 自动打开浏览器显示 stats.html，可视化 bundle 内容</code></pre>
+        <p><strong>(2) 找出大依赖</strong>—— 通常是图表库（recharts / chart.js）/ 富文本编辑器（tiptap / draft-js）/ 表单库 / 国际化（i18next + 全语言文件）/ moment.js 等。</p>
+        <p><strong>(3) lazy load 重型组件</strong>：</p>
+        <pre class="code"><code class="lang-typescript">const Chart = lazy(() =&gt; import('./Chart'));   // 用 React.lazy
+const Editor = lazy(() =&gt; import('./Editor'));</code></pre>
+        <p><strong>(4) Tree shake 工具库</strong>：用 <code>lodash-es</code> 而不是 <code>lodash</code>；用 <code>date-fns</code>（每函数独立 import）而不是 moment.js。</p>
+        <p><strong>(5) manual chunks 分大依赖</strong>：</p>
+        <pre class="code"><code class="lang-javascript">manualChunks: {
+  'recharts': ['recharts'],
+  'editor': ['@tiptap/core', '@tiptap/react'],
+}</code></pre>
+        <p><strong>(6) 定期检查 bundle 大小</strong>—— 加 size-limit 到 CI；超阈值 build 失败。</p>
+
+        <h3>场景 B · 多页 app（admin + user 两套入口）</h3>
+        <pre class="code"><code class="lang-text">my-app/
+├── index.html              ← 用户端
+├── admin.html              ← 管理后台
+└── src/
+    ├── user/main.tsx
+    └── admin/main.tsx</code></pre>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+export default {
+  build: {
+    rollupOptions: {
+      input: {
+        user: resolve(__dirname, 'index.html'),
+        admin: resolve(__dirname, 'admin.html')
+      }
+    }
+  }
+};</code></pre>
+        <p>build 后两个独立 entry，各自的 chunk 完全独立 cache。</p>
+
+        <h3>场景 C · 库打包发 npm</h3>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  build: {
+    lib: {
+      entry: './src/index.ts',
+      name: 'my-lib',
+      fileName: 'my-lib',
+      formats: ['es', 'cjs']
+    },
+    rollupOptions: {
+      external: ['react', 'react-dom'],
+      output: {
+        globals: { react: 'React', 'react-dom': 'ReactDOM' }
+      }
+    }
+  }
+});</code></pre>
+        <pre class="code"><code class="lang-json">// package.json
+{
+  "name": "my-lib",
+  "type": "module",
+  "main": "./dist/my-lib.cjs",
+  "module": "./dist/my-lib.js",
+  "exports": {
+    ".": {
+      "import": "./dist/my-lib.js",
+      "require": "./dist/my-lib.cjs"
+    }
+  },
+  "files": ["dist"]
+}</code></pre>
+
+        <h3>场景 D · 提前体验 Rolldown</h3>
+        <pre class="code"><code class="lang-bash"># Vite 6+ 实验性
+$ npm i vite@latest
+# vite.config.js 加 experimental 标志</code></pre>
+        <pre class="code"><code class="lang-javascript">// vite.config.js (Vite 6+)
+export default {
+  experimental: {
+    rolldown: true
+  }
+};
+$ vite build
+# 用 Rolldown 而不是 Rollup</code></pre>
+        <p>实测 build 时间显著降低（5-10x）但要注意：实验阶段，遇到问题报 issue 给 Rolldown。</p>
+
+        <h3>场景 E · 静态资源版本化部署</h3>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+export default {
+  base: '/static/',                  // 部署到 /static/* 子路径
+  build: {
+    assetsDir: 'assets',             // 资源放 dist/static/assets/
+    rollupOptions: {
+      output: {
+        // 自定义文件名 pattern
+        entryFileNames: 'assets/[name]-[hash].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash][extname]'
+      }
+    }
+  }
+};</code></pre>
+        <p>所有产物都带 hash → CDN 上 <code>Cache-Control: max-age=31536000, immutable</code> 永久缓存。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：完整 build 配置</span></h2>
+
+        <h3>生产级 vite.config.ts</h3>
+        <pre class="code"><code class="lang-typescript">import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { visualizer } from 'rollup-plugin-visualizer';
+import { resolve } from 'path';
+
+export default defineConfig(({ mode }) =&gt; ({
+  plugins: [
+    react(),
+    // 仅在 build 时生成 stats
+    mode === 'production' &amp;&amp; visualizer({
+      filename: 'dist/stats.html',
+      open: false,
+      gzipSize: true,
+      brotliSize: true
+    })
+  ].filter(Boolean),
+
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, './src')
+    }
+  },
+
+  build: {
+    target: 'es2020',
+    outDir: 'dist',
+    sourcemap: true,                 // 生产 sourcemap（部署到 Sentry）
+    minify: 'esbuild',
+    cssCodeSplit: true,
+    chunkSizeWarningLimit: 500,      // chunk &gt; 500KB 警告
+
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'utils': ['lodash-es', 'date-fns', 'zod'],
+          'charts': ['recharts'],
+          'editor': ['@tiptap/core', '@tiptap/react']
+        },
+        entryFileNames: 'assets/[name]-[hash].js',
+        chunkFileNames: 'assets/chunks/[name]-[hash].js',
+        assetFileNames: ({ name }) =&gt; {
+          if (/\.(woff2?|ttf|eot)$/.test(name ?? '')) {
+            return 'assets/fonts/[name]-[hash][extname]';
+          }
+          if (/\.(png|jpg|svg|webp)$/.test(name ?? '')) {
+            return 'assets/images/[name]-[hash][extname]';
+          }
+          return 'assets/[name]-[hash][extname]';
+        }
+      }
+    }
+  }
+}));</code></pre>
+
+        <h3>检查 bundle 内容</h3>
+        <pre class="code"><code class="lang-bash">$ vite build
+✓ 156 modules transformed.
+dist/index.html                   0.42 kB │ gzip:  0.28 kB
+dist/assets/index-abc.css        12.34 kB │ gzip:  3.45 kB
+dist/assets/index-def.js         45.67 kB │ gzip: 14.23 kB
+dist/assets/react-vendor-ghi.js 142.89 kB │ gzip: 45.67 kB
+dist/assets/utils-jkl.js         23.45 kB │ gzip:  7.89 kB
+dist/assets/Profile-mno.js       12.34 kB │ gzip:  4.56 kB
+✓ built in 8.45s</code></pre>
+
+        <h3>Sentry 上传 sourcemap</h3>
+        <pre class="code"><code class="lang-bash"># package.json scripts
+"build": "vite build",
+"sentry:sourcemaps": "sentry-cli sourcemaps upload --org=my-org --project=my-app dist/",
+"deploy": "npm run build && npm run sentry:sourcemaps && rsync -av dist/ server:/path/"</code></pre>
+
+        <h3>CI bundle size 检查</h3>
+        <pre class="code"><code class="lang-json">// package.json
+{
+  "size-limit": [
+    {
+      "path": "dist/assets/index-*.js",
+      "limit": "100 KB"
+    },
+    {
+      "path": "dist/assets/react-vendor-*.js",
+      "limit": "200 KB"
+    }
+  ]
+}</code></pre>
+        <pre class="code"><code class="lang-yaml"># .github/workflows/ci.yml
+- run: npm run build
+- run: npm run size-limit</code></pre>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：以为 dev 快 build 也快</h3>
+        <p>Vite dev mode &lt; 1s 启动，但 <strong>build mode 用 Rollup 仍慢</strong>（5-30s）。Webpack 用户切到 Vite 期望 build 也"飞快"会失望。</p>
+        <p>Vite 7 + Rolldown 后 build 加速 5-10x；现在可以提前用 <code>experimental.rolldown</code>。</p>
+
+        <h3>陷阱 2：忘记 lazy load 大组件</h3>
+        <p>新人常见错：所有 React 组件直接 import。结果 bundle 包含所有页面 / 所有图表。</p>
+        <p>修复：</p>
+        <pre class="code"><code class="lang-typescript">// ❌ 不好
+import Dashboard from './pages/Dashboard';
+import Chart from './components/Chart';   // 几百 KB
+
+// ✅ 好
+const Dashboard = lazy(() =&gt; import('./pages/Dashboard'));
+const Chart = lazy(() =&gt; import('./components/Chart'));</code></pre>
+
+        <h3>陷阱 3：manualChunks 配置过细</h3>
+        <p>分太多 chunk 让 HTTP 请求变多 + chunk overhead 累积反而拖慢。</p>
+        <p>好的分包数量级：5-15 个 chunk（比如 main + vendor + 几个大库 + 路由 chunks）。<strong>超过 50 个 chunk 通常过度优化</strong>。</p>
+
+        <h3>陷阱 4：source map 暴露公网</h3>
+        <p>生产 sourcemap 等于<strong>暴露源代码</strong>。除非 public open source，否则<strong>不要部署 .map 文件到 public CDN</strong>。</p>
+        <p>正确做法：</p>
+        <ul>
+          <li>生成 sourcemap → 上传到 Sentry / Datadog / 等错误追踪服务</li>
+          <li>不部署 .map 到 public</li>
+          <li>或者 <code>build.sourcemap: 'hidden'</code>（生成但不在 .js 里加 <code>//# sourceMappingURL</code>）</li>
+        </ul>
+
+        <h3>陷阱 5：忘记 "type": "module" 让 Node SSR 报错</h3>
+        <p>Vite 6 SSR 输出 ESM；Node ESM 需要 package.json 标 <code>"type": "module"</code>。否则启动 SSR server 报错：<code>SyntaxError: Cannot use import statement outside a module</code>。</p>
+
+        <h3>陷阱 6：assetsInlineLimit 默认值不适合所有场景</h3>
+        <p>默认 4KB inline base64。某些场景：</p>
+        <ul>
+          <li>很多小 SVG icon → 都 inline 到 JS bundle，bundle 变大</li>
+          <li>需要单独 cache 的资源 → inline 后无法独立 cache</li>
+        </ul>
+        <p>调整：</p>
+        <pre class="code"><code class="lang-javascript">build: {
+  assetsInlineLimit: 0   // 全部独立 file
+}
+// 或
+build: {
+  assetsInlineLimit: (filePath) =&gt; {
+    // 只 inline 小 SVG
+    return filePath.endsWith('.svg') &amp;&amp; getFileSize(filePath) &lt; 2048;
+  }
+}</code></pre>
+
+        <h3>陷阱 7：dev 没问题 build 报错</h3>
+        <p>常见。原因：</p>
+        <ul>
+          <li>dev 用 esbuild transform（宽松）；build 用 Rollup（严格）</li>
+          <li>tree shaking 在 dev 不开，build 才开 → 某些 side effect 被删</li>
+          <li>minify 在 dev 不开，build 才开 → 某些反射代码失效</li>
+        </ul>
+        <p>对策：CI 跑 build 而不是只跑 dev。预发环境用 production build。</p>
+
+        <h3>陷阱 8：以为 esbuild minify 等于 terser</h3>
+        <p>esbuild minify 速度极快但<strong>优化没 terser 激进</strong>。某些场景（极致体积优化）用 terser 仍然有意义：</p>
+        <pre class="code"><code class="lang-javascript">build: {
+  minify: 'terser',
+  terserOptions: {
+    compress: {
+      drop_console: true,           // 删 console.log
+      pure_funcs: ['console.log', 'debug'],
+      passes: 2                     // 多遍优化
+    },
+    mangle: { toplevel: true }
+  }
+}</code></pre>
+        <p>典型差距：terser 比 esbuild minify 多压缩 5-10%；但慢 50-100x。生产关键 app 值得；其他用 esbuild 即可。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>Vite + Rollup</h3>
+        <ul>
+          <li><a href="https://vitejs.dev/guide/build.html" target="_blank" rel="noopener">Vite Build for Production</a></li>
+          <li><a href="https://rollupjs.org/configuration-options/" target="_blank" rel="noopener">Rollup Configuration Options</a></li>
+          <li><a href="https://rolldown.rs/" target="_blank" rel="noopener">Rolldown 主页</a></li>
+        </ul>
+
+        <h3>Bundle 优化</h3>
+        <ul>
+          <li><a href="https://github.com/btd/rollup-plugin-visualizer" target="_blank" rel="noopener">rollup-plugin-visualizer</a></li>
+          <li><a href="https://github.com/ai/size-limit" target="_blank" rel="noopener">size-limit</a> · CI bundle 大小检查</li>
+          <li><a href="https://web.dev/articles/code-splitting-suspense" target="_blank" rel="noopener">web.dev: Code splitting with Suspense</a></li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="../03-modules/01-esm-standard.html">P3.1 ESM 标准</a></li>
+          <li><a href="../04-tree-shaking/01-tree-shaking.html">P4.1 Tree Shaking 真相</a></li>
+          <li><a href="../06-compilers/02-source-maps.html">P6.2 Source Maps 工程化</a></li>
+          <li><a href="../07-plugins-and-next/02-next-gen.html">P7.2 下一代构建工具横评</a></li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../browser-rendering/04-performance/01-load-metrics.html">浏览器渲染 P4.1 LCP/FCP/TTFB</a> · bundle 大小对 LCP 影响</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

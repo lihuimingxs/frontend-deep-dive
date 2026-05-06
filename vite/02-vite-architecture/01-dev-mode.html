@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vite Dev mode：esbuild 预构建 + 浏览器原生 ESM · P2.1 · Vite & 构建工具深度学习</title>
+    <meta name="description" content="Vite 设计核心。回答「为什么 Vite dev 启动这么快」：浏览器原生 ESM 让 dev 不打包成为可能 + esbuild 预构建依赖（避免几百个请求） + on-demand transform（源代码按需编译）+ import 重写（bare specifier → /node_modules/.vite/deps/ 路径）。冷启动 < 1s + HMR < 50ms 不是因为 esbuild 快，是因为不全量打包。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23bd34fe'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Vite & 构建工具深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.25 305); color: #fff">Vite</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · Vite 双模架构</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-dev-mode.html" class="active">01 · Dev mode：esbuild 预构建 + 原生 ESM</a></li>
+          <li><a href="02-build-mode.html">02 · Build mode：Rollup → Rolldown 接班</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Vite & 构建工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · Vite 双模架构</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Dev mode</span>
+        </nav>
+        <h1>Vite Dev mode：esbuild 预构建 + 浏览器原生 ESM</h1>
+        <p class="lead">
+          Vite 设计核心。<strong>核心 idea</strong>：浏览器原生支持 ESM，dev mode 不打包 —— 让浏览器请求每个 module 文件，server on-demand 转换返回。<strong>关键洞察</strong>：Vite 快不是因为 esbuild 快，<strong>是因为不全量打包</strong>。esbuild 只做"依赖预构建"（把 node_modules 里散文件 / CJS 转换成单 ESM 文件，避免浏览器发几百个请求）和"逐文件 transform"（TS / Vue SFC / JSX 转 JS）。架构层面，1000 文件的项目和 100 文件几乎一样快。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P1（构建工具是谁）+ 浏览器渲染 P3.1（HTML parser + 资源加载）</span>
+          <span><strong>主要来源</strong> Vite 官方文档 · 尤雨溪演讲 · vite/packages/vite 源码</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Vite dev mode 不打包源代码</strong>—— 浏览器原生支持 ESM，让 dev server 可以让浏览器自己解析 import 链。Vite server 只做"按浏览器请求逐个转换文件"。</li>
+          <li><strong>node_modules 依赖必须预构建</strong>—— 因为：(1) node_modules 里很多包是 CJS（浏览器只懂 ESM）；(2) 一个包可能有几百个散文件（浏览器一个 import 一个 HTTP 请求会爆）。Vite 用 esbuild 把每个依赖预 bundle 成<strong>单个 ESM 文件</strong>。</li>
+          <li><strong>缓存机制：.vite/ 目录 + hash invalidation</strong>—— 预构建结果存到 node_modules/.vite/；hash 基于 lock file + 配置；package.json 改了才重构。</li>
+          <li><strong>on-demand transform</strong>—— 源代码（src/）按浏览器请求逐个转换：TS → JS / Vue SFC → JS / JSX → JS。用 esbuild 做 transform（不做 bundle）。</li>
+          <li><strong>import 重写</strong>—— 浏览器只接受 absolute / relative URL；Vite server 把 <code>import 'react'</code> 重写为 <code>/node_modules/.vite/deps/react.js?v=hash</code> 等。同时处理 <code>.css</code> / <code>.svg</code> 等资源 import。</li>
+          <li><strong>"为什么 Vite 快"的真正答案</strong>：<strong>不全量打包整个项目</strong>。即使把 esbuild 换成更慢的 bundler，启动也仍然快——大项目 1000 文件和小项目 100 文件几乎一样快，因为不全量解析依赖图。esbuild 速度只影响"预构建那几百毫秒"。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>核心架构：dev server 不打包</h3>
+        <p>传统 Webpack dev mode 流程：</p>
+        <pre class="code"><code class="lang-text">用户 npm run dev
+  ↓
+Webpack 启动
+  ↓
+解析整个项目依赖图（所有 src/ + node_modules）
+  ↓
+全量打包成 bundle.js（可能 50-200MB）
+  ↓
+启动 webpack-dev-server，serve bundle.js
+  ↓
+浏览器加载 bundle.js（第一次几秒）
+  ↓
+源代码改 → Webpack 增量重 build → push 给浏览器</code></pre>
+        <p>Vite dev mode 流程：</p>
+        <pre class="code"><code class="lang-text">用户 vite
+  ↓
+Vite 启动（&lt; 100ms）
+  ↓
+扫描 + 预构建 node_modules 依赖（esbuild，~几百 ms 首次 / 几十 ms 缓存命中）
+  ↓
+启动 server，监听文件变化（chokidar）
+  ↓
+浏览器请求 /index.html → server 返回带 &lt;script type="module"&gt;
+  ↓
+浏览器解析 main.js → 发现 import './App.tsx' → 请求 /App.tsx
+  ↓
+Vite server: 编译 App.tsx（TS → JS） + 重写 import → 返回
+  ↓
+浏览器继续解析 App.tsx 里的 import → 继续请求...
+  ↓
+源代码改 → Vite 编译那一个文件 → WebSocket push 给浏览器 → HMR</code></pre>
+        <p><strong>关键差异</strong>：</p>
+        <ul>
+          <li>Webpack：启动时全量解析 + 打包整个项目</li>
+          <li>Vite：启动时只预构建 node_modules + 等浏览器请求</li>
+        </ul>
+
+        <h3>依赖预构建（dependency pre-bundling）</h3>
+        <p>预构建是 Vite dev 中<strong>唯一"打包"步骤</strong>。它做两件事：</p>
+
+        <h4>原因 1：CJS → ESM 转换</h4>
+        <p>node_modules 里很多包仍是 CJS：</p>
+        <pre class="code"><code class="lang-javascript">// react 4-5 仍是 CJS（react-dom 同样）
+// node_modules/react/index.js
+'use strict';
+if (process.env.NODE_ENV === 'production') {
+  module.exports = require('./cjs/react.production.min.js');
+} else {
+  module.exports = require('./cjs/react.development.js');
+}</code></pre>
+        <p>浏览器只懂 ESM（<code>import / export</code>）。预构建时 esbuild 把 CJS 转 ESM：</p>
+        <pre class="code"><code class="lang-javascript">// node_modules/.vite/deps/react.js（预构建后）
+import { ... } from './chunk-XXX.js';
+export default ReactExport;
+export { useState, useEffect, ... };</code></pre>
+
+        <h4>原因 2：散文件 → 单文件</h4>
+        <p>很多包内部有几百个散文件。<strong>没有预构建</strong>，浏览器解析每个 import 都发 HTTP 请求：</p>
+        <pre class="code"><code class="lang-text">// 例：lodash-es 有 600+ 个文件
+import { debounce } from 'lodash-es';
+// 浏览器：发 1 个请求拿到 lodash-es/debounce.js
+// debounce.js 里 import './_baseDebounce' → 发 1 个请求...
+// _baseDebounce.js 里 import './...' → 继续...
+// 总计可能几百个 HTTP 请求！dev 启动巨慢</code></pre>
+        <p>预构建后：</p>
+        <pre class="code"><code class="lang-text">// node_modules/.vite/deps/lodash-es.js（单个文件，所有依赖打包到一起）
+浏览器：1 个请求拿到 lodash-es 全部</code></pre>
+        <p>这是 Vite dev 启动快的关键 —— 不是 esbuild 多么快，是<strong>把"几百个 HTTP 请求" 减成 "几个 HTTP 请求"</strong>。</p>
+
+        <h4>预构建实现</h4>
+        <p>Vite 启动时：</p>
+        <ol>
+          <li>扫描入口文件（默认 index.html）→ 发现所有 import</li>
+          <li>分类：node_modules 里的（要预构建）vs src/ 里的（不预构建）</li>
+          <li>用 esbuild 把每个 node_modules 入口 bundle 成单个 ESM 文件</li>
+          <li>输出到 <code>node_modules/.vite/deps/</code></li>
+          <li>计算依赖 hash（基于 lock file + 配置）→ 写入 <code>node_modules/.vite/deps/_metadata.json</code></li>
+        </ol>
+        <p>典型预构建产物：</p>
+        <pre class="code"><code class="lang-text">node_modules/.vite/deps/
+├── _metadata.json
+├── react.js                  ← 单文件 ESM
+├── react-dom.js
+├── react-dom_client.js
+├── lodash-es.js
+└── chunk-XXX.js              ← 共享 chunk（多个依赖共用）</code></pre>
+
+        <h3>缓存机制</h3>
+        <p>预构建有几百毫秒成本（首次）。Vite 缓存策略：</p>
+        <ul>
+          <li><strong>cache key</strong> = lock file content + Vite config + 入口列表的 hash</li>
+          <li><strong>cache 位置</strong>：node_modules/.vite/deps/_metadata.json</li>
+          <li><strong>失效条件</strong>：lock file 变 / config 变 / 入口加新依赖</li>
+          <li><strong>缓存命中</strong>：直接 mmap 读 .vite/deps/ 文件，跳过 esbuild bundling</li>
+        </ul>
+        <p>实测：首次 ~500ms-2s（依项目）；缓存命中 &lt; 100ms。</p>
+
+        <h3>on-demand transform：源代码按需编译</h3>
+        <p>src/ 里的文件不预构建。它们由 Vite server <strong>按浏览器请求逐个编译</strong>：</p>
+        <pre class="code"><code class="lang-text">浏览器请求 GET /src/App.tsx
+  ↓
+Vite server middleware 链：
+  → resolve plugin: 解析路径
+  → load plugin: 读文件内容
+  → transform plugin: 编译 TS → JS（用 esbuild）
+  → transform plugin: 重写 import 路径
+  → 返回 JS 给浏览器</code></pre>
+        <p>每个文件只在<strong>首次请求时</strong>编译；二次请求 + 内存缓存命中。</p>
+
+        <h3>import 重写</h3>
+        <p>浏览器原生 ESM 只支持<strong>绝对 URL 或相对路径</strong>：</p>
+        <ul>
+          <li><code>import './foo.js'</code> ✅ 相对</li>
+          <li><code>import '/foo.js'</code> ✅ 绝对</li>
+          <li><code>import 'react'</code> ❌ bare specifier，浏览器不知道去哪找</li>
+        </ul>
+        <p>Vite server 在 transform 阶段重写 import：</p>
+        <pre class="code"><code class="lang-javascript">// 源代码
+import React from 'react';
+import { debounce } from 'lodash-es';
+import './style.css';
+
+// Vite server 重写后返回
+import React from '/node_modules/.vite/deps/react.js?v=abc123';
+import { debounce } from '/node_modules/.vite/deps/lodash-es.js?v=abc123';
+import '/src/style.css?direct';   // CSS 也是 module（HMR 用）</code></pre>
+        <p><code>?v=abc123</code> 是 cache busting：依赖 hash 变了 query 也变，让浏览器 invalidate cache。</p>
+
+        <h3>CSS / 静态资源处理</h3>
+        <p>Vite 把 CSS / image / font 等都当 ESM module：</p>
+        <pre class="code"><code class="lang-javascript">import './style.css';        // 注入 CSS 到 DOM
+import logo from './logo.png'; // logo 是 URL string
+import data from './data.json' with { type: 'json' };  // import attributes</code></pre>
+        <p>CSS 处理特别：</p>
+        <pre class="code"><code class="lang-javascript">// 浏览器接收的 CSS 实际是 JS module
+// vite 把 CSS 包装成：
+const css = ".foo { color: red; }";
+const style = document.createElement('style');
+style.textContent = css;
+document.head.appendChild(style);
+export default css;
+// HMR 时直接替换 style 元素</code></pre>
+
+        <h3>HTTP 请求模型与 HTTP/2</h3>
+        <p>"Vite 让浏览器发几百个请求"听起来差。但<strong>HTTP/2 / HTTP/3 多路复用让小请求高效</strong>：</p>
+        <ul>
+          <li>HTTP/1.1：每个请求要独立 TCP 连接（max ~6 并发）/ head-of-line blocking</li>
+          <li>HTTP/2：一个 TCP 连接多路复用 N 个请求；几百个请求几乎免费</li>
+          <li>浏览器 cache：二次访问几乎零 HTTP 开销</li>
+        </ul>
+        <p>这也是 Vite 设计的<strong>时代背景</strong> —— 没有 HTTP/2 普及（~2018+），Vite 设计可能不可行。</p>
+
+        <h3>性能数据：为什么 &lt; 1s 启动</h3>
+        <p>典型 Vite dev 启动分解：</p>
+        <table>
+          <thead>
+            <tr><th>步骤</th><th>时间</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Vite server 启动</td><td>~50ms</td></tr>
+            <tr><td>读 vite.config.js + 解析配置</td><td>~50ms</td></tr>
+            <tr><td>预构建（缓存命中）</td><td>~100ms</td></tr>
+            <tr><td>预构建（首次，10-20 个依赖）</td><td>~300-1000ms</td></tr>
+            <tr><td>启动 chokidar（文件监听）</td><td>~50ms</td></tr>
+            <tr><td>浏览器加载 + 第一次解析</td><td>取决于网络 / CPU</td></tr>
+          </tbody>
+        </table>
+        <p>对比 Webpack：</p>
+        <ul>
+          <li>Webpack 启动需要扫描 + 解析 + 编译<strong>所有</strong>源文件 + 所有依赖</li>
+          <li>1000 文件的 React 项目典型 30-60s</li>
+          <li>大项目（10k+ 文件）可能几分钟甚至 OOM</li>
+        </ul>
+
+        <h3>大型项目可扩展性</h3>
+        <p>因为 Vite dev <strong>不全量打包</strong>，启动时间几乎与项目大小无关：</p>
+        <table>
+          <thead>
+            <tr><th>项目大小</th><th>Webpack dev start</th><th>Vite dev start</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>100 文件</td><td>~3-5s</td><td>~500ms</td></tr>
+            <tr><td>1000 文件</td><td>~15-30s</td><td>~700ms</td></tr>
+            <tr><td>5000 文件</td><td>~60s+</td><td>~1s</td></tr>
+            <tr><td>10000 文件</td><td>OOM 常见</td><td>~1.5s</td></tr>
+          </tbody>
+        </table>
+        <p>Vite 启动时间增长曲线 = O(node_modules 数量)，几乎不依赖 src/ 文件数。</p>
+
+        <h3>SSR + RSC：Environment API（Vite 6+）</h3>
+        <p>Vite 6（2024-11）引入 <strong>Environment API</strong>，让 SSR / RSC / Edge / Worker 等不同环境跑同一个 Vite：</p>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+export default {
+  environments: {
+    client: { /* 浏览器环境 */ },
+    ssr: { /* Node SSR */ },
+    rsc: { /* React Server Components */ },
+    edge: { /* Cloudflare Workers */ }
+  }
+};</code></pre>
+        <p>每个 environment 独立编译流水线 + 不同 transform 规则。这让 React Router 7 / TanStack Start / Astro 等同时支持多 runtime 的框架更易实现。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · 启动时间慢的诊断</h3>
+        <p>Vite dev 启动慢通常 3 类原因：</p>
+        <p><strong>(1) 预构建慢</strong>—— 依赖太多 / 包结构不友好（CJS / 散文件）。Vite 启动日志看：<code>Pre-bundling dependencies (...)</code> 那段时间。</p>
+        <p>对策：检查依赖是否必要；用 ESM 版本（lodash-es 而不是 lodash）；optimizeDeps.include / exclude 调整。</p>
+        <p><strong>(2) 第一次浏览器加载慢</strong>—— 首页 import 链深 + 文件多 → 浏览器要请求很多。</p>
+        <p>对策：<code>optimizeDeps.entries</code> 显式声明入口；vite.config.js <code>server.warmup</code> 让 server 预热源文件。</p>
+        <p><strong>(3) 监听文件慢</strong>—— 大项目的 chokidar 启动慢；macOS 上 fsevents 偶尔有问题。</p>
+        <p>对策：<code>server.watch.usePolling</code> 调整；忽略不必要目录。</p>
+
+        <h3>场景 B · CJS-only 依赖让 dev 报错</h3>
+        <p>有时第三方包是 CJS only，没正确标注 exports；预构建可能失败：</p>
+        <pre class="code"><code class="lang-text">[vite] Internal server error: 'foo' is not exported by node_modules/cjs-only-pkg/index.js</code></pre>
+        <p>解决：</p>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+export default {
+  optimizeDeps: {
+    include: ['cjs-only-pkg'],   // 强制预构建
+  }
+};</code></pre>
+
+        <h3>场景 C · 大型 monorepo 性能优化</h3>
+        <p>monorepo 里 packages/ 多个内部包都是源代码（不在 node_modules）。Vite 默认<strong>不预构建源代码</strong>，每次都 transform。大型 monorepo 这会让浏览器请求几千文件。</p>
+        <p>解决：</p>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+export default {
+  optimizeDeps: {
+    // 强制预构建内部包
+    include: ['@my-org/ui', '@my-org/utils']
+  }
+};</code></pre>
+
+        <h3>场景 D · proxy 后端 API（dev 期）</h3>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+export default {
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+        rewrite: (path) =&gt; path.replace(/^\/api/, '')
+      }
+    }
+  }
+};</code></pre>
+        <p>所有 <code>/api/*</code> 请求转发到 backend，避免 CORS。</p>
+
+        <h3>场景 E · Vite 6 Environment API（SSR + 客户端）</h3>
+        <pre class="code"><code class="lang-javascript">import { createServer } from 'vite';
+
+const server = await createServer({
+  environments: {
+    client: {
+      build: { outDir: 'dist/client' }
+    },
+    ssr: {
+      build: { outDir: 'dist/ssr', rollupOptions: { input: 'src/entry-server.ts' } }
+    }
+  }
+});
+
+await server.listen();
+// dev 时同时跑 client + ssr 两个 environment</code></pre>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：完整 Vite 项目</span></h2>
+
+        <h3>最简 vite 项目结构</h3>
+        <pre class="code"><code class="lang-text">my-app/
+├── package.json
+├── vite.config.js
+├── index.html              ← 入口（不是 src/index.html）
+├── src/
+│   ├── main.tsx
+│   ├── App.tsx
+│   └── style.css
+└── public/                 ← 静态资源（不经 import 直接复制）
+    └── favicon.ico</code></pre>
+
+        <h3>index.html（关键）</h3>
+        <pre class="code"><code class="lang-html">&lt;!doctype html&gt;
+&lt;html&gt;
+  &lt;head&gt;
+    &lt;meta charset="UTF-8" /&gt;
+    &lt;link rel="icon" type="image/svg+xml" href="/favicon.svg" /&gt;
+    &lt;title&gt;My App&lt;/title&gt;
+  &lt;/head&gt;
+  &lt;body&gt;
+    &lt;div id="root"&gt;&lt;/div&gt;
+    &lt;script type="module" src="/src/main.tsx"&gt;&lt;/script&gt;
+  &lt;/body&gt;
+&lt;/html&gt;</code></pre>
+        <p>注意：</p>
+        <ul>
+          <li><code>type="module"</code> 是关键 —— 让浏览器以 ESM 方式解析</li>
+          <li>路径 <code>/src/main.tsx</code> 是绝对路径 —— Vite server 会从项目根目录 serve</li>
+          <li>HTML 在项目根，不在 public/（与 CRA 不同）</li>
+        </ul>
+
+        <h3>vite.config.ts</h3>
+        <pre class="code"><code class="lang-typescript">import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+
+  // dev server
+  server: {
+    port: 3000,
+    open: true,                  // 启动后自动打开浏览器
+    proxy: {
+      '/api': 'http://localhost:3001'
+    }
+  },
+
+  // 优化预构建
+  optimizeDeps: {
+    include: ['react', 'react-dom', 'lodash-es'],
+    exclude: ['some-cjs-pkg-that-breaks']
+  },
+
+  // 构建（详见 P2.2）
+  build: {
+    outDir: 'dist',
+    target: 'es2020'
+  }
+});</code></pre>
+
+        <h3>src/main.tsx</h3>
+        <pre class="code"><code class="lang-typescript">import React from 'react';
+import { createRoot } from 'react-dom/client';
+import App from './App';
+import './style.css';
+
+const root = createRoot(document.getElementById('root')!);
+root.render(&lt;App /&gt;);</code></pre>
+
+        <h3>用 import.meta.env 区分环境</h3>
+        <pre class="code"><code class="lang-typescript">// Vite 内置 env 变量
+console.log(import.meta.env.MODE);          // 'development' | 'production'
+console.log(import.meta.env.DEV);           // true | false
+console.log(import.meta.env.PROD);          // true | false
+console.log(import.meta.env.BASE_URL);      // 配置的 base 路径
+
+// 自定义 env：以 VITE_ 开头才暴露给客户端
+// .env.local
+// VITE_API_URL=https://api.example.com
+
+console.log(import.meta.env.VITE_API_URL);  // "https://api.example.com"</code></pre>
+
+        <h3>预构建状态检查</h3>
+        <pre class="code"><code class="lang-bash"># 启动后看 .vite/deps 内容
+$ ls node_modules/.vite/deps/
+_metadata.json
+chunk-XXX.js
+react.js
+react-dom_client.js
+react-dom.js
+
+# 看 metadata
+$ cat node_modules/.vite/deps/_metadata.json | jq .
+{
+  "hash": "abc123",
+  "browserHash": "def456",
+  "optimized": {
+    "react": { "src": "...", "file": "react.js", ... },
+    ...
+  }
+}</code></pre>
+
+        <h3>清理预构建缓存（debug 用）</h3>
+        <pre class="code"><code class="lang-bash">$ rm -rf node_modules/.vite
+$ vite --force      # 启动时强制重新预构建</code></pre>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：以为 Vite 快是因为 esbuild</h3>
+        <p>常见误解。<strong>Vite 快的根本是不全量打包</strong>，esbuild 只是预构建那几百毫秒用得快。即使把 esbuild 替换成更慢的 bundler 做预构建，启动时间仍比 Webpack 快 10-50x —— 因为预构建只处理依赖（数十个），Webpack 全量打包整个项目（数千文件）。</p>
+
+        <h3>陷阱 2：用 require / __dirname / process.env 期望工作</h3>
+        <p>Vite dev mode 是浏览器 ESM 环境，<strong>不是 Node</strong>：</p>
+        <pre class="code"><code class="lang-javascript">// ❌ 这些在 dev 中报错
+const fs = require('fs');                    // 浏览器没 require
+console.log(__dirname);                      // 浏览器没 __dirname
+console.log(process.env.NODE_ENV);           // 浏览器无 process
+
+// ✅ 浏览器原生 ESM 用：
+import.meta.url                              // 当前模块 URL
+new URL('./asset.png', import.meta.url)      // 资源相对路径
+import.meta.env.NODE_ENV                     // Vite 注入的 env
+import.meta.env.DEV                          // dev 标志</code></pre>
+
+        <h3>陷阱 3：依赖里 import 浏览器不支持的 Node API</h3>
+        <p>有些 npm 包（如 fs-extra / path）是 Node-only。在浏览器 dev 用时报错：<code>Module "fs" has been externalized for browser compatibility.</code></p>
+        <p>对策：</p>
+        <ul>
+          <li>用浏览器版替代（path-browserify 替代 path）</li>
+          <li>vite.config.js <code>resolve.alias</code> 重定向</li>
+          <li>用 SSR 模式跑 Node 代码（Vite 6 Environment API）</li>
+        </ul>
+
+        <h3>陷阱 4：CommonJS 默认导出问题</h3>
+        <p>CJS 包用 <code>module.exports = obj</code>；ESM 期望 <code>export default obj</code>。Vite 预构建做 interop，但有时不完美：</p>
+        <pre class="code"><code class="lang-javascript">// 旧 CJS 包
+import lodash from 'lodash';     // 可能拿到 { default: { ...lodash } }
+// 实际访问要：lodash.default.debounce 而不是 lodash.debounce
+
+// ✅ 用 ESM 版本
+import { debounce } from 'lodash-es';</code></pre>
+
+        <h3>陷阱 5：用 CRA 风格 public 路径</h3>
+        <pre class="code"><code class="lang-html">&lt;!-- ❌ CRA 风格（Vite 不支持） --&gt;
+&lt;img src="%PUBLIC_URL%/logo.png" /&gt;
+
+&lt;!-- ✅ Vite 风格 --&gt;
+&lt;img src="/logo.png" /&gt;       &lt;!-- public/ 下的资源直接 / 路径 --&gt;</code></pre>
+
+        <h3>陷阱 6：忘记 @vitejs/plugin-react / vue 插件</h3>
+        <p>Vite 不内置 React/Vue 支持。<strong>必须装对应 plugin</strong>：</p>
+        <pre class="code"><code class="lang-bash">$ npm i -D @vitejs/plugin-react
+# 或
+$ npm i -D @vitejs/plugin-vue</code></pre>
+        <p>然后 vite.config.js 加 plugin。否则 JSX / SFC 不能编译。</p>
+
+        <h3>陷阱 7：optimizeDeps.include / exclude 误用</h3>
+        <p><code>include</code> 强制预构建（针对自动检测漏掉的）；<code>exclude</code> 强制不预构建（针对预构建出错的）。<strong>误用会导致诡异 bug</strong>：</p>
+        <ul>
+          <li>把<strong>纯 ESM 包</strong>放 exclude 没意义（Vite 不预构建它）</li>
+          <li>把<strong>很重的包</strong>放 exclude 让浏览器发几百请求</li>
+        </ul>
+        <p>规则：默认让 Vite 自动判断；只在<strong>明确遇到错误</strong>才调整。</p>
+
+        <h3>陷阱 8：缓存不更新</h3>
+        <p>诡异行为时清缓存：</p>
+        <pre class="code"><code class="lang-bash">$ rm -rf node_modules/.vite
+$ vite --force</code></pre>
+        <p>常见诱因：lock file 没更新但 package.json 改了；deps 锁定 hash 不一致。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>Vite 官方</h3>
+        <ul>
+          <li><a href="https://vitejs.dev/guide/why.html" target="_blank" rel="noopener">Why Vite</a> · 设计哲学</li>
+          <li><a href="https://vitejs.dev/guide/dep-pre-bundling.html" target="_blank" rel="noopener">Dependency Pre-Bundling</a></li>
+          <li><a href="https://vitejs.dev/guide/api-environment.html" target="_blank" rel="noopener">Environment API (Vite 6+)</a></li>
+          <li><a href="https://vitejs.dev/config/" target="_blank" rel="noopener">Vite config 全参考</a></li>
+        </ul>
+
+        <h3>深度文章</h3>
+        <ul>
+          <li><a href="https://patak.dev/vite/announcing-vite-6.html" target="_blank" rel="noopener">Patak · Announcing Vite 6</a></li>
+          <li><a href="https://www.youtube.com/watch?v=DkGV5F4XnfQ" target="_blank" rel="noopener">Evan You · Vite 1.0 launch talk</a></li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="02-build-mode.html">P2.2 Build mode：Rollup → Rolldown 接班</a></li>
+          <li><a href="../03-modules/01-esm-standard.html">P3.1 ESM 标准</a></li>
+          <li><a href="../05-hmr/01-hmr-and-react-refresh.html">P5.1 HMR + React Refresh</a></li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../browser-rendering/03-crp/01-parse-dom-cssom.html">浏览器渲染 P3.1 HTML parser + 资源加载</a> · 浏览器原生 ESM 加载</li>
+          <li><a href="../../bun/04-toolchain/03-bun-build.html">Bun P4.3 Bun build</a></li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
