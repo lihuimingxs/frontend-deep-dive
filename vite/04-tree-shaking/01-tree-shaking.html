@@ -1,0 +1,626 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tree Shaking 真相 · P4.1 · Vite & 构建工具深度学习</title>
+    <meta name="description" content="行业最被误解的特性。Tree shaking 不是开关，依赖整个生态共同配合：包正确标 sideEffects + bundler 实现 + 用户写 code 风格。任何一环失效都让 tree shake 失败。Rollup 最严最干净 / Webpack 依赖 sideEffects + Babel pure annotation 常假阳性 / esbuild 中等。失效场景全谱：默认导入整个 lodash / 第三方包不标 sideEffects / CSS 副作用 / 模块顶层 console.log / Babel 转译破坏 ESM 静态结构。/* @__PURE__ */ 注释救场。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23bd34fe'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Vite & 构建工具深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.25 305); color: #fff">Vite</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · Tree Shaking 真相</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-tree-shaking.html" class="active">01 · Tree Shaking 真相</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Vite & 构建工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · Tree Shaking 真相</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Tree Shaking 真相</span>
+        </nav>
+        <h1>Tree Shaking 真相</h1>
+        <p class="lead">
+          行业<strong>最被误解的特性</strong>之一。"我开了 tree shaking 怎么 bundle 还这么大"是常见困惑——<strong>答案是 tree shaking 不是开关，依赖整个生态共同配合</strong>：包正确标 sideEffects + bundler 实现 + 用户写 code 风格 + 编译器不破坏 ESM 结构。任何一环失效都让 tree shake 失败。<strong>Rollup 最严最干净 / Webpack 依赖 sideEffects + Babel pure annotation 常假阳性 / esbuild 中等严格</strong>。<strong>本章讲清</strong>：tree shaking 怎么真正工作 + 失效场景全谱 + 怎么诊断和修复。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P3.1（ESM 标准）+ P3.2（CJS Interop）</span>
+          <span><strong>主要来源</strong> Rich Harris 经典文章 · Rollup docs · Webpack tree shaking docs · esbuild 文档</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Tree shaking 定义</strong>—— 编译时分析模块图 → 标记未使用的 export → 不打包到产物。"<strong>shake 掉死代码</strong>"。</li>
+          <li><strong>前提：必须用 ESM</strong>—— ESM 静态分析（详见 <a href="../03-modules/01-esm-standard.html">P3.1</a>）让编译时知道哪些 export 被用。CJS 是动态 require → 不能可靠 tree shake。<strong>用 lodash-es 而不是 lodash 是 tree shake 第一规则</strong>。</li>
+          <li><strong>side effects（副作用）概念</strong>—— 模块加载时执行的代码（<code>console.log</code> / 注册全局 / polyfill / 初始化）<strong>有副作用</strong>。tree shaker 默认假设所有模块有副作用 → 不敢删 → tree shake 不动。</li>
+          <li><strong>package.json sideEffects 字段</strong>—— 让包作者声明哪些文件有副作用：<code>"sideEffects": false</code>（整包纯）/ <code>"sideEffects": ["./src/polyfill.js", "*.css"]</code>（指定）。<strong>没标 sideEffects 的包默认保守保留</strong>。</li>
+          <li><strong>静态分析的 4 个限制</strong>：(1) 动态 import 不能完全分析；(2) 调用未知函数（可能改全局）保守处理；(3) re-export（<code>export *</code>）扩展分析图；(4) destructuring import 是必要不充分（虽然 import 但用了什么不一定确定）。</li>
+          <li><strong>三大 bundler 实现差异</strong>：Rollup 最严（"<strong>tree shaking 第一公民</strong>"，无包标注也敢 shake）/ Webpack 依赖包标注 + Babel <code>/* @__PURE__ */</code>，常有"假阳性"（认为有副作用其实没有）/ esbuild 中等严格（接近 Rollup 但不及）。</li>
+          <li><strong>失效场景全谱</strong>—— 大多数 "tree shake 没生效"是用户 code 写法 + 第三方包没标 sideEffects 共同导致。<strong>诊断工具</strong>：rollup-plugin-visualizer / source-map-explorer。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>tree shaking 概念起源</h3>
+        <p>2015 年 Rich Harris（Rollup 作者）写文章 <em>Tree-shaking versus dead code elimination</em>，区分两个概念：</p>
+        <ul>
+          <li><strong>Dead code elimination（DCE）</strong>—— 编译器把<strong>已包含的代码</strong>里 unreachable 部分删（如 <code>if (false) {...}</code> 块）</li>
+          <li><strong>Tree shaking</strong>—— 编译器在<strong>合并模块时</strong>，决定哪些 export 不引入</li>
+        </ul>
+        <p>类比：<strong>DCE</strong> 是"做完一桌菜后扔掉吃不完的"；<strong>tree shaking</strong> 是"做菜前算好不要做太多"。</p>
+        <p>tree shaking 是 ESM 时代的特性，CJS 时代只有 DCE。</p>
+
+        <h3>静态分析能做什么</h3>
+        <p>编译时（不运行代码）能确定：</p>
+        <ul>
+          <li>每个模块的 import 路径（必须 literal）</li>
+          <li>每个模块的 export 列表（必须顶层）</li>
+          <li>每个 import 用了哪些 export（语法分析）</li>
+          <li>构建完整模块依赖图</li>
+        </ul>
+        <p>有了这些信息，tree shaker 算法：</p>
+        <ol>
+          <li>从 entry 出发遍历所有可达 export</li>
+          <li>未被到达的 export 标记为"未使用"</li>
+          <li>把未使用的 export <strong>+ 它的实现代码</strong> 删除</li>
+        </ol>
+        <p>但<strong>实现代码删除有副作用风险</strong>：删了某个函数定义，但定义里有 <code>polyfill.register()</code> 怎么办？这就是 sideEffects 概念出现的原因。</p>
+
+        <h3>Side effects 详解</h3>
+        <p>"副作用"在 tree shaking 上下文 = <strong>模块加载（top-level execution）时执行</strong>的代码：</p>
+        <pre class="code"><code class="lang-javascript">// math.js
+console.log('math.js loaded');   // ← 副作用！
+
+export function add(a, b) {
+  return a + b;
+}
+export function subtract(a, b) {
+  return a - b;
+}</code></pre>
+        <p>用户代码：</p>
+        <pre class="code"><code class="lang-javascript">// app.js
+import { add } from './math';
+console.log(add(1, 2));
+// 没用 subtract</code></pre>
+        <p>如果 tree shaker 删除 subtract → 看似 OK。但<strong>整个 math.js 模块还得 load</strong>（因为 <code>console.log</code> 是副作用）→ 实际上 subtract 实现也保留（防止 console.log 失效）。</p>
+        <p>tree shaker 的<strong>保守原则</strong>：<strong>遇到不确定的副作用，宁可不 shake</strong>。结果：用户经常发现 "明明没用怎么还在 bundle 里"。</p>
+
+        <h3>package.json sideEffects 字段</h3>
+        <p>包作者用 sideEffects 字段告诉 bundler "我没副作用 / 副作用在哪"：</p>
+        <pre class="code"><code class="lang-json">// 整包纯（无副作用）
+{
+  "sideEffects": false
+}
+
+// 指定哪些文件有副作用
+{
+  "sideEffects": [
+    "./src/polyfill.js",
+    "*.css",
+    "./src/init/*"
+  ]
+}
+
+// 默认（不写）：所有文件都有副作用 → tree shake 不动</code></pre>
+        <p><strong>关键</strong>：</p>
+        <ul>
+          <li>包作者<strong>必须正确标</strong>—— 错标会让 polyfill 等被错删（bug）</li>
+          <li>用户能 override：项目自己 package.json 设 sideEffects</li>
+          <li>2026 主流包（lodash-es / date-fns / @mui / @emotion / etc.）都正确标</li>
+        </ul>
+
+        <h3>用户代码 sideEffects 标注</h3>
+        <p>不只是包，<strong>用户项目也可以标</strong>：</p>
+        <pre class="code"><code class="lang-json">// 你的 app 的 package.json
+{
+  "name": "my-app",
+  "sideEffects": [
+    "./src/polyfills/*",       // 这些是副作用
+    "*.css",
+    "./src/setup-tracking.ts"
+  ]
+}</code></pre>
+        <p>让 bundler 知道你的 app 哪些文件有副作用。其他文件可以激进 tree shake。</p>
+
+        <h3>三大 bundler tree shaking 对比</h3>
+
+        <h4>Rollup：最严最干净</h4>
+        <p>Rollup 把 tree shaking 视为<strong>第一公民</strong>：</p>
+        <ul>
+          <li>默认开启 + 激进</li>
+          <li>不依赖 sideEffects 标注（也用 <code>/* @__PURE__ */</code> 注释）</li>
+          <li>能识别"<strong>调用没副作用的函数</strong>"模式（如 <code>const x = createObj()</code>，如果 createObj 标了 PURE，x 没用就 shake 掉 createObj）</li>
+          <li>scope hoisting（把所有模块代码合并到同一作用域）让 minifier 进一步删</li>
+        </ul>
+        <p>结果：<strong>Rollup 输出通常最干净</strong>。库打包用 Rollup 是行业标准。</p>
+
+        <h4>Webpack：依赖标注 + Babel</h4>
+        <p>Webpack tree shaking：</p>
+        <ul>
+          <li>必须 production mode 才完全开启（dev 模式不 shake）</li>
+          <li><strong>严重依赖 sideEffects 标注</strong>—— 没标的包保守保留</li>
+          <li>依赖 Babel <code>/* @__PURE__ */</code> 注释（Babel preset-env 会丢掉这些注释，要小心）</li>
+          <li>concatenateModules（scope hoisting）2018 后改善</li>
+        </ul>
+        <p>结果：<strong>常有假阳性</strong>—— 该 shake 的没 shake 掉，bundle 比 Rollup 大。</p>
+
+        <h4>esbuild：中等严格</h4>
+        <p>esbuild tree shaking：</p>
+        <ul>
+          <li>默认开启</li>
+          <li>识别 sideEffects 标注</li>
+          <li>识别 <code>/* @__PURE__ */</code></li>
+          <li>速度快但不及 Rollup 精细</li>
+        </ul>
+        <p>结果：接近 Rollup 但不完全等价。</p>
+
+        <h4>对比实测（典型库）</h4>
+        <table>
+          <thead>
+            <tr><th>场景</th><th>Rollup</th><th>Webpack</th><th>esbuild</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>纯 ESM 库 + sideEffects: false</td><td>最干净</td><td>干净</td><td>干净</td></tr>
+            <tr><td>纯 ESM 库 + 没标 sideEffects</td><td>干净（Rollup 不依赖标注）</td><td>保留全部（保守）</td><td>中等</td></tr>
+            <tr><td>有副作用代码（polyfill）</td><td>正确保留</td><td>正确保留</td><td>正确保留</td></tr>
+            <tr><td>包含 CJS 的 lib</td><td>处理慢，可能保守</td><td>原生支持</td><td>原生支持</td></tr>
+          </tbody>
+        </table>
+
+        <h3>静态分析的 4 个限制</h3>
+
+        <h4>限制 1：动态 import 不能完全分析</h4>
+        <pre class="code"><code class="lang-javascript">// 路径完全动态
+const mod = await import(getUserInput());   // bundler 不知道
+// → 不能 tree shake 任何模块（保守保留所有可能性）</code></pre>
+        <p>对策：<strong>不要用完全动态 import</strong>；用 glob pattern 让 bundler 至少能限制范围。</p>
+
+        <h4>限制 2：调用未知函数（可能改全局）保守</h4>
+        <pre class="code"><code class="lang-javascript">// utils.js
+export function init() { /* 可能改全局 */ }
+
+// app.js
+import { init } from './utils';
+init();   // bundler 不确定 init 是否有副作用 → 保守保留</code></pre>
+        <p>对策：标 <code>/* @__PURE__ */</code>：</p>
+        <pre class="code"><code class="lang-javascript">/*#__PURE__*/ init();   // 告诉 tree shaker：这个调用纯，删了 OK</code></pre>
+
+        <h4>限制 3：re-export 扩展分析图</h4>
+        <pre class="code"><code class="lang-javascript">// utils/index.js
+export * from './a';
+export * from './b';
+export * from './c';
+
+// app.js
+import { foo } from 'utils';   // bundler 必须分析 a/b/c 都看一遍找 foo</code></pre>
+        <p>这本身 OK，但<strong>大型 barrel file</strong>（<code>index.ts</code> 一次 export 几百个）让 bundler 扫描范围大；某些 bundler / 配置下退化到"全部保留"。</p>
+
+        <h4>限制 4：destructuring import 必要不充分</h4>
+        <pre class="code"><code class="lang-javascript">// 表面上：用了 add，没用 subtract
+import { add } from 'math';
+
+// 实际上：bundler 还要分析 math.js 内部所有代码确认无副作用
+// 如果 math.js 内部有 console.log 或调用未知函数，保留所有</code></pre>
+
+        <h3>典型失效场景</h3>
+
+        <h4>失效 1：默认导入整个 lodash</h4>
+        <pre class="code"><code class="lang-javascript">// ❌ 整个 lodash 进来（CJS 包，~70KB）
+import _ from 'lodash';
+const r = _.debounce(fn);
+
+// ✅ 只 debounce
+import { debounce } from 'lodash-es';
+const r = debounce(fn);
+
+// ✅ 或单文件 import（更激进）
+import debounce from 'lodash/debounce';   // 仍 CJS 但 lodash 设计支持单文件 import</code></pre>
+
+        <h4>失效 2：第三方包没标 sideEffects</h4>
+        <pre class="code"><code class="lang-javascript">// 包 X 没标 sideEffects
+import { foo } from 'pkg-x';   // bundler 保守保留整个 pkg-x
+
+// 临时对策：用户项目 package.json 强行标
+{
+  "sideEffects": ["./node_modules/pkg-x/some-side-effect-file.js"]
+}</code></pre>
+
+        <h4>失效 3：CSS 副作用</h4>
+        <pre class="code"><code class="lang-javascript">// 这是副作用（注入 DOM），不能 tree shake
+import 'global-styles.css';
+import './side-effect.scss';</code></pre>
+        <p>包作者要标：</p>
+        <pre class="code"><code class="lang-json">{
+  "sideEffects": ["*.css", "*.scss"]
+}</code></pre>
+
+        <h4>失效 4：模块顶层 console.log</h4>
+        <pre class="code"><code class="lang-javascript">// foo.js
+console.log('foo loaded');   // ← 让整个模块被认为有副作用
+
+export function bar() { /* ... */ }
+
+// app.js
+import { bar } from './foo';   // bar 被保留，foo.js 整个加载</code></pre>
+        <p>对策：删掉无意义的 console.log；或包装在条件里。</p>
+
+        <h4>失效 5：Babel 转译破坏 ESM 静态结构</h4>
+        <p>Babel preset-env 默认把 ESM 转 CJS（兼容旧浏览器）。<strong>转 CJS 后 tree shake 不动</strong>。</p>
+        <p>对策：</p>
+        <pre class="code"><code class="lang-json">// babel.config.js
+{
+  "presets": [
+    ["@babel/preset-env", {
+      "modules": false   // 不转 ESM 模块
+    }]
+  ]
+}</code></pre>
+        <p>让 Babel 保留 ESM 给 bundler 处理。<strong>2026 用 SWC / esbuild 替代 Babel</strong> 通常默认正确。</p>
+
+        <h4>失效 6：Class 字段 / private 等转译副作用</h4>
+        <p>Babel 转 ES2022 私有字段时可能加 helper：</p>
+        <pre class="code"><code class="lang-javascript">// 源
+class Foo {
+  #count = 0;
+  inc() { this.#count++; }
+}
+
+// Babel 转译后（简化）
+class Foo {
+  constructor() {
+    _classPrivateFieldInitSpec(this, _count, { writable: true, value: 0 });
+  }
+  inc() { /* 用 helper */ }
+}
+function _classPrivateFieldInitSpec() { /* ... */ }   // 全局 helper</code></pre>
+        <p>helper 看起来副作用 → tree shake 失效。</p>
+        <p>对策：</p>
+        <ul>
+          <li>用 SWC / esbuild（不用 Babel preset-env）</li>
+          <li>target 现代浏览器（不需要转译）</li>
+          <li>Babel 的 <code>@babel/runtime</code> 配 sideEffects: false</li>
+        </ul>
+
+        <h3>关键工具：<code>/* @__PURE__ */</code> 注释</h3>
+        <p>这是<strong>跨 bundler 标准</strong>：标在函数调用前，告诉 tree shaker"这调用纯，删了 OK"：</p>
+        <pre class="code"><code class="lang-javascript">// 告诉 tree shaker：createComponent 是 pure 的
+const Component = /*#__PURE__*/ createComponent({ name: 'Foo' });
+
+// 没用 Component 时整个被删（包括 createComponent 调用）
+
+// 多个调用都标
+export const cx = /*#__PURE__*/ createCx();
+export const cy = /*#__PURE__*/ createCy();</code></pre>
+        <p>注意：</p>
+        <ul>
+          <li>注释格式严格：<code>/*#__PURE__*/</code> 或 <code>/* @__PURE__ */</code></li>
+          <li>必须紧贴函数调用前面</li>
+          <li>Babel preset-env 默认<strong>会丢掉注释</strong>（要 <code>shouldPrintComment</code> 选项保留）</li>
+        </ul>
+
+        <h3>诊断工具</h3>
+
+        <h4>rollup-plugin-visualizer</h4>
+        <pre class="code"><code class="lang-bash">$ npm i -D rollup-plugin-visualizer</code></pre>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+import { visualizer } from 'rollup-plugin-visualizer';
+
+export default {
+  plugins: [react(), visualizer({ open: true, gzipSize: true })]
+};</code></pre>
+        <pre class="code"><code class="lang-bash">$ vite build
+# 自动打开浏览器，treemap 可视化每个 chunk 内容</code></pre>
+
+        <h4>source-map-explorer（Webpack 友好）</h4>
+        <pre class="code"><code class="lang-bash">$ npm i -g source-map-explorer
+$ source-map-explorer dist/assets/index-*.js
+# 浏览器打开，treemap 可视化</code></pre>
+
+        <h4>esbuild metafile</h4>
+        <pre class="code"><code class="lang-bash">$ esbuild src/index.js --bundle --metafile=meta.json --outfile=out.js
+$ cat meta.json | jq '.outputs'
+# 看每个 output 的 inputs / imports / bytes</code></pre>
+
+        <h4>vite build --debug bundle:</h4>
+        <pre class="code"><code class="lang-bash">$ DEBUG="vite:*" vite build 2&gt;&amp;1 | grep "tree-shake"</code></pre>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · 我开了 tree shaking 但 bundle 还很大</h3>
+        <p>诊断流程：</p>
+        <p><strong>步骤 1：可视化 bundle 内容</strong>—— 用 visualizer。看哪些大模块</p>
+        <p><strong>步骤 2：识别意外模块</strong>—— 比如发现 lodash 整个进来 + moment.js 完整 + 等。</p>
+        <p><strong>步骤 3：检查包是 ESM 还是 CJS</strong>：</p>
+        <pre class="code"><code class="lang-bash">$ cat node_modules/lodash/package.json | jq '.type'
+null   # CJS（默认）</code></pre>
+        <p><strong>步骤 4：换 ESM 版</strong>：</p>
+        <ul>
+          <li>lodash → lodash-es</li>
+          <li>moment → date-fns / dayjs</li>
+          <li>chart.js（CJS）→ chart.js（ESM build，2024+）</li>
+        </ul>
+        <p><strong>步骤 5：检查包 sideEffects</strong>：</p>
+        <pre class="code"><code class="lang-bash">$ cat node_modules/some-pkg/package.json | jq '.sideEffects'
+true   # 默认（保守保留）</code></pre>
+        <p>对策：项目 package.json 强标 sideEffects；或开 issue 让包作者标。</p>
+
+        <h3>场景 B · 写库时 tree shake 友好</h3>
+        <p>包作者最佳实践：</p>
+        <p><strong>1. 用 ESM 输出</strong>（<code>"type": "module"</code> 或 exports.import）</p>
+        <p><strong>2. 标 sideEffects</strong>：</p>
+        <pre class="code"><code class="lang-json">{
+  "sideEffects": false   // 大多数库没副作用
+}
+// 或
+{
+  "sideEffects": ["*.css", "./src/polyfill.js"]
+}</code></pre>
+        <p><strong>3. 分散导出（不要 barrel file）</strong>：</p>
+        <pre class="code"><code class="lang-json">// package.json
+{
+  "exports": {
+    ".": "./dist/index.js",
+    "./debounce": "./dist/debounce.js",
+    "./throttle": "./dist/throttle.js"
+  }
+}</code></pre>
+        <p><strong>4. 标 PURE 函数</strong>：</p>
+        <pre class="code"><code class="lang-javascript">export const Component = /*#__PURE__*/ createComponent({ ... });</code></pre>
+        <p><strong>5. 测试</strong>：用 publint / are-the-types-wrong / 实际接进 demo 项目验证 tree shake。</p>
+
+        <h3>场景 C · 修复 Babel 破坏 tree shaking</h3>
+        <p>检查 Babel 配置：</p>
+        <pre class="code"><code class="lang-json">// babel.config.js (问题)
+{
+  "presets": ["@babel/preset-env"]   // 默认转 CJS
+}</code></pre>
+        <p>修复：</p>
+        <pre class="code"><code class="lang-json">// babel.config.js
+{
+  "presets": [
+    ["@babel/preset-env", {
+      "modules": false,            // 保留 ESM
+      "targets": "&gt; 0.25%, not dead"
+    }]
+  ]
+}</code></pre>
+        <p>或换 SWC / esbuild（默认行为正确）。</p>
+
+        <h3>场景 D · 用 sideEffects 让 polyfill 仍工作</h3>
+        <pre class="code"><code class="lang-javascript">// src/polyfills/index.js
+import 'core-js/features/promise';
+import 'core-js/features/array';
+
+// app.js
+import './polyfills';   // 仅副作用 import</code></pre>
+        <pre class="code"><code class="lang-json">// package.json
+{
+  "sideEffects": ["./src/polyfills/**"]
+}</code></pre>
+        <p>这让 bundler 知道：polyfills 文件夹里的代码必须保留；其他可以 tree shake。</p>
+
+        <h3>场景 E · 测试 tree shake 是否生效</h3>
+        <p>简单实验：</p>
+        <pre class="code"><code class="lang-typescript">// test.ts
+import { specificFunc } from 'lib-x';
+console.log(specificFunc);</code></pre>
+        <pre class="code"><code class="lang-bash">$ vite build
+# 看 dist/ 里 chunk 是否只含 specificFunc 还是整个 lib-x</code></pre>
+        <p>如果整个 lib-x 都进来 → tree shake 失败 → 调查包配置。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：完整示例</span></h2>
+
+        <h3>检测包是否 tree-shake-friendly</h3>
+        <pre class="code"><code class="lang-bash">$ cat node_modules/some-pkg/package.json | jq '{type, sideEffects, exports, main, module}'</code></pre>
+        <p>判定：</p>
+        <ul>
+          <li><code>"type": "module"</code> 或 <code>"exports.import"</code> 存在 → ESM ✅</li>
+          <li><code>"sideEffects": false</code> 或 数组 → 标了 ✅</li>
+          <li><code>"sideEffects": null</code>（默认）→ 没标 ⚠️</li>
+        </ul>
+
+        <h3>用 unbuild 发 tree-shake-friendly 库</h3>
+        <pre class="code"><code class="lang-bash">$ npm i -D unbuild</code></pre>
+        <pre class="code"><code class="lang-typescript">// build.config.ts
+import { defineBuildConfig } from 'unbuild';
+
+export default defineBuildConfig({
+  entries: ['./src/index'],
+  declaration: true,
+  rollup: {
+    emitCJS: true,
+    inlineDependencies: false
+  }
+});</code></pre>
+        <pre class="code"><code class="lang-json">// package.json
+{
+  "name": "my-pkg",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "scripts": { "build": "unbuild" }
+}</code></pre>
+
+        <h3>用 PURE 注释优化 createSlice 等工厂函数</h3>
+        <pre class="code"><code class="lang-typescript">// store/slices/user.ts
+import { createSlice } from '@reduxjs/toolkit';
+
+// ❌ tree shaker 不确定 createSlice 是否有副作用
+export const userSlice = createSlice({ ... });
+
+// ✅ 标 PURE 让 tree shake 工作
+export const userSlice = /*#__PURE__*/ createSlice({ ... });</code></pre>
+        <p>Redux Toolkit 4+ 自动标 PURE，但旧代码 / 自定义工厂要手动。</p>
+
+        <h3>诊断真实 bundle 内容</h3>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+import { visualizer } from 'rollup-plugin-visualizer';
+
+export default {
+  plugins: [
+    react(),
+    visualizer({
+      open: true,
+      template: 'sunburst',   // 或 'treemap', 'network'
+      gzipSize: true,
+      brotliSize: true,
+      filename: 'dist/stats.html'
+    })
+  ]
+};</code></pre>
+        <pre class="code"><code class="lang-bash">$ vite build
+# 自动打开 dist/stats.html
+# 浏览器看每个文件大小（gzip 后）+ tree shaking 结果</code></pre>
+
+        <h3>检查 Rollup 是否成功 tree shake</h3>
+        <pre class="code"><code class="lang-typescript">// vite.config.ts
+export default {
+  build: {
+    rollupOptions: {
+      onLog(level, log) {
+        if (log.code === 'TREESHAKING_ANNOTATION') {
+          console.log('Tree shaking note:', log.message);
+        }
+      }
+    }
+  }
+};</code></pre>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：以为 tree shaking 是开关</h3>
+        <p>常见误解。<strong>不是开关，是整个生态共同努力</strong>：</p>
+        <ol>
+          <li>包作者用 ESM + 标 sideEffects + 标 PURE</li>
+          <li>编译器（Babel/SWC）不破坏 ESM 静态结构</li>
+          <li>bundler（Rollup/Webpack/esbuild）正确实现</li>
+          <li>用户写 ESM-friendly 代码（细粒度 import）</li>
+        </ol>
+        <p>任何一环失效 → tree shake 失败。</p>
+
+        <h3>陷阱 2：用 Babel preset-env 默认配置</h3>
+        <p>preset-env 默认 <code>modules: "auto"</code>，环境是 Node 时转 CJS → 给 bundler 是 CJS → tree shake 不动。</p>
+        <p>修复：<code>modules: false</code> 让 Babel 保留 ESM。</p>
+
+        <h3>陷阱 3：以为 lodash 单文件 import 等同 lodash-es</h3>
+        <pre class="code"><code class="lang-javascript">// 单文件 import：减少了进入的代码
+import debounce from 'lodash/debounce';
+// 但 lodash 内部仍是 CJS；bundler 还是要做 CJS-ESM interop
+// tree shaking 比 lodash-es 略差
+
+// lodash-es：纯 ESM
+import { debounce } from 'lodash-es';
+// tree shaking 最优</code></pre>
+        <p>规则：能用 lodash-es 就用；不能（CJS 项目）退而求其次用单文件。</p>
+
+        <h3>陷阱 4：barrel file 导致大 bundle</h3>
+        <pre class="code"><code class="lang-typescript">// utils/index.ts (barrel)
+export * from './a';
+export * from './b';
+export * from './c';
+export * from './d';
+// ... 100 个
+
+// 用户
+import { something } from 'utils';</code></pre>
+        <p>问题：bundler 要分析所有 100 个文件找 something。<strong>性能差 + 某些 bundler tree shake 失效</strong>。</p>
+        <p>对策：</p>
+        <ul>
+          <li>从源头单独 import：<code>import { something } from 'utils/something'</code></li>
+          <li>包导出用 exports 字段精细控制 subpath</li>
+        </ul>
+
+        <h3>陷阱 5：SSR / Webpack 5 magic comments 失效</h3>
+        <p>Webpack 5 / Vite SSR 模式有时 tree shake 不及预期 —— 因为 SSR 输出是 CJS / 含 dynamic 路径 / 等。</p>
+        <p>对策：CI 检查 SSR bundle 大小 + 可视化分析。</p>
+
+        <h3>陷阱 6：TS enum 比预期大</h3>
+        <pre class="code"><code class="lang-typescript">enum Status { Open, Closed, Pending }
+// 编译后包含整个 enum 定义（双向映射）
+
+// 用 const enum 让 inline
+const enum Status { Open, Closed, Pending }
+// Status.Open → 0（直接替换）
+
+// 或用 union type
+type Status = 'open' | 'closed' | 'pending';</code></pre>
+
+        <h3>陷阱 7：CSS / @import 不能 tree shake</h3>
+        <p>CSS 没有"未使用 class shake"的概念（PurgeCSS / Tailwind JIT 是不同机制）。<code>@import</code> 引入的样式都被打入 bundle。</p>
+        <p>用 PurgeCSS / Tailwind v4 JIT 让<strong>没用的 class</strong> 不进 bundle（不是 ESM tree shaking，是 CSS-specific 优化）。</p>
+
+        <h3>陷阱 8：Webpack mode "development" 不 shake</h3>
+        <p>Webpack <code>mode: "development"</code> 默认<strong>不开 tree shaking</strong>（dev 不需要）。</p>
+        <pre class="code"><code class="lang-javascript">// 检查 production 实际 shake 情况
+$ NODE_ENV=production webpack --mode production</code></pre>
+        <p>Vite 的 <code>vite build</code> 默认 production mode，自动开。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>经典文章</h3>
+        <ul>
+          <li><a href="https://medium.com/@Rich_Harris/tree-shaking-versus-dead-code-elimination-d3765df85c80" target="_blank" rel="noopener">Rich Harris · <em>Tree-shaking versus dead code elimination</em></a>（2015 经典）</li>
+          <li><a href="https://webpack.js.org/guides/tree-shaking/" target="_blank" rel="noopener">Webpack · Tree Shaking Guide</a></li>
+          <li><a href="https://rollupjs.org/configuration-options/#treeshake" target="_blank" rel="noopener">Rollup · treeshake 配置</a></li>
+          <li><a href="https://esbuild.github.io/api/#tree-shaking" target="_blank" rel="noopener">esbuild · Tree Shaking</a></li>
+        </ul>
+
+        <h3>工具</h3>
+        <ul>
+          <li><a href="https://github.com/btd/rollup-plugin-visualizer" target="_blank" rel="noopener">rollup-plugin-visualizer</a></li>
+          <li><a href="https://github.com/danvk/source-map-explorer" target="_blank" rel="noopener">source-map-explorer</a></li>
+          <li><a href="https://bundlephobia.com/" target="_blank" rel="noopener">Bundlephobia</a> · 包大小查询</li>
+          <li><a href="https://publint.dev/" target="_blank" rel="noopener">publint</a> · 包配置 lint</li>
+          <li><a href="https://arethetypeswrong.github.io/" target="_blank" rel="noopener">are-the-types-wrong</a></li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="../05-hmr/01-hmr-and-react-refresh.html">P5 HMR + React Refresh</a></li>
+          <li><a href="../06-compilers/01-esbuild-swc.html">P6.1 编译器后端</a> · 编译器对 tree shaking 影响</li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../03-modules/01-esm-standard.html">P3.1 ESM 标准</a> · ESM 静态分析基础</li>
+          <li><a href="../03-modules/02-cjs-interop.html">P3.2 CJS Interop</a> · 为什么 CJS 不能 tree shake</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HMR + React Refresh / Vue HMR / Svelte HMR · P5.1 · Vite & 构建工具深度学习</title>
+    <meta name="description" content="「改一行 React 代码不丢 state」是 modern dev 体验核心。HMR 协议层：文件变化 → WebSocket push → 浏览器 client → fetch 新模块 → accept callback。模块边界：自我边界 / 父边界 / 走到顶 full reload。React Refresh 自动给每个组件加 HMR boundary，保留 useState/useReducer 状态；hook order 改变（违反 Rules of Hooks）→ full reload。Vue HMR / Svelte HMR 各自的 state 保留实现。失败场景：修改 hook 数 / 顶层全局状态 / 副作用注册。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23bd34fe'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Vite & 构建工具深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.25 305); color: #fff">Vite</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · HMR 与 React Refresh</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-hmr-and-react-refresh.html" class="active">01 · HMR + React Refresh</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Vite & 构建工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · HMR 与 React Refresh</a><span class="breadcrumb-sep">/</span>
+          <span>01 · HMR + React Refresh</span>
+        </nav>
+        <h1>HMR + React Refresh / Vue HMR / Svelte HMR</h1>
+        <p class="lead">
+          "<strong>改一行 React 代码不丢 state</strong>" 是 modern dev 体验核心。<strong>本章讲清</strong>：HMR 怎么真正工作（文件变化 → WebSocket → 浏览器 client → fetch 新模块 → accept callback）+ 模块边界（自我边界 / 父边界 / 走到顶 full reload）+ React Refresh 怎么自动 HMR 组件 + Vue/Svelte HMR 实现 + 为什么有时 state 丢失（修改 hook 数 / 顶层全局 / 副作用注册等）。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P2.1（Vite Dev mode）</span>
+          <span><strong>主要来源</strong> Vite HMR API · React Refresh docs · Vue HMR · Svelte HMR · Webpack HMR docs</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>HMR（Hot Module Replacement）核心思想</strong>—— 源代码改了 → 不重启浏览器（保留 state） → 热替换改动的模块。HMR 是 Webpack 2014 发明的概念；现代 bundler 都支持。</li>
+          <li><strong>HMR 协议层</strong>：1) Vite server 监听文件变化（chokidar）；2) 检测到改动 → 编译新版本；3) WebSocket push HMR update message；4) 浏览器 client 收到 → 决定 accept 或 full reload；5) accept → fetch 新模块 → 替换 + 调 accept callback。</li>
+          <li><strong>import.meta.hot API</strong>—— 模块声明自己怎么 accept HMR：<code>import.meta.hot.accept((newMod) =&gt; {...})</code>。Vite/Webpack/Rspack 等都用类似 API。</li>
+          <li><strong>HMR boundary（边界）</strong>—— 模块 accept 自己 = 自我边界；父模块 accept 子模块 = 父是边界；一直没 accept = 走到顶 = full reload。<strong>组件级 HMR 需要边界设置正确</strong>。</li>
+          <li><strong>React Refresh</strong>—— 自动给每个 React 组件加 HMR boundary。组件改了 → 重新挂载组件 + 保留 useState/useReducer 状态。<strong>Hook order 改变（违反 Rules of Hooks）→ full reload</strong>（无法保留 state）。</li>
+          <li><strong>Vue HMR</strong>：SFC（.vue 文件）每个 block（template / script / style）独立 HMR；Vue runtime 处理保留 reactive state。<strong>Svelte HMR</strong>：编译时 instrument；保留组件实例 state。</li>
+          <li><strong>典型失败场景</strong>—— 修改 hook 数 / 顶层全局状态 / 副作用注册（map polyfill）/ 修改 export 名 / CSS-in-JS 样式名变化。<strong>HMR 不是全自动</strong>，依赖框架和用户配合。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>HMR 完整流程</h3>
+        <p>用户在编辑器修改 src/Counter.tsx：</p>
+        <pre class="code"><code class="lang-text">1. 文件保存 → fs 通知
+2. Vite server (chokidar) 检测到 src/Counter.tsx 变化
+3. Vite server 编译新版 Counter.tsx (TS → JS + JSX)
+4. Vite server 计算 HMR 更新计划:
+   - 检查 Counter.tsx 是否 self-accept (import.meta.hot.accept)
+   - 如果 accept → 单文件更新
+   - 如果 not accept → 检查父模块（importer）
+   - 直到找到边界或走到顶
+5. WebSocket push: { type: "update", path: "/src/Counter.tsx", ... }
+6. 浏览器 client (vite/client.js) 收到消息:
+   - import 新模块 (fetch /src/Counter.tsx?t=timestamp)
+   - 调当前模块的 hot.accept callback，传入新模块
+7. callback 执行:
+   - React Refresh: re-render 组件，保留 hook state
+   - Vue: 重新激活 component，保留 reactive
+   - 自定义: 用户决定怎么处理</code></pre>
+        <p>整个流程通常 &lt; 50ms。</p>
+
+        <h3>import.meta.hot API（Vite）</h3>
+        <p>每个模块通过 <code>import.meta.hot</code> 声明 HMR 行为：</p>
+        <pre class="code"><code class="lang-javascript">// my-module.js
+export const value = 42;
+
+if (import.meta.hot) {
+  // 接受自己的更新
+  import.meta.hot.accept((newModule) =&gt; {
+    // newModule 是新版本的导出
+    console.log('Module updated, new value:', newModule.value);
+  });
+
+  // 接受依赖的更新
+  import.meta.hot.accept('./dep.js', (newDep) =&gt; { ... });
+
+  // 接受多个依赖
+  import.meta.hot.accept(['./a', './b'], ([newA, newB]) =&gt; { ... });
+
+  // 旧 API：清理（已弃用，用 dispose）
+  import.meta.hot.dispose((data) =&gt; {
+    // 清理 timer / event listener / etc.
+    // data 会传给新版 module 的 hot.data
+  });
+
+  // 完全主动 reload
+  import.meta.hot.invalidate();
+}
+
+// 访问之前 dispose 传的数据
+if (import.meta.hot) {
+  const oldState = import.meta.hot.data;   // 之前 dispose 传的
+}</code></pre>
+
+        <h3>HMR 边界（boundary）</h3>
+        <p>当模块 X 改动，Vite 沿着 importer 链向上找<strong>第一个能 accept 的模块</strong>：</p>
+        <pre class="code"><code class="lang-text">App.tsx (root, 没 accept)
+  ├─ Header.tsx (没 accept)
+  └─ Pages.tsx (没 accept)
+       └─ Counter.tsx (有 import.meta.hot.accept)
+            └─ utils.ts (没 accept)
+
+修改 utils.ts → Vite 找 importer:
+  utils.ts → Counter.tsx (Counter accept 自己 + 任何 import 的更新) → 替换</code></pre>
+        <p>规则：</p>
+        <ul>
+          <li>修改的模块 self-accept → 单文件更新</li>
+          <li>父模块 accept 子模块 → 父更新</li>
+          <li>没人 accept → 走到顶 → full page reload</li>
+        </ul>
+        <p><strong>full reload 让 state 全丢</strong>。所以好的 HMR 要 accept 在合适层级。</p>
+
+        <h3>React Refresh：自动 HMR boundary</h3>
+        <p>每个 React 组件如果手动写 hot.accept 太烦。<strong>React Refresh</strong>（Facebook 出品，Vite/Next/Webpack 都支持）<strong>自动注入</strong>：</p>
+        <pre class="code"><code class="lang-typescript">// 你写的
+function Counter() {
+  const [count, setCount] = useState(0);
+  return &lt;button onClick={() =&gt; setCount(count + 1)}&gt;{count}&lt;/button&gt;;
+}
+
+// React Refresh 编译时注入（简化）
+function Counter() {
+  const [count, setCount] = useState(0);
+  return &lt;button onClick={() =&gt; setCount(count + 1)}&gt;{count}&lt;/button&gt;;
+}
+
+if (import.meta.hot) {
+  import.meta.hot.accept();
+  // RefreshRuntime 处理：替换组件 + 保留 fiber 节点 + 保留 useState 值
+  RefreshRuntime.register(Counter, "Counter");
+}</code></pre>
+
+        <h4>React Refresh 怎么保留 state</h4>
+        <p>核心：<strong>用 React 的 fiber tree</strong>（详见 <a href="../../react/04-fiber/" target="_blank">React P4 Fiber</a>）。</p>
+        <ol>
+          <li>组件改了 → 收到新版本 Counter</li>
+          <li>RefreshRuntime 找到所有 Counter 实例（fiber 节点）</li>
+          <li>用新版本替换 fiber.type</li>
+          <li>调度 React 重新 render；hook state 保留（hook list 还在 fiber 上）</li>
+        </ol>
+        <p>结果：组件 UI 用新代码渲染，state 不变。</p>
+
+        <h4>React Refresh 限制</h4>
+        <p><strong>(1) Hook 数量 / 顺序变 → full reload</strong></p>
+        <p>React 依赖 hook 调用顺序唯一识别（详见 <a href="../../react/03-hooks/" target="_blank">React P3</a>）。改 hook 数让顺序变 → React 不知怎么 mapping → 强制 full reload。</p>
+        <pre class="code"><code class="lang-typescript">// 改前
+function Counter() {
+  const [count, setCount] = useState(0);
+  return &lt;...&gt;;
+}
+
+// 改后（多了一个 useEffect）
+function Counter() {
+  const [count, setCount] = useState(0);
+  useEffect(() =&gt; { ... });   // ← 加新 hook
+  return &lt;...&gt;;
+}
+
+// HMR 看到 hook count 变 1 → 2 → full reload</code></pre>
+
+        <p><strong>(2) 改非组件文件（utils 函数）→ 仍可 HMR 但 state 可能不更新</strong></p>
+        <p>如果 Counter 用 <code>formatCount</code>，你改 formatCount.ts：</p>
+        <ul>
+          <li>React Refresh 不直接管 utils（只管组件）</li>
+          <li>Vite 默认行为：父模块 (Counter) 重新加载 → 触发 React Refresh → 组件 re-render</li>
+          <li>但如果 utils 顶层有 side effect（注册全局），不一定按预期</li>
+        </ul>
+
+        <p><strong>(3) 默认导出非组件 → full reload</strong></p>
+        <pre class="code"><code class="lang-typescript">// ❌ React Refresh 不识别 default export 是常量
+export default 42;
+
+// ❌ 也不识别 default export 是非组件函数
+export default function notAComponent() { return 42; }
+
+// ✅ 命名导出常量 OK（不影响 React Refresh）
+export const SOME_CONST = 42;</code></pre>
+
+        <p><strong>(4) Anonymous default export → 无法识别</strong></p>
+        <pre class="code"><code class="lang-typescript">// ❌ 匿名 export，React Refresh 不能识别为组件
+export default () =&gt; &lt;div&gt;Hello&lt;/div&gt;;
+
+// ✅ 给个名字
+export default function Component() {
+  return &lt;div&gt;Hello&lt;/div&gt;;
+}</code></pre>
+
+        <h3>Vue HMR：SFC block 级</h3>
+        <p>Vue 单文件组件（.vue）有 template / script / style 三个 block。Vue HMR 把每个 block 独立处理：</p>
+        <pre class="code"><code class="lang-vue">&lt;script setup&gt;
+import { ref } from 'vue';
+const count = ref(0);
+&lt;/script&gt;
+
+&lt;template&gt;
+  &lt;button @click="count++"&gt;{{ count }}&lt;/button&gt;
+&lt;/template&gt;
+
+&lt;style&gt;
+button { color: red; }
+&lt;/style&gt;</code></pre>
+        <p>HMR 行为：</p>
+        <ul>
+          <li>改 <code>&lt;template&gt;</code> → 只重新 render，保留 setup 内的 ref 值</li>
+          <li>改 <code>&lt;style&gt;</code> → 替换 style 元素，DOM 不动</li>
+          <li>改 <code>&lt;script&gt;</code> 但不改 setup 顶层结构 → 重 render，保留</li>
+          <li>改 <code>&lt;script&gt;</code> 大改（加 props / 改 emit 等）→ 重新挂载，state 丢</li>
+        </ul>
+        <p>Vue 3 Composition API 让 setup 级 HMR 更稳定（vs Options API）。</p>
+
+        <h3>Svelte HMR</h3>
+        <p>Svelte 编译时把 .svelte 文件编译成 JS class。HMR 用 <strong>编译时 instrument</strong>：</p>
+        <ol>
+          <li>编译时给 component class 加 HMR proxy</li>
+          <li>component 改 → 替换 proxy 内部实现</li>
+          <li>保留 instance（DOM + state）</li>
+        </ol>
+        <p>典型行为：</p>
+        <ul>
+          <li>改 markup / 简单 logic → 保留 state</li>
+          <li>改 script `<script>` 大改 → 重新挂载</li>
+          <li>改 props → 重新挂载</li>
+        </ul>
+        <p>Svelte HMR 文档：<a href="https://github.com/sveltejs/svelte-hmr" target="_blank" rel="noopener">sveltejs/svelte-hmr</a>。</p>
+
+        <h3>Vite vs Webpack HMR API 对比</h3>
+        <p>API 略有差异：</p>
+        <pre class="code"><code class="lang-javascript">// Vite
+if (import.meta.hot) {
+  import.meta.hot.accept((newMod) =&gt; { ... });
+  import.meta.hot.dispose((data) =&gt; { ... });
+}
+
+// Webpack 5
+if (module.hot) {
+  module.hot.accept((err) =&gt; { ... });   // 注意 callback 签名不同
+  module.hot.dispose((data) =&gt; { ... });
+}</code></pre>
+        <p>很多 plugin 使用 abstract API（如 React Refresh 通用版）兼容两者。</p>
+
+        <h3>WebSocket vs Server-Sent Events</h3>
+        <p>HMR 通常用 WebSocket（双向通信）。Vite client 连接 ws://localhost:5173，server push 更新消息。</p>
+        <p>HTTPS 部署 dev：Vite 自动用 wss://。如果 dev 在 docker / 远程，需要配置：</p>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+export default {
+  server: {
+    hmr: {
+      host: 'localhost',
+      port: 5173,
+      protocol: 'ws',   // 'wss' for HTTPS
+      clientPort: 5173  // 浏览器 → server 端口（通过反向代理时）
+    }
+  }
+};</code></pre>
+
+        <h3>HMR overlay（错误显示）</h3>
+        <p>HMR 时编译错误，Vite 在浏览器 inject overlay 显示：</p>
+        <pre class="code"><code class="lang-text">[plugin:vite:react-babel] /src/App.tsx: Unexpected token (10:5)
+
+  9 |     &lt;div&gt;
+&gt; 10 |       {{count}
+                ^
+ 11 |     &lt;/div&gt;</code></pre>
+        <p>用户修复后 overlay 自动消失。</p>
+        <pre class="code"><code class="lang-javascript">// 关闭 overlay（debug 用）
+export default {
+  server: { hmr: { overlay: false } }
+};</code></pre>
+
+        <h3>HMR 性能数据</h3>
+        <p>典型 HMR 时间分解：</p>
+        <table>
+          <thead>
+            <tr><th>步骤</th><th>时间</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>chokidar 检测文件变化</td><td>~5ms</td></tr>
+            <tr><td>Vite server 编译单文件（esbuild）</td><td>~5-15ms</td></tr>
+            <tr><td>计算 HMR plan</td><td>~1ms</td></tr>
+            <tr><td>WebSocket push</td><td>~5ms</td></tr>
+            <tr><td>浏览器 fetch 新模块</td><td>~10ms</td></tr>
+            <tr><td>React Refresh 替换组件</td><td>~5ms</td></tr>
+            <tr><td>React re-render</td><td>取决于组件</td></tr>
+          </tbody>
+        </table>
+        <p>总和：~30-50ms（典型项目）。Webpack HMR 通常 ~200-500ms。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · 自定义 HMR 行为（非组件模块）</h3>
+        <p>典型场景：你的模块导出非组件（如 Redux store / config / 国际化字典），改了想 HMR 而不是 full reload：</p>
+        <pre class="code"><code class="lang-typescript">// store.ts
+import { createStore } from 'redux';
+import rootReducer from './reducers';
+
+export const store = createStore(rootReducer);
+
+if (import.meta.hot) {
+  import.meta.hot.accept('./reducers', (newReducer) =&gt; {
+    // 替换 reducer 不重建 store（保留 state）
+    store.replaceReducer(newReducer.default);
+  });
+}</code></pre>
+
+        <h3>场景 B · dispose 清理资源</h3>
+        <pre class="code"><code class="lang-typescript">// timer-module.ts
+let timer = setInterval(() =&gt; console.log('tick'), 1000);
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() =&gt; {
+    clearInterval(timer);   // HMR 替换前清理旧 timer
+  });
+
+  import.meta.hot.accept((newMod) =&gt; {
+    // 新模块加载，timer 重置
+  });
+}</code></pre>
+
+        <h3>场景 C · 修复 React Refresh 不识别的导出</h3>
+        <pre class="code"><code class="lang-typescript">// ❌ 文件混合 React 组件 + 常量
+export const SOME_CONST = 42;
+export default function MyComponent() { ... }
+// 改 SOME_CONST → React Refresh 困惑（认为是非组件 export）→ full reload
+
+// ✅ 拆分文件
+// constants.ts
+export const SOME_CONST = 42;
+
+// MyComponent.tsx
+import { SOME_CONST } from './constants';
+export default function MyComponent() { ... }
+// 改 SOME_CONST → 仅 constants.ts 更新；MyComponent 重 render；保留 state</code></pre>
+
+        <h3>场景 D · invalidate 强制重 reload</h3>
+        <pre class="code"><code class="lang-typescript">// dynamic-config.ts
+let config = await fetchConfig();
+
+if (import.meta.hot) {
+  import.meta.hot.accept((newMod) =&gt; {
+    if (newMod.someBreakingChange) {
+      // 改动太大无法热替换，强制 full reload
+      import.meta.hot!.invalidate();
+    } else {
+      config = newMod.config;
+    }
+  });
+}</code></pre>
+
+        <h3>场景 E · CSS HMR（自动工作）</h3>
+        <p>CSS HMR 不需要写代码：</p>
+        <pre class="code"><code class="lang-javascript">// app.tsx
+import './style.css';
+
+// 用户改 style.css → Vite HMR 自动替换 &lt;style&gt; 元素 → 不重 render</code></pre>
+        <p>对 CSS-in-JS（emotion / styled-components）也通常工作（库内置 HMR 支持）。</p>
+
+        <h3>场景 F · 测试 HMR 工作</h3>
+        <p>简单实验：</p>
+        <pre class="code"><code class="lang-typescript">// Counter.tsx
+function Counter() {
+  const [count, setCount] = useState(0);
+  return &lt;button onClick={() =&gt; setCount(count + 1)}&gt;{count} (改我看 HMR)&lt;/button&gt;;
+}
+
+// 启动 vite，浏览器点几次 button（count = 5）
+// 编辑 Counter.tsx，改 button 文字 "改我看 HMR" → "已改"
+// 期望：count 仍是 5，文字变成 "已改"</code></pre>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：HMR 完整使用</span></h2>
+
+        <h3>常用 HMR API</h3>
+        <pre class="code"><code class="lang-typescript">if (import.meta.hot) {
+  // 1. 自我 accept
+  import.meta.hot.accept((newMod) =&gt; {
+    if (newMod) {
+      // newMod 是新版 module exports
+    } else {
+      // null 表示 HMR 失败，full reload
+      window.location.reload();
+    }
+  });
+
+  // 2. 接受依赖更新
+  import.meta.hot.accept('./dep', (newDep) =&gt; { ... });
+  import.meta.hot.accept(['./a', './b'], ([a, b]) =&gt; { ... });
+
+  // 3. dispose 清理
+  import.meta.hot.dispose((data) =&gt; {
+    // data 是空对象，可写入数据传给下一版
+    data.savedState = currentState;
+  });
+
+  // 4. 访问上一版 dispose 传的数据
+  const restoredState = import.meta.hot.data?.savedState;
+
+  // 5. 强制 full reload
+  import.meta.hot.invalidate();
+
+  // 6. 监听任意事件
+  import.meta.hot.on('vite:beforeUpdate', (payload) =&gt; { ... });
+  import.meta.hot.on('vite:afterUpdate', (payload) =&gt; { ... });
+  import.meta.hot.on('custom:event', (data) =&gt; { ... });
+
+  // 7. 自定义事件（双向通信）
+  import.meta.hot.send('custom:event', { ... });
+}</code></pre>
+
+        <h3>store HMR（Redux Toolkit）</h3>
+        <pre class="code"><code class="lang-typescript">// store.ts
+import { configureStore } from '@reduxjs/toolkit';
+import rootReducer from './reducers';
+
+export const store = configureStore({ reducer: rootReducer });
+
+if (import.meta.hot) {
+  import.meta.hot.accept('./reducers', () =&gt; {
+    // 异步重新 import
+    import('./reducers').then(({ default: newReducer }) =&gt; {
+      store.replaceReducer(newReducer);
+    });
+  });
+}</code></pre>
+
+        <h3>i18n HMR</h3>
+        <pre class="code"><code class="lang-typescript">// i18n.ts
+import i18next from 'i18next';
+import en from './locales/en.json';
+import zh from './locales/zh.json';
+
+await i18next.init({ resources: { en: { translation: en }, zh: { translation: zh } }});
+
+if (import.meta.hot) {
+  import.meta.hot.accept(['./locales/en.json', './locales/zh.json'], async () =&gt; {
+    const newEn = await import('./locales/en.json');
+    const newZh = await import('./locales/zh.json');
+    i18next.addResourceBundle('en', 'translation', newEn.default, true, true);
+    i18next.addResourceBundle('zh', 'translation', newZh.default, true, true);
+    // 触发 re-render（如果用 react-i18next，Hook 会自动 re-render）
+  });
+}</code></pre>
+
+        <h3>调试 HMR</h3>
+        <pre class="code"><code class="lang-bash"># 启用 Vite debug 看 HMR 决策
+$ DEBUG="vite:hmr" vite
+
+vite:hmr [file change] src/Counter.tsx +1ms
+vite:hmr boundary: /src/Counter.tsx accept
+vite:hmr [update]: src/Counter.tsx +1ms</code></pre>
+
+        <h3>禁用 HMR（特殊场景）</h3>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+export default {
+  server: {
+    hmr: false   // 完全禁用，每次改动都 full reload
+  }
+};</code></pre>
+        <p>典型场景：debug HMR 本身的问题；某些 framework 不兼容 HMR。</p>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：改 hook 数 / 顺序 让 state 丢</h3>
+        <p>常见情景。React Refresh 检测到 hook count 变 → full reload。规避：</p>
+        <ul>
+          <li>预先把所有 hook 写好（不要逐个加）</li>
+          <li>用条件 hook（不被推荐但偶尔有效）</li>
+          <li>接受 full reload + 用 redux-devtools 等保留 state</li>
+        </ul>
+
+        <h3>陷阱 2：mixed export 让组件 HMR 失败</h3>
+        <pre class="code"><code class="lang-typescript">// ❌ 文件混合
+export const helper = () =&gt; { ... };   // 非组件
+export default function MyComp() { ... }
+
+// 改 helper → React Refresh 不知怎么处理 → full reload</code></pre>
+        <p>对策：组件文件只 export 组件 + 类型；utility / 常量另开文件。</p>
+
+        <h3>陷阱 3：顶层全局状态 HMR 后重置</h3>
+        <pre class="code"><code class="lang-typescript">// ❌ 顶层全局
+let globalCounter = 0;
+export function increment() { globalCounter++; }
+
+// HMR 后 globalCounter 重置 = 0</code></pre>
+        <p>对策：用 store / 持久化（localStorage / IndexedDB）；HMR dispose 保存到 hot.data。</p>
+
+        <h3>陷阱 4：dispose 清理不彻底</h3>
+        <pre class="code"><code class="lang-typescript">// ❌ 没清理 listener
+window.addEventListener('scroll', handleScroll);
+
+// HMR 后注册新 listener，旧的还在 → 累积重复触发
+
+// ✅ 用 dispose 清理
+if (import.meta.hot) {
+  import.meta.hot.dispose(() =&gt; {
+    window.removeEventListener('scroll', handleScroll);
+  });
+}</code></pre>
+
+        <h3>陷阱 5：忘记 @vitejs/plugin-react / vue 插件</h3>
+        <p>没装 plugin → React Refresh / Vue HMR 不工作 → 改组件 = full reload。</p>
+        <pre class="code"><code class="lang-bash">$ npm i -D @vitejs/plugin-react</code></pre>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+import react from '@vitejs/plugin-react';
+export default { plugins: [react()] };</code></pre>
+
+        <h3>陷阱 6：默认 export 匿名函数</h3>
+        <pre class="code"><code class="lang-typescript">// ❌ React Refresh 不识别匿名
+export default () =&gt; &lt;div&gt;Hello&lt;/div&gt;;
+
+// ✅ 给名字
+const Component = () =&gt; &lt;div&gt;Hello&lt;/div&gt;;
+export default Component;</code></pre>
+
+        <h3>陷阱 7：dev 用 production build</h3>
+        <p>HMR 只在 dev mode 工作。<code>vite build</code> 然后 serve 静态文件没有 HMR。<strong>开发用 <code>vite</code>（dev server），不要用 <code>vite preview</code></strong>。</p>
+
+        <h3>陷阱 8：HMR 后副作用累积</h3>
+        <p>典型：第三方库注册全局事件 / 定时器；HMR 替换后旧的没清，新的又注册。</p>
+        <pre class="code"><code class="lang-typescript">// 错误：每次 HMR 都注册一遍
+import 'analytics-lib';   // 内部 init 注册全局
+
+// 修复（如果库支持 cleanup）
+import { init, destroy } from 'analytics-lib';
+init();
+if (import.meta.hot) {
+  import.meta.hot.dispose(() =&gt; destroy());
+}</code></pre>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>Vite HMR</h3>
+        <ul>
+          <li><a href="https://vitejs.dev/guide/api-hmr.html" target="_blank" rel="noopener">Vite · HMR API</a></li>
+          <li><a href="https://vitejs.dev/guide/api-plugin.html#handlehotupdate" target="_blank" rel="noopener">Vite · handleHotUpdate（plugin 接 HMR）</a></li>
+        </ul>
+
+        <h3>React Refresh</h3>
+        <ul>
+          <li><a href="https://github.com/facebook/react/tree/main/packages/react-refresh" target="_blank" rel="noopener">react-refresh package</a></li>
+          <li><a href="https://github.com/pmmmwh/react-refresh-webpack-plugin" target="_blank" rel="noopener">react-refresh-webpack-plugin（细节文档）</a></li>
+        </ul>
+
+        <h3>Vue / Svelte HMR</h3>
+        <ul>
+          <li><a href="https://github.com/vuejs/core/tree/main/packages/runtime-core/src/hmr.ts" target="_blank" rel="noopener">Vue 3 HMR 源码</a></li>
+          <li><a href="https://github.com/sveltejs/svelte-hmr" target="_blank" rel="noopener">svelte-hmr</a></li>
+        </ul>
+
+        <h3>历史</h3>
+        <ul>
+          <li><a href="https://webpack.js.org/concepts/hot-module-replacement/" target="_blank" rel="noopener">Webpack HMR concept</a> · 概念起源</li>
+          <li><a href="https://medium.com/@dan_abramov/hot-reloading-in-react-1140438583bf" target="_blank" rel="noopener">Dan Abramov · Hot Reloading in React</a>（2016 经典）</li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="../06-compilers/01-esbuild-swc.html">P6.1 编译器后端</a></li>
+          <li><a href="../07-plugins-and-next/01-plugins.html">P7.1 Vite/Rollup 插件 API</a></li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../react/04-fiber/" target="_blank">React P4 Fiber</a> · React Refresh 用 fiber 替换</li>
+          <li><a href="../../react/03-hooks/" target="_blank">React P3 Hooks</a> · hook 顺序唯一识别</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
