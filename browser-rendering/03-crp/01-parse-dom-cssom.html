@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>HTML parser + Preload scanner + CSSOM 阻塞 + JS async/defer · P3.1 · 浏览器渲染管线深度学习</title>
-    <meta name="description" content="渲染管线第一段。HTML / CSS 怎么变成 DOM 树 + CSSOM 树。讲透 HTML parser 流式构造 + Preload scanner 并行预扫描 + CSSOM 是阻塞渲染资源 + JS 三种加载顺序（default/async/defer/module）+ DOMContentLoaded vs load 差异 + 现代 preload / modulepreload / fetchpriority。" />
+    <title>HTML → DOM → CSSOM 解析：HTML parser + Preload scanner + 阻塞行为 · P3.1 · 浏览器渲染管线深度学习</title>
+    <meta name="description" content="渲染管线第一段。HTML / CSS 怎么变成 DOM 树 + CSSOM 树。HTML parser 流式构造 + Preload scanner 并行预扫描 + CSSOM 阻塞渲染 + JS 三种加载顺序（default/async/defer/module）+ 现代 preload / fetchpriority。" />
     <link rel="stylesheet" href="../../assets/styles.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234285F4'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EB%3C/text%3E%3C/svg%3E" />
   </head>
@@ -46,63 +46,271 @@
           <a href="index.html">P3 · 关键渲染路径 CRP</a><span class="breadcrumb-sep">/</span>
           <span>01 · HTML → DOM → CSSOM 解析</span>
         </nav>
-        <h1>HTML parser + Preload scanner + CSSOM 阻塞 + JS async/defer</h1>
+        <h1>HTML → DOM → CSSOM 解析：从字节流到树</h1>
         <p class="lead">
-          渲染管线第一段。HTML / CSS 怎么变成 DOM 树 + CSSOM 树。讲透 HTML parser 流式构造 + Preload scanner 并行预扫描 + CSSOM 是阻塞渲染资源 + JS 三种加载顺序（default/async/defer/module）+ DOMContentLoaded vs load 差异 + 现代 preload / modulepreload / fetchpriority。
+          渲染管线第一段。HTML / CSS 怎么变成 DOM 树 + CSSOM 树。讲透 <strong>HTML parser</strong>（流式构造 DOM + 边下载边 parse）+ <strong>Preload scanner</strong>（HTML parser 之外的预扫描器，让浏览器并行下载资源）+ <strong>CSSOM 阻塞渲染</strong>（必须 parse 完才能 layout）+ <strong>JS 三种加载顺序</strong>（default / async / defer / module）+ 现代 preload / modulepreload / fetchpriority。<strong>关键洞察</strong>：preload scanner 是大部分人不知道的"隐藏功能"，让 HTML parser 看似串行实则并行下载。
         </p>
         <div class="chapter-meta">
           <span><strong>阅读时长</strong> ~30 分钟</span>
           <span><strong>前置</strong> P2</span>
-          <span><strong>主要来源</strong> web.dev/critical-rendering-path · whatwg.org/HTML</span>
-        </div>
-
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>本章为<strong>骨架</strong>。已完成大纲与关键知识点列表（见各段标题下的 bullet），正文撰写中。可参考 <a href="../outline.md">outline.md</a> 了解完整覆盖范围。</p>
+          <span><strong>主要来源</strong> web.dev/critical-rendering-path · whatwg.org/HTML · Chrome team blog</span>
         </div>
 
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
-          <li><em>正文待写。</em></li>
+          <li><strong>Preload scanner 是浏览器隐藏的并行下载机制</strong>—— 大部分人以为 HTML parser 是串行（遇到 script 阻塞下载、再 parse 下面），实际浏览器有第二个扫描器并行扫描整个 HTML 找 link/script/img 提前下载。这是现代浏览器载入快的核心机制。</li>
+          <li><strong>CSS 阻塞渲染但不阻塞 HTML parsing</strong>——CSS 没下载完前浏览器不会 first paint（要等 CSSOM 完整）；但 HTML parsing 仍在继续。<strong>CSS 阻塞 JS 执行</strong>——JS 可能查询 style，所以 JS 执行前 CSS 必须 parse 完。</li>
+          <li><strong>JS 三种加载顺序：default / async / defer，加上 type=module 默认 defer</strong>——理解这四种语义是优化首屏加载的基础。<code>&lt;script type="module"&gt;</code> 默认 defer 是现代写法。</li>
         </ol>
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
-        <p><em>正文待写。本章覆盖：HTML parser · Preload scanner · CSSOM 阻塞 · &lt;script&gt; default/async/defer/module · DOMContentLoaded vs load · &lt;link rel=preload&gt; · fetchpriority</em></p>
+
+        <h3>HTML parser：流式 DOM 构造</h3>
+        <p>HTML parser 是<strong>把 HTML 字节流变成 DOM 树</strong>的组件。两个阶段：</p>
+        <p><strong>(1) Tokenizer</strong>：把字节流变成 token 序列（开标签 / 关标签 / 属性 / 文本）。规则在 WHATWG HTML spec 定义，包含大量边界 case（HTML5 容错性强——错误的标签嵌套也能 parse）。</p>
+        <p><strong>(2) Tree builder</strong>：把 token 变成 DOM 节点 + 维护元素栈构造 tree 结构。处理嵌套规则（<code>&lt;p&gt;</code> 不能嵌套 <code>&lt;div&gt;</code>，浏览器自动闭合）。</p>
+        <p>关键设计：<strong>流式 parse</strong>——HTML parser 不等整个 HTML 下载完，是<strong>边收到字节边 parse</strong>。这意味着：</p>
+        <p>(1) <strong>HTML 顶部的内容更快可见</strong>——浏览器可以先 parse + 渲染顶部，再继续 parse 下面。</p>
+        <p>(2) <strong>CDN / 服务器流式响应有意义</strong>—— Server 用 chunked transfer encoding 持续输出 HTML，浏览器持续 parse，比"等整个 HTML 生成完再发"快很多。</p>
+        <p>(3) <strong>HTML 顺序影响渲染速度</strong>—— 把首屏关键内容放 HTML 前面，让 first paint 早。</p>
+
+        <h3>Preload scanner：隐藏的并行下载</h3>
+        <p>HTML parser 看起来是串行的——遇到 <code>&lt;script&gt;</code> 默认阻塞 parsing 等下载 + 执行；遇到 <code>&lt;link&gt;</code> 引用 CSS 也阻塞。但实际浏览器<strong>有第二个 parser 叫 Preload scanner</strong>——它是 HTML parser 之外的<strong>预扫描器</strong>，<strong>不阻塞主 parsing 流程</strong>。</p>
+        <p>Preload scanner 的工作：</p>
+        <p>(1) <strong>提前扫描整个 HTML</strong>—— 跳过当前 parser 在的位置，往后看；</p>
+        <p>(2) <strong>找 <code>&lt;link rel="stylesheet"&gt;</code> / <code>&lt;script src="..."&gt;</code> / <code>&lt;img src="..."&gt;</code></strong> 等需要下载的资源；</p>
+        <p>(3) <strong>提前发起请求</strong>—— 让浏览器并行下载这些资源；</p>
+        <p>(4) <strong>不影响主 HTML parser 状态</strong>—— 主 parser 还按串行行为，但资源已经在后台下。</p>
+        <p>这套机制让"<strong>看起来串行的 HTML parser</strong>"实际有<strong>大量并行下载</strong>。如果没有 preload scanner：HTML parser 串行扫到第 100 行的 <code>&lt;script&gt;</code> → 阻塞 → 下载 → 执行 → 继续；扫到第 200 行的 <code>&lt;img&gt;</code> → 才开始下载这个 img。有 preload scanner：HTML 一开始下载浏览器就<strong>整体扫描</strong>，所有资源（script / img / css）都<strong>并行下载</strong>。</p>
+        <p>Preload scanner 的<strong>限制</strong>：</p>
+        <p>(1) <strong>动态创建的资源看不到</strong>—— JS <code>document.createElement('script')</code> 后插入的资源 preload scanner 不知道。这是为什么 dynamic import / framework lazy load 的资源加载较慢。</p>
+        <p>(2) <strong>只看 src 属性</strong>—— 如果你用 <code>data-src</code> + 自家 lazy loading，preload scanner 看不到。</p>
+        <p>这是为什么 <code>&lt;link rel="preload"&gt;</code> + <code>fetchpriority</code> 等显式 hint API 重要——它们告诉浏览器（包括 preload scanner）哪些资源高优先级。</p>
+
+        <h3>CSS 解析：CSSOM 与渲染阻塞</h3>
+        <p>CSS 也要 parse 成<strong>CSSOM (CSS Object Model)</strong>——和 DOM 平行的树。每个元素的 style 来自所有匹配的 CSS rule 的 cascade。</p>
+        <p>CSS 的<strong>关键性质</strong>：</p>
+        <p><strong>(1) CSS 是渲染阻塞资源 (render-blocking)</strong>——CSSOM 必须完整 parse 才能 first paint。原因：浏览器不能"先用旧 CSS 渲染，新 CSS 来了再覆盖"——会出现 <strong>FOUC (Flash of Unstyled Content)</strong>。所以等 CSS。</p>
+        <p><strong>(2) CSS 不阻塞 HTML parsing</strong>—— HTML parser 继续 parse，构造 DOM 树。但<strong>不会进入 layout/paint 阶段</strong>。</p>
+        <p><strong>(3) CSS 阻塞 JS 执行</strong>—— 这是反直觉的。原因：JS 可能 <code>getComputedStyle()</code> 查询 style，所以浏览器在 JS 之前必须确保 CSSOM 完整。如果 CSS 还在下载，<code>&lt;script&gt;</code> 会等 CSS 完成才执行——即使 script 在 CSS 之前。</p>
+        <p>所以经典优化：<strong>CSS 放 head，script 放 body 底部</strong>。CSS 早 parse 不阻塞渲染过晚；script 在 body 底部不阻塞 HTML parsing 看到所有 DOM。</p>
+        <p>现代写法：用 <code>&lt;script defer&gt;</code> 或 <code>&lt;script type="module"&gt;</code>（默认 defer），脚本放 head 也不阻塞 HTML parsing。</p>
+
+        <h3>JS 加载的四种语义</h3>
+        <p><code>&lt;script&gt;</code> 标签有四种加载语义：</p>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 22%">语法</th>
+              <th style="width: 26%">下载阻塞 HTML parse</th>
+              <th style="width: 26%">执行阻塞 HTML parse</th>
+              <th style="width: 26%">执行顺序</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>&lt;script src&gt;</code> (default)</td>
+              <td>不阻塞（preload scanner 已并行下载）</td>
+              <td>阻塞（下载完立即同步执行）</td>
+              <td>文档顺序</td>
+            </tr>
+            <tr>
+              <td><code>&lt;script async&gt;</code></td>
+              <td>不阻塞</td>
+              <td>不阻塞（下载完异步执行）</td>
+              <td>下载完成顺序（不可预测）</td>
+            </tr>
+            <tr>
+              <td><code>&lt;script defer&gt;</code></td>
+              <td>不阻塞</td>
+              <td>不阻塞（DOMContentLoaded 前执行）</td>
+              <td>文档顺序</td>
+            </tr>
+            <tr>
+              <td><code>&lt;script type="module"&gt;</code></td>
+              <td>不阻塞</td>
+              <td>不阻塞（默认 defer）</td>
+              <td>文档顺序（依赖图解析）</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>具体语义：</p>
+        <p><strong>default（不带 async / defer）</strong>：旧默认行为。脚本下载 + 执行<strong>阻塞 HTML parser</strong>—— 这是为什么经典优化"script 放 body 底部"。但因为 preload scanner，<strong>下载</strong>是并行的，只有<strong>执行</strong>阻塞。</p>
+        <p><strong>async</strong>：下载完<strong>立即执行</strong>（即使 HTML 还没 parse 完）。执行顺序按下载完成顺序，<strong>不保证文档顺序</strong>。适合<strong>独立脚本</strong>（analytics / ads），不依赖其他 script。</p>
+        <p><strong>defer</strong>：下载完<strong>等 HTML parse 完</strong>再执行（DOMContentLoaded 前）。多个 defer 按文档顺序执行。适合<strong>依赖 DOM 但不阻塞 first paint</strong> 的脚本。</p>
+        <p><strong>type="module"</strong>：默认 defer 行为 + 模块系统（import / export）。现代标准。<strong>type="module" + async</strong> 也行，混合两种语义。</p>
+        <p><strong>实战推荐</strong>：现代 JS 几乎全用 <code>&lt;script type="module" src="app.js"&gt;</code>—— 默认 defer + 模块化 + 不阻塞。老代码用 <code>&lt;script defer&gt;</code> 也好。<strong>避免 default 阻塞写法</strong>（除非你真的需要 inline 同步脚本）。</p>
+
+        <h3>DOMContentLoaded vs load：两个生命周期 event</h3>
+        <p>两个常用 event：</p>
+        <p><strong>DOMContentLoaded</strong>：HTML 完全 parse 完 + 所有 defer scripts 执行完触发。<strong>不等</strong> async scripts、不等 image / iframe / 其他资源。这时 DOM tree 完整，可以操作 DOM。</p>
+        <p><strong>load</strong>：所有资源（图片 / iframe / async script / etc.）都加载完才触发。比 DOMContentLoaded 晚很多——大型页面可能差几秒。</p>
+        <p>实战用法：</p>
+        <p><strong>(1) 操作 DOM 用 DOMContentLoaded</strong>——大部分 init 代码不需要图片加载完。</p>
+        <p><strong>(2) 计算页面整体高度 / 处理图片用 load</strong>——需要所有资源就位。</p>
+        <p><strong>(3) 现代 JS 框架（React / Vue）通常用 DOMContentLoaded 或更早</strong>——hydrate / mount 不必等图片。</p>
+
+        <h3>现代 hint API：preload / modulepreload / fetchpriority</h3>
+        <p><strong>&lt;link rel="preload"&gt;</strong>：显式声明高优先级资源。浏览器会立即开始下载（不等 preload scanner / CSS / JS 决定）。</p>
+        <pre class="code"><code class="lang-html">&lt;link rel="preload" href="hero.jpg" as="image" fetchpriority="high"&gt;
+&lt;link rel="preload" href="critical.css" as="style"&gt;
+&lt;link rel="preload" href="font.woff2" as="font" type="font/woff2" crossorigin&gt;</code></pre>
+        <p><strong>&lt;link rel="modulepreload"&gt;</strong>：预加载 ES Module。比 preload 更知道是 module，能预解析依赖图。</p>
+        <pre class="code"><code class="lang-html">&lt;link rel="modulepreload" href="/app.js"&gt;
+&lt;link rel="modulepreload" href="/utils.js"&gt;
+&lt;script type="module" src="/app.js"&gt;&lt;/script&gt;</code></pre>
+        <p><strong>fetchpriority 属性 (Chrome 102+)</strong>：调整资源优先级。<code>fetchpriority="high"</code>（首屏关键资源）/ <code>"low"</code>（below-the-fold）/ <code>"auto"</code>（默认）。</p>
+        <pre class="code"><code class="lang-html">&lt;img src="hero.jpg" fetchpriority="high"&gt;
+&lt;img src="below-fold.jpg" fetchpriority="low" loading="lazy"&gt;</code></pre>
+        <p><strong>&lt;link rel="preconnect"&gt; / "dns-prefetch"</strong>：预连接到第三方 domain。<code>preconnect</code> 建立 TLS 连接（最大优化），<code>dns-prefetch</code> 只 DNS 解析。</p>
+        <pre class="code"><code class="lang-html">&lt;link rel="preconnect" href="https://api.example.com"&gt;
+&lt;link rel="dns-prefetch" href="https://cdn.example.com"&gt;</code></pre>
+        <p>这些 hint 是<strong>优化关键资源加载顺序</strong>的核心工具。LCP 优化（详见 <a href="../04-performance/01-load-metrics.html">P4.1</a>）大量依赖这些 hint。</p>
+
+        <h3>资源优先级模型</h3>
+        <p>浏览器内部对资源有<strong>优先级队列</strong>—— 不是"看到 A 资源就立即下载 A 完成再下 B"，而是按优先级调度多个并发下载。优先级（Chrome 视角）：</p>
+        <p><strong>Highest</strong>：HTML 主文档、render-blocking CSS、async/defer script（前 ~5 个）、preload + fetchpriority="high" 资源。</p>
+        <p><strong>High</strong>：non-async / non-defer 同步 script（HTML 内联的）、首屏 image (Largest Contentful Paint candidate) 自动提升。</p>
+        <p><strong>Medium</strong>：async/defer script（后续）、其他 image。</p>
+        <p><strong>Low</strong>：lazy load image、prefetch 资源、低优先级图片。</p>
+        <p><strong>Lowest</strong>：preconnect、dns-prefetch、prefetch。</p>
+        <p>实操：用 DevTools Network panel 看每个资源的 Priority 列。如果你的 LCP image 不是 Highest 优先级，加 <code>fetchpriority="high"</code> 或 <code>preload</code>。</p>
+
+        <h3>HTTP 协议层影响</h3>
+        <p>HTTP 协议版本影响并行下载能力：</p>
+        <p><strong>HTTP/1.1</strong>：每个连接<strong>串行处理请求</strong>。浏览器对每个 origin 最多 6 个并行连接 → 同时下载 ≤ 6 个资源。这是为什么早年要做 <strong>domain sharding</strong>（把资源分到多个 subdomain 绕过 6 连接限制）。</p>
+        <p><strong>HTTP/2</strong>：单个连接<strong>多路复用</strong>—— 一个连接能并发处理几十几百个请求。Domain sharding 不再必要（甚至有害）。HEADERS 用 HPACK 压缩。</p>
+        <p><strong>HTTP/3 (QUIC)</strong>：基于 UDP，进一步降低握手 + 队头阻塞。Mobile 网络下显著好于 HTTP/2。详见待写的 HTTP/2/3 主题。</p>
+        <p>现代 web 开发<strong>必须 HTTPS + HTTP/2 或 HTTP/3</strong>—— 这是性能基线。Cloudflare / AWS CloudFront / Vercel / Netlify 等 CDN 都默认 HTTP/2 或 HTTP/3。</p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 A · 用 preload 优化首屏 LCP image</h3>
+          <p>项目 LCP 是 hero image（首屏顶部大图）—— 浏览器要 parse HTML → 找到 <code>&lt;img&gt;</code> → 开始下载 → 渲染。延迟在"找到 img 才开始下载"这步。优化：在 <code>&lt;head&gt;</code> 加 <code>&lt;link rel="preload" href="hero.jpg" as="image" fetchpriority="high"&gt;</code>—— 浏览器解析 head 时就开始下载 hero image，不用等到 body 的 img tag。LCP 通常能提升 200-500ms（取决于网络）。这是最有效的 LCP 优化之一。注意：<strong>不要 preload 一切</strong>—— preload 让资源占用首屏带宽，过度 preload 反而拖慢真正关键的资源。只 preload 你确定首屏需要的 1-3 个关键资源。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 B · 排查「为什么我的 page 渲染慢」</h3>
+          <p>页面 first paint 慢——用 Chrome DevTools Performance panel 录制，看渲染管线时间线。<strong>常见原因</strong>：(1) <strong>render-blocking CSS 太大</strong>—— 看 Network panel CSS 文件大小 + Performance 上 CSS parse 时间。优化：critical CSS inline 到 HTML head；其他 CSS 异步加载（用 <code>media="print" onload</code> hack 或 modern preload）。(2) <strong>JS 阻塞</strong>—— head 里有大同步 script。改 defer 或 async。(3) <strong>第三方资源阻塞</strong>—— Google Fonts / GTM / 广告 SDK 加载在前 head。改 async load 或 lazy load。(4) <strong>FCP 已快但 LCP 慢</strong>—— 真正的 LCP image 没 preload。加 fetchpriority。这套排查流程让你 1-2 小时定位 first paint 瓶颈。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 C · 用 preconnect 优化第三方 API 延迟</h3>
+          <p>项目首屏要调 api.example.com 拿数据——TLS 握手 + DNS resolve 占 200-500ms。优化：<code>&lt;link rel="preconnect" href="https://api.example.com"&gt;</code> 在 head——浏览器解析 head 时就开始建 TLS 连接 + DNS。当真正调 fetch 时，连接已就绪——节省 200-500ms。<strong>注意</strong>：(1) preconnect 不是 prefetch——只建连接不下载内容；(2) 浏览器会限制 preconnect 数（避免滥用），最多 ~6-10 个 origin；(3) 跨 origin 的 font 必须加 <code>crossorigin</code> attribute。具体：CDN / API 主 origin 用 preconnect；不重要的 third party 用 dns-prefetch（更廉价）。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 D</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 D · 给做 SSR 框架的工程师：理解流式响应</h3>
+          <p>做 SSR 框架（Next.js / Remix / SvelteKit）—— 流式响应（HTTP chunked transfer encoding）是关键性能特性。机制：server 不等所有数据生成完再发 HTML，而是<strong>边生成边 chunk 发</strong>。浏览器边收到 chunk 边 parse → 顶部内容更早可见。<strong>实操要点</strong>：(1) <strong>HTML head 先 flush</strong>—— 包含 critical CSS / preload / 关键 meta，浏览器立即 preload scanner 启动；(2) <strong>main content 流式输出</strong>—— React 18 Suspense / Next.js streaming SSR 自动支持；(3) <strong>慢数据用 Suspense fallback</strong>—— 先发 fallback skeleton，数据来后流出更新。这种"流式 SSR"让 LCP 比传统 "render full HTML 再 send" 快几百 ms。</p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
         <div class="code-block">
+          <span class="code-label">html</span>
+<pre class="code"><code class="lang-html">&lt;!-- 现代优化的 HTML head 模板 --&gt;
+&lt;!doctype html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+  &lt;meta charset="UTF-8"&gt;
+  &lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+
+  &lt;!-- 1. preconnect 第三方 origin --&gt;
+  &lt;link rel="preconnect" href="https://api.example.com"&gt;
+  &lt;link rel="preconnect" href="https://fonts.gstatic.com" crossorigin&gt;
+
+  &lt;!-- 2. preload 关键资源 --&gt;
+  &lt;link rel="preload" href="/hero.jpg" as="image" fetchpriority="high"&gt;
+  &lt;link rel="preload" href="/font-bold.woff2" as="font" type="font/woff2" crossorigin&gt;
+
+  &lt;!-- 3. critical CSS inline --&gt;
+  &lt;style&gt;
+    /* 首屏可见区域的 CSS */
+    body { margin: 0; font-family: sans-serif; }
+    .hero { height: 100vh; ... }
+  &lt;/style&gt;
+
+  &lt;!-- 4. 非关键 CSS 异步加载 --&gt;
+  &lt;link rel="stylesheet" href="/non-critical.css" media="print" onload="this.media='all'"&gt;
+
+  &lt;!-- 5. JS 用 module / defer --&gt;
+  &lt;script type="module" src="/app.js"&gt;&lt;/script&gt;
+
+  &lt;!-- 6. 第三方独立脚本用 async --&gt;
+  &lt;script async src="https://www.googletagmanager.com/gtag/js?id=G-XXX"&gt;&lt;/script&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;img src="/hero.jpg" alt="hero" fetchpriority="high"&gt;
+  &lt;!-- below-the-fold 图片用 loading="lazy" --&gt;
+  &lt;img src="/below.jpg" loading="lazy" alt="..."&gt;
+&lt;/body&gt;
+&lt;/html&gt;</code></pre>
+        </div>
+        <div class="code-block">
           <span class="code-label">javascript</span>
-<pre class="code"><code class="lang-js">// 正文待写</code></pre>
+<pre class="code"><code class="lang-js">// 用 PerformanceObserver 测 HTML / CSS / JS 加载时间
+new PerformanceObserver((list) =&gt; {
+  for (const entry of list.getEntries()) {
+    if (entry.entryType === 'resource') {
+      console.log(`${entry.name}: ${entry.duration}ms (priority: ${entry.fetchPriority})`);
+    }
+  }
+}).observe({ entryTypes: ['resource'] });
+
+// 监听 DOMContentLoaded 和 load
+document.addEventListener('DOMContentLoaded', () =&gt; {
+  console.log('DOM ready:', performance.now());
+  // 可以操作 DOM
+});
+
+window.addEventListener('load', () =&gt; {
+  console.log('all resources loaded:', performance.now());
+  // 所有图片 / iframe / async script 完成
+});</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// 动态创建 script —— preload scanner 看不到，可能加载慢
+// 优化：手动 preload 让浏览器知道
+async function loadModuleAndUse() {
+  // 提示浏览器 preload
+  const link = document.createElement('link');
+  link.rel = 'modulepreload';
+  link.href = '/heavy-module.js';
+  document.head.appendChild(link);
+
+  // 真正加载
+  const mod = await import('/heavy-module.js');
+  return mod.doStuff();
+}
+
+// 或更现代：
+// &lt;link rel="modulepreload" href="/heavy-module.js"&gt;
+// 提前在 HTML 里声明，preload scanner 能看到</code></pre>
         </div>
 
         <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
         <div class="pitfall">
-          <div class="pitfall-title">陷阱标题</div>
-          <p><em>正文待写。</em></p>
+          <div class="pitfall-title">过度 preload 让首屏更慢</div>
+          <p>有人看到 preload 优化首屏 LCP，给所有图片 / 脚本都加 preload——<strong>反而拖慢</strong>。原因：preload 让所有 preload 资源争夺首屏带宽，真正关键的 LCP image 反而被挤占。<strong>正确做法</strong>：只 preload 1-3 个最关键资源（LCP image、关键 CSS、关键 font）；其他让浏览器自然处理。规避：用 DevTools Network panel 看每个资源 priority + 时序，确认 preload 真的让关键资源更早完成（不是被其他 preload 挤占）。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">用 default script 阻塞渲染</div>
+          <p>有人写 <code>&lt;script src="app.js"&gt;&lt;/script&gt;</code> 在 head——这是 default 语义，<strong>下载完立即执行 + 阻塞 HTML parsing</strong>。即使 preload scanner 提前下载了，<strong>执行</strong>仍阻塞。这让 first paint 推迟到 script 执行完。<strong>规避</strong>：永远用 <code>&lt;script defer&gt;</code> 或 <code>&lt;script type="module"&gt;</code>（默认 defer）。<strong>除非</strong>你真需要 inline 同步脚本（如 polyfill / framework loader），否则不要 default 行为。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">认为「JS 放 body 底部」=「不阻塞」</div>
+          <p>"script 放 body 底部"是经典优化，但<strong>不完美</strong>。问题：(1) <strong>HTML 大时仍要 parse 整个 HTML 才到 script</strong>—— 不能利用 preload scanner；(2) <strong>script 仍阻塞 DOMContentLoaded</strong>——比 defer 慢。<strong>更好的写法</strong>：<code>&lt;script defer src="app.js"&gt;&lt;/script&gt;</code> 在 head——下载并行（preload scanner）+ 不阻塞 parsing + DOMContentLoaded 前执行。这是 2026 现代 best practice。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">忘记 CSS 阻塞 JS 执行</div>
+          <p>有人发现 script 在 CSS 之前但仍要等 CSS——以为是 bug。实际是浏览器规范：<strong>JS 可能查 style，所以 JS 执行前 CSS 必须 parse 完</strong>。即使 script 在 CSS link 之前。规避：(1) critical CSS inline + 非关键 CSS 异步加载，让 CSS 不阻塞 JS；(2) 用 defer script（DOMContentLoaded 前执行，CSS 已经 parse 完）；(3) 别在 JS 里用 <code>getComputedStyle</code> 太早——可能强制 layout。</p>
         </div>
 
         <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
         <ul>
-          <li><a href="https://web.dev/" target="_blank" rel="noopener">web.dev</a></li>
-          <li>回到主题首页 → <a href="../index.html">浏览器渲染管线深度学习</a></li>
+          <li><a href="https://web.dev/articles/critical-rendering-path" target="_blank" rel="noopener">web.dev · Critical Rendering Path</a> · 渲染管线官方文档</li>
+          <li><a href="https://web.dev/articles/preload-critical-assets" target="_blank" rel="noopener">web.dev · preload critical assets</a></li>
+          <li><a href="https://web.dev/articles/fetch-priority" target="_blank" rel="noopener">web.dev · fetchpriority</a></li>
+          <li><a href="https://html.spec.whatwg.org/multipage/parsing.html" target="_blank" rel="noopener">WHATWG HTML · Parsing</a> · HTML parser 规范</li>
+          <li><a href="https://developer.chrome.com/blog/inside-browser-part3" target="_blank" rel="noopener">Inside Browser part 3 (Render)</a></li>
+          <li>下一章 → <a href="02-style-layout.html">P3.2 · Style → Layout（Reflow）</a></li>
         </ul>
 
         <nav class="chapter-nav" aria-label="章节翻页">

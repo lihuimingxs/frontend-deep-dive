@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Paint records + Layer tree + Tile 分块 + GPU 合成 · P3.3 · 浏览器渲染管线深度学习</title>
-    <meta name="description" content="渲染管线第三段。Layout tree 怎么变成屏幕像素。讲透 Paint phase（生成 paint records 不是真绘制）+ Layer tree（按 layer 分组）+ Tile-based rasterization（256x256 块异步 raster）+ GPU 合成（transform/opacity 走 GPU 直通）+ Reflow vs Repaint vs Composite 三态 + will-change 滥用 + GPU raster + Vulkan/Metal 后端。" />
+    <title>Paint → Composite：GPU 合成 + Layer tree + Tile-based raster · P3.3 · 浏览器渲染管线深度学习</title>
+    <meta name="description" content="渲染管线第三段。Layout tree 怎么变成屏幕像素。Paint phase + Layer tree + Tile-based rasterization + GPU 合成 + Reflow vs Repaint vs Composite 三态 + transform/opacity 黄金路径 + will-change 滥用 + GPU raster + Vulkan/Metal 后端。" />
     <link rel="stylesheet" href="../../assets/styles.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234285F4'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EB%3C/text%3E%3C/svg%3E" />
   </head>
@@ -46,63 +46,285 @@
           <a href="index.html">P3 · 关键渲染路径 CRP</a><span class="breadcrumb-sep">/</span>
           <span>03 · Paint → Composite（GPU 合成）</span>
         </nav>
-        <h1>Paint records + Layer tree + Tile 分块 + GPU 合成</h1>
+        <h1>Paint → Composite：GPU 合成 + Layer tree + Tile-based raster</h1>
         <p class="lead">
-          渲染管线第三段。Layout tree 怎么变成屏幕像素。讲透 Paint phase（生成 paint records 不是真绘制）+ Layer tree（按 layer 分组）+ Tile-based rasterization（256x256 块异步 raster）+ GPU 合成（transform/opacity 走 GPU 直通）+ Reflow vs Repaint vs Composite 三态 + will-change 滥用 + GPU raster + Vulkan/Metal 后端。
+          渲染管线第三段。Layout tree 怎么变成屏幕像素。<strong>关键洞察</strong>：<strong>Reflow vs Repaint vs Composite 三态</strong>是浏览器性能的核心模型——geometry 改 → reflow + repaint + composite；颜色改 → repaint + composite；transform/opacity 改 → composite only。<strong>后者是 60fps 动画的黄金路径</strong>。这一章讲透 Paint phase（生成 paint records 不是真绘制）+ Layer tree + Tile-based rasterization + GPU 合成 + will-change 滥用 + GPU raster + Vulkan/Metal 后端 + OOP-D（Out-of-Process Display Compositor）。
         </p>
         <div class="chapter-meta">
           <span><strong>阅读时长</strong> ~30 分钟</span>
           <span><strong>前置</strong> P3.2</span>
-          <span><strong>主要来源</strong> developer.chrome.com/docs/extensions/reference/api/layers · webkit.org/blog/3308/scrolling-with-async</span>
-        </div>
-
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>本章为<strong>骨架</strong>。已完成大纲与关键知识点列表（见各段标题下的 bullet），正文撰写中。可参考 <a href="../outline.md">outline.md</a> 了解完整覆盖范围。</p>
+          <span><strong>主要来源</strong> developer.chrome.com / Skia docs / Chrome team blog</span>
         </div>
 
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
-          <li><em>正文待写。</em></li>
+          <li><strong>Reflow vs Repaint vs Composite 三态</strong>是浏览器性能心智模型——你做的每个动画 / 视觉变化都对应这三态之一。<strong>composite-only 是黄金路径</strong>，不需要 layout / paint，只走 GPU 合成。</li>
+          <li><strong>transform / opacity 走 composite-only</strong>——这是为什么这两个 CSS 属性是动画首选。<strong>width / height / left / top / margin 等触发 reflow</strong>—— 即使在 transition 里也会让动画卡。</li>
+          <li><strong>Compositor thread 独立运行</strong>—— 主线程被 100ms 长任务卡时，transform 动画仍 60fps 顺滑（因为 Compositor 在另一线程跑）。这是浏览器架构给前端最大的性能礼物。</li>
         </ol>
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
-        <p><em>正文待写。本章覆盖：Paint records · Layer tree · Tile-based raster · GPU 合成 · Reflow vs Repaint vs Composite · transform/opacity 黄金路径 · will-change · OOP-D</em></p>
+
+        <h3>Paint Phase：生成 paint records（不是真绘制）</h3>
+        <p>Paint 是<strong>把 layout tree 变成「绘制指令列表」</strong>—— 每个元素生成一组 <strong>paint records</strong>（绘制指令）。这一步<strong>不真的画到屏幕</strong>—— 真绘制（rasterization）在后续步骤。</p>
+        <p>Paint 阶段的工作：</p>
+        <p>(1) <strong>遍历 layout tree</strong>，按 z-index / stacking context 顺序生成 paint records；</p>
+        <p>(2) <strong>每个元素生成多个绘制指令</strong>—— background / border / text / decoration 各一段指令；</p>
+        <p>(3) <strong>Paint records 是 immutable + 可序列化</strong>—— 让多线程 / 跨进程合成成为可能。</p>
+        <p>这种"<strong>生成指令而非直接绘制</strong>"的设计让浏览器有<strong>巨大的优化空间</strong>：</p>
+        <p>(1) <strong>Layer 分组</strong>—— 把 paint records 按 layer 分组，每个 layer 独立 raster；</p>
+        <p>(2) <strong>异步 raster</strong>—— 主线程生成 paint records 后扔给 Raster threads（worker pool）真绘制；</p>
+        <p>(3) <strong>缓存 layer</strong>—— 没变的 layer 复用之前的 raster 结果，不重画；</p>
+        <p>(4) <strong>GPU 合成</strong>—— GPU 把所有 layer 合成最终图像。</p>
+
+        <h3>Layer tree：分组 + 独立 raster</h3>
+        <p><strong>Layer tree</strong>把 layout tree 中的元素<strong>分组</strong>—— 每组（layer）独立 raster + 合成。</p>
+        <p>哪些情况会创建独立 layer？</p>
+        <p><strong>(1) 3D / transform / 透视</strong>——<code>transform: translate3d</code> / <code>perspective</code> / <code>transform-style: preserve-3d</code>。</p>
+        <p><strong>(2) <code>will-change</code> 提示</strong>——<code>will-change: transform / opacity</code> 强制创建 layer。</p>
+        <p><strong>(3) <code>backface-visibility</code> hidden</strong>。</p>
+        <p><strong>(4) <code>position: fixed</code></strong>——通常独立 layer。</p>
+        <p><strong>(5) <code>filter</code> / <code>mix-blend-mode</code> / 某些 effect</strong>。</p>
+        <p><strong>(6) Video / Canvas / iframe</strong>—— 内容独立来源，独立 layer。</p>
+        <p><strong>(7) Stacking context 在某些 z-index 复杂情况</strong>。</p>
+        <p>Layer 多的<strong>好处</strong>：每个 layer 独立 raster + 合成，变化只影响那一个 layer，性能高（特别是动画场景）。</p>
+        <p>Layer 多的<strong>坏处</strong>：每个 layer 占 GPU 内存（一张 bitmap）。<strong>过度 layer</strong> 会让 GPU 内存爆—— DevTools 看到 "Layer count: 100+"，GPU 内存可能几百 MB。这是为什么 <code>will-change</code> 滥用是反模式。</p>
+        <p>Chrome DevTools "Layers" panel 能可视化 layer tree—— 看每个 layer 的尺寸、被 promote 原因、内存占用。性能优化时第一站。</p>
+
+        <h3>Tile-based Rasterization：异步分块绘制</h3>
+        <p><strong>Rasterization</strong>是真把 paint records 画成像素。Chromium 用<strong>tile-based</strong> 策略：</p>
+        <p>(1) <strong>每个 layer 切成 256×256 tiles</strong>—— 一个 1920×1080 layer 切成约 32 个 tile。</p>
+        <p>(2) <strong>只 raster 屏幕内 tile</strong>—— 屏幕外的 tile 不画（懒加载）。滚动时按需画新 tile。</p>
+        <p>(3) <strong>Raster 在独立线程</strong>—— Raster threads（worker pool）并行画多个 tile。主线程不被阻塞。</p>
+        <p>(4) <strong>GPU raster (Chrome 默认 2020+)</strong>—— 把 raster 移到 GPU。比 CPU raster 快 5-10x。</p>
+        <p>这套设计的<strong>好处</strong>：(1) 滚动顺滑（只画新 tile，不重画整页）；(2) 内存效率（屏幕外不占像素内存）；(3) 多核 + GPU 并行。</p>
+        <p>Chrome 还在演进：</p>
+        <p><strong>SkiaRenderer</strong>（Chrome 87+）—— 用 Skia 画整个浏览器 UI，统一渲染管线。</p>
+        <p><strong>Vulkan / Metal 后端</strong>—— Skia 可以用 Vulkan（Linux/Android）/ Metal（macOS/iOS）/ DirectX（Windows）作为底层 GPU API。比传统 GL 快 + 现代。</p>
+
+        <h3>GPU Compositing：合成最终图像</h3>
+        <p>Compositing 是<strong>把所有 raster 完的 tile 合成成最终屏幕图像</strong>。在 <strong>GPU process</strong> 跑（详见 <a href="../02-multi-process/01-process-model.html">P2.1</a>），独立于 Renderer 进程。</p>
+        <p>合成步骤：</p>
+        <p><strong>(1) 收 layer tree + tile bitmap</strong>—— 从 Renderer 主线程来。</p>
+        <p><strong>(2) 计算每个 layer 的最终 transform</strong>—— 应用 CSS transform / opacity / filter。<strong>这一步对 transform/opacity 几乎免费</strong>—— GPU 用矩阵乘法，硬件加速。</p>
+        <p><strong>(3) 按 z-order 把 layer 叠加</strong>—— 透明的 layer 用 alpha blending。</p>
+        <p><strong>(4) 输出到 framebuffer</strong>—— 屏幕显示。</p>
+        <p>这套合成<strong>不需要 Renderer 主线程</strong>——主线程被 long task 卡时，Compositor 仍能 60fps 跑（基于上次 raster 的 tile）。<strong>这是 transform/opacity 动画顺滑的根本原因</strong>。</p>
+
+        <h3>Reflow vs Repaint vs Composite：性能心智模型</h3>
+        <p>每个 CSS 属性变化对应渲染管线的不同阶段。三态模型：</p>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 22%">变化类型</th>
+              <th style="width: 32%">触发管线</th>
+              <th style="width: 22%">代价</th>
+              <th style="width: 24%">典型 CSS 属性</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Reflow</strong></td>
+              <td>Style → Layout → Paint → Composite</td>
+              <td>最高（几十 ms）</td>
+              <td>width / height / margin / padding / position / top / left / float</td>
+            </tr>
+            <tr>
+              <td><strong>Repaint</strong></td>
+              <td>Paint → Composite</td>
+              <td>中（几 ms 到 10ms）</td>
+              <td>color / background-color / box-shadow / border-color</td>
+            </tr>
+            <tr>
+              <td><strong>Composite</strong></td>
+              <td>Composite only</td>
+              <td>最低（&lt; 1ms，GPU 几乎免费）</td>
+              <td>transform / opacity / filter (部分)</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>这个心智模型是<strong>Web 动画 + 性能优化的核心</strong>——你看每个 CSS 属性会判断它走哪条路径，决定动画方案。</p>
+        <p><strong>实操规则</strong>：</p>
+        <p>(1) <strong>动画用 transform / opacity</strong>—— 走 composite-only，60fps 顺滑。</p>
+        <p>(2) <strong>避免在动画中改 width / height / margin / padding / left / top / position</strong>—— 触发 reflow，掉帧。</p>
+        <p>(3) <strong>颜色 / 阴影 / 边框颜色变化</strong>—— 触发 repaint，能用但不如 composite-only。</p>
+        <p>(4) <strong>用 transform: translate 替代 left/top 动画</strong>—— 视觉效果一样，性能完全不同。</p>
+
+        <h3>transform / opacity 黄金路径详解</h3>
+        <p>为什么 transform / opacity 走 composite-only？</p>
+        <p><strong>CSS Transform</strong>（<code>transform: translate / rotate / scale / matrix</code>）—— 只改变元素的视觉位置，<strong>不改变 layout box 的位置</strong>。这意味着：</p>
+        <p>(1) Layout 不变（其他元素位置不动）；</p>
+        <p>(2) Paint 不变（每个 layer 内容不变）；</p>
+        <p>(3) Composite 时 GPU 用矩阵乘法应用 transform——硬件加速近免费。</p>
+        <p><strong>CSS Opacity</strong>—— 改变元素透明度。原理：</p>
+        <p>(1) Layout 不变；</p>
+        <p>(2) 如果是独立 layer，paint 不变（layer 已经画好）；</p>
+        <p>(3) Composite 时 GPU 应用 alpha blending—— 硬件加速近免费。</p>
+        <p>对 opacity 重要的是<strong>"独立 layer"</strong>—— 如果 opacity 元素不在独立 layer，opacity 变化会触发 repaint。<strong>规避</strong>：用 <code>will-change: opacity</code> 强制独立 layer。</p>
+        <p>这两个属性是<strong>GPU 合成时代浏览器给前端的最大礼物</strong>—— 让 60fps 动画从"奢侈"变成"默认"。</p>
+
+        <h3>will-change：明示 layer 提升</h3>
+        <p><strong><code>will-change</code></strong>是 CSS 属性，<strong>提示浏览器</strong>"这个元素将来要变化某个属性，提前优化"。最常见用法：</p>
+        <pre class="code"><code class="lang-css">.animated-element {
+  will-change: transform;
+  /* 或：will-change: opacity, transform */
+}</code></pre>
+        <p>浏览器看到 <code>will-change</code> 后<strong>提前创建独立 layer</strong>—— 让后续 transform 变化只走 composite-only。</p>
+        <p>但 <code>will-change</code> <strong>极易滥用</strong>—— 给所有元素加 <code>will-change</code> 让浏览器创建过多 layer，GPU 内存爆 + 整体性能下降。<strong>正确使用</strong>：</p>
+        <p>(1) <strong>只给真要动画的元素加</strong>—— 不动的元素不需要 layer。</p>
+        <p>(2) <strong>动画结束后移除</strong>—— <code>el.style.willChange = 'auto'</code>，让浏览器回收 layer。</p>
+        <p>(3) <strong>避免给容器加</strong>—— 给容器加让所有子元素都升 layer，过度。</p>
+        <p>(4) <strong>用其他方式触发 layer</strong>—— <code>transform: translateZ(0)</code> 或 <code>backface-visibility: hidden</code> 也能创建 layer，更隐式。</p>
+
+        <h3>Compositor 优化的边界</h3>
+        <p>Compositor 不能优化所有动画。具体限制：</p>
+        <p><strong>(1) 必须是独立 layer</strong>—— 元素如果不在独立 layer，transform 变化也会触发 repaint。规避：will-change 或 translate3d。</p>
+        <p><strong>(2) <code>filter</code> 部分走 composite</strong>—— 简单 filter（blur / brightness）GPU 加速；复杂 filter（drop-shadow / convolution）可能仍要 paint。</p>
+        <p><strong>(3) <code>clip-path</code> 部分走 composite</strong>—— 简单 clip-path GPU 加速；复杂 polygon 可能要 paint。</p>
+        <p><strong>(4) <code>border-radius</code> 大值 + transform</strong>—— 某些组合会让 GPU 不能完全 cache layer。</p>
+        <p><strong>(5) Sub-pixel 渲染</strong>—— transform 非整数像素位置可能导致 anti-aliasing 不一致。</p>
+        <p>实操：用 DevTools Performance + "Show frames" 看每帧的 paint vs composite 时间。如果你预期 composite-only 但发现 paint 时间高，调整 layer 提升策略。</p>
+
+        <h3>OOP-D：Out-of-Process Display Compositor</h3>
+        <p><strong>OOP-D</strong>是 Chromium 的进程模型演进——把 <strong>display compositor</strong>（最终把所有 Renderer 合成结果输出到屏幕的组件）独立到<strong>专用进程</strong>。之前 display compositor 在 Browser 或 GPU 进程，OOP-D 让它独立。</p>
+        <p>好处：</p>
+        <p><strong>(1) Renderer 崩溃时屏幕不闪烁</strong>—— display compositor 仍能 paint 上次帧。</p>
+        <p><strong>(2) 多 Renderer 合成更高效</strong>—— 一个 display compositor 服务所有 Renderer。</p>
+        <p><strong>(3) 屏幕输出延迟降低</strong>—— compositor 能更早 swap framebuffer。</p>
+        <p>这种 OOP-D 是 Chromium 内部架构演进，对开发者透明—— 但理解它能让你看懂 Chromium 源码的最新组织。</p>
+
+        <h3>查看 Layer 状态：DevTools 工具</h3>
+        <p>实操工具：</p>
+        <p><strong>(1) DevTools "Layers" panel</strong>（Chrome 内：More tools → Layers）—— 可视化所有 layer，看每个 layer 的尺寸、内存占用、被 promote 原因。</p>
+        <p><strong>(2) DevTools "Rendering" panel</strong>—— 开 "Layer borders" 看每个 layer 边界（橘色框）；开 "Paint flashing" 看 repaint 区域（绿色高亮）。性能调试 essential。</p>
+        <p><strong>(3) DevTools Performance Recording</strong>—— 录制一段时间，看 timeline 上每帧的 Style / Layout / Paint / Composite 时间。</p>
+        <p><strong>(4) <code>chrome://gpu</code></strong>—— GPU 进程状态、driver 版本、硬件加速是否启用。如果硬件加速没启用，所有 composite 走 CPU——性能巨差。</p>
+        <p>这些工具是诊断浏览器渲染性能的核心。每个 Web 工程师应该熟悉。</p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 A · 把 left/top 动画改成 transform：60fps 提升</h3>
+          <p>项目有 sidebar 滑入 / 弹窗弹出动画——用 <code>left</code> 或 <code>top</code> 动画卡顿。改成 <code>transform: translateX</code> / <code>translateY</code> 立即顺滑。<strong>原因</strong>：left/top 触发 reflow（可能影响其他元素位置） + repaint + composite，几十 ms / 帧；transform 走 composite-only，&lt; 1ms / 帧。<strong>具体做法</strong>：(1) 用 transform 替代 left/top；(2) 加 <code>will-change: transform</code> 提前创建 layer；(3) 动画结束移除 will-change；(4) 测试用 DevTools Performance Record + Frames panel。<strong>常见踩坑</strong>：(1) 如果 sidebar 撑开 layout（影响 main content），transform 不能替代——需要重新设计 layout 让 sidebar 浮动；(2) 老 IE 11 不支持 transform 3D 语义—— 现代项目不必担心。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 B · 排查「主线程卡 100ms 但动画仍顺滑」</h3>
+          <p>团队成员问"主线程被 JS 卡了 100ms，为什么动画还顺滑"——多进程 + Compositor thread 给出答案。<strong>核心机制</strong>：(1) Renderer 主线程跑 JS / Layout / Paint；Compositor thread 跑 GPU 合成；(2) 主线程被 JS 卡时，Compositor 仍以 60fps 用<strong>上次 raster 的 tile</strong>合成；(3) 如果动画走 composite-only（transform/opacity），新帧 = 旧 tile + 新 transform 矩阵——完全不需要主线程。<strong>这就是为什么 transform 动画能在主线程卡死时仍流畅</strong>——是浏览器架构给前端的礼物。验证：故意写个 <code>setTimeout</code> 阻塞主线程 500ms，看 transform 动画是否仍顺滑（应该是）。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 C · 用 DevTools Layers panel 排查 GPU 内存</h3>
+          <p>用户报"页面 GPU 内存占用高 + 滚动卡"——用 Chrome DevTools Layers panel 排查。<strong>步骤</strong>：(1) 打开 More tools → Layers；(2) 看 layer 总数 + 每个 layer 内存（"Memory estimate"）；(3) 点 layer 看"Compositing reasons"—— 找出哪些 layer 是被错误提升的（如全局 will-change 滥用）。<strong>常见原因</strong>：(1) 给所有 list-item 加 <code>will-change: transform</code> → 100+ layer；(2) 给容器加 <code>will-change</code> → 子元素全升 layer；(3) 第三方 SDK 滥用 transform-3d。<strong>修复</strong>：移除不必要的 will-change；只在动画时加，结束移除；用 <code>transform: translateZ(0)</code> 代替 will-change（更精细控制）。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 D</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 D · 给做复杂滚动动画的工程师：用 IntersectionObserver + transform</h3>
+          <p>做"滚动到这个元素时元素 fade in"动画——传统方法用 scroll 监听 + 改 opacity。问题：scroll 事件高频触发 + opacity 改如果元素不在独立 layer 触发 repaint。<strong>现代做法</strong>：(1) <strong>IntersectionObserver 监听元素 visibility</strong>—— 不需要 scroll 监听，自动 batch；(2) <strong>触发时改 transform / opacity</strong>—— 走 composite-only；(3) <strong>预先 will-change: opacity, transform</strong>—— 让元素在独立 layer。<strong>具体代码</strong>：<code>new IntersectionObserver((entries) =&gt; { if (entries[0].isIntersecting) el.classList.add('visible') })</code>；CSS 用 <code>transition: opacity 0.3s, transform 0.3s</code>。这套组合让滚动动画零卡顿。</p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
         <div class="code-block">
+          <span class="code-label">css</span>
+<pre class="code"><code class="lang-css">/* ✅ 黄金动画路径：transform / opacity */
+.modal {
+  transform: translateY(-20px);
+  opacity: 0;
+  transition: transform 0.3s, opacity 0.3s;
+  will-change: transform, opacity;  /* 提前创建 layer */
+}
+
+.modal.visible {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+/* ❌ 反模式：top / margin / height 动画 */
+.modal-bad {
+  margin-top: -20px;
+  height: 0;
+  transition: margin-top 0.3s, height 0.3s;
+  /* 触发 reflow + repaint + composite，每帧几十 ms */
+}
+
+/* ✅ 移除 will-change（动画结束后） */
+.modal:not(.animating) {
+  will-change: auto;
+}</code></pre>
+        </div>
+        <div class="code-block">
           <span class="code-label">javascript</span>
-<pre class="code"><code class="lang-js">// 正文待写</code></pre>
+<pre class="code"><code class="lang-js">// IntersectionObserver + transform 实现滚动 fade in
+const observer = new IntersectionObserver((entries) =&gt; {
+  for (const entry of entries) {
+    if (entry.isIntersecting) {
+      entry.target.classList.add('visible');
+      observer.unobserve(entry.target);  // 一次性
+    }
+  }
+}, {
+  threshold: 0.1  // 10% 进入视口就触发
+});
+
+document.querySelectorAll('.fade-in').forEach(el =&gt; observer.observe(el));
+
+// CSS:
+// .fade-in { opacity: 0; transform: translateY(20px); transition: 0.3s; will-change: opacity, transform }
+// .fade-in.visible { opacity: 1; transform: translateY(0) }</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// 用 PerformanceObserver 监听 Long Tasks
+// long task 期间 composite-only 动画仍能顺滑
+
+new PerformanceObserver((list) =&gt; {
+  for (const entry of list.getEntries()) {
+    console.log('Long Task:', entry.duration + 'ms');
+  }
+}).observe({ entryTypes: ['longtask'] });
+
+// 模拟主线程长任务
+function blockMainThread(ms) {
+  const start = performance.now();
+  while (performance.now() - start &lt; ms) {}
+}
+
+// 启动 transform 动画
+const box = document.querySelector('.box');
+box.style.transition = 'transform 2s';
+box.style.transform = 'translateX(500px)';
+
+// 1 秒后阻塞主线程 500ms
+setTimeout(() =&gt; blockMainThread(500), 1000);
+
+// 观察：transform 动画在主线程阻塞期间仍然顺滑
+// PerformanceObserver 会报 long task = 500ms
+// 但用户看到的动画 60fps</code></pre>
         </div>
 
         <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
         <div class="pitfall">
-          <div class="pitfall-title">陷阱标题</div>
-          <p><em>正文待写。</em></p>
+          <div class="pitfall-title">滥用 will-change 让 GPU 内存爆</div>
+          <p>给所有元素加 <code>will-change: transform</code>—— 浏览器创建一堆 layer，GPU 内存爆，整体性能反而差。<strong>规避</strong>：(1) 只给真要动画的元素加；(2) 动画结束移除（<code>el.style.willChange = 'auto'</code>）；(3) 不给容器加（让所有子元素升 layer）；(4) 用 DevTools Layers panel 监控 layer 数。一般原则：layer 数 &lt; 50 是合理，&gt; 100 过多。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">用 transform: scale 做尺寸动画</div>
+          <p>看起来 <code>transform: scale</code> 比改 width / height 顺滑——但<strong>scale 改变视觉大小，不改 layout box</strong>。所以：(1) 元素本身视觉变小，但仍占原 box 的 layout 空间；(2) 内部文字 / 图片按 scale 缩放（可能模糊）；(3) 周围元素位置不变。<strong>对开发者影响</strong>：scale 适合"提示性动画"（按钮 hover 微缩 / 图片 zoom），不适合"真正改变布局"的尺寸变化。后者要么 reflow（接受成本），要么重新设计 layout。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">opacity 动画不在独立 layer 触发 repaint</div>
+          <p><code>opacity</code> 走 composite-only 的前提是<strong>元素在独立 layer</strong>。如果元素不在独立 layer，opacity 变化触发 paint（重画整个元素）—— 仍比 reflow 好但不是 composite-only。<strong>规避</strong>：opacity 动画的元素加 <code>will-change: opacity</code> 强制独立 layer；或加 <code>transform: translateZ(0)</code>（隐式 layer 提升）；用 DevTools Layers panel 验证元素在独立 layer。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">硬件加速没启用时 composite 走 CPU</div>
+          <p>极少情况下硬件加速没启用（GPU driver 问题 / 用户 disabled / Chrome 黑名单某些 GPU）—— 整个 composite pipeline 走 CPU，性能巨差。<strong>检查</strong>：<code>chrome://gpu</code> 看 "Graphics Feature Status"——如果 "Hardware accelerated" 是 disabled / software only，就是这种情况。<strong>规避</strong>：(1) 用户层面：升级 GPU driver / Chrome；(2) 开发层面：测试 fallback 行为，不要假设 composite 总是 GPU；(3) 监控用户中硬件加速比例（用 <code>WEBGL</code> 检测代理）。</p>
         </div>
 
         <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
         <ul>
-          <li><a href="https://web.dev/" target="_blank" rel="noopener">web.dev</a></li>
-          <li>回到主题首页 → <a href="../index.html">浏览器渲染管线深度学习</a></li>
+          <li><a href="https://web.dev/articles/animations-guide" target="_blank" rel="noopener">web.dev · Animations guide</a> · 动画性能</li>
+          <li><a href="https://aerotwist.com/blog/the-anatomy-of-a-frame/" target="_blank" rel="noopener">The Anatomy of a Frame</a> · Paul Lewis 经典文章</li>
+          <li><a href="https://developer.chrome.com/docs/devtools/layers/" target="_blank" rel="noopener">Chrome DevTools · Layers panel</a></li>
+          <li><a href="https://developer.chrome.com/docs/devtools/rendering/" target="_blank" rel="noopener">DevTools · Rendering panel</a></li>
+          <li><a href="https://skia.org/" target="_blank" rel="noopener">Skia</a> · Chromium 用的 2D 图形库</li>
+          <li>对照 GPU 进程 → <a href="../02-multi-process/01-process-model.html">P2.1 · Chromium 进程模型</a></li>
+          <li>下一章 → <a href="../04-performance/01-load-metrics.html">P4.1 · 载入侧 metrics LCP / FCP / TTFB</a></li>
         </ul>
 
         <nav class="chapter-nav" aria-label="章节翻页">

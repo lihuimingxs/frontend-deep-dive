@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Style cascade + Layout/Reflow 算法 + Box model + Containment · P3.2 · 浏览器渲染管线深度学习</title>
-    <meta name="description" content="渲染管线第二段。DOM + CSSOM 怎么变成「每个元素的位置 + 大小」（Layout tree）。讲透 Style cascade（CSS 优先级 + inheritance）+ Computed style + Layout tree（不含 display:none）+ Layout 算法（BFC/IFC/Flexbox/Grid）+ Box model + Reflow 触发条件 + CSS Containment + content-visibility 现代特性。" />
+    <title>Style → Layout（Reflow）：Cascade + Layout 算法 + Containment · P3.2 · 浏览器渲染管线深度学习</title>
+    <meta name="description" content="渲染管线第二段。DOM + CSSOM 怎么变成「每个元素的位置 + 大小」（Layout tree）。Style cascade + Computed style + Layout tree + BFC/IFC/Flexbox/Grid 算法 + Box model + Reflow 触发条件 + CSS Containment + content-visibility 现代特性。" />
     <link rel="stylesheet" href="../../assets/styles.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234285F4'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EB%3C/text%3E%3C/svg%3E" />
   </head>
@@ -46,63 +46,307 @@
           <a href="index.html">P3 · 关键渲染路径 CRP</a><span class="breadcrumb-sep">/</span>
           <span>02 · Style → Layout（Reflow）</span>
         </nav>
-        <h1>Style cascade + Layout/Reflow 算法 + Box model + Containment</h1>
+        <h1>Style → Layout（Reflow）：Cascade + Layout 算法 + Containment</h1>
         <p class="lead">
-          渲染管线第二段。DOM + CSSOM 怎么变成「每个元素的位置 + 大小」（Layout tree）。讲透 Style cascade（CSS 优先级 + inheritance）+ Computed style + Layout tree（不含 display:none）+ Layout 算法（BFC/IFC/Flexbox/Grid）+ Box model + Reflow 触发条件 + CSS Containment + content-visibility 现代特性。
+          渲染管线第二段。DOM + CSSOM 怎么变成「每个元素的位置 + 大小」（Layout tree）。<strong>关键洞察</strong>：Reflow 是性能大头——改一个 style 可能导致整树 reflow，几十 ms 量级；批量 DOM 操作 + read/write batching + CSS Containment 是优化核心。这一章讲透 Style cascade（CSS 优先级 + inheritance）+ Computed style + Layout tree（不含 display:none）+ BFC/IFC/Flexbox/Grid 算法 + Box model + Reflow 触发条件 + CSS Containment / content-visibility 现代性能特性。
         </p>
         <div class="chapter-meta">
           <span><strong>阅读时长</strong> ~30 分钟</span>
           <span><strong>前置</strong> P3.1</span>
-          <span><strong>主要来源</strong> developer.mozilla.org/CSS · web.dev/animations</span>
-        </div>
-
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>本章为<strong>骨架</strong>。已完成大纲与关键知识点列表（见各段标题下的 bullet），正文撰写中。可参考 <a href="../outline.md">outline.md</a> 了解完整覆盖范围。</p>
+          <span><strong>主要来源</strong> developer.mozilla.org/CSS · web.dev/animations · WHATWG / W3C CSS specs</span>
         </div>
 
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
-          <li><em>正文待写。</em></li>
+          <li><strong>Reflow 是性能大头</strong>—— 改一个元素的几何（width / height / position / margin 等）几乎一定让其他元素也 reflow（流式布局的特性）；几十 ms 量级。批量操作 + read/write batching 是优化核心。</li>
+          <li><strong>CSS Containment 是 2020+ 浏览器最重要的性能 API</strong>—— <code>contain: layout</code> 明确告诉浏览器「这块独立」，让 reflow 不外扩。<code>content-visibility: auto</code> 让浏览器跳过屏幕外元素的 layout/paint。</li>
+          <li><strong>Layout tree 不等于 DOM tree</strong>—— display: none 的元素不在 layout tree（不占位），但仍在 DOM tree（仍在内存）。理解这点能解释很多 layout 反直觉行为。</li>
         </ol>
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
-        <p><em>正文待写。本章覆盖：Style cascade · Computed style · Layout tree · BFC / IFC / Flexbox / Grid · Box model · Reflow 触发条件 · CSS Containment · content-visibility</em></p>
+
+        <h3>Style Cascade：从 CSS 规则到每个元素的样式</h3>
+        <p>CSS Cascade 是<strong>把 CSS rules 应用到 DOM elements</strong>的算法。每个元素的<strong>computed style</strong>来自所有匹配 CSS rule 的累积，按以下顺序决定：</p>
+        <p><strong>(1) Origin + Importance</strong>：用户代理样式 (user agent) → 用户样式 → 作者样式 (author)；<code>!important</code> 反转优先级。</p>
+        <p><strong>(2) Specificity (优先级)</strong>：选择器优先级——id (100) &gt; class / attr / pseudo-class (10) &gt; element / pseudo-element (1)。inline style 比 selector 高。</p>
+        <p><strong>(3) Source order</strong>：specificity 相同时，<strong>后定义的胜</strong>。</p>
+        <p><strong>(4) Inheritance</strong>：某些属性（color / font-family / line-height）从父元素继承；某些（margin / border）不继承。</p>
+        <p><strong>(5) Initial / inherit / unset / revert</strong>：显式控制。<code>initial</code> 用规范 default 值；<code>inherit</code> 用父元素值；<code>unset</code> = inherit (可继承属性) 或 initial (不可继承)；<code>revert</code> 回到上一层 origin。</p>
+        <p>这套算法对每个元素跑一次 → 得到 <strong>Computed style</strong>—— 每个元素的最终样式值（resolved %、计算继承、解析 var()）。Computed style 是 layout 的输入。</p>
+        <p><strong>性能</strong>：CSS 选择器匹配是 hot path。Chrome / Firefox / Safari 都用<strong>从右到左匹配</strong>—— <code>div.foo &gt; span.bar</code> 先找 <code>span.bar</code>，再看父是不是 <code>div.foo</code>。这是为什么"<strong>避免深嵌套选择器</strong>"是 CSS 性能建议（深嵌套从右到左走更多步）。</p>
+
+        <h3>Layout tree：不等于 DOM tree</h3>
+        <p>Layout tree（也叫 Render tree）是<strong>「需要 layout 的元素」的子集</strong>。和 DOM tree 关系：</p>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 40%">情况</th>
+              <th style="width: 30%">DOM tree</th>
+              <th style="width: 30%">Layout tree</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>普通可见元素</td>
+              <td>✅ 在</td>
+              <td>✅ 在</td>
+            </tr>
+            <tr>
+              <td><code>display: none</code></td>
+              <td>✅ 在</td>
+              <td>❌ 不在</td>
+            </tr>
+            <tr>
+              <td><code>visibility: hidden</code></td>
+              <td>✅ 在</td>
+              <td>✅ 在（占位置但不可见）</td>
+            </tr>
+            <tr>
+              <td><code>opacity: 0</code></td>
+              <td>✅ 在</td>
+              <td>✅ 在（占位置 + 不可见）</td>
+            </tr>
+            <tr>
+              <td>pseudo-element <code>::before</code></td>
+              <td>❌ 不在</td>
+              <td>✅ 在</td>
+            </tr>
+            <tr>
+              <td><code>&lt;head&gt;</code> / <code>&lt;script&gt;</code> / <code>&lt;style&gt;</code></td>
+              <td>✅ 在</td>
+              <td>❌ 不在</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>关键差异让一些行为合理：</p>
+        <p>(1) <code>display: none</code> <strong>不参与 layout</strong>——所以切换它时整个 layout 重算。</p>
+        <p>(2) <code>visibility: hidden</code> <strong>参与 layout 但不绘制</strong>——切换时不触发 reflow（只 paint）。</p>
+        <p>(3) Pseudo-element <strong>没 DOM 节点但有 layout box</strong>——CSS 创建的 layout 单元，DevTools Elements panel 看不到（要看 Computed）。</p>
+
+        <h3>Layout 算法：从 box 到位置</h3>
+        <p>Layout 算法计算每个元素的<strong>"位置 + 大小"</strong>。CSS 提供多种 layout mode：</p>
+        <p><strong>(1) BFC (Block Formatting Context)</strong>—— 块级布局。default 行为。块级元素从上到下排列，每行占满父宽。<code>display: block</code> / <code>display: flow-root</code> / <code>overflow: hidden</code>（创建独立 BFC） / float / position 等触发新 BFC。</p>
+        <p><strong>(2) IFC (Inline Formatting Context)</strong>—— 行内布局。inline 元素从左到右排，自动换行。文字 / span 是 IFC。Line box 高度由最高的 inline 元素决定。</p>
+        <p><strong>(3) Flexbox</strong>—— <code>display: flex</code>。一维布局（行或列）。子元素 flex-grow / flex-shrink / flex-basis 算尺寸。</p>
+        <p><strong>(4) Grid</strong>—— <code>display: grid</code>。二维布局（行列）。<code>grid-template-rows / columns</code> 定义网格，子元素自动 / 显式定位到 cell。</p>
+        <p><strong>(5) Multi-column</strong>—— <code>column-count</code> / <code>column-width</code>。流式分多列。</p>
+        <p><strong>(6) Subgrid (CSS Grid Level 2)</strong>—— Grid 嵌套时子 grid 复用父 grid 的 track。</p>
+        <p>每种 mode 有自己的算法。Flexbox / Grid 是现代 layout 主力，IFC / BFC 仍用于文本流。</p>
+        <p><strong>性能</strong>：layout 复杂度通常 <strong>O(n)</strong> 元素数（n 是 layout tree size），但实际更复杂——某些 layout（深嵌套 flex / grid 含 percentage） 可能 O(n²) 或更糟。Chrome <strong>LayoutNG (2017+)</strong> 改进了这点——新一代 layout 引擎按"独立 layout subtree"切分，子树不影响父树。</p>
+
+        <h3>Box Model：CSS 的几何基础</h3>
+        <p>每个元素有 <strong>4 层 box</strong>：</p>
+        <p><strong>Content box</strong> → <strong>Padding box</strong> → <strong>Border box</strong> → <strong>Margin box</strong>。</p>
+        <p>关键属性：</p>
+        <p><strong><code>width</code> / <code>height</code></strong>：默认指 content box 宽高（standard model）。</p>
+        <p><strong><code>box-sizing: border-box</code></strong>：让 width / height 指 border box（包含 padding + border）。<strong>这是现代 CSS reset 的标配</strong>—— <code>* { box-sizing: border-box }</code>—— 让宽度计算更直觉。</p>
+        <p><strong>Margin collapsing</strong>：垂直 margin 重叠（取大值）。这是 BFC 的特性，flex / grid 子元素不重叠。新手常踩坑：两个 div 上下排，每个 margin: 20px → 间距是 20px（不是 40px）。</p>
+        <p><strong>Negative margin</strong>：margin 可以是负数，让元素重叠或超出父 box。常用 hack 但难维护，现代 CSS 用 grid / flex 替代。</p>
+
+        <h3>Reflow 触发条件</h3>
+        <p><strong>Reflow（也叫 Layout）</strong>是 layout 算法重新跑——<strong>性能大头</strong>。常见触发：</p>
+        <p><strong>(1) 几何变化</strong>—— width / height / margin / padding / border / position / top / left / float 改变。</p>
+        <p><strong>(2) 内容变化</strong>—— text 改变 / 添加删除 DOM / 图片加载完。</p>
+        <p><strong>(3) 视口变化</strong>—— 窗口 resize / orientation 改变。</p>
+        <p><strong>(4) 强制 reflow（forced layout）</strong>—— JS 读 layout 属性（offsetWidth / offsetHeight / getBoundingClientRect / getComputedStyle 涉及 layout 的属性）。这种"读"会强制浏览器立即跑 layout（如果有 pending invalidation），是性能反模式。</p>
+        <p>关键反模式：<strong>"layout thrashing"</strong>—— 读 / 写 layout 属性交替，每次读都强制跑 layout：</p>
+        <pre class="code"><code class="lang-js">// ❌ Layout thrashing：每次循环都强制 reflow
+for (let i = 0; i &lt; items.length; i++) {
+  const w = items[i].offsetWidth;  // 强制 reflow（之前 write 让 layout 失效）
+  items[i].style.width = w + 10 + 'px';  // write 失效 layout
+}
+
+// ✅ Read / Write batching：先全读，后全写
+const widths = items.map(item =&gt; item.offsetWidth);  // 一次 reflow
+for (let i = 0; i &lt; items.length; i++) {
+  items[i].style.width = widths[i] + 10 + 'px';
+}</code></pre>
+        <p>这种 "read-then-write" 模式是 DOM 优化基础。React / Vue 等框架内部都做这种 batching。</p>
+
+        <h3>CSS Containment：明确隔离 reflow 影响</h3>
+        <p>CSS Containment（<code>contain</code> 属性）让你<strong>明确告诉浏览器</strong>"这个元素的内部变化不影响外部"——浏览器优化 reflow 范围。</p>
+        <p>Containment 类型：</p>
+        <p><strong><code>contain: layout</code></strong>—— 子元素的 layout 不影响外部。比如这个元素内的子元素改 width，外部 layout 不重算。</p>
+        <p><strong><code>contain: paint</code></strong>—— 子元素的 paint 不绘制到外面（实际相当于 overflow: hidden + 创建 stacking context）。</p>
+        <p><strong><code>contain: size</code></strong>—— 元素 size 不依赖子元素（你必须显式声明 width/height）。让子元素 layout 不影响这个元素。</p>
+        <p><strong><code>contain: content</code></strong>—— layout + paint + style 三个 contain。常用速记。</p>
+        <p><strong><code>contain: strict</code></strong>—— size + layout + paint 都 contain。最严格。</p>
+        <p>实操：</p>
+        <pre class="code"><code class="lang-css">/* 长列表的每一项都 contain，让局部更新不影响整列表 */
+.list-item {
+  contain: content;
+  height: 80px;  /* 显式 height 配合 size containment */
+}
+
+/* dashboard widget 用 contain 隔离 */
+.widget {
+  contain: layout style;
+}</code></pre>
+        <p>Containment 是<strong>现代大型应用的关键性能优化</strong>—— 没有 contain，DOM 一处变化可能让全树 reflow。Contain 后变化局限在这个 box 内。Chrome / Safari / Firefox 全支持（Container Queries 也基于 contain）。</p>
+
+        <h3>content-visibility：跳过屏幕外元素</h3>
+        <p><strong><code>content-visibility: auto</code></strong>（Chrome 85+）让浏览器<strong>跳过屏幕外元素的 layout / paint</strong>—— 直到滚动接近时才 layout。</p>
+        <pre class="code"><code class="lang-css">.below-fold-section {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 500px;  /* 占位高度 */
+}</code></pre>
+        <p>用法：长列表 / dashboard / 文档<strong>每个 section 都设</strong> <code>content-visibility: auto</code>—— 浏览器只 layout 屏幕内的，屏幕外完全跳过。<strong>性能提升巨大</strong>——长页面 layout 时间能从 1000ms 降到 100ms。</p>
+        <p>限制：(1) <code>contain-intrinsic-size</code> 必须设（否则浏览器不知道占多少位置）；(2) 屏幕外元素的内容 SEO 仍可见（搜索引擎能爬到，不像 display:none）；(3) 不影响屏幕内元素行为。</p>
+        <p>这是<strong>2020+ 浏览器最重要的性能 API 之一</strong>—— 把"虚拟列表"这种复杂前端 hack 变成 CSS 一行。Chrome / Edge 完整支持，Safari 18+ / Firefox 2024 跟进。</p>
+
+        <h3>Flexbox 关键概念</h3>
+        <p>Flexbox（<code>display: flex</code>）是一维布局，6 个核心属性：</p>
+        <p><strong>容器属性</strong>：<code>flex-direction</code>（row / column）、<code>justify-content</code>（主轴对齐）、<code>align-items</code>（交叉轴对齐）、<code>flex-wrap</code>（换行 / 不换）、<code>gap</code>（子元素间距）。</p>
+        <p><strong>子元素属性</strong>：<code>flex: grow shrink basis</code>。<code>flex: 1</code> 是最常用的——三值 <code>1 1 0%</code>，让子元素均分剩余空间。</p>
+        <p>Flexbox 的<strong>性能</strong>：现代浏览器优化得好。但<strong>大量嵌套 flex 仍可能慢</strong>—— flex 算法对子元素有 multiple pass（先算 basis、再算 grow/shrink、再 align），嵌套深度高时复杂度叠加。</p>
+
+        <h3>Grid 关键概念</h3>
+        <p>Grid（<code>display: grid</code>）是二维布局，最适合<strong>复杂布局结构</strong>（dashboard / 卡片网格 / 复杂表单）。核心：</p>
+        <p><strong><code>grid-template-rows / columns</code></strong>—— 定义 grid 网格。值可以是 <code>1fr 2fr</code>（按比例分）/ <code>repeat(3, 1fr)</code> / <code>auto</code> / <code>min-content</code> / <code>max-content</code>。</p>
+        <p><strong><code>grid-template-areas</code></strong>—— 用名字定义网格区域，子元素 <code>grid-area</code> 引用。可读性极高。</p>
+        <p><strong><code>fr unit</code></strong>—— Grid 独有，"fraction unit"，按可用空间比例分配。</p>
+        <p><strong>Subgrid (Level 2)</strong>—— 子 grid 复用父 grid 的 track。Chrome 117+ / Safari 16+ / Firefox 71+。</p>
+        <p>Grid 比 Flexbox 表达力强但学习曲线略陡。<strong>2020+ 现代 CSS 布局基本：Grid 做整体框架 + Flexbox 做局部组件</strong>。</p>
+
+        <h3>Min-content / Max-content / fr / 各种 size</h3>
+        <p>CSS 现代 size 关键字：</p>
+        <p><strong><code>min-content</code></strong>—— 元素的最小内容尺寸（不会让内容溢出）。文字的 min-content 是最长单词的宽度。</p>
+        <p><strong><code>max-content</code></strong>—— 元素的最大内容尺寸（内容不换行）。</p>
+        <p><strong><code>fit-content(N)</code></strong>—— 在 min-content 和 max-content 之间，最大不超过 N。</p>
+        <p><strong><code>fr</code> (Grid)</strong>—— 按 fraction 分配剩余空间。</p>
+        <p><strong><code>auto</code></strong>—— 复杂语义（context-dependent）。在 grid 是 max-content；在 flex 是 flex-basis。</p>
+        <p>这些关键字让 layout 表达力远超 px / %。现代 CSS 很多布局可以"只用 Grid + min/max-content + fr 表达"，不需要 JS 算尺寸。</p>
+
+        <h3>Aspect-ratio：避免 layout shift</h3>
+        <p><strong><code>aspect-ratio</code></strong>（CSS 2021+）让你声明元素的宽高比，浏览器自动按比例计算。</p>
+        <pre class="code"><code class="lang-css">.video {
+  width: 100%;
+  aspect-ratio: 16 / 9;  /* 自动算 height */
+}
+
+.avatar {
+  width: 60px;
+  aspect-ratio: 1;  /* 圆形头像 */
+}</code></pre>
+        <p>这是<strong>避免 CLS（Cumulative Layout Shift）的关键 API</strong>——之前要用 padding-bottom hack 才能保留比例占位，现在一行搞定。详见 <a href="../04-performance/03-cls-animation.html">P4.3 CLS</a>。</p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 A · 用 content-visibility 优化长页面 first paint</h3>
+          <p>项目是长内容页面（博客文章 / 文档 / 列表）—— first paint 慢因为浏览器 layout 整页。优化：每个 section 加 <code>content-visibility: auto + contain-intrinsic-size: auto 500px</code>—— 浏览器只 layout 屏幕内的 section，屏幕外完全跳过。具体做法：(1) 把页面切成逻辑 section（每个 article / 每个 list 块）；(2) 每个 section 加 content-visibility；(3) 用 DevTools Performance panel 测 layout 时间——通常能从几百 ms 降到几十 ms。注意：(1) contain-intrinsic-size 一定要设（否则没占位）；(2) 屏幕外内容仍可被 Ctrl+F 搜到、SEO 可见；(3) IE / 老 Safari 不支持，但作为渐进增强 OK。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 B · 用 contain 隔离 dashboard widget</h3>
+          <p>Dashboard 有 20+ widget，每个 widget 内部数据频繁更新——担心一个 widget 更新让整个 dashboard reflow。优化：每个 widget 加 <code>contain: content</code>—— 浏览器知道这个 widget 内部变化不影响外部。现实效果：单 widget 数据更新只 reflow 这个 widget 的内部子树，dashboard 整体不动。<strong>具体做法</strong>：(1) widget 设 <code>contain: layout style</code>（不必 paint，paint 是另外问题）；(2) widget 设固定 / aspect-ratio，配合 <code>contain: size</code>；(3) 用 DevTools Performance Recording 验证 reflow 范围。这种隔离让大型 dashboard 在频繁更新场景仍 60fps。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 C · 排查「Layout thrashing」性能问题</h3>
+          <p>页面交互卡——DevTools Performance Recording 看到大量 "Layout" 事件。常见原因：layout thrashing。识别方法：(1) 看 Recording 中 "Recalculate Style" + "Layout" 频繁交替；(2) 用 Chrome DevTools Performance Insights → "Forced reflow"。<strong>定位代码</strong>：搜索代码里读 + 写交替的 DOM 操作（offsetWidth / scrollHeight + style.X）。<strong>修复</strong>：(1) batching——先全读再全写；(2) 用 <code>requestAnimationFrame</code> 让浏览器自然 batch；(3) framework 里不要在 render 函数里读 layout 属性。这是大部分前端性能问题的根因之一。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 D</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 D · 用 Grid + Subgrid 做复杂表单 layout</h3>
+          <p>项目要做<strong>多列表单</strong>（label / input 对齐多行）——传统方法用 table（语义不对）或 flex（label 对齐难）。Grid + Subgrid 优雅解决：父 grid 定义"label 列 + input 列"的整体网格；每个 row 用 subgrid 复用父 grid track，确保 label / input 跨多 row 对齐。具体做法：父 <code>display: grid; grid-template-columns: max-content 1fr</code>；每个 row 用 subgrid。<strong>对照传统</strong>：传统 flex 做这种"多行整体对齐"要 JS 算最长 label 宽度；Grid + Subgrid CSS 一句话表达。这是 CSS 现代 layout 的力量——把"曾经 JS 解决"的问题变成 CSS 表达。</p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
         <div class="code-block">
           <span class="code-label">javascript</span>
-<pre class="code"><code class="lang-js">// 正文待写</code></pre>
+<pre class="code"><code class="lang-js">// 检测 forced reflow（开发时排查 layout thrashing）
+const originalGetBoundingClientRect = Element.prototype.getBoundingClientRect;
+Element.prototype.getBoundingClientRect = function () {
+  console.warn('getBoundingClientRect called', new Error().stack);
+  return originalGetBoundingClientRect.call(this);
+};
+
+// 之后每次 forced reflow 都会打 stack trace
+// 帮你定位代码里读 layout 属性的位置</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// Read / Write batching：避免 layout thrashing
+
+// ❌ 反模式
+function badResize(items) {
+  for (const item of items) {
+    item.style.width = item.offsetWidth + 10 + 'px';
+    // 每次 offsetWidth 强制 reflow
+  }
+}
+
+// ✅ 正确：先全读
+function goodResize(items) {
+  // 1. 全部 read
+  const widths = Array.from(items, item =&gt; item.offsetWidth);
+
+  // 2. 全部 write
+  items.forEach((item, i) =&gt; {
+    item.style.width = widths[i] + 10 + 'px';
+  });
+}
+
+// 现代框架（React 18 / Vue 3）会自动 batch
+// 但你写自家 DOM 操作时要手动 batch</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">css</span>
+<pre class="code"><code class="lang-css">/* CSS Containment 实操 */
+.dashboard-widget {
+  /* layout / style / paint 都 contain */
+  contain: content;
+
+  /* 显式 size containment（让 layout 不依赖子元素） */
+  contain-intrinsic-size: 200px;
+  /* 必须配合 height / aspect-ratio 让子元素 layout 范围确定 */
+}
+
+/* content-visibility 长列表优化 */
+.long-list-section {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 500px;
+}
+
+/* aspect-ratio 防 CLS */
+.image-card {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+}
+
+/* Grid + fr unit + min-content */
+.layout {
+  display: grid;
+  grid-template-columns: min-content 1fr 1fr;
+  grid-template-rows: min-content 1fr;
+  gap: 1rem;
+}</code></pre>
         </div>
 
         <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
         <div class="pitfall">
-          <div class="pitfall-title">陷阱标题</div>
-          <p><em>正文待写。</em></p>
+          <div class="pitfall-title">读 offsetWidth / getBoundingClientRect 不知道触发 forced reflow</div>
+          <p>JS 读 <code>element.offsetWidth</code> / <code>getBoundingClientRect()</code> / <code>getComputedStyle(el).width</code> 等 layout 属性时，<strong>如果之前有 pending DOM 改动</strong>，浏览器必须立即跑完 layout 才能给你准确值——这是 forced reflow / synchronous layout。一次还行，循环里反复就是 layout thrashing。<strong>规避</strong>：(1) DevTools Performance 找 "Forced reflow"；(2) read / write batching；(3) 用 <code>ResizeObserver</code> / <code>IntersectionObserver</code> 异步获取 layout 信息（避免 forced reflow）。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">在 React render 里读 layout 属性</div>
+          <p>React 组件在 render 里读 <code>ref.current.offsetWidth</code>—— 每次 render 都触发 forced reflow。React 18 + Concurrent Mode 让这种问题更严重（render 可能被打断 + 重跑）。<strong>正确做法</strong>：(1) 用 <code>useLayoutEffect</code> 读 layout（在 paint 前同步跑）；(2) 用 <code>ResizeObserver</code> 异步监听变化；(3) 不要在 render 里读 layout。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">用 contain 但没设 contain-intrinsic-size</div>
+          <p><code>contain: size</code> 让浏览器认为元素 size 不依赖子元素——但<strong>你必须显式声明 width/height</strong>，否则浏览器不知道占多少位置。<strong>常见错误</strong>：写 <code>contain: content</code>（包含 size），但元素 height 是 auto——结果元素塌成 0 高度。<strong>规避</strong>：用 <code>contain: layout</code>（不含 size）；或显式设 <code>contain-intrinsic-size: 200px</code>；或用 <code>aspect-ratio</code> 配合。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">滥用深嵌套选择器影响 CSS 选择器性能</div>
+          <p><code>.foo .bar .baz .qux .item { ... }</code> 这种深嵌套选择器——浏览器从右到左匹配，每个 <code>.item</code> 元素都要往上看 4 层 ancestor。Hot path 上累积影响。<strong>规避</strong>：(1) 单层 class 选择器（用 BEM / Tailwind utility class）；(2) 不超过 3 层嵌套；(3) 避免 universal selector + 复杂组合（如 <code>* &gt; .x</code>）。现代 CSS 最佳实践是<strong>单 class 风格</strong>—— 性能 + 可读性都好。</p>
         </div>
 
         <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
         <ul>
-          <li><a href="https://web.dev/" target="_blank" rel="noopener">web.dev</a></li>
-          <li>回到主题首页 → <a href="../index.html">浏览器渲染管线深度学习</a></li>
+          <li><a href="https://web.dev/articles/dom-size-and-interactivity" target="_blank" rel="noopener">DOM size and interactivity</a></li>
+          <li><a href="https://web.dev/articles/content-visibility" target="_blank" rel="noopener">web.dev · content-visibility</a></li>
+          <li><a href="https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_containment/Using_CSS_containment" target="_blank" rel="noopener">MDN · CSS Containment</a></li>
+          <li><a href="https://web.dev/articles/avoid-large-complex-layouts-and-layout-thrashing" target="_blank" rel="noopener">Avoid layout thrashing</a></li>
+          <li><a href="https://www.w3.org/TR/css-flexbox-1/" target="_blank" rel="noopener">CSS Flexbox spec</a></li>
+          <li><a href="https://www.w3.org/TR/css-grid-1/" target="_blank" rel="noopener">CSS Grid spec</a></li>
+          <li>下一章 → <a href="03-paint-composite.html">P3.3 · Paint → Composite（GPU 合成）</a></li>
         </ul>
 
         <nav class="chapter-nav" aria-label="章节翻页">
