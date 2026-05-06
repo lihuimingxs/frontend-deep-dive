@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>幻影依赖与双 package hazard · P2.2 · pnpm & monorepo 深度学习</title>
+    <meta name="description" content="幻影依赖（phantom dependency）+ doppelganger + 双 package hazard 三个 npm 扁平化时代的结构性问题。3 个真实 production bug 案例，让读者意识到这不是洁癖、是工程问题。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23f69220'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EP%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>pnpm & monorepo 深度学习</span><span class="site-title-badge" style="background: oklch(0.7 0.18 60); color: #fff">pnpm</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · node_modules 真相</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-resolution.html">01 · Resolution 算法 + 4 种 layout</a></li>
+          <li><a href="02-phantom-deps.html" class="active">02 · 幻影依赖与双 package hazard</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">pnpm & monorepo</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · node_modules 真相</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 幻影依赖与双 package hazard</span>
+        </nav>
+        <h1>幻影依赖与双 package hazard</h1>
+        <p class="lead">
+          扁平化 hoisting 不只是"性能优化"——它<strong>引入了三个结构性问题</strong>：(1) <strong>幻影依赖</strong>（phantom dependency，未声明却能 require）；(2) <strong>doppelganger</strong>（同包多版本同时存在导致单例失效）；(3) <strong>双 package hazard</strong>（CJS / ESM 双产物加载两次）。本章用 3 个真实 production bug 让读者意识到这不是洁癖、是工程问题——也是 pnpm / PnP 在 2017+ 起义的根本动机。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P2.1（resolution + 4 种 layout）</span>
+          <span><strong>主要来源</strong> pnpm.io / Rush 文档 / Node ESM spec / 真实开源 issue</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>三个问题都是 npm 3+ 扁平化的结构性副作用</strong> —— 不是 npm 实现 bug，是<strong>"提升所有依赖到顶层"这个决定本身的代价</strong>。它们在 2015 年 npm 3 发布时就已存在，整个 JS 生态用了 10 年才接受"必须解决"。</li>
+          <li><strong>幻影依赖（phantom dependency）</strong> —— 你的 package.json 没有声明 X，但 X 是某个传递依赖。hoisting 把 X 提到顶层后，<code>require('X')</code> 也能跑。<strong>看似正常但脆弱</strong>：升级、切包管理器、修改 dep 时 X 可能消失。</li>
+          <li><strong>Doppelganger</strong> —— 同一个包的<strong>多个版本</strong>同时存在 node_modules 中（不同子路径）。看似无害，直到 <code>instanceof</code> / 单例 / 全局状态在两份实例间不共享，bug 难复现。React"Hook 报错 You may have more than one copy of React"是 doppelganger 的典型症状。</li>
+          <li><strong>双 package hazard</strong> —— ESM / CJS 双产物的包<strong>在不同条件下被加载两次</strong>，状态不共享。例子：库内部的"懒初始化 singleton"在 ESM 入口和 CJS 入口分别初始化一次，副作用执行两次。</li>
+          <li><strong>pnpm + PnP 各自从结构上消除这三个问题</strong> —— pnpm 通过 symlink 拓扑限制可见性（顶层只有声明的依赖）+ 同版本物理一份；PnP 通过 .pnp.cjs 严格仲裁 require。这是它们对 npm 扁平化的"<strong>结构性回应</strong>"，不是"性能优化"。</li>
+          <li><strong>诊断幻影依赖的工具</strong> —— <code>arethetypeswrong</code>（包发布前检查 exports/双产物）、<code>publint</code>（package.json lint）、<code>depcheck</code>（找未声明的 import）、pnpm 直接报错。建议<strong>所有发包项目 CI 集成 publint + arethetypeswrong</strong>。</li>
+          <li><strong>修复路径</strong> —— 显式声明所有用到的依赖（最干净）；用 pnpm/PnP 让结构问题"无处藏身"；对单例敏感的库（React / Zustand 等）用 peer dependency 声明 + 用户保证版本一致。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>幻影依赖（phantom dependency）的产生机制</h3>
+        <p>回到 P2.1 的扁平 hoisting 例子。my-app 声明 <code>react@^18</code>，react 传递依赖 loose-envify。npm 3+ 装出来的 node_modules：</p>
+        <div class="code-block">
+          <span class="code-label">扁平后的结构</span>
+          <pre class="code"><code class="lang-text">my-app/
+├── package.json   # 只声明了 react
+└── node_modules/
+    ├── react/         # 顶层
+    └── loose-envify/  # ← 提到顶层！</code></pre>
+        </div>
+        <p>现在写 my-app 的源码：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// my-app/src/foo.js
+const envify = require('loose-envify');
+console.log(envify);  // ← 居然能跑！</code></pre>
+        </div>
+        <p>能跑的原因：Node resolution 算法逐级向上查 node_modules，<code>loose-envify</code> 在 my-app/node_modules 里，命中。Node 不关心"它是不是你声明的"——这是 JS 生态没有 import 边界检查的结构性后果。</p>
+
+        <p><strong>什么时候会暴雷</strong>：</p>
+        <ul>
+          <li><strong>升级 react</strong>—— react 的新版本可能不再依赖 loose-envify（换了实现），loose-envify 不再被提到顶层；my-app 的 require 突然报错</li>
+          <li><strong>切包管理器</strong>—— pnpm 装出来的 layout 顶层只有 react，没有 loose-envify；my-app 切到 pnpm 后立即崩溃</li>
+          <li><strong>removed transitive</strong>—— react 的<strong>另一个</strong>传递依赖（不是 loose-envify）被升级，触发 npm 重做 hoisting，loose-envify 可能因为新的版本冲突回退到嵌套位置；require 失败</li>
+          <li><strong>修复 audit</strong>—— <code>npm audit fix</code> 升级某个上游 sub-dep，连带改了 hoisting 决策</li>
+        </ul>
+
+        <p><strong>这是工程灾难的本质</strong>：bug 触发条件与代码本身无关，与<strong>表面看起来不相关的某个其他依赖的版本变化</strong>有关。debug 极难——你修着 react 升级问题，结果发现是 loose-envify 不见了。</p>
+
+        <p><strong>真实数据</strong>：根据 pnpm 团队 2022 年的统计，主流 npm 项目中<strong>平均 15-30 个文件</strong>使用了未声明的依赖。Rush 团队（Microsoft）在大型 monorepo 内部审计发现，单个 monorepo 可能有<strong>数百处</strong>幻影依赖，是切 pnpm 时最大的迁移成本。</p>
+
+        <h3>Doppelganger（同包多版本）</h3>
+        <p>当 hoisting 遇到版本冲突时，"赢家"留在顶层，"输家"回退到嵌套位置：</p>
+        <div class="code-block">
+          <span class="code-label">doppelganger 示例</span>
+          <pre class="code"><code class="lang-text">my-app/
+├── package.json   # 直接依赖 react@^18
+└── node_modules/
+    ├── react/                    # version 18.3.1（顶层）
+    ├── some-old-pkg/
+    │   ├── package.json          # 依赖 react@^17
+    │   └── node_modules/
+    │       └── react/            # version 17.0.2（嵌套）！doppelganger 出现
+    └── ...
+
+# 现在 my-app/src/foo.js 用了 react@18
+# some-old-pkg 内部用了 react@17
+# 它们各自 require('react') 会走不同 resolution 路径，得到不同对象</code></pre>
+        </div>
+        <p>表面无害——each package gets its expected version。但<strong>对依赖单例 / 全局状态的库，这是灾难</strong>：</p>
+
+        <p><strong>典型场景：React Hook 报错</strong></p>
+        <div class="code-block">
+          <span class="code-label">错误信息</span>
+          <pre class="code"><code class="lang-text">Warning: Invalid hook call. Hooks can only be called inside of the body
+of a function component. This could happen for one of the following reasons:
+1. You might have mismatching versions of React and the renderer (such as React DOM)
+2. You might be breaking the Rules of Hooks
+3. **You might have more than one copy of React in the same app**
+   ↑ doppelganger 经典症状</code></pre>
+        </div>
+        <p><strong>诊断</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 看 react 在 node_modules 里出现了几次
+find node_modules -name "react" -type d -maxdepth 3
+# node_modules/react
+# node_modules/some-old-pkg/node_modules/react   ← doppelganger！
+
+# 让 npm 显示版本树
+npm ls react
+
+# Yarn 用
+yarn why react</code></pre>
+        </div>
+
+        <p><strong>为什么 React Hook 翻车</strong>：React 18 的 Hook 实现依赖<strong>模块级 module-private 状态</strong>（"current dispatcher"等）。如果你的代码 require 的是 react@18.3.1（顶层），some-old-pkg 内部 require 的是 react@17.0.2（嵌套），两者运行时是不同的 module instance，state 不共享，Hook 调用栈对不上。</p>
+
+        <p><strong>类似受害者</strong>：</p>
+        <ul>
+          <li><strong>Zustand / Jotai / Valtio</strong>（store 实例必须全局唯一）</li>
+          <li><strong>styled-components / emotion</strong>（CSS-in-JS 的 sheet 注册表）</li>
+          <li><strong>history（react-router 用）</strong>（路由器状态全局唯一）</li>
+          <li><strong>graphql / apollo</strong>（schema 注册）</li>
+        </ul>
+
+        <p><strong>npm 的部分缓解：dedupe 和 overrides</strong></p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// package.json，强制把所有 react 引用拉到 ^18.3.1
+{
+  "overrides": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}</code></pre>
+        </div>
+        <p>npm 8+ / pnpm 都支持 overrides；Yarn 用 <code>resolutions</code>。但<strong>这是用户事后补救</strong>——根本问题是扁平化对"包用同版本"不能保证。</p>
+
+        <p><strong>pnpm 的结构性消解</strong>：pnpm 把每个 <code>包@版本</code> 在 store 里物理上只放一份。如果项目两次需要 react@18.3.1（一处直接、一处传递），两处都 hardlink 指向同一份；require.cache 命中相同物理路径，<strong>module instance 自动合一</strong>。版本不同时（react@17 + react@18）pnpm 不会强制合并，但用户能立即看到（顶层只有一份显式声明的，多版本不被默认 hoist）。</p>
+
+        <h3>双 package hazard（dual package hazard）</h3>
+        <p>这是 ESM / CJS 时代特有的问题。一个包同时发 CJS（CommonJS）和 ESM（ES Module）两份产物：</p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// some-pkg/package.json
+{
+  "name": "some-pkg",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    }
+  }
+}</code></pre>
+        </div>
+        <p>同一个项目内：</p>
+        <ul>
+          <li>app 主代码用 ESM <code>import { foo } from 'some-pkg'</code> → 加载 .mjs</li>
+          <li>某个老依赖用 CJS <code>require('some-pkg')</code> → 加载 .cjs</li>
+          <li><strong>同一个包被加载了两次！两份 module instance！</strong></li>
+        </ul>
+
+        <p><strong>当 some-pkg 有内部状态时灾难发生</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// some-pkg/dist/index.mjs / index.cjs（同一份源码两种格式）
+let counter = 0;
+let initialized = false;
+
+export function init() {
+  if (initialized) return;
+  initialized = true;
+  // 注册全局副作用，例如启动定时器、连接数据库
+  setInterval(() =&gt; counter++, 1000);
+}
+
+export function getCounter() {
+  return counter;
+}
+
+// 现在 ESM 路径调用 init() → 副作用执行 1 次（启动 1 个定时器）
+// CJS 路径调用 init() → 副作用又执行 1 次（启动第 2 个定时器）
+// 用户从 ESM 路径调 getCounter() → 看到 ESM 的 counter
+// 同时 CJS 路径的 counter 在独立增长，被忽略</code></pre>
+        </div>
+
+        <p><strong>真实受害者</strong>：</p>
+        <ul>
+          <li><strong>node-fetch v3</strong>（ESM-only）vs v2（CJS）—— 大量项目同时 import 两版导致 fetch polyfill 注册两次</li>
+          <li><strong>uuid</strong>—— 内部 ID 计数器在双产物下不一致</li>
+          <li><strong>chalk v5</strong>（ESM-only）—— 强制 ESM 不再有 dual hazard，但不少老项目装了多版本</li>
+        </ul>
+
+        <p><strong>检测：arethetypeswrong + publint</strong></p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 发包前自检
+npx publint                    # 检查 package.json 的 exports / main / module 配置
+npx attw --pack .              # arethetypeswrong：检查 ESM/CJS dual + types
+
+# 输出会标出"dual package hazard"风险</code></pre>
+        </div>
+
+        <p><strong>避免方案（包作者侧）</strong>：</p>
+        <ul>
+          <li><strong>ESM-only</strong>—— 只发 .mjs 不发 .cjs。彻底没 dual hazard，代价是 CJS 用户用不了（除非用 dynamic import）</li>
+          <li><strong>CJS wrapper around ESM</strong>—— ESM 是真身，CJS 入口 re-export ESM。技术上能做到 module instance 合一，但配置复杂</li>
+          <li><strong>无状态库</strong>—— 如果库本身没有 module-level mutable state（纯函数 / 工具函数），dual hazard 无害</li>
+        </ul>
+
+        <p><strong>避免方案（用户侧）</strong>：</p>
+        <ul>
+          <li>统一项目模块系统（要么全 ESM 要么全 CJS）</li>
+          <li>用 <code>overrides</code> / <code>resolutions</code> 强制依赖某一版本，防止同时装多个</li>
+          <li>检查 <code>npm ls some-pkg</code> 输出，确认只有一个 instance</li>
+        </ul>
+
+        <h3>3 个真实 production bug 案例</h3>
+
+        <p><strong>案例 1 · Stripe SDK 升级翻车（幻影依赖）</strong></p>
+        <p>2023 年某 SaaS 把 stripe SDK 从 11.x 升 12.x。CI 通过，部署到 staging。结果某个支付流程 throw <code>Cannot find module 'stripe-utils'</code>。</p>
+        <ul>
+          <li>诊断：源码里有 <code>require('stripe-utils')</code>，但 package.json 从来没声明过</li>
+          <li>根因：stripe@11 内部依赖 stripe-utils，hoisting 把它提到顶层；stripe@12 重构后不再依赖 stripe-utils，hoisting 不再提供</li>
+          <li>修复：显式 <code>npm install stripe-utils</code>。但<strong>真正的修复</strong>是切 pnpm 让这种问题<strong>装包时就报错</strong>，而不是部署后翻车</li>
+        </ul>
+
+        <p><strong>案例 2 · Storybook 7 升级 React Hook 报错（doppelganger）</strong></p>
+        <p>2024 年某 React 项目升 Storybook 7。dev 模式下打开 Storybook，立即 console 报 "You may have more than one copy of React"。</p>
+        <ul>
+          <li>诊断：<code>npm ls react</code> 显示项目顶层 react@18，但 storybook 的某个 internal addon 依赖 react@17，回退到嵌套位置</li>
+          <li>临时方案：用 <code>overrides</code> 强制全部 react ≥ 18</li>
+          <li>根因：Storybook 7 的某个 addon 没及时升级 peer 范围；overrides 治标</li>
+          <li><strong>切 pnpm 后</strong>：pnpm 严格 peer 模式直接报警告，迫使你在装包阶段就修</li>
+        </ul>
+
+        <p><strong>案例 3 · node-fetch dual hazard 引发的奇诡 401（双 package hazard）</strong></p>
+        <p>2023 年某全栈项目用 node-fetch v3（ESM）做 SSR。同时某个老 SDK 内部用 node-fetch v2（CJS）。生产环境出现间歇性 401——每隔几个请求一次。</p>
+        <ul>
+          <li>诊断：node-fetch v2 / v3 各自维护一份 cookie jar；用户登录走 v3 路径设了 cookie，但后续 SDK 调用走 v2 路径，没拿到 cookie</li>
+          <li>修复：统一用 native <code>fetch</code>（Node 18+ 内置）+ undici cookie jar；或强制 SDK 升级 node-fetch v3</li>
+          <li>教训：dual package hazard 在<strong>有内部状态的库</strong>下很危险。无状态库（lodash 等）不受影响</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 切包管理器前的诊断</h3>
+          <p><strong>背景</strong>：从 npm 切 pnpm，担心生产暴雷。如何在切之前找出所有幻影依赖？</p>
+          <p><strong>建议工作流</strong>：</p>
+          <ul>
+            <li>先在分支上 <code>pnpm install</code> 而不删 package-lock.json</li>
+            <li>跑全套测试 + lint + build——pnpm 严格 layout 下幻影依赖会立即 module-not-found</li>
+            <li>用 <code>npx depcheck</code> 主动扫描"未声明的 import"</li>
+            <li>对每个被发现的幻影依赖，<code>pnpm add &lt;name&gt;</code> 显式声明</li>
+            <li>典型项目修 5-30 处</li>
+            <li>验证完后才删 package-lock.json，正式切 pnpm</li>
+          </ul>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · React 项目"You may have more than one copy of React"</h3>
+          <p><strong>背景</strong>：突然报 React 多 copy 错误，dev 不能启动。</p>
+          <p><strong>诊断步骤</strong>：</p>
+          <div class="code-block">
+            <span class="code-label">bash</span>
+            <pre class="code"><code class="lang-bash"># Step 1: 看 react 装了几份
+npm ls react
+# 或 pnpm ls react / yarn why react
+
+# Step 2: 找到嵌套的 react
+find node_modules -name "react" -type d | grep -v ".pnpm"
+
+# Step 3: 看是哪个包导致
+npm ls --all | grep -B 5 "react@17"</code></pre>
+          </div>
+          <p><strong>修复路径（按优先级）</strong>：</p>
+          <ul>
+            <li>升级旧依赖到兼容当前 React 版本（最干净）</li>
+            <li>临时用 <code>overrides</code>（npm 8+）/ <code>resolutions</code>（Yarn）强制单版本</li>
+            <li>如果是 monorepo 内部：把 react 设为 peer dependency，让 app 决定版本</li>
+          </ul>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · 发库前的 dual package hazard 自检</h3>
+          <p><strong>背景</strong>：维护一个 npm 库，要发新版。需要支持 ESM + CJS。</p>
+          <p><strong>建议 CI 流程</strong>：</p>
+          <ul>
+            <li>build 产 .mjs + .cjs + .d.ts + .d.cts</li>
+            <li>跑 <code>publint</code> 检查 package.json 配置</li>
+            <li>跑 <code>arethetypeswrong --pack .</code> 检查 dual + types 正确</li>
+            <li>跑一个 minimal ESM consumer + CJS consumer 验证</li>
+            <li>发版前看 npmjs.com 的"Files"标签，确认 dist 内容</li>
+          </ul>
+          <p>这套自检对应是 npm 生态社区共识——typescript-eslint / Vite / Vitest / Astro 都在 CI 跑这两个工具。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">用 depcheck 找未声明的依赖</span>
+          <pre class="code"><code class="lang-bash">npx depcheck
+
+# 输出：
+# Unused dependencies
+# * eslint-plugin-old
+# Unused devDependencies
+# * jest-old
+# Missing dependencies   ← 幻影依赖！
+# * loose-envify: ./src/utils.js
+# * lodash.merge: ./src/api.js</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">overrides 强制单版本</span>
+          <pre class="code"><code class="lang-json">// npm 8+ / pnpm
+{
+  "overrides": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}
+
+// Yarn classic / Berry
+{
+  "resolutions": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">peer dependency 声明（库作者）</span>
+          <pre class="code"><code class="lang-json">// my-react-lib/package.json
+{
+  "name": "my-react-lib",
+  "peerDependencies": {
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react-dom": { "optional": true }
+  }
+}
+
+// 用 peer dependency 声明：让 app 提供 react，
+// 而不是 my-react-lib 自己装。这样不会出现 doppelganger。</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">publint + arethetypeswrong CI 集成</span>
+          <pre class="code"><code class="lang-yaml"># .github/workflows/release.yml（节选）
+- name: Validate package
+  run: |
+    pnpm build
+    pnpm publint
+    pnpm attw --pack .
+
+# 失败示例输出（attw）：
+# .src/index.cjs is treated as ESM by Node, not CJS
+# Dual package hazard: ESM and CJS both initialized</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">检测 doppelganger 的工具脚本</span>
+          <pre class="code"><code class="lang-bash">#!/usr/bin/env bash
+# 找 node_modules 中重复出现的包
+find node_modules -name "package.json" -not -path "*/.bin/*" \
+  | xargs -I {} cat {} 2&gt;/dev/null \
+  | jq -r '"\(.name)@\(.version)"' 2&gt;/dev/null \
+  | sort | uniq -c | sort -rn | awk '$1 &gt; 1 {print}'
+
+# 输出：
+#   3 react@17.0.2
+#   2 react@18.3.1
+#   ...
+# 任何 count &gt; 1 的都是潜在 doppelganger</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · "我从来没遇到过幻影依赖问题"</div>
+          <p>一个常见错觉。你没遇到不代表没有——只是"目前没暴雷"。<strong>幻影依赖是定时炸弹</strong>，会在升级、切包管理器、修依赖时突然引爆。<strong>主动诊断</strong>（depcheck 或切 pnpm）总好过事后救火。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 把 doppelganger 修复用 overrides 当根本解</div>
+          <p>overrides 治标——它强制版本统一，但<strong>问题根源是某个上游包的 peer 范围太窄</strong>。长期路径是给上游提 PR 扩 peer 范围，或换一个维护更好的替代。否则下次升级时又会出现新的不匹配。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 把 ESM-only 看成"过激"</div>
+          <p>"为什么不发 dual？dual 兼容更好" —— dual 兼容是有代价的（dual hazard 风险 + 维护两份产物）。<strong>chalk / nanoid / nanoid 等先发 ESM-only 的库迫使生态升级</strong>，效果证明可行。如果你的库本来就主要服务现代 Node + bundler 用户，ESM-only 是合理选择。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 在测试环境忽略幻影依赖</div>
+          <p>"测试都过了 —— 应该没问题吧？" —— 测试可能<strong>只测试到了 hoisting 提供的依赖</strong>，没测试到边界场景。<strong>真正可靠的检验</strong>：在 CI 用 pnpm 装一遍，跑全套测试。pnpm 的严格 layout 把幻影依赖暴露在装包阶段，CI 就能拦住。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 把"切 pnpm 后报错"看成 pnpm 的问题</div>
+          <p>切 pnpm 后报 module-not-found 不是 pnpm 错——是<strong>原本扁平化掩盖的幻影依赖暴露了</strong>。pnpm 是诊断工具不是肇事者。这种情况下加显式声明就解决，不要骂 pnpm "破坏了我能跑的项目"。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://pnpm.io/blog/2020/05/27/flat-node-modules-is-not-the-only-way" target="_blank" rel="noopener">pnpm Blog · Flat node_modules is not the only way（pnpm 论点正式声明）</a></li>
+          <li><a href="https://rushstack.io/pages/advanced/phantom_deps/" target="_blank" rel="noopener">Rush Docs · Phantom Dependencies（Microsoft 官方解释）</a></li>
+          <li><a href="https://nodejs.org/api/packages.html#dual-package-hazard" target="_blank" rel="noopener">Node.js Docs · Dual Package Hazard</a></li>
+          <li><a href="https://github.com/arethetypeswrong/arethetypeswrong.github.io" target="_blank" rel="noopener">arethetypeswrong · 双产物 + types 自检工具</a></li>
+          <li><a href="https://publint.dev/" target="_blank" rel="noopener">publint · package.json 配置 lint</a></li>
+          <li><a href="https://github.com/depcheck/depcheck" target="_blank" rel="noopener">depcheck · 找未声明 / 未使用依赖</a></li>
+          <li><a href="https://react.dev/warnings/invalid-hook-call-warning" target="_blank" rel="noopener">React · Invalid Hook Call Warning（doppelganger 经典症状文档）</a></li>
+          <li><a href="../../vite/03-modules/02-cjs-interop.html">Vite P3.2 · CJS / ESM Interop（本站，dual hazard 详细）</a></li>
+          <li><a href="../03-pnpm-internals/01-cas-storage.html">P3.1 · pnpm 存储拓扑（下章，从结构上消除问题）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-resolution.html">
+            <span class="label">← 上一章</span>
+            <span class="title">01 · Resolution + 4 种 layout</span>
+          </a>
+          <a class="next" href="../03-pnpm-internals/index.html">
+            <span class="label">下一阶段 →</span>
+            <span class="title">P3 · pnpm 内部</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

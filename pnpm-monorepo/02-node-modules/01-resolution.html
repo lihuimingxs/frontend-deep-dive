@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Node module resolution + 4 种 layout · P2.1 · pnpm & monorepo 深度学习</title>
+    <meta name="description" content="Node module resolution 算法（CJS + ESM 两套）+ node_modules 4 种 layout（嵌套 / 扁平 hoisting / pnpm symlink / Yarn PnP）。从 require/import 出发，把"为什么 npm 装出来这样、pnpm 装出来那样"讲透。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23f69220'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EP%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>pnpm & monorepo 深度学习</span><span class="site-title-badge" style="background: oklch(0.7 0.18 60); color: #fff">pnpm</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · node_modules 真相</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-resolution.html" class="active">01 · Resolution 算法 + 4 种 layout</a></li>
+          <li><a href="02-phantom-deps.html">02 · 幻影依赖与双 package hazard</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">pnpm & monorepo</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · node_modules 真相</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Resolution + 4 种 layout</span>
+        </nav>
+        <h1>Node module resolution + 4 种 layout</h1>
+        <p class="lead">
+          从 <code>require('foo')</code> / <code>import 'foo'</code> 出发，把"为什么 npm 装出来这样、pnpm 装出来那样"讲透。<strong>核心问题</strong>：Node 拿到一个 bare specifier（"foo" 这样的字符串），是怎么找到它对应的物理文件的？4 种 node_modules layout（<strong>嵌套 / 扁平 hoisting / pnpm symlink / Yarn PnP</strong>）都是这个 resolution 算法的不同物化形态。理解了 resolution，下一章的"幻影依赖"就是水到渠成的结论。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> 用过 require / import；P1.1 历史</span>
+          <span><strong>主要来源</strong> Node.js 官方 modules 文档 + ESM resolution spec + 各家包管理器实现</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Node 有两套 resolution 算法</strong> —— CJS（<code>require</code>，1999 CommonJS 起源，Node 自家实现）+ ESM（<code>import</code>，ECMA-262 spec 定义 + Node 适配）。两套<strong>核心步骤相似</strong>（都是逐级向上查 node_modules）<strong>但细节差异巨大</strong>（exports 字段、conditional exports、import attributes、文件扩展名要求）。</li>
+          <li><strong>CJS 算法 5 步</strong> —— (1) 是 <code>./</code> / <code>../</code> 相对路径吗？直接拼；(2) 是 Node 内置（<code>node:fs</code>）吗？跳过 fs 查找；(3) 从当前目录开始，逐级向上查 <code>node_modules/&lt;name&gt;</code>；(4) 找到目录后，看 package.json 的 <code>main</code> / <code>exports</code>；(5) 缺扩展名时尝试 <code>.js</code> / <code>.json</code> / <code>.node</code> / index.js。</li>
+          <li><strong>ESM 算法更严</strong> —— 必须带扩展名（<code>./foo.js</code> 不能省 <code>.js</code>）+ <code>exports</code> 字段是<strong>强制 gateway</strong>（package 没声明 exports 的子路径不能 import）+ 支持 <code>import attributes</code>（<code>import json from './data.json' with { type: 'json' }</code>）+ 支持 conditional exports（按 <code>"node"</code> / <code>"browser"</code> / <code>"import"</code> / <code>"require"</code> 条件解析）。</li>
+          <li><strong>node_modules 4 种物理 layout</strong> —— (1) <strong>嵌套</strong>（npm 1-2，2010-2015）；(2) <strong>扁平 hoisting</strong>（npm 3+ / Yarn classic / npm 11，2015-）；(3) <strong>pnpm symlink 拓扑</strong>（pnpm 1+，2017-）；(4) <strong>Yarn PnP（无 node_modules）</strong>（Yarn 2+, 2019-）。每种是 resolution 算法走在不同物理结构上的产物。</li>
+          <li><strong>resolution 算法本身不区分 layout</strong> —— Node 实现是同一份代码；它逐级向上查 node_modules，无论那个 node_modules 内容是嵌套还是扁平还是 symlink。<strong>包管理器只决定怎么"摆放文件"</strong>，让 Node 算法以最自然的方式找到包。</li>
+          <li><strong>PnP 是唯一例外</strong> —— Yarn PnP 不用 node_modules；它在 Node 启动时<strong>注入一个 .pnp.cjs loader</strong>，劫持 Node 的 resolution，直接从 manifest 查找包位置。本质上是"另一套 resolution 算法"。</li>
+          <li><strong>package.json 的 exports 字段是 2026 的关键</strong> —— 控制"哪些子路径外界可以 import"。<strong>exports 不只是文档，是强制约束</strong>——ESM 下没声明的子路径直接 throw。这影响每个发包者的 API surface 设计。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>CJS resolution 算法（require）</h3>
+        <p>Node 的 <code>require(X)</code> 在调用时执行如下流程（来自 Node 官方文档，简化版）：</p>
+        <p><strong>Step 1 · X 是 Node 内置模块？</strong>（如 <code>node:fs</code> / <code>node:path</code> / 早期的 <code>fs</code> bare name）</p>
+        <ul>
+          <li>是 → 返回内置模块，结束</li>
+          <li>否 → 继续</li>
+        </ul>
+        <p><strong>Step 2 · X 是相对路径？</strong>（以 <code>./</code> / <code>../</code> / <code>/</code> 开头）</p>
+        <ul>
+          <li>是 → 走 LOAD_AS_FILE（试 X、X.js、X.json、X.node）→ 失败则 LOAD_AS_DIRECTORY（试 X/package.json#main、X/index.js）</li>
+          <li>否 → 继续到 Step 3</li>
+        </ul>
+        <p><strong>Step 3 · 从 caller 所在目录开始，逐级向上查 node_modules</strong></p>
+        <ul>
+          <li>例如 caller 在 <code>/proj/src/foo.js</code>，<code>require('lodash')</code></li>
+          <li>查找路径序列：<code>/proj/src/node_modules/lodash</code> → <code>/proj/node_modules/lodash</code> → <code>/node_modules/lodash</code></li>
+          <li>第一个匹配的赢——这是 Node 算法的核心</li>
+        </ul>
+        <p><strong>Step 4 · 找到目录后，看 package.json</strong></p>
+        <ul>
+          <li>有 <code>exports</code> 字段（Node 12+） → 按 exports 解析，<strong>主入口是 <code>"."</code></strong></li>
+          <li>有 <code>main</code> 字段 → 用 main 指向的文件</li>
+          <li>都没有 → 试 <code>index.js</code></li>
+        </ul>
+        <p><strong>Step 5 · 找不到 → 抛 <code>MODULE_NOT_FOUND</code> 错误</strong></p>
+
+        <p>CJS 算法的几个隐藏特性：</p>
+        <ul>
+          <li><strong>逐级向上是核心</strong>——只要你在<strong>祖先目录</strong>装了某包，就能 require。这是 hoisting 能"提到顶层就到处可用"的根本机制</li>
+          <li><strong>cache 命中</strong>——<code>require</code> 第一次执行后结果缓存到 <code>require.cache</code>，再次 require 直接拿；这是 module singleton 的来源</li>
+          <li><strong>动态可计算</strong>——<code>require(someVar)</code> 合法，运行时才能确定指向；这是 CJS 比 ESM 灵活但难静态分析的原因</li>
+        </ul>
+
+        <h3>ESM resolution 算法（import）</h3>
+        <p>ESM 是 ECMA-262 spec 定义 + Node 适配（《ESM Resolution》一节）。它和 CJS 共享"<strong>逐级向上查 node_modules</strong>"的核心，但有几个关键不同：</p>
+
+        <p><strong>差异 1 · 必须显式扩展名</strong></p>
+        <p>ESM <code>import './foo.js'</code> 是合法的，<code>import './foo'</code> 默认<strong>不会自动加 <code>.js</code></strong>（除非用 <code>--experimental-specifier-resolution=node</code>，已弃用）。原因：HTTP / 浏览器规范都要求 URL 完整，Node 想保持兼容。</p>
+
+        <p><strong>差异 2 · exports 字段是强制 gateway（不只是文档）</strong></p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// some-pkg/package.json
+{
+  "name": "some-pkg",
+  "exports": {
+    ".": "./dist/index.js",
+    "./utils": "./dist/utils.js"
+  }
+}</code></pre>
+        </div>
+        <p>有了上面的 exports 后：</p>
+        <ul>
+          <li><code>import 'some-pkg'</code> ✅ → ./dist/index.js</li>
+          <li><code>import 'some-pkg/utils'</code> ✅ → ./dist/utils.js</li>
+          <li><code>import 'some-pkg/dist/internal.js'</code> ❌ → throw <code>ERR_PACKAGE_PATH_NOT_EXPORTED</code></li>
+        </ul>
+        <p><strong>为什么这个限制重要</strong>：包作者第一次拥有真正的 API 边界控制。在 CJS 时代任何用户都能 <code>require('lodash/fp/curry')</code> 进入未公开内部；ESM 下只有 exports 声明的路径外界可达。</p>
+
+        <p><strong>差异 3 · conditional exports</strong></p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">{
+  "name": "isomorphic-fetch",
+  "exports": {
+    ".": {
+      "node": "./dist/node.js",
+      "browser": "./dist/browser.js",
+      "default": "./dist/default.js"
+    }
+  }
+}</code></pre>
+        </div>
+        <p>resolver 按 condition 顺序匹配。bundler / runtime 各自定义自己的 condition：</p>
+        <ul>
+          <li>Node ESM 默认：<code>node</code> + <code>import</code> + <code>default</code></li>
+          <li>Node CJS 默认：<code>node</code> + <code>require</code> + <code>default</code></li>
+          <li>Bun runtime：<code>bun</code> + <code>node</code> + <code>import</code> + <code>default</code></li>
+          <li>Vite dev：<code>module</code> + <code>browser</code> + <code>development</code> + ...</li>
+          <li>Vite build：<code>module</code> + <code>browser</code> + <code>production</code> + ...</li>
+        </ul>
+        <p>这套机制让一个包能"在不同环境暴露不同实现"，是 isomorphic 库的现代标准（详见 <a href="../../vite/03-modules/01-esm-spec.html">Vite P3.1</a>）。</p>
+
+        <p><strong>差异 4 · import attributes（旧名 import assertions）</strong></p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">import data from './config.json' with { type: 'json' };
+import css from './style.css' with { type: 'css' };  // 浏览器 / Bun</code></pre>
+        </div>
+        <p>2024+ 的 stage 4 提案（详见 <a href="../../ecma/07-execution/04-module-system.html">ECMA P7.4</a>）。声明 import 类型，让 resolver / bundler 能正确处理非 JS 资源。</p>
+
+        <p><strong>差异 5 · import maps（浏览器 + Deno）</strong></p>
+        <p>ESM 在浏览器 / Deno 通过 <code>&lt;script type="importmap"&gt;</code> 或 <code>deno.json#imports</code> 自定义 bare specifier 映射。Node 不支持 import maps（截至 2026 仍在 RFC）。</p>
+
+        <h3>Layout 1 · 嵌套 node_modules（npm 1-2，2010-2015）</h3>
+        <p>每个包独立解析自己的依赖，物理上嵌套：</p>
+        <div class="code-block">
+          <span class="code-label">嵌套布局示例</span>
+          <pre class="code"><code class="lang-text">my-app/
+├── package.json   # 声明依赖 react, lodash
+├── node_modules/
+│   ├── react/
+│   │   ├── package.json   # 声明依赖 loose-envify
+│   │   └── node_modules/
+│   │       └── loose-envify/
+│   │           ├── package.json   # 依赖 js-tokens
+│   │           └── node_modules/
+│   │               └── js-tokens/
+│   └── lodash/  # 无依赖</code></pre>
+        </div>
+        <p><strong>Resolution 行为</strong>：</p>
+        <ul>
+          <li><code>require('react')</code> 从 <code>my-app/src/foo.js</code> 出发 → 查 my-app/src/node_modules（无）→ my-app/node_modules（命中 react）✅</li>
+          <li><code>require('loose-envify')</code> 从 <code>my-app/node_modules/react/lib/...</code> 出发 → 查 react/lib/node_modules（无）→ react/node_modules（命中 loose-envify）✅</li>
+          <li><code>require('lodash')</code> 从 <code>react/lib/...</code> 出发 → 逐级向上查 → my-app/node_modules（命中 lodash）✅—— <strong>react 没声明 lodash 但能 require 到，已经埋下幻影依赖伏笔！</strong></li>
+        </ul>
+        <p><strong>优势</strong>：每个包的依赖独立 sandbox，版本冲突时各自相安无事。如 react 用 lodash@3、my-app 用 lodash@4，两者并存不冲突。</p>
+        <p><strong>劣势</strong>：磁盘爆炸（同一个 lodash 可能装 N 份）、Windows 路径长度灾难（嵌套 7-8 层超过 260 字符）。</p>
+
+        <h3>Layout 2 · 扁平 hoisting（npm 3+ / Yarn classic，2015-）</h3>
+        <p>npm 3 引入扁平化：把所有依赖提到根 node_modules，冲突时回退到嵌套。</p>
+        <div class="code-block">
+          <span class="code-label">扁平 hoisting 示例</span>
+          <pre class="code"><code class="lang-text">my-app/
+├── package.json
+├── node_modules/
+│   ├── react/
+│   ├── lodash/
+│   ├── loose-envify/   ← 提到顶层！React 的传递依赖
+│   └── js-tokens/      ← 同样提到顶层
+
+# 仅当版本冲突时才回退嵌套
+# 例如 my-app/node_modules/some-pkg/node_modules/lodash（如果 some-pkg 要 lodash@3 而顶层是 lodash@4）</code></pre>
+        </div>
+        <p><strong>Resolution 行为</strong>：</p>
+        <ul>
+          <li><code>require('lodash')</code> 从任何子目录都能命中顶层的 lodash</li>
+          <li>提升顺序按解析顺序，<strong>非确定性</strong>（同一份 package.json 不同时间装出不同布局；Yarn 1 加了 sort 保证确定，npm 5+ 也修了）</li>
+          <li>遇到版本冲突，"提升获胜者"决定：通常顶层版本是 package.json 直接声明的版本；冲突的传递依赖回退到嵌套</li>
+        </ul>
+        <p><strong>幻影依赖核心</strong>：源码里 <code>require('loose-envify')</code> 能跑——尽管 my-app 的 package.json 没声明它。这是 npm 3 扁平化的<strong>结构性副作用</strong>，不是 bug 是设计本身。详见 <a href="02-phantom-deps.html">P2.2</a>。</p>
+
+        <h3>Layout 3 · pnpm symlink 拓扑（pnpm 1+，2017-）</h3>
+        <p>pnpm 用 3 层链接拓扑，把每个包 sandbox 到独立目录，但避免重复存储：</p>
+        <div class="code-block">
+          <span class="code-label">pnpm 拓扑（简化）</span>
+          <pre class="code"><code class="lang-text">my-app/
+├── package.json
+└── node_modules/
+    ├── react → .pnpm/react@18.3.1/node_modules/react   ← symlink
+    ├── lodash → .pnpm/lodash@4.17.21/node_modules/lodash
+    └── .pnpm/
+        ├── react@18.3.1/
+        │   └── node_modules/
+        │       ├── react/   ← hardlink 到 ~/.pnpm-store
+        │       └── loose-envify → ../../loose-envify@1.4.0/node_modules/loose-envify
+        ├── loose-envify@1.4.0/
+        │   └── node_modules/
+        │       ├── loose-envify/
+        │       └── js-tokens → ../../js-tokens@4.0.0/node_modules/js-tokens
+        ├── js-tokens@4.0.0/
+        │   └── node_modules/
+        │       └── js-tokens/
+        └── lodash@4.17.21/
+            └── node_modules/
+                └── lodash/
+
+# 全局 store 在 ~/.pnpm-store/ —— 每个版本物理上只有一份</code></pre>
+        </div>
+        <p><strong>Resolution 行为</strong>：</p>
+        <ul>
+          <li>顶层 <code>node_modules/&lt;name&gt;</code> 是 symlink，<strong>只有 package.json 直接声明的依赖</strong>。其他包不在顶层——require 找不到</li>
+          <li>每个包的传递依赖在 <code>.pnpm/&lt;name&gt;@&lt;ver&gt;/node_modules/</code> 内 sandbox；它们走 Node resolution 时只能看到自己的 transitive deps，不会"漂"到别的包的依赖</li>
+          <li>所有 hardlink 指向 <code>~/.pnpm-store</code>，<strong>同一版本全机一份物理文件</strong>，多项目共享磁盘</li>
+        </ul>
+        <p><strong>关键洞见</strong>：pnpm 不是"另一套 resolution 算法"，它仍走标准 Node resolution；只是<strong>把 node_modules 摆放成让幻影依赖结构性不可能</strong>。这是 pnpm 设计的精妙处。详见 <a href="../03-pnpm-internals/01-cas-storage.html">P3.1</a>。</p>
+
+        <h3>Layout 4 · Yarn PnP · 没有 node_modules（Yarn 2+, 2019-）</h3>
+        <p>Yarn Berry 走最激进路线：<strong>取消 node_modules，劫持 Node resolution</strong>。</p>
+        <div class="code-block">
+          <span class="code-label">Yarn PnP 布局</span>
+          <pre class="code"><code class="lang-text">my-app/
+├── package.json
+├── yarn.lock
+├── .pnp.cjs              ← Node loader！包含全部 resolution 决策
+├── .pnp.loader.mjs       ← ESM loader 版本
+└── .yarn/
+    └── cache/
+        ├── react-npm-18.3.1-abc.zip       ← 不解压！
+        ├── lodash-npm-4.17.21-def.zip
+        └── ...
+
+# 启动 Node 时：node --require .pnp.cjs your-script.js
+# 或在 package.json 加 "type": "module" + import .pnp.loader.mjs</code></pre>
+        </div>
+        <p><strong>Resolution 行为</strong>：</p>
+        <ul>
+          <li><code>require('react')</code> → .pnp.cjs 拦截 → 查内置 manifest → 知道 react 在 cache/react-npm-18.3.1-abc.zip 内 / dist/index.js 路径 → 返回该路径（zip 内部用 zip-fs 读）</li>
+          <li>没有 node_modules 目录！Node 标准 resolution 找不到，必须走 .pnp.cjs</li>
+          <li>每个 require 调用都经过 manifest 仲裁——<strong>严格性绝对</strong>（你 require 的必须在 manifest 里）</li>
+        </ul>
+        <p><strong>优势</strong>：</p>
+        <ul>
+          <li>install 极快（不解压 + 不建立目录树）</li>
+          <li>磁盘最省（zip 不解压，只在执行时读）</li>
+          <li>严格性最高</li>
+          <li>"<strong>zero-installs</strong>"——commit cache + .pnp.cjs 到 git，新 clone 不用 install</li>
+        </ul>
+        <p><strong>劣势</strong>：</p>
+        <ul>
+          <li>需要工具链适配（很多包假设 node_modules 存在；webpack/metro/vite 各自需要 plugin）</li>
+          <li>VS Code 需要 <code>@yarnpkg/sdks</code> 配合</li>
+          <li>调试栈跟踪指向 zip 内部</li>
+        </ul>
+        <p>2026 年 PnP 仍小众但坚定（详见 <a href="../01-overview/02-landscape.html">P1.2</a>）。</p>
+
+        <h3>4 种 layout 在同一项目下的对比</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>嵌套</th>
+              <th>扁平 hoisting</th>
+              <th>pnpm symlink</th>
+              <th>Yarn PnP</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>磁盘占用</td>
+              <td>大（重复）</td>
+              <td>中</td>
+              <td>小（hardlink）</td>
+              <td>最小（zip）</td>
+            </tr>
+            <tr>
+              <td>Resolution 速度</td>
+              <td>快（局部）</td>
+              <td>快</td>
+              <td>快</td>
+              <td>极快（无 IO）</td>
+            </tr>
+            <tr>
+              <td>幻影依赖</td>
+              <td>少（局部范围）</td>
+              <td>严重</td>
+              <td>无</td>
+              <td>无</td>
+            </tr>
+            <tr>
+              <td>doppelganger</td>
+              <td>不可避免</td>
+              <td>偶发</td>
+              <td>不会（同版本物理一份）</td>
+              <td>不会</td>
+            </tr>
+            <tr>
+              <td>需要 Node 修改？</td>
+              <td>不需要</td>
+              <td>不需要</td>
+              <td>不需要</td>
+              <td>需要 .pnp.cjs loader</td>
+            </tr>
+            <tr>
+              <td>工具链兼容性</td>
+              <td>完全兼容</td>
+              <td>完全兼容</td>
+              <td>99%（rare 工具假设扁平）</td>
+              <td>~80%（要 patch）</td>
+            </tr>
+            <tr>
+              <td>Windows 友好</td>
+              <td>差（路径长度）</td>
+              <td>好</td>
+              <td>好</td>
+              <td>好</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout info">
+          <div class="callout-title">💡 关键洞见：算法不变，layout 不同</div>
+          <p>Node resolution 算法 15 年来基本没变（CJS 部分；ESM 是新加的）。<strong>所有"包管理器之争"本质上是"node_modules 应该长什么样"之争</strong>。每种 layout 都是同一个 resolution 算法跑在不同物理结构上的结果。理解了这一点你就明白：选包管理器不是选"算法"，是选"对未声明依赖的态度"。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · ESM 升级踩坑：包没在 exports 里声明 dist 子路径</h3>
+          <p><strong>背景</strong>：把项目从 CJS 切到 ESM（package.json 加 <code>"type": "module"</code>）。突然报错：<code>Package subpath './dist/internal' is not defined by "exports"</code>。</p>
+          <p><strong>诊断</strong>：在 CJS 时代 <code>require('some-pkg/dist/internal')</code> 能跑（CJS resolver 不强制 exports）；切 ESM 后 exports 字段是强制 gateway，包作者没在 exports 里声明 <code>./dist/internal</code> 路径，import 直接被拒。</p>
+          <p><strong>修复</strong>：</p>
+          <ul>
+            <li>正确做法：用包公开 API 替代深层路径（<code>import { internal } from 'some-pkg'</code>）</li>
+            <li>临时方案：给包提 PR 加 exports 子路径声明</li>
+            <li>最后退路：用 <code>node --no-experimental-require-module</code> + 手动改 import 为 <code>createRequire</code> + require（不推荐）</li>
+          </ul>
+          <p><strong>背景知识</strong>：这是 ESM 严格化的代价。早期"看到 dist 就 import"的习惯在 ESM 下不可持续——包作者第一次有真正的 API 边界控制。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · Vite + pnpm monorepo 内部包不热更新</h3>
+          <p><strong>背景</strong>：pnpm monorepo，apps/web 引用 packages/ui 的组件。改 packages/ui 的源文件，apps/web 的 Vite dev server 不响应——必须刷页才看到。</p>
+          <p><strong>诊断</strong>：Vite 默认 <code>server.watch.ignored</code> 包含 <code>**/node_modules/**</code>，避免监听数千个依赖包。但 pnpm 把 packages/ui symlink 到 <code>node_modules/.pnpm/...</code>，<strong>修改的物理文件路径也在 node_modules 内</strong>，被 Vite 忽略。</p>
+          <p><strong>修复</strong>：在 vite.config.js 显式不忽略 workspace 包：</p>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// vite.config.js
+export default {
+  server: {
+    watch: {
+      ignored: ['!**/node_modules/.pnpm/@my-org+ui*/**']
+    }
+  },
+  // 或者直接禁用 server.fs 限制
+  resolve: {
+    preserveSymlinks: false  // 默认就是 false；让 Vite 跟随 symlink 监听真实路径
+  }
+}</code></pre>
+          </div>
+          <p>详见 <a href="../../vite/02-vite-architecture/01-dev-mode.html">Vite P2.1</a>。这是 pnpm symlink layout 与 Vite watcher 的著名交互陷阱。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · 切 PnP 后 webpack-loader 报错</h3>
+          <p><strong>背景</strong>：从 Yarn classic 升级 Yarn 4（PnP 模式）。webpack 自定义 loader 报 <code>Cannot find module 'foo'</code>，明明 foo 在 yarn.lock 里。</p>
+          <p><strong>诊断</strong>：自定义 loader 用 <code>require.resolve('foo', { paths: ['/some/dir/node_modules'] })</code> 显式指定查找路径。PnP 下没有 node_modules，这种"假设布局"的代码直接失败。</p>
+          <p><strong>修复</strong>：</p>
+          <ul>
+            <li>升级到 PnP 兼容版的 webpack（webpack 5+ 内置支持）+ <code>pnp-webpack-plugin</code>（旧版 webpack 4）</li>
+            <li>修改自定义 loader：用 <code>require.resolve('foo')</code>（不带 paths）让 PnP loader 接管</li>
+            <li>fallback：<code>yarnRcYml</code> 配 <code>nodeLinker: node-modules</code> 退回扁平 hoisting</li>
+          </ul>
+          <p><strong>教训</strong>：PnP 的"严格优雅"换来的是<strong>所有"假设 node_modules 存在"的代码都要适配</strong>。这是 PnP 5 年来未能主流化的根本原因。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">手动调用 Node resolver</span>
+          <pre class="code"><code class="lang-js">// CJS
+const path = require.resolve('lodash');
+console.log(path);
+// → /Users/me/proj/node_modules/lodash/lodash.js
+
+// ESM（Node 20+）
+import { resolve } from 'node:module';
+const url = await import.meta.resolve('lodash');
+console.log(url);
+// → file:///Users/me/proj/node_modules/lodash/lodash.js</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">检查包的 exports 字段</span>
+          <pre class="code"><code class="lang-bash"># 查看一个包能从哪些子路径 import
+cat node_modules/some-pkg/package.json | jq '.exports'
+
+# 例：lodash@4.x 的 exports
+{
+  ".": "./lodash.js",
+  "./*": "./*.js",
+  "./fp": "./fp.js",
+  "./fp/*": "./fp/*.js",
+  "./package.json": "./package.json"
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">conditional exports 实战：写一个 isomorphic 包</span>
+          <pre class="code"><code class="lang-json">// my-pkg/package.json
+{
+  "name": "my-pkg",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "node": {
+        "import": "./dist/node.mjs",
+        "require": "./dist/node.cjs"
+      },
+      "browser": "./dist/browser.mjs",
+      "default": "./dist/default.mjs"
+    }
+  }
+}
+
+// 同一个包在 Node ESM / Node CJS / 浏览器 / bundler 下加载不同实现
+// types 必须放最前面（TS resolver 要求）</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">观察 4 种 layout：用 npm/pnpm 装同一个项目</span>
+          <pre class="code"><code class="lang-bash"># 临时建一个项目对比
+mkdir test-layout && cd test-layout
+echo '{"dependencies":{"react":"^18.3.1"}}' &gt; package.json
+
+# npm 方式 → 扁平 hoisting
+npm install
+ls node_modules/   # 看到 react / loose-envify / js-tokens 都在顶层
+
+rm -rf node_modules package-lock.json
+
+# pnpm 方式 → symlink 拓扑
+pnpm install
+ls node_modules/   # 只看到 react（顶层只有声明的依赖）
+ls node_modules/.pnpm/   # 看到 react@18.3.1 / loose-envify@1.4.0 / js-tokens@4.0.0
+
+# 用 require.resolve 看实际路径
+node -e "console.log(require.resolve('react'))"
+# pnpm: /...test-layout/node_modules/.pnpm/react@18.3.1/node_modules/react/index.js
+# npm:  /...test-layout/node_modules/react/index.js</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">PnP loader 工作原理（简化）</span>
+          <pre class="code"><code class="lang-js">// .pnp.cjs（简化伪代码）
+const manifest = {
+  packageRegistryData: [
+    ['react', [['npm:18.3.1', {
+      packageLocation: './.yarn/cache/react-npm-18.3.1-abc.zip/node_modules/react/',
+      packageDependencies: [['loose-envify', 'npm:1.4.0']]
+    }]]],
+    // ...
+  ]
+};
+
+// 劫持 Node 的 resolution
+const Module = require('module');
+const originalResolve = Module._resolveFilename;
+Module._resolveFilename = function(request, parent, ...rest) {
+  // 如果是 PnP 管理的包，从 manifest 查找
+  const pnpResolved = pnpResolve(request, parent);
+  if (pnpResolved) return pnpResolved;
+  // 否则走原始 resolution
+  return originalResolve.call(this, request, parent, ...rest);
+};
+
+// 加上 zip-fs 让 Node 能读 zip 内的文件
+require('@yarnpkg/fslib').xfs.mountZip();</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · ESM 下省略 .js 扩展名</div>
+          <p>从 CJS 切 ESM 时最常见的报错。<code>import './foo'</code> 不会自动加 <code>.js</code>。修法：要么所有 import 显式带扩展名，要么打开 TypeScript 的 <code>"moduleResolution": "Bundler"</code> 让 bundler 解决（但这意味着 <strong>tsc 编译产物不能直接被 Node 跑</strong>，需要 bundler 介入）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 把 exports 字段当文档</div>
+          <p>"exports 是给文档用的吧？" —— 不，<strong>它是强制约束</strong>。ESM 下没声明的子路径直接 throw。这意味着发包时<strong>设计 exports 等于设计 API surface</strong>——一旦发了某个子路径，就不能轻易撤销，否则 break 用户。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 在 monorepo 把内部包当外部包"硬编码路径"</div>
+          <p>有人写 <code>require('../../packages/ui/src/Button')</code> 直接走相对路径。这绕过了 workspace 的 symlink + package.json exports，等于<strong>故意制造"硬编码内部细节"</strong>。正确做法是用 workspace:* 声明依赖 + 走包名 import（<code>import { Button } from '@app/ui'</code>），让 resolution 算法 + workspace 管理。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 假设 require.cache 跨 layout 一致</div>
+          <p>require 的 module singleton 依赖<strong>同一物理路径只 require 一次</strong>。pnpm symlink 下，如果某个包被 require 两次但走不同 symlink（罕见但 monorepo 中可能），可能命中两个 cache 项。pnpm 通过 <code>realpath</code> 把 symlink 指向的物理路径作为 cache key 解决（默认行为），但配置不当（如 <code>preserveSymlinks: true</code>）会出现"同一个包加载两次"的诡异 bug。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 在 PnP 下用 fs.readdirSync(node_modules)</div>
+          <p>很多老工具假设 <code>node_modules</code> 目录存在，直接 fs.readdir 列出依赖。PnP 下没有这个目录，readdir 抛 ENOENT。<strong>正确做法</strong>：用 Node 标准的 <code>require.resolve</code> / <code>import.meta.resolve</code>，让 resolver（包括 PnP）接管。这也是 PnP 兼容性差的最大单一原因。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://nodejs.org/api/modules.html#all-together" target="_blank" rel="noopener">Node.js Modules: CJS Resolution Algorithm（官方）</a></li>
+          <li><a href="https://nodejs.org/api/esm.html#resolution-algorithm-specification" target="_blank" rel="noopener">Node.js ESM Resolution Algorithm（官方 spec）</a></li>
+          <li><a href="https://nodejs.org/api/packages.html#package-entry-points" target="_blank" rel="noopener">Node.js Package Entry Points（exports / conditional exports 文档）</a></li>
+          <li><a href="https://yarnpkg.com/features/pnp" target="_blank" rel="noopener">Yarn PnP 设计文档</a></li>
+          <li><a href="https://pnpm.io/symlinked-node-modules-structure" target="_blank" rel="noopener">pnpm Symlinked node_modules Structure</a></li>
+          <li><a href="https://nodejs.org/api/esm.html#import-attributes" target="_blank" rel="noopener">Import Attributes（Node 文档）</a></li>
+          <li><a href="../../ecma/07-execution/04-module-system.html">ECMA P7.4 · 模块系统 spec（本站）</a></li>
+          <li><a href="../../vite/03-modules/01-esm-spec.html">Vite P3.1 · ESM 标准（本站）</a></li>
+          <li><a href="02-phantom-deps.html">P2.2 · 幻影依赖详解（下一章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../01-overview/02-landscape.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P1.2 · 同代人横评</span>
+          </a>
+          <a class="next" href="02-phantom-deps.html">
+            <span class="label">下一章 →</span>
+            <span class="title">02 · 幻影依赖与双 package hazard</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
