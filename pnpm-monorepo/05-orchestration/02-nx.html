@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Nx · 项目图 + affected + 横评 · P5.2 · pnpm & monorepo 深度学习</title>
+    <meta name="description" content="Nx 设计解剖：框架式 monorepo，项目图 + affected + plugin 生态 + nx migrate codemod + Nx Cloud DTE。与 Turborepo 哲学差异（全家桶 vs 组合工具）+ 决策矩阵。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23f69220'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EP%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>pnpm & monorepo 深度学习</span><span class="site-title-badge" style="background: oklch(0.7 0.18 60); color: #fff">pnpm</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · 任务编排</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-turborepo.html">01 · Turborepo · task graph + remote cache</a></li>
+          <li><a href="02-nx.html" class="active">02 · Nx · 项目图 + affected + 横评</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">pnpm & monorepo</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · 任务编排</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Nx · 项目图 + 横评</span>
+        </nav>
+        <h1>Nx · 项目图 + affected + 横评</h1>
+        <p class="lead">
+          上章讲 Turborepo（"<strong>组合工具</strong>"流派）。本章讲 <strong>Nx</strong>（"<strong>全家桶</strong>"流派）—— 不仅是 task runner，还有项目图、plugin 生态、code generator、迁移 codemod、Nx Cloud。Nx 把 Lerna 的位置接过来后做了大量改造，2026 年是企业级 monorepo 的另一极。本章讲它的核心机制 + 与 Turborepo 的决策矩阵。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P5.1（Turborepo）</span>
+          <span><strong>主要来源</strong> nx.dev 官方 / Victor Savkin blog / Nrwl 团队演讲</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Nx 不只是 task runner</strong> —— 与 Turborepo 单一职责不同，Nx 提供：(1) <strong>项目图</strong>（自动从代码推断，可视化）；(2) <strong>affected 命令</strong>（按图差分跑任务）；(3) <strong>plugin 生态</strong>（@nx/react / @nx/next / @nx/vite / @nx/jest）；(4) <strong>generator</strong>（脚手架代码）；(5) <strong>nx migrate</strong>（升级 Nx 自动改全 monorepo 配置）；(6) <strong>Nx Cloud</strong>（远程 cache + DTE 分布式执行）。</li>
+          <li><strong>项目图（project graph）</strong> —— Nx 自动从 package.json / tsconfig.json / 源码 import 推断 monorepo 内部依赖关系。<code>nx graph</code> 渲染交互式 SVG，能看每个包依赖谁、被谁依赖。这是"affected"的基础。</li>
+          <li><strong>nx affected</strong> —— <code>nx affected -t test</code> 只跑被改影响的项目（项目图差分实现）。比 Turborepo 的 git filter 更精确——它<strong>知道哪些文件属于哪个项目</strong>。</li>
+          <li><strong>plugin 生态是 Nx 最大差异点</strong> —— @nx/react 不只跑 React 项目，还提供 generator（<code>nx g @nx/react:lib my-lib</code> 自动建包 + 配 tsconfig + lint + test）+ executor（标准化跑 build/test/lint）+ migration（升级时自动改配置）。这套"框架式 monorepo"是 Nx 的灵魂。</li>
+          <li><strong>nx migrate</strong> —— Nx 18 → 19 → 20 升级时，<code>nx migrate latest</code> 自动改 monorepo 内所有 plugin 配置 + 跑 codemod 适配 breaking changes。<strong>这是 Turborepo 没有的能力</strong>，也是 Nx 在长期维护性上的优势。</li>
+          <li><strong>Nx Cloud + DTE</strong> —— Nx Cloud 提供远程 cache（与 Vercel Remote Cache 类似）+ <strong>DTE（Distributed Task Execution）</strong>把任务分到多 CI 节点并行跑。50 包的 monorepo CI 从 10 分钟降到 2 分钟（不仅 cache，还有真正的并行执行）。</li>
+          <li><strong>Nx vs Turborepo 哲学差异</strong> —— Nx 是"<strong>从零搭，工具链一统</strong>"（适合大企业团队、新项目）；Turborepo 是"<strong>已有工具链，加层 cache</strong>"（适合现存项目、组合自由）。<strong>没有对错只有选择</strong>。</li>
+          <li><strong>Nx 接管 Lerna（2022）</strong> —— Lerna 6+ 由 Nrwl 维护，本质是 Nx 的"轻模式"。新项目几乎没人单独用 Lerna；存量 Lerna 项目升 Nx 6+ 是渐进路线。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>项目图（project graph）</h3>
+
+        <p>Nx 启动时扫描整个 monorepo，构建<strong>项目依赖图</strong>。来源：</p>
+        <ul>
+          <li>每个项目的 package.json 中的 dependencies / devDependencies（找到 workspace 内部依赖）</li>
+          <li>tsconfig.json 中的 paths 字段</li>
+          <li>源码中的 import 语句静态分析（<code>@nx/js/typescript</code> plugin 提供）</li>
+        </ul>
+
+        <p>结果是个 DAG：</p>
+        <div class="code-block">
+          <span class="code-label">project graph 示例</span>
+          <pre class="code"><code class="lang-text">          [apps/web]
+              ↓
+        [apps/web-e2e]   [apps/admin]
+              ↓               ↓
+            ┌────────────────┘
+            ↓
+       [packages/ui] ──→ [packages/utils]
+            ↓                  ↓
+       [packages/icons]   [packages/types]</code></pre>
+        </div>
+
+        <p><strong>可视化</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">nx graph
+# 自动启动 localhost:4211 浏览器交互式 SVG
+# 可以点击节点高亮 / filter / 看任务依赖
+
+# 静态导出
+nx graph --file=graph.html
+nx graph --file=graph.json   # 用于 CI 分析</code></pre>
+        </div>
+
+        <p><strong>这是 Nx 的差异化武器</strong>。Turborepo 也有任务图（隐式从 dependsOn 推断），但<strong>没有项目级的可视化</strong>。Nx 的项目图让大型 monorepo（50+ 包）的<strong>结构清晰可见</strong>。</p>
+
+        <h3>nx affected · 项目图驱动的差分</h3>
+
+        <p>Turborepo 的 <code>--filter='[main]'</code> 用 git diff 找变化文件 → 推断变化的包。这够用但不精确——大文件改动 / 跨包重构 / git 历史复杂时会误判。</p>
+
+        <p>Nx 的 affected 走<strong>项目图 + 文件归属</strong>：</p>
+        <ol>
+          <li>git diff 找出变化的文件路径</li>
+          <li>用项目图把每个文件归属到 owning project（packages/ui/src/Button.tsx → packages/ui）</li>
+          <li>选中所有 owning project</li>
+          <li>沿项目图<strong>下游遍历</strong>，把所有受影响的下游 project 也选中</li>
+          <li>对结果集跑指定 task（test / build / lint）</li>
+        </ol>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 自 main 以来 affected 的项目跑 test
+nx affected -t test --base=main
+
+# 跑 build（test 同样，但 build 涉及上游依赖也要 build）
+nx affected -t build
+
+# 看哪些 affected
+nx show projects --affected --base=main</code></pre>
+        </div>
+
+        <p><strong>典型 PR 场景</strong>：</p>
+        <ul>
+          <li>改了 packages/ui/src/Button.tsx</li>
+          <li>nx affected：packages/ui + 它的下游（apps/web, apps/admin）</li>
+          <li>跑 5-10 个项目的 test，跳过其余 40+ 项目</li>
+          <li>CI 时间从 15 分钟降到 3 分钟</li>
+        </ul>
+
+        <h3>plugin 生态 · Nx 的"框架式"基因</h3>
+
+        <p>装一个 Nx plugin（如 @nx/react）后获得：</p>
+
+        <p><strong>(1) generator · 标准化建包</strong></p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 创建一个新 React lib
+nx g @nx/react:lib packages/my-component-lib
+
+# Nx 自动：
+# - 创建目录结构
+# - 配置 tsconfig.json（继承根 tsconfig）
+# - 配置 package.json + 依赖
+# - 配置 .eslintrc.json
+# - 配置 vite.config.ts（或 jest.config.ts，按 plugin）
+# - 创建 src/index.ts + src/lib/my-component-lib.tsx 模板
+# - 注册到 nx.json 的 projects
+
+# 创建 React app
+nx g @nx/react:app apps/my-new-app
+
+# Nx 也自动配 .gitignore / public/ / 路由 / SSR 选项</code></pre>
+        </div>
+
+        <p><strong>意义</strong>：团队所有 React lib 配置一致——所有人 nx g 出来的 lib 用同一套 tsconfig / eslint / build 流程。新人加入 0 学习成本。</p>
+
+        <p><strong>(2) executor · 标准化跑任务</strong></p>
+        <div class="code-block">
+          <span class="code-label">project.json（Nx 的项目配置文件）</span>
+          <pre class="code"><code class="lang-json">{
+  "name": "my-react-lib",
+  "targets": {
+    "build": {
+      "executor": "@nx/vite:build",
+      "options": {
+        "outputPath": "dist/packages/my-react-lib"
+      }
+    },
+    "test": {
+      "executor": "@nx/vite:test",
+      "options": {
+        "config": "packages/my-react-lib/vite.config.ts"
+      }
+    }
+  }
+}</code></pre>
+        </div>
+
+        <p>每个 task 用一个 executor 跑。executor 是 Nx 提供的标准实现——比直接调 vite build 多了：</p>
+        <ul>
+          <li>统一的输入/输出格式（让 Nx cache 知道边界）</li>
+          <li>错误处理 + 报告</li>
+          <li>多项目共用配置</li>
+        </ul>
+
+        <p><strong>(3) migration · 升级时自动改</strong></p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 准备升级 Nx
+nx migrate latest
+
+# 自动：
+# - 升级 nx + 所有 @nx/* plugins 到最新
+# - 升级 Nx 间接依赖（react / vite / vitest 等到兼容版本）
+# - 生成 migrations.json，记录所有要跑的 codemod
+
+# 应用 codemod
+nx migrate --run-migrations
+
+# 这一步自动：
+# - 改 nx.json schema 适配新版本
+# - 改每个 project.json 的 executor 名（如果 Nx 18 的 @nx/vite:build 改名了）
+# - 改 tsconfig.json 选项（如果 TS 升级要求）
+# - 改 .eslintrc.json（如果 ESLint 升级）
+# - 自动 fix 一些已知 breaking changes</code></pre>
+        </div>
+
+        <p><strong>这是 Nx 比 Turborepo 强的地方</strong>。Turborepo 升级你要自己改 turbo.json + 自己适配各 plugin 的 breaking changes。Nx 的 migration 系统让<strong>大型 monorepo 跨版本升级成本可控</strong>。</p>
+
+        <h3>Nx Cloud · DTE 分布式执行</h3>
+
+        <p>Vercel Remote Cache（Turborepo）只做"<strong>cache 复用</strong>"。Nx Cloud 多了一层：<strong>Distributed Task Execution（DTE）</strong>。</p>
+
+        <p><strong>什么是 DTE</strong>：</p>
+        <ul>
+          <li>monorepo 50 个项目要跑 test + build</li>
+          <li>传统 CI：1 个 runner 顺序跑或并发跑（受单 runner CPU 限制，通常 4-8 并发）</li>
+          <li>DTE：把 50 个 task 分到 N 个 CI runner 同时跑，主 runner 协调</li>
+          <li>结果聚合 + cache 推送都自动</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">.github/workflows/ci.yml（Nx DTE）</span>
+          <pre class="code"><code class="lang-yaml">jobs:
+  main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: nrwl/nx-set-shas@v4
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec nx-cloud start-ci-run --stop-agents-after="build"
+      - run: pnpm exec nx affected -t lint test build --parallel=3
+      - run: pnpm exec nx-cloud stop-agents
+
+  agents:
+    name: Nx Cloud Agents
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        agent: [1, 2, 3]   # 3 个 agent 协助主 runner
+    steps:
+      - uses: actions/checkout@v4
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec nx-cloud start-agent</code></pre>
+        </div>
+
+        <p><strong>实测效果</strong>：</p>
+        <ul>
+          <li>50 包 monorepo：单 runner 10 分钟，4 agent DTE 2-3 分钟</li>
+          <li>主 runner 不再"满负载"，可以做轻活（合 cache、检查结果）</li>
+          <li>付费功能（Nx Cloud 免费层不含 DTE）</li>
+        </ul>
+
+        <h3>Nx 的 nx.json + project.json 配置</h3>
+
+        <p>Nx 用两层配置：</p>
+
+        <p><strong>nx.json</strong>（项目根，全局）：</p>
+        <div class="code-block">
+          <span class="code-label">nx.json</span>
+          <pre class="code"><code class="lang-json">{
+  "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "namedInputs": {
+    "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "production": [
+      "default",
+      "!{projectRoot}/**/*.spec.tsx",
+      "!{projectRoot}/**/*.test.tsx",
+      "!{projectRoot}/tsconfig.spec.json"
+    ],
+    "sharedGlobals": [
+      "{workspaceRoot}/tsconfig.base.json",
+      "{workspaceRoot}/.eslintrc.json"
+    ]
+  },
+  "targetDefaults": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": ["production", "^production"],
+      "cache": true
+    },
+    "test": {
+      "dependsOn": ["build"],
+      "inputs": ["default", "^production"],
+      "cache": true
+    },
+    "lint": {
+      "inputs": ["default", "{workspaceRoot}/.eslintrc.json"],
+      "cache": true
+    }
+  },
+  "plugins": [
+    "@nx/vite/plugin",
+    "@nx/eslint/plugin",
+    "@nx/react/plugin"
+  ],
+  "nxCloudId": "abc123-cloud-id"
+}</code></pre>
+        </div>
+
+        <p><strong>project.json</strong>（每个项目，可选）：</p>
+        <ul>
+          <li>覆盖该项目的 task 配置</li>
+          <li>大部分项目用 plugin 推断（不写 project.json）</li>
+          <li>需要个性化时写</li>
+        </ul>
+
+        <p>Nx 的配置比 Turborepo 复杂——这是"全家桶"哲学的代价。学习曲线陡 + 配置 surface 大。</p>
+
+        <h3>Nx vs Turborepo · 哲学差异详解</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>Turborepo</th>
+              <th>Nx</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>定位</td>
+              <td>Task runner + cache layer</td>
+              <td>Framework for monorepo</td>
+            </tr>
+            <tr>
+              <td>侵入性</td>
+              <td>低（一个 turbo.json）</td>
+              <td>高（nx.json + 各 project.json + plugin）</td>
+            </tr>
+            <tr>
+              <td>可逆性</td>
+              <td>高（删 turbo.json 即恢复）</td>
+              <td>低（深度集成）</td>
+            </tr>
+            <tr>
+              <td>学习曲线</td>
+              <td>缓（1-2 小时）</td>
+              <td>陡（1-2 周）</td>
+            </tr>
+            <tr>
+              <td>项目图</td>
+              <td>隐式</td>
+              <td>显式 + 可视化</td>
+            </tr>
+            <tr>
+              <td>plugin 生态</td>
+              <td>极少</td>
+              <td>大（@nx/react / vite / next / jest 等）</td>
+            </tr>
+            <tr>
+              <td>generator (脚手架)</td>
+              <td>无</td>
+              <td>核心特性</td>
+            </tr>
+            <tr>
+              <td>migration codemod</td>
+              <td>无</td>
+              <td>核心特性</td>
+            </tr>
+            <tr>
+              <td>远程 cache</td>
+              <td>Vercel / 自建</td>
+              <td>Nx Cloud（含免费层）</td>
+            </tr>
+            <tr>
+              <td>DTE 分布式执行</td>
+              <td>无</td>
+              <td>有（Nx Cloud 付费）</td>
+            </tr>
+            <tr>
+              <td>主流场景</td>
+              <td>已有项目加 cache</td>
+              <td>从零搭企业级 monorepo</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>选 Turborepo 还是 Nx · 决策矩阵</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>团队特征</th>
+              <th>建议</th>
+              <th>理由</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>已有成熟工具链（Vite + Vitest + ESLint）</td>
+              <td><strong>Turborepo</strong></td>
+              <td>不破坏现有工具，加层 cache 即可</td>
+            </tr>
+            <tr>
+              <td>从零搭新 monorepo + 团队大（20+ 人）</td>
+              <td><strong>Nx</strong></td>
+              <td>generator + migration 让长期一致</td>
+            </tr>
+            <tr>
+              <td>项目数 5-30 包</td>
+              <td>Turborepo</td>
+              <td>简单足够，不需要 Nx 复杂度</td>
+            </tr>
+            <tr>
+              <td>项目数 30-100 包</td>
+              <td>都 OK，看哲学偏好</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td>项目数 100+ 包，多语言（JS + Java + Go）</td>
+              <td><strong>Nx 或 Bazel</strong></td>
+              <td>Turborepo 不擅长跨语言；Nx 有多语言 plugin</td>
+            </tr>
+            <tr>
+              <td>跨团队 + 强需求"affected"</td>
+              <td>Nx</td>
+              <td>项目图驱动的 affected 更精确</td>
+            </tr>
+            <tr>
+              <td>团队已用 Vercel 部署</td>
+              <td>Turborepo</td>
+              <td>Vercel Remote Cache 自然集成</td>
+            </tr>
+            <tr>
+              <td>OSS 项目（Vite / Vitest / Astro）</td>
+              <td><strong>Turborepo</strong></td>
+              <td>实际：这些项目都用 Turborepo</td>
+            </tr>
+            <tr>
+              <td>组合工具哲学（不喜欢被锁定）</td>
+              <td>Turborepo</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td>"全家桶让我省心" 心态</td>
+              <td>Nx</td>
+              <td>—</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>超大规模选项 · Bazel / Rush / Pants</h3>
+
+        <p>当 monorepo &gt; 500 包 + 多语言（Java / Go / Python / JS 混合）时，Turborepo / Nx 都吃力。这时考虑：</p>
+
+        <p><strong>Bazel</strong>（Google）：</p>
+        <ul>
+          <li>大厂工业级（Google / Spotify / Uber 都用）</li>
+          <li>语言无关，全用 BUILD 文件描述</li>
+          <li>极致 cache + 可重现 build</li>
+          <li>学习曲线极陡（数月）</li>
+          <li>JS 工具链支持有限（rules_nodejs）</li>
+        </ul>
+
+        <p><strong>Rush</strong>（Microsoft）：</p>
+        <ul>
+          <li>Microsoft 出品，自家产品（Azure DevOps / Office）用</li>
+          <li>JS 专精，但理念偏"严格 + 大企业"</li>
+          <li>有自己的 Phantom Dependency 解决方案（早于 pnpm）</li>
+          <li>2026 年存在感不如 Nx</li>
+        </ul>
+
+        <p><strong>Pants</strong>（Twitter / 现 Twitter Tech Spinoff）：</p>
+        <ul>
+          <li>Bazel 的更易用替代</li>
+          <li>多语言（Python / Go / Scala / JS）</li>
+          <li>JS 生态支持比 Bazel 好但仍不主流</li>
+        </ul>
+
+        <p><strong>2026 现实</strong>：超大规模 + JS-only 仍是 Nx 的天下；超大规模 + 多语言才会上 Bazel / Rush / Pants。绝大多数团队不会到那个规模。详见 <a href="../07-future/01-decision-tree.html">P7.1 决策树</a>。</p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 关键洞见：选哲学，不只选工具</div>
+          <p>Nx vs Turborepo 不是"哪个更好"，是"<strong>你想要什么样的 monorepo 生活</strong>"。Nx 是"<strong>我接受框架约束换来一致性</strong>"；Turborepo 是"<strong>我保留组合自由换来灵活</strong>"。两条路线在 2026 年都有大型成功项目背书，选你团队文化匹配的那种。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 新建 React 企业级 monorepo</h3>
+          <p><strong>背景</strong>：50 人团队，要从零搭一个 monorepo。预计 50+ 包，多个 Next.js app + 共享组件库 + 后端 NestJS API。</p>
+          <p><strong>建议</strong>：<strong>Nx</strong>。理由：</p>
+          <ul>
+            <li>项目数大 + 团队大 → 一致性比灵活性重要</li>
+            <li>generator 让团队成员建包遵循同一模板</li>
+            <li>migration 让 5 年后升级成本可控</li>
+            <li>nx affected 更精确（重要 PR 场景）</li>
+          </ul>
+          <div class="code-block">
+            <span class="code-label">bash</span>
+            <pre class="code"><code class="lang-bash"># 创建 Nx workspace
+pnpm create nx-workspace@latest my-org --preset=react-monorepo
+
+# 创建第一个 app
+nx g @nx/next:app web
+
+# 创建共享 lib
+nx g @nx/react:lib ui-components --directory=packages/ui
+
+# 项目图可视化（团队定期审视）
+nx graph</code></pre>
+          </div>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · 在已有项目加 cache（不愿大改）</h3>
+          <p><strong>背景</strong>：5 年的 pnpm monorepo + Vite + Vitest，CI 慢。不想改工具链，只想加 cache。</p>
+          <p><strong>建议</strong>：<strong>Turborepo</strong>（详见 P5.1 场景 1）。Nx 的侵入性对这种项目过大——要改大量配置才能让 Nx 接管 build。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · OSS 项目选型</h3>
+          <p><strong>背景</strong>：开源 React 库 monorepo（10 包），主要给社区贡献者用。</p>
+          <p><strong>建议</strong>：<strong>Turborepo</strong>。理由：</p>
+          <ul>
+            <li>OSS 贡献者背景多样，Nx 学习曲线高门槛</li>
+            <li>简单 turbo.json 一目了然，PR 易 review</li>
+            <li>Vercel Remote Cache 对 OSS 免费、配置简单</li>
+            <li>实际：<strong>2026 年大量旗舰 OSS 项目</strong>（Vite / Vitest / Astro / shadcn/ui）<strong>选 Turborepo</strong>，几乎没用 Nx</li>
+          </ul>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">完整 nx.json 模板</span>
+          <pre class="code"><code class="lang-json">{
+  "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "namedInputs": {
+    "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "production": [
+      "default",
+      "!{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)",
+      "!{projectRoot}/tsconfig.spec.json"
+    ],
+    "sharedGlobals": [
+      "{workspaceRoot}/.gitignore",
+      "{workspaceRoot}/tsconfig.base.json"
+    ]
+  },
+  "targetDefaults": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": ["production", "^production"],
+      "cache": true,
+      "outputs": ["{projectRoot}/dist", "{projectRoot}/.next"]
+    },
+    "test": {
+      "dependsOn": ["build"],
+      "inputs": ["default", "^production"],
+      "cache": true
+    },
+    "lint": {
+      "cache": true,
+      "inputs": ["default", "{workspaceRoot}/.eslintrc.json"]
+    }
+  },
+  "plugins": [
+    {
+      "plugin": "@nx/vite/plugin",
+      "options": {
+        "buildTargetName": "build",
+        "testTargetName": "test"
+      }
+    },
+    {
+      "plugin": "@nx/eslint/plugin",
+      "options": { "targetName": "lint" }
+    }
+  ],
+  "nxCloudAccessToken": "***"
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">nx 命令速查</span>
+          <pre class="code"><code class="lang-bash"># 列出所有项目
+nx show projects
+
+# 项目图可视化
+nx graph
+
+# 跑某个项目的某个 task
+nx run my-app:build
+nx run my-app:test
+nx run my-app:lint
+
+# 等价简写
+nx build my-app
+nx test my-app
+
+# 跑所有项目某个 task（topological 排序）
+nx run-many -t build
+
+# 仅跑 affected
+nx affected -t test --base=main
+
+# 创建项目
+nx g @nx/react:lib my-lib
+nx g @nx/next:app my-app
+
+# 查看项目细节
+nx show project my-app
+
+# 升级 Nx
+nx migrate latest
+nx migrate --run-migrations
+
+# 清空 cache
+nx reset</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">从 pnpm workspace 渐进引入 Nx</span>
+          <pre class="code"><code class="lang-bash"># 已有 pnpm workspace（不想破坏）
+# 渐进加 Nx 作为 task runner
+
+pnpm add -D -w nx
+
+# 创建简单 nx.json（不强制 plugin）
+cat &gt; nx.json &lt;&lt;EOF
+{
+  "namedInputs": {
+    "default": ["{projectRoot}/**/*"],
+    "production": ["default", "!{projectRoot}/**/*.test.*"]
+  },
+  "targetDefaults": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": ["production", "^production"],
+      "cache": true
+    }
+  }
+}
+EOF
+
+# Nx 自动从 package.json scripts 推断 task
+nx run-many -t build
+
+# 渐进迁移到 plugin（可选）
+# 不必一次性切到 generator 模式</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 把 Nx 当 Turborepo 用（仅 cache）</div>
+          <p>装了 Nx 但不用 plugin / generator / migration，只用 cache 功能——本质上花了 Nx 的复杂度成本但没拿到大半收益。<strong>判断</strong>：只想要 cache → 选 Turborepo；想要 generator + migration + framework consistency → 选 Nx。不要中间状态。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · Nx + Turborepo 混挂</div>
+          <p>跟着不同教程同时装两套，配置冗余 + cache 各自一份 + 团队 confused。<strong>修复</strong>：选一个清理另一个。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 不跑 nx migrate 就升级</div>
+          <p><code>pnpm update nx</code> 直接升级，不跑 <code>nx migrate</code>。结果项目配置与新 Nx 版本不匹配，task 跑失败。<strong>修复</strong>：Nx 升级永远走 <code>nx migrate latest --run-migrations</code> 流程。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 期望 Nx generator 完美</div>
+          <p>Nx generator 创建项目模板已知"刻板"——它给你的 tsconfig / eslint / build config 反映 Nx 团队的偏好，未必符合你的项目风格。<strong>建议</strong>：team 决定建 lib 后<strong>立即调整 generator 输出</strong>到团队规范，或者写自定义 generator（Nx 支持）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · Nx Cloud 默认开 telemetry</div>
+          <p>Nx 装完默认开 telemetry（执行数据上报）。企业项目可能合规上有问题。<strong>修复</strong>：<code>npx nx@latest --analytics=disable</code> 或在 nx.json 加 <code>"defaultBase": "main"</code> 同时关 telemetry。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://nx.dev/" target="_blank" rel="noopener">Nx 官方文档</a></li>
+          <li><a href="https://nx.dev/concepts/integrated-vs-package-based" target="_blank" rel="noopener">Nx · Integrated vs Package-Based（两种模式）</a></li>
+          <li><a href="https://nx.dev/features/run-tasks" target="_blank" rel="noopener">Nx · Run Tasks</a></li>
+          <li><a href="https://nx.dev/ci/features/distribute-task-execution" target="_blank" rel="noopener">Nx Cloud · DTE 分布式执行</a></li>
+          <li><a href="https://nx.dev/features/automate-updating-dependencies" target="_blank" rel="noopener">Nx · Automated Updates（migrate）</a></li>
+          <li><a href="https://github.com/lerna/lerna" target="_blank" rel="noopener">Lerna 6+（Nrwl 接管后）</a></li>
+          <li><a href="https://blog.nrwl.io/" target="_blank" rel="noopener">Nrwl Blog（Nx 团队官方）</a></li>
+          <li><a href="https://bazel.build/" target="_blank" rel="noopener">Bazel 官方（超大规模参考）</a></li>
+          <li><a href="https://rushstack.io/" target="_blank" rel="noopener">Rush 官方（Microsoft 选择）</a></li>
+          <li><a href="01-turborepo.html">P5.1 · Turborepo（前一章）</a></li>
+          <li><a href="../07-future/01-decision-tree.html">P7.1 · 全主题决策树（最终章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-turborepo.html">
+            <span class="label">← 上一章</span>
+            <span class="title">01 · Turborepo</span>
+          </a>
+          <a class="next" href="../06-versioning-publishing/index.html">
+            <span class="label">下一阶段 →</span>
+            <span class="title">P6 · 版本与发布</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

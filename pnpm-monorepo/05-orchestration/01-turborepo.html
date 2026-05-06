@@ -1,0 +1,722 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Turborepo · task graph + remote cache · P5.1 · pnpm & monorepo 深度学习</title>
+    <meta name="description" content="Turborepo 设计解剖：建在 npm/Yarn/pnpm/Bun 之上的 task runner + cache layer。turbo.json 任务图 + input/output hash + Vercel Remote Cache + 环境变量边界陷阱。回答「为什么 CI 时间能从 8 分钟降到 1 分钟」。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23f69220'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EP%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>pnpm & monorepo 深度学习</span><span class="site-title-badge" style="background: oklch(0.7 0.18 60); color: #fff">pnpm</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · 任务编排</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-turborepo.html" class="active">01 · Turborepo · task graph + remote cache</a></li>
+          <li><a href="02-nx.html">02 · Nx · 项目图 + affected + 横评</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">pnpm & monorepo</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · 任务编排</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Turborepo</span>
+        </nav>
+        <h1>Turborepo · task graph + remote cache</h1>
+        <p class="lead">
+          光有 workspace 不够：50 个包跑 build 半小时，每次 PR CI 都重跑就是浪费。<strong>Turborepo</strong>（2020 Jared Palmer，2021 Vercel 收购）的设计立场是：<strong>不替包管理器；建在 pnpm/Bun 之上的 task runner + cache layer</strong>。本章把它的核心机制讲透——turbo.json 任务图、input/output hash 的 cache 算法、Vercel Remote Cache 实现、以及最容易踩的"<strong>环境变量边界</strong>"陷阱。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P4（workspace + filter）</span>
+          <span><strong>主要来源</strong> turbo.build/repo/docs / Jared Palmer 演讲 / Vercel 团队 blog</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Turborepo 不是包管理器</strong> —— 它<strong>建在 npm/Yarn/pnpm/Bun 之上</strong>，专做"按依赖图调度任务 + cache 复用"。这是它的核心定位差异——与 Nx 的"全家桶"路线相反，Turborepo 是"组合工具"流派。</li>
+          <li><strong>turbo.json 描述任务图</strong> —— 每个 task 配 <code>dependsOn</code>（依赖谁）/ <code>inputs</code>（哪些文件影响 hash）/ <code>outputs</code>（产物路径）/ <code>cache</code>（是否缓存）/ <code>env</code>（影响 hash 的环境变量）。<code>^build</code> 表示"上游 workspace 的 build"。</li>
+          <li><strong>input/output hash 是 cache 的核心算法</strong> —— Turborepo 把任务的<strong>所有输入文件 + 环境变量 + 工具版本 + 依赖任务的 output hash</strong> 全部 SHA-256 → 得到 cache key。命中即<strong>replay output 文件 + log 输出</strong>，未命中真正执行。</li>
+          <li><strong>Local cache</strong> —— 每个 task 的 cache 存到 <code>node_modules/.cache/turbo/&lt;hash&gt;.tar.zst</code>。重跑相同输入直接拿，速度 ~瞬时（解压 + 复制）。</li>
+          <li><strong>Remote Cache</strong> —— Turborepo 最大商业卖点。cache key 推到 <strong>Vercel Remote Cache</strong>（默认免费层）/ 自建 S3 / Cloudflare Workers 兼容层。<strong>团队成员 + CI 共享</strong>："Linus 编译过的，我不再编译"。</li>
+          <li><strong>环境变量边界陷阱</strong> —— Turborepo 默认<strong>不感知环境变量</strong>。漏配 <code>env</code> 字段导致跨环境 cache 命中误判（dev cache 在 prod 复用，bug）。这是最常见的 Turborepo 故障。</li>
+          <li><strong>turbo dev / turbo run dev</strong> —— 长跑任务支持（不缓存输出但<strong>智能调度</strong>）；自动并发跑所有 dev 命令（apps/web + packages/ui watcher）。这是 monorepo dev 联调的现代标准。</li>
+          <li><strong>Turborepo 2（2024-08）大改</strong> —— Rust 重写（原 Go 实现）；filter UI 可视化 cache 命中；新的 boundaries 规则；更好的错误信息。2026 年主流是 turbo@2。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Turborepo 在 monorepo 中的位置</h3>
+        <p>把 monorepo 工具栈分层看：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>层</th>
+              <th>负责什么</th>
+              <th>工具</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>L4 任务编排 + cache</td>
+              <td>按依赖图跑 task，cache 复用结果</td>
+              <td><strong>Turborepo / Nx</strong></td>
+            </tr>
+            <tr>
+              <td>L3 包管理器 + workspace</td>
+              <td>装依赖、symlink、catalog</td>
+              <td>pnpm / Bun / npm</td>
+            </tr>
+            <tr>
+              <td>L2 单个 task 的实现</td>
+              <td>编译 / 测试 / lint 等</td>
+              <td>Vite / tsc / Vitest / ESLint</td>
+            </tr>
+            <tr>
+              <td>L1 source code</td>
+              <td>—</td>
+              <td>—</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p><strong>Turborepo 占 L4</strong>。它不管 L3（让 pnpm 处理），也不管 L2（让 Vite/Vitest 处理）。它只关心"<strong>当我跑 build 时，需要哪些 task 按什么顺序，怎么用 cache 加速</strong>"。</p>
+
+        <p>这就是"组合工具"哲学——每层用专门工具，互不锁定。</p>
+
+        <h3>turbo.json 任务图详解</h3>
+
+        <p>任意 Turborepo monorepo 的核心配置文件 <code>turbo.json</code>（项目根）：</p>
+
+        <div class="code-block">
+          <span class="code-label">turbo.json 完整示例</span>
+          <pre class="code"><code class="lang-json">{
+  "$schema": "https://turbo.build/schema.json",
+  "ui": "tui",
+
+  "globalDependencies": [
+    "**/.env.*local",
+    "tsconfig.json"
+  ],
+
+  "globalEnv": [
+    "NODE_ENV",
+    "VERCEL_ENV"
+  ],
+
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "src/**",
+        "package.json",
+        "tsconfig.json",
+        "vite.config.ts"
+      ],
+      "outputs": ["dist/**", ".next/**"],
+      "env": [
+        "NEXT_PUBLIC_*",
+        "DATABASE_URL"
+      ]
+    },
+    "test": {
+      "dependsOn": ["build"],
+      "inputs": ["src/**", "test/**"],
+      "outputs": []
+    },
+    "lint": {
+      "inputs": ["src/**", "*.json", ".eslintrc.*"],
+      "outputs": []
+    },
+    "typecheck": {
+      "dependsOn": ["^typecheck"],
+      "inputs": ["src/**", "*.ts", "tsconfig.json"],
+      "outputs": []
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    }
+  }
+}</code></pre>
+        </div>
+
+        <p><strong>关键字段</strong>：</p>
+
+        <p><strong><code>dependsOn</code></strong>：</p>
+        <ul>
+          <li><code>"^build"</code> —— 上游 workspace 的 build（@app/web 的 build 依赖 packages/ui 的 build 完成）</li>
+          <li><code>"build"</code>（不带 ^）—— <strong>同 workspace</strong> 的 build（test 在跑前先跑同包的 build）</li>
+          <li><code>"^build", "build"</code> —— 上游所有 build + 同包 build 都要先完成</li>
+        </ul>
+
+        <p><strong><code>inputs</code></strong>：</p>
+        <ul>
+          <li>哪些文件影响这个 task 的 hash</li>
+          <li>关键：<strong>不写 inputs 时默认是包内所有文件</strong>（除了 .gitignore 中的）。看似省事但容易导致<strong>无关变化使 cache 失效</strong>（如 README.md 改了导致 build cache miss）</li>
+          <li>显式列出能精确控制 cache 边界</li>
+        </ul>
+
+        <p><strong><code>outputs</code></strong>：</p>
+        <ul>
+          <li>这个 task 产生的文件路径（相对于 workspace 根）</li>
+          <li>cache 命中时，这些文件被从 cache 还原到工作区</li>
+          <li>对不产生输出的 task（lint / typecheck / test）写 <code>"outputs": []</code></li>
+        </ul>
+
+        <p><strong><code>cache</code></strong>：</p>
+        <ul>
+          <li>默认 true，可以缓存</li>
+          <li>对长跑任务（dev / start）设 false——没有"完成"概念，cache 没意义</li>
+        </ul>
+
+        <p><strong><code>persistent</code></strong>：</p>
+        <ul>
+          <li>true 表示这个 task 会持续运行（dev server）</li>
+          <li>Turborepo 不会等它"完成"才跑下游</li>
+          <li>用于 dev / watch 类</li>
+        </ul>
+
+        <p><strong><code>env</code></strong>：</p>
+        <ul>
+          <li>哪些环境变量影响 hash</li>
+          <li>通配符 <code>NEXT_PUBLIC_*</code> 把所有此前缀的 env 都纳入</li>
+          <li><strong>这是 Turborepo 最易出 bug 的字段</strong>（详见下面）</li>
+        </ul>
+
+        <p><strong><code>globalDependencies</code> / <code>globalEnv</code></strong>：</p>
+        <ul>
+          <li>所有 task 都受影响的全局依赖（root package.json / tsconfig / .env）</li>
+          <li>全局 env 同理</li>
+          <li>通常放"项目级"配置文件 + 跨任务共用 env</li>
+        </ul>
+
+        <h3>input/output hash · cache 的核心算法</h3>
+
+        <p>Turborepo 在跑某个 task 前，先计算 cache key：</p>
+
+        <div class="code-block">
+          <span class="code-label">cache key 计算（伪代码）</span>
+          <pre class="code"><code class="lang-text">function computeCacheKey(task, workspace) {
+  const hasher = new SHA256();
+
+  // 1. 全部 input 文件的内容 hash
+  for (const file of resolveGlobs(task.inputs, workspace)) {
+    hasher.update(filePath, fileContent);
+  }
+
+  // 2. globalDependencies 文件
+  for (const file of resolveGlobs(turbo.globalDependencies, root)) {
+    hasher.update(filePath, fileContent);
+  }
+
+  // 3. 影响 hash 的环境变量值
+  for (const key of [...task.env, ...turbo.globalEnv]) {
+    hasher.update(key, process.env[key]);
+  }
+
+  // 4. 上游依赖任务的 cache key（递归）
+  for (const upstream of task.dependsOn) {
+    hasher.update(upstream, computeCacheKey(upstream, ...));
+  }
+
+  // 5. task 命令本身的 hash（pnpm run 的 script 内容）
+  hasher.update('command', readScript(workspace, task.name));
+
+  // 6. workspace 包名 + Turborepo 版本
+  hasher.update('workspace', workspace.name);
+  hasher.update('turbo-version', turbo.VERSION);
+
+  return hasher.digest();
+}</code></pre>
+        </div>
+
+        <p>每次跑 task：</p>
+        <ul>
+          <li>计算 cache key</li>
+          <li>查 cache：local 先（<code>node_modules/.cache/turbo/</code>），remote 后（如果配了）</li>
+          <li>命中 → 解压 cache 包，<strong>复制 outputs 到工作区</strong>，<strong>replay 当时的 stdout/stderr</strong>，标 cached</li>
+          <li>未命中 → 真正跑 task；成功后把 outputs + log 打成 <code>&lt;hash&gt;.tar.zst</code> 存 cache</li>
+        </ul>
+
+        <p><strong>实测 cache 行为</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 第一次跑
+pnpm turbo run build
+# • Building...
+# Tasks: 12 successful, 12 total
+# Cached: 0 cached, 12 total
+# Time: 35.2s
+
+# 立即第二次跑（一切未变）
+pnpm turbo run build
+# • Building...
+# Tasks: 12 successful, 12 total
+# Cached: 12 cached, 12 total           ← 全命中！
+# Time: 0.8s                            ← 几乎瞬时</code></pre>
+        </div>
+
+        <p>0.8 秒的开销主要是<strong>解压 cache + 复制 outputs</strong>。真正的 build 跳过。</p>
+
+        <h3>Local cache 与 Remote Cache</h3>
+
+        <p><strong>Local cache</strong>（默认）：</p>
+        <ul>
+          <li>存到 <code>node_modules/.cache/turbo/&lt;hash&gt;.tar.zst</code></li>
+          <li>用 <strong>zstd</strong> 压缩（速度比 gzip 快、压缩率好）</li>
+          <li>只对当前机器有效——同事机器 / CI 上没有</li>
+        </ul>
+
+        <p><strong>Remote Cache</strong>：</p>
+        <ul>
+          <li>本地查不到时去远程拉</li>
+          <li>本地跑成功后推到远程</li>
+          <li><strong>团队成员 + CI 共享</strong>——你已 build 过的，CI 可以直接拉</li>
+        </ul>
+
+        <p>三种 Remote Cache 选择：</p>
+
+        <p><strong>(1) Vercel Remote Cache（默认推荐）</strong>：</p>
+        <ul>
+          <li>免费层够用（团队 &lt; 10 人）</li>
+          <li>登录 <code>turbo login</code> + 链接项目 <code>turbo link</code></li>
+          <li>不要求项目部署在 Vercel——只是用 Vercel 的 cache 服务</li>
+          <li>对 OSS 项目甚至商业项目这是最低门槛方案</li>
+        </ul>
+
+        <p><strong>(2) 自建 S3 / Cloudflare R2 等 S3-compatible</strong>：</p>
+        <ul>
+          <li>用社区项目 <code>turborepo-remote-cache</code>（开源 S3 wrapper）</li>
+          <li>自己控制 cache 数据 + 不付 Vercel 费用</li>
+          <li>适合大团队 / 已有云存储基建</li>
+        </ul>
+
+        <p><strong>(3) Cloudflare Workers 兼容层</strong>：</p>
+        <ul>
+          <li>把 Vercel Remote Cache API 重做在 Cloudflare Workers + R2</li>
+          <li>对全球团队低延迟</li>
+        </ul>
+
+        <p><strong>实战收益</strong>：</p>
+        <ul>
+          <li>团队成员 A 改了一行 README，B 拉代码 → B 的 build cache 命中 A 的（README 不在 inputs，hash 不变）</li>
+          <li>CI 上跑 build → 拉 main 分支 cache 直接 replay</li>
+          <li>典型 CI 时间从 8 分钟降到 1 分钟（节省 80-90%）</li>
+        </ul>
+
+        <h3>环境变量边界陷阱（最易踩）</h3>
+
+        <p>Turborepo cache 要"<strong>对所有影响 output 的输入敏感</strong>"。环境变量是经典坑——它们不在文件里，但显著影响 build 输出。</p>
+
+        <p><strong>默认行为</strong>：Turborepo<strong>不感知任何环境变量</strong>，除非你显式列在 <code>env</code> / <code>globalEnv</code>。</p>
+
+        <p><strong>典型 bug 1 · NEXT_PUBLIC_* 漏配</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// 错误的 turbo.json
+{
+  "tasks": {
+    "build": {
+      "outputs": [".next/**"]
+      // ❌ 没声明 env！
+    }
+  }
+}</code></pre>
+        </div>
+        <ul>
+          <li>本地 dev: <code>NEXT_PUBLIC_API_URL=http://localhost:3000</code> + 跑 turbo build</li>
+          <li>本地 prod 测试: <code>NEXT_PUBLIC_API_URL=https://api.production.com</code> + 跑 turbo build</li>
+          <li>Turborepo 看 inputs（src 文件）没变 → <strong>cache 命中</strong> → 用 dev 时 build 的 .next 文件</li>
+          <li>启动 prod 测试 → 浏览器请求 localhost：bug</li>
+        </ul>
+
+        <p><strong>正确写法</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">{
+  "tasks": {
+    "build": {
+      "outputs": [".next/**"],
+      "env": ["NEXT_PUBLIC_*"]              // ← 任何 NEXT_PUBLIC_ 前缀的 env 都影响 hash
+    }
+  }
+}</code></pre>
+        </div>
+
+        <p>现在 NEXT_PUBLIC_API_URL 变化触发 cache miss，build 重跑。</p>
+
+        <p><strong>典型 bug 2 · CI / dev 的全局 env 没区分</strong>：</p>
+        <ul>
+          <li>CI 环境有 <code>CI=true</code></li>
+          <li>有些 build script 看 CI 标志改行为（不跑 dev 工具、不打开 source map 等）</li>
+          <li>没声明 globalEnv 导致 dev 和 CI cache 互相污染</li>
+        </ul>
+
+        <p><strong>解</strong>：根 turbo.json 加 <code>"globalEnv": ["CI", "NODE_ENV"]</code>。</p>
+
+        <p><strong>诊断工具</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 看某个 task 的 cache 计算细节（dry run）
+turbo run build --dry-run=json | jq '.tasks[] | select(.taskId=="@app/web#build")'
+
+# 输出包含：
+# - hashOfInputs: 哪些文件参与
+# - hashOfEnv: 哪些 env 参与
+# - cache: hit/miss
+# - 整体 hash</code></pre>
+        </div>
+
+        <h3>turbo dev · 长跑任务的智能调度</h3>
+
+        <p>monorepo dev 场景：要同时跑 apps/web 的 Vite dev + packages/ui 的 tsc --watch + packages/db 的 prisma generate watch + ... 手写 npm-run-all 配 8-10 个并发命令既复杂又难看 log。</p>
+
+        <p><strong>turbo dev</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">turbo.json</span>
+          <pre class="code"><code class="lang-json">{
+  "tasks": {
+    "dev": {
+      "cache": false,
+      "persistent": true,
+      "dependsOn": ["^build"]   // 上游 build 一次再跑 dev
+    }
+  }
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 在 monorepo 根
+turbo run dev
+
+# Turborepo 自动：
+# 1. 看哪些包定义了 dev script
+# 2. 上游包先 build（packages/ui 的 dist 准备好）
+# 3. 然后并发跑所有 dev script
+# 4. 输出按包聚合（不交错）
+# 5. 一个 task 失败不影响其他</code></pre>
+        </div>
+
+        <p><strong>filter 配合</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 只跑 apps/web 的 dev + 它的上游依赖的 watch
+turbo run dev --filter=@app/web</code></pre>
+        </div>
+
+        <h3>Turborepo 2 的关键改进（2024-08）</h3>
+
+        <p>原 Turborepo 用 Go 实现。2024 年 8 月 Vercel 发布 turbo@2，<strong>Rust 重写</strong>，带来：</p>
+        <ul>
+          <li><strong>性能提升</strong>：cache 处理 + hash 计算更快</li>
+          <li><strong>TUI（Terminal UI）模式</strong>：交互式查看 task 进度 + cache 命中</li>
+          <li><strong>boundaries 规则</strong>（实验）：声明哪些包能/不能依赖哪些包，编译时拦截违规 import</li>
+          <li><strong>更好的错误信息</strong>：cache miss 原因、失败 task 的清晰输出</li>
+          <li><strong>turbo.json 的命名一致化</strong>：<code>"pipeline"</code> 改 <code>"tasks"</code>（旧字段仍兼容但 deprecated）</li>
+        </ul>
+
+        <p>2026 年主流项目用 turbo@2.x，这是 Turborepo 现代化的明确分界。</p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 关键洞见：Turborepo 是"cache layer"而非"monorepo 工具"</div>
+          <p>很多人把 Turborepo 当 monorepo 全方案。<strong>这是错的</strong>。Turborepo 不管包管理（pnpm 管）、不管编译（Vite/tsc 管）、不管测试（Vitest 管）。它专做"<strong>缓存任务结果 + 智能调度</strong>"。理解这一点你就明白：选 Turborepo 不是"换框架"，是"加一层 cache"——可逆、可叠加、低门槛。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · CI build 时间从 8 分钟降到 1 分钟</h3>
+          <p><strong>背景</strong>：30 包 monorepo，CI 上 <code>pnpm -r build</code> 每次 8 分钟。每天 50+ PR，CI 排队。</p>
+          <p><strong>方案</strong>：</p>
+          <ol>
+            <li>装 Turborepo: <code>pnpm add -D -w turbo</code></li>
+            <li>写 <code>turbo.json</code>（先简单：build / test / lint 三个 task）</li>
+            <li>本地试: <code>pnpm turbo run build</code> 验证正常</li>
+            <li>登录 Vercel Remote Cache: <code>turbo login &amp;&amp; turbo link</code></li>
+            <li>CI workflow 改：</li>
+          </ol>
+          <div class="code-block">
+            <span class="code-label">yaml</span>
+            <pre class="code"><code class="lang-yaml"># .github/workflows/ci.yml
+- run: pnpm install --frozen-lockfile
+- run: pnpm turbo run build typecheck lint test
+  env:
+    TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+    TURBO_TEAM: 'my-team'</code></pre>
+          </div>
+          <ol start="6">
+            <li>第一次 CI 跑 8 分钟（build 全部 + 推 cache）</li>
+            <li>第二次 CI（small PR）：~1 分钟（绝大部分 cache 命中）</li>
+          </ol>
+          <p><strong>典型 ROI</strong>：节省 6-7 分钟/PR × 50 PR/天 = 5-6 小时/天 CI 时间。月省数百美元 CI 账单 + 极大改善 dev 体验。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · monorepo dev 命令一统</h3>
+          <p><strong>背景</strong>：dev 时要同时跑 apps/web Vite + packages/ui tsc --watch + packages/db prisma generate --watch。手写 concurrently 命令难维护。</p>
+          <p><strong>方案</strong>：用 turbo dev</p>
+          <div class="code-block">
+            <span class="code-label">turbo.json</span>
+            <pre class="code"><code class="lang-json">{
+  "tasks": {
+    "dev": { "cache": false, "persistent": true, "dependsOn": ["^build"] },
+    "build": { "outputs": ["dist/**", ".next/**"] }
+  }
+}</code></pre>
+          </div>
+          <div class="code-block">
+            <span class="code-label">bash</span>
+            <pre class="code"><code class="lang-bash"># 一条命令启动所有
+pnpm turbo dev
+
+# 或仅启动主 app + 它的依赖 watch
+pnpm turbo dev --filter=@app/web</code></pre>
+          </div>
+          <p>Turborepo 自动：</p>
+          <ul>
+            <li>跑上游 packages 的 build 一次（让 dist 准备好）</li>
+            <li>然后并发跑各包的 dev / watch</li>
+            <li>log 按包分组聚合</li>
+          </ul>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · cache 突然全 miss 的诊断</h3>
+          <p><strong>背景</strong>：turbo build 一直好用，今天突然全 miss，cache 完全不命中。</p>
+          <p><strong>诊断顺序</strong>：</p>
+          <ol>
+            <li><code>turbo run build --dry-run=json</code> 查 hash，看变化的部分</li>
+            <li>常见原因：</li>
+            <ul>
+              <li>团队升级了 turbo 版本（version 进 hash）→ 升级时全 miss 一次正常</li>
+              <li>修改了 turbo.json（schema 进 hash）→ 改一次 miss 一次</li>
+              <li>修改了 globalDependencies 中的文件（如 tsconfig.json）→ 全 miss</li>
+              <li>新加了 globalEnv 中的 env 变量（每次值不同）</li>
+              <li>升级 Node 版本（不在 hash 中但影响 build 行为，间接通过 lockfile）</li>
+            </ul>
+            <li>修复：明确改动的目的，确认是不是预期行为</li>
+            <li>验证：再次 build 后查 cache 是否命中</li>
+          </ol>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">完整 turbo.json 模板（中型 monorepo）</span>
+          <pre class="code"><code class="lang-json">{
+  "$schema": "https://turbo.build/schema.json",
+  "ui": "tui",
+
+  "globalDependencies": [
+    "**/.env.*local",
+    "tsconfig.base.json",
+    "package.json"
+  ],
+
+  "globalEnv": ["NODE_ENV", "CI", "VERCEL_ENV"],
+
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "!**/*.md",
+        "!**/*.test.*"
+      ],
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"],
+      "env": ["NEXT_PUBLIC_*", "DATABASE_URL"]
+    },
+    "test": {
+      "dependsOn": ["build"],
+      "inputs": ["$TURBO_DEFAULT$"],
+      "outputs": ["coverage/**"]
+    },
+    "test:watch": { "cache": false, "persistent": true },
+    "lint": {
+      "inputs": ["src/**", "*.json", "*.cjs", ".eslintrc.*"],
+      "outputs": []
+    },
+    "typecheck": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**", "*.ts", "tsconfig.json"],
+      "outputs": []
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true,
+      "dependsOn": ["^build"]
+    },
+    "clean": {
+      "cache": false
+    }
+  }
+}</code></pre>
+        </div>
+
+        <p>注意 <code>$TURBO_DEFAULT$</code>：turbo@2 引入的占位符，等于"包内所有 git-tracked 文件"。配合 <code>!**/*.md</code> 等排除模式精确控制。</p>
+
+        <div class="code-block">
+          <span class="code-label">CI workflow（GitHub Actions）</span>
+          <pre class="code"><code class="lang-yaml"># .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+  TURBO_TEAM: 'my-team'
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      # 一条命令跑所有任务，全用 cache
+      - run: pnpm turbo run build typecheck lint test
+        env:
+          # 这里列出的 env 必须在 turbo.json 的 task.env 中声明
+          # 才能让 cache 对它们敏感
+          NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">root package.json scripts</span>
+          <pre class="code"><code class="lang-json">{
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "ci": "pnpm install --frozen-lockfile && turbo run build test lint typecheck",
+    "clean": "turbo run clean && rm -rf node_modules/.cache/turbo"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0"
+  }
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">filter + remote cache 实战</span>
+          <pre class="code"><code class="lang-bash"># 只 build 受当前 PR 影响的包
+turbo run build --filter='[origin/main...HEAD]'
+
+# 只测试 ui 包及其下游
+turbo run test --filter='@app/ui...'
+
+# 看 cache 状态
+turbo run build --dry-run
+
+# 强制不用 cache（验证某个 task 真的能跑）
+turbo run build --force
+
+# 仅 local cache 不推 remote
+turbo run build --no-remote-cache</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 漏配 env 字段</div>
+          <p>最常见 Turborepo bug。改 .env 后 cache 命中错的版本。<strong>修复</strong>：每个 build / publish 类 task 都列 env；CI 跑前 <code>turbo run build --dry-run=json</code> 验证关键 env 在 hash 中。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · outputs 写错路径</div>
+          <p>把 outputs 写成 <code>"./dist/**"</code>（带 ./）或绝对路径——Turborepo 期待 workspace-relative 路径。<strong>结果</strong>：cache 找不到产物，每次都 miss + 复制不上。<strong>修复</strong>：用 <code>"dist/**"</code>（无前导斜杠或 ./）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 把 node_modules 放进 inputs</div>
+          <p>"我的 task 依赖 node_modules 里的某些包" —— 不要！<strong>node_modules 是 lockfile + pnpm install 的产物</strong>，Turborepo 间接通过 globalDependencies 中的 lockfile 跟踪。把 node_modules 列入 inputs 会导致每次装包都全 miss + hash 计算极慢。<strong>修复</strong>：把 lockfile 列入 globalDependencies 而非 node_modules。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · Remote cache 不工作但没报错</div>
+          <p>CI 上配了 TURBO_TOKEN 但没生效，cache 看似正常其实没跨机器。<strong>诊断</strong>：</p>
+          <div class="code-block">
+            <span class="code-label">bash</span>
+            <pre class="code"><code class="lang-bash"># --summarize 查看 cache 来源
+turbo run build --summarize
+# 查 .turbo/runs/&lt;timestamp&gt;.json 中的 cacheState
+# REMOTE 表示从远程拉的；LOCAL 仅本地</code></pre>
+          </div>
+          <p>典型问题：TURBO_TEAM 没配（仅 TOKEN 不够）；token 过期；team slug 拼错。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 和 Nx 同时挂在项目里</div>
+          <p>有人跟着不同教程，先装了 Nx 后又装 Turborepo（或反之）。<strong>两套并存</strong>互不知情，cache 各自一份，配置冗余。<strong>修复</strong>：选一个。Turborepo 是"组合工具"流派，Nx 是"全家桶"流派——理念冲突，混用得不偿失。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://turbo.build/repo/docs" target="_blank" rel="noopener">Turborepo 官方文档</a></li>
+          <li><a href="https://turbo.build/repo/docs/reference/configuration" target="_blank" rel="noopener">turbo.json schema 全字段</a></li>
+          <li><a href="https://turbo.build/repo/docs/core-concepts/remote-caching" target="_blank" rel="noopener">Remote Caching 文档</a></li>
+          <li><a href="https://turbo.build/blog/turbo-2-0" target="_blank" rel="noopener">Turborepo 2.0 发布公告（2024-08）</a></li>
+          <li><a href="https://turbo.build/repo/docs/crafting-your-repository/caching#environment-variables" target="_blank" rel="noopener">Environment Variables in Caching（最易踩坑）</a></li>
+          <li><a href="https://github.com/ducktors/turborepo-remote-cache" target="_blank" rel="noopener">turborepo-remote-cache（自建 S3）</a></li>
+          <li><a href="../04-workspaces/02-filter-topological.html">P4.2 · pnpm filter（前一章）</a></li>
+          <li><a href="02-nx.html">P5.2 · Nx + 横评（下一章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../04-workspaces/02-filter-topological.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P4.2 · filter / topological</span>
+          </a>
+          <a class="next" href="02-nx.html">
+            <span class="label">下一章 →</span>
+            <span class="title">02 · Nx · 项目图 + affected + 横评</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
