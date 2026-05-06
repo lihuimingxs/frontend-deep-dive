@@ -1,0 +1,676 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CJS Interop + 双 Package Hazard · P3.2 · Vite & 构建工具深度学习</title>
+    <meta name="description" content="现实世界的模块混乱。CJS（CommonJS）核心：module.exports + require；同步加载 + 复制值。CJS vs ESM 4 个不兼容点：同步/异步、复制值/live binding、动态/静态、namespace/named。双 package hazard：一个包同时发 CJS 和 ESM → 可能 import 两份 → 状态不一致。package.json exports 字段精细声明每个 entry 的 CJS/ESM/types。bundler 处理 CJS 各家不同：Vite 通过 plugin / Webpack 原生 / esbuild 自动 interop。回答「为什么 import lodash 报错」「为什么 node-fetch 升 3 后我用不了」。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23bd34fe'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Vite & 构建工具深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.25 305); color: #fff">Vite</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · ESM vs CJS 模块系统</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-esm-standard.html">01 · ESM 标准</a></li>
+          <li><a href="02-cjs-interop.html" class="active">02 · CJS Interop + 双 Package Hazard</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Vite & 构建工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · ESM vs CJS 模块系统</a><span class="breadcrumb-sep">/</span>
+          <span>02 · CJS Interop</span>
+        </nav>
+        <h1>CJS Interop + 双 Package Hazard + bundler 处理</h1>
+        <p class="lead">
+          现实世界的模块混乱。回答"<strong>为什么我 import lodash 报错</strong>"、"<strong>为什么 node-fetch 升 3 后我用不了</strong>"、"<strong>为什么这个包同时发 CJS 和 ESM 反而让我状态错乱</strong>"。<strong>核心问题</strong>：CJS / ESM 共存是 Node ecosystem 的"原罪"——Node 决定 ESM 时社区已有 100k+ CJS 包，不能强制全切 ESM。<strong>本章讲清</strong>：CJS / ESM 的 4 个不兼容点 / 双 package hazard / package.json exports 字段 / bundler 怎么处理 CJS / 现实世界混乱场景。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P3.1（ESM 标准）+ Node.js 基础</span>
+          <span><strong>主要来源</strong> Node Modules docs · package.json exports 提案 · 各 bundler interop 文档</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>CJS / ESM 共存是 Node ecosystem 的"原罪"</strong>—— Node 决定 ESM（2017+）时社区已有 100k+ CJS 包；不能强制全切 ESM。<strong>2026 仍在管理两个系统</strong>，新代码 ESM 主流但 CJS 大量存活。</li>
+          <li><strong>4 个根本不兼容点</strong>：(1) CJS 同步 require / ESM 异步 import + top-level await；(2) CJS 复制值 / ESM live binding；(3) CJS 动态路径 / ESM 静态；(4) CJS exports namespace / ESM named exports + default。</li>
+          <li><strong>双 package hazard</strong>—— 一个包同时发布 CJS 和 ESM 版本；Node 加载时可能<strong>load 两次</strong>（CJS 一份 + ESM 一份） → 内部状态不一致 → bug 难调试。</li>
+          <li><strong>package.json exports 字段</strong>—— 现代约定，精细声明每个 entry 的 CJS / ESM / types：<code>"exports": { ".": { "import": "...", "require": "...", "types": "..." }}</code>。所有新包都应该用 exports 而不是 main。</li>
+          <li><strong>bundler 处理 CJS 各家不同</strong>—— Vite (Rollup) 用 @rollup/plugin-commonjs 转 ESM AST（不完美）/ Webpack 原生支持两种 + 自动 wrapper / esbuild 原生支持两种 + 自动 interop。<strong>同一个 CJS 包不同 bundler 行为可能略不同</strong>。</li>
+          <li><strong>现实场景痛点</strong>—— lodash vs lodash-es（tree shaking 差异）/ node-fetch 3+ 仅 ESM（CJS 用户痛）/ Vite SSR 模式 dev/build 输出不同 / CJS-only 库 lock 整个项目升级 ESM。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>CJS（CommonJS）核心</h3>
+        <p>CJS 是 Node 1.0+（2009）的<strong>原生模块系统</strong>。Browserify（2013）后被带到浏览器。核心 API：</p>
+        <pre class="code"><code class="lang-javascript">// foo.js
+const x = 'hello';
+function greet() { return x; }
+
+module.exports = { x, greet };
+// 或
+exports.x = x;
+exports.greet = greet;
+
+// app.js
+const { x, greet } = require('./foo');
+console.log(greet());</code></pre>
+        <p>关键属性：</p>
+        <ul>
+          <li><strong>同步加载</strong>—— require 同步返回；阻塞执行直到模块加载完</li>
+          <li><strong>动态路径</strong>—— <code>require(anyString)</code>，运行时计算</li>
+          <li><strong>复制值</strong>—— <code>const { x } = require(...)</code> 复制了 x 当前值</li>
+          <li><strong>module.exports 是 namespace 对象</strong>—— 一个对象代表整个模块导出</li>
+        </ul>
+
+        <h3>CJS vs ESM 4 个不兼容点</h3>
+
+        <h4>不兼容点 1：同步 vs 异步</h4>
+        <pre class="code"><code class="lang-javascript">// CJS：同步
+const fs = require('fs');
+const config = require('./config');   // 同步返回
+
+// ESM：异步
+import fs from 'fs';
+import config from './config.js';     // 解析阶段异步处理
+
+// top-level await（仅 ESM）
+import { data } from './data.js';
+const result = await fetch(data.url);</code></pre>
+        <p><strong>影响</strong>：CJS 模块不能 import ESM 模块（CJS 是同步，ESM 是异步）。Node 22+ 部分支持<strong>同步加载 ESM</strong>（如果 ESM 没 top-level await）但仍有限制。</p>
+
+        <h4>不兼容点 2：复制值 vs live binding</h4>
+        <p>详见 P3.1。简短：</p>
+        <pre class="code"><code class="lang-javascript">// CJS 复制值
+const { count } = require('./counter');
+counter.increment();
+console.log(count);   // 旧值
+
+// ESM live binding
+import { count, increment } from './counter';
+increment();
+console.log(count);   // 新值</code></pre>
+
+        <h4>不兼容点 3：动态 vs 静态路径</h4>
+        <pre class="code"><code class="lang-javascript">// CJS：动态完全可以
+function load(name) {
+  return require(`./modules/${name}`);   // 运行时算
+}
+
+// ESM：static import 必须字符串 literal
+import x from `./modules/${name}`;   // ❌ SyntaxError
+
+// ESM 用 dynamic import
+async function load(name) {
+  return await import(`./modules/${name}`);   // ✅
+}</code></pre>
+
+        <h4>不兼容点 4：exports 结构</h4>
+        <pre class="code"><code class="lang-javascript">// CJS：module.exports 整体是一个对象
+module.exports = { a: 1, b: 2 };
+// 或
+module.exports = function() { ... };
+// 或
+module.exports = "string";
+
+// ESM：必须命名 export 或 default export
+export const a = 1;
+export const b = 2;
+export default function() { ... };</code></pre>
+        <p>问题：CJS 的 <code>module.exports = function() {}</code> 怎么映射到 ESM？是当 default export？还是当命名空间？<strong>这是 interop 复杂的根源</strong>。</p>
+
+        <h3>双 Package Hazard 详解</h3>
+        <p>问题场景：你的应用同时通过两个路径加载同一个包：</p>
+        <pre class="code"><code class="lang-text">app.mjs (ESM)
+  ↓ import 'state-lib'
+  → state-lib (ESM 版本) loaded as Module A
+
+dep-of-app.cjs (CJS)
+  ↓ require('state-lib')
+  → state-lib (CJS 版本) loaded as Module B
+
+Module A 和 B 是两个独立模块实例！</code></pre>
+        <p>如果 state-lib 内部有<strong>module-level state</strong>（单例 / 计数器 / cache）：</p>
+        <pre class="code"><code class="lang-javascript">// state-lib internal
+let counter = 0;
+export function increment() { counter++; return counter; }
+
+// 通过 ESM
+import { increment as inc1 } from 'state-lib';
+inc1(); inc1();   // counter = 2
+
+// 通过 CJS
+const { increment: inc2 } = require('state-lib');
+inc2();           // counter = 1（不同实例！）</code></pre>
+        <p>用户期望两次调用 counter = 3；实际是两个独立 counter。<strong>极难调试</strong>，因为代码看起来正确。</p>
+        <p><strong>规避方案</strong>：</p>
+        <ul>
+          <li>包作者：<strong>不要同时发 CJS 和 ESM 单独包</strong>。如果发，<code>exports</code> 字段统一指向同一文件（用现代工具如 tsup 输出 dual format 但内部共享）。</li>
+          <li>用户：检查 npm ls 看是否同包多版本；用 yarn dedupe / pnpm dedupe 合并。</li>
+        </ul>
+
+        <h3>package.json exports 字段（现代标准）</h3>
+        <p>npm 包传统用 <code>main</code> 字段：</p>
+        <pre class="code"><code class="lang-json">{
+  "main": "./index.js"
+}</code></pre>
+        <p>缺点：只能一个 entry；不能区分 CJS / ESM；没有 conditional resolution。</p>
+        <p>2019+ Node 引入 <code>exports</code> 字段：</p>
+        <pre class="code"><code class="lang-json">{
+  "name": "my-pkg",
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./utils": {
+      "types": "./dist/utils.d.ts",
+      "import": "./dist/utils.js",
+      "require": "./dist/utils.cjs"
+    },
+    "./package.json": "./package.json"
+  }
+}</code></pre>
+        <p><strong>关键特性</strong>：</p>
+        <ul>
+          <li><strong>条件 resolution</strong>—— Node 看 <code>require</code> 选 CJS；看 <code>import</code> 选 ESM</li>
+          <li><strong>多 subpath</strong>—— 不同子路径独立 entry</li>
+          <li><strong>encapsulation</strong>—— 没列在 exports 里的内部文件外部不能访问（防止用户依赖 internal API）</li>
+          <li><strong>types 优先</strong>—— TypeScript 看 <code>types</code></li>
+        </ul>
+        <p><strong>条件键的优先级</strong>（自上而下）：</p>
+        <pre class="code"><code class="lang-json">{
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",        // TS 优先
+      "browser": "./browser/index.js",       // 浏览器环境
+      "deno": "./deno/index.js",             // Deno
+      "node": {
+        "import": "./node/index.mjs",
+        "require": "./node/index.cjs"
+      },
+      "default": "./fallback/index.js"
+    }
+  }
+}</code></pre>
+
+        <h3>bundler 怎么处理 CJS</h3>
+
+        <h4>Vite (Rollup) 处理</h4>
+        <p>Vite build 用 Rollup，依赖 <code>@rollup/plugin-commonjs</code> 把 CJS 转 ESM AST：</p>
+        <pre class="code"><code class="lang-javascript">// CJS 输入
+module.exports = { foo: 1, bar: 2 };
+
+// 转换后（AST 级）
+const cjsExports = { foo: 1, bar: 2 };
+export default cjsExports;
+export const foo = cjsExports.foo;
+export const bar = cjsExports.bar;</code></pre>
+        <p><strong>不完美</strong>：</p>
+        <ul>
+          <li>动态 require（<code>require(somePath)</code>）转换困难</li>
+          <li>条件 require（<code>if (x) require('a') else require('b')</code>）需 plugin 启发式</li>
+          <li>module.exports 重赋值情况复杂</li>
+        </ul>
+        <p>Vite dev mode 用 esbuild 预构建依赖，esbuild 自带 CJS 转换（更稳定但语义略不同）。</p>
+
+        <h4>Webpack 处理</h4>
+        <p>Webpack 原生支持 CJS 和 ESM，自动 interop wrapper：</p>
+        <pre class="code"><code class="lang-javascript">// Webpack 生成的代码（简化）
+function __webpack_require__(moduleId) {
+  if (moduleCache[moduleId]) return moduleCache[moduleId].exports;
+  const module = moduleCache[moduleId] = { exports: {} };
+  modules[moduleId](module, module.exports, __webpack_require__);
+  return module.exports;
+}</code></pre>
+        <p>优势：兼容性最好（任何包基本能跑）；劣势：bundle 体积大（每模块都有 wrapper）+ tree shaking 不及 Rollup。</p>
+
+        <h4>esbuild 处理</h4>
+        <p>esbuild 原生支持两种格式 + 自动 interop：</p>
+        <pre class="code"><code class="lang-javascript">// CJS 输入
+module.exports = { foo: 1 };
+
+// esbuild 输出（简化）
+var stdin_exports = {};
+__export(stdin_exports, { default: () =&gt; stdin_default });
+var stdin_default = { foo: 1 };
+
+// ESM 用户
+import x from 'cjs-module';
+console.log(x);   // { foo: 1 }</code></pre>
+        <p>esbuild 的 interop 逻辑相对简单清晰，bug 少；但功能不及 Rollup（无法处理某些边缘 CJS 模式）。</p>
+
+        <h3>bundler 输出格式</h3>
+        <p>bundler 通常能输出多种格式：</p>
+        <table>
+          <thead>
+            <tr><th>格式</th><th>含义</th><th>使用场景</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>esm</code> / <code>es</code></td><td>ESM</td><td>现代浏览器 / Node ESM</td></tr>
+            <tr><td><code>cjs</code> / <code>commonjs</code></td><td>CJS</td><td>旧 Node / Browserify 兼容</td></tr>
+            <tr><td><code>umd</code></td><td>Universal</td><td>浏览器全局 + Node CJS（库常用）</td></tr>
+            <tr><td><code>iife</code></td><td>IIFE</td><td>浏览器全局 only（脚本 inject）</td></tr>
+            <tr><td><code>amd</code></td><td>AMD</td><td>RequireJS（已死）</td></tr>
+            <tr><td><code>system</code></td><td>SystemJS</td><td>SystemJS loader</td></tr>
+          </tbody>
+        </table>
+        <p><strong>2026 实践</strong>：</p>
+        <ul>
+          <li>App build → 通常 ESM（现代浏览器）+ legacy ES5（@vitejs/plugin-legacy 支持旧浏览器）</li>
+          <li>Library build → ESM + CJS（兼容性）；不再发 UMD（除非 IE 10 兼容）</li>
+        </ul>
+
+        <h3>现实场景痛点</h3>
+
+        <h4>痛点 1：lodash vs lodash-es</h4>
+        <pre class="code"><code class="lang-javascript">// lodash 是 CJS
+import _ from 'lodash';
+const r = _.debounce(fn);
+// 整个 lodash bundle 进来（~70KB）
+
+// lodash-es 是 ESM
+import { debounce } from 'lodash-es';
+const r = debounce(fn);
+// 只 debounce 进来（~5KB）—— tree shaking 生效</code></pre>
+        <p><strong>规则</strong>：能用 ESM 版本就用（lodash-es / date-fns / chart.js ESM build / 等）。CJS 版本通常 tree shake 不动。</p>
+
+        <h4>痛点 2：node-fetch 3+ 仅 ESM</h4>
+        <p>node-fetch 是 Node 经典 fetch polyfill。2021 年 v3 发布<strong>仅 ESM</strong>（去掉 CJS 支持）：</p>
+        <pre class="code"><code class="lang-javascript">// node-fetch 3+
+// CJS 用户：报错
+const fetch = require('node-fetch');   // ❌ Error [ERR_REQUIRE_ESM]
+
+// ESM 用户：OK
+import fetch from 'node-fetch';   // ✅</code></pre>
+        <p>大量 CJS 项目升级 node-fetch 失败。社区压力下 v3 后续提供 cjs export，但只是包装：</p>
+        <pre class="code"><code class="lang-javascript">// 后续 hack
+const fetch = (...args) =&gt; import('node-fetch').then(({ default: f }) =&gt; f(...args));</code></pre>
+        <p>2026 解决：<strong>Node 18+ 自带 fetch</strong>（不需要 node-fetch）。但旧 Node 项目仍痛。</p>
+
+        <h4>痛点 3：Vite SSR dev/build 输出不同</h4>
+        <p>Vite SSR：</p>
+        <ul>
+          <li>dev：用 ESM（Vite server 直接 transform）</li>
+          <li>build：可能输出 CJS（Node 旧版兼容）或 ESM（现代）</li>
+        </ul>
+        <p>dev 跑得 OK 的 SSR build 后报错的常见原因：</p>
+        <ul>
+          <li>用了 ESM-only 包（dev OK，build CJS 时不能 require）</li>
+          <li>用了 top-level await（dev OK，build CJS 时不支持）</li>
+        </ul>
+        <p>规避：build 配置 <code>ssr.noExternal</code> 让 Vite 把它打进 bundle；或者输出 ESM（要求 Node 16+）。</p>
+
+        <h4>痛点 4：CJS-only 库 lock 整个项目</h4>
+        <p>你想升 ESM；但项目某个老依赖只发 CJS（包括它的 transitive deps）。<strong>升不了</strong>。</p>
+        <p>规避：</p>
+        <ul>
+          <li>找替代品（社区维护的 ESM fork）</li>
+          <li>等待原作者更新</li>
+          <li>用 patch-package 临时修补</li>
+          <li>暂时保持 CJS</li>
+        </ul>
+
+        <h3>Node 22+ 同步 require ESM</h3>
+        <p>2024 Node 22 引入实验性<strong>同步 require ESM</strong>（如果 ESM 没 top-level await）：</p>
+        <pre class="code"><code class="lang-javascript">// Node 22+
+const esmMod = require('./pure-esm-module.mjs');
+// 如果 ESM 没 top-level await，能同步加载</code></pre>
+        <p>这缓解了 CJS 用户用 ESM 库的痛苦。但<strong>仍有限制</strong>：</p>
+        <ul>
+          <li>ESM 不能 top-level await</li>
+          <li>实验性（要 --experimental-require-module flag）</li>
+          <li>语义微妙（live binding 在同步 require 后变复杂）</li>
+        </ul>
+
+        <h3>tsx / ts-node：TypeScript ESM 痛点</h3>
+        <p>TS 编译输出有几种选择：</p>
+        <ul>
+          <li><code>module: "commonjs"</code>（旧默认）—— TS 把 ESM 转 CJS</li>
+          <li><code>module: "esnext"</code>—— 输出 ESM（需 .js 扩展）</li>
+          <li><code>module: "nodenext"</code>—— 跟随 Node 行为（看 package.json type）</li>
+        </ul>
+        <p>常见痛点：</p>
+        <ul>
+          <li>TS 源码 <code>import './utils'</code>，编译 ESM 后要 <code>import './utils.js'</code>（TS 不自动加扩展）</li>
+          <li>tsx / ts-node 的 ESM 模式不稳（2024-2026 仍在演进）</li>
+        </ul>
+        <p>详见 <a href="../../typescript/index.html">TypeScript 主题</a>。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · 发布一个 dual format（CJS + ESM）库</h3>
+        <p>用 <strong>tsup</strong>（基于 esbuild）或 <strong>tshy</strong>（TS-first）：</p>
+        <pre class="code"><code class="lang-bash">$ npm i -D tsup</code></pre>
+        <pre class="code"><code class="lang-typescript">// tsup.config.ts
+import { defineConfig } from 'tsup';
+
+export default defineConfig({
+  entry: ['src/index.ts'],
+  format: ['esm', 'cjs'],
+  dts: true,
+  splitting: false,
+  sourcemap: true,
+  clean: true
+});</code></pre>
+        <pre class="code"><code class="lang-json">// package.json
+{
+  "name": "my-lib",
+  "version": "1.0.0",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": ["dist"]
+}</code></pre>
+
+        <h3>场景 B · 解决 CJS-only 包不能在 ESM 项目用</h3>
+        <p>包 X 只发 CJS。你的项目 ESM。</p>
+        <p>方案 1：default import 通常 OK：</p>
+        <pre class="code"><code class="lang-javascript">// CJS 包 X：module.exports = { foo: 1 }
+import X from 'x';        // ✅ X = { foo: 1 }
+console.log(X.foo);
+import { foo } from 'x';  // ❌ 不行（ESM 期望命名 export）</code></pre>
+        <p>方案 2：用 <code>createRequire</code>（Node ESM）：</p>
+        <pre class="code"><code class="lang-javascript">import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const X = require('x');
+console.log(X.foo);</code></pre>
+        <p>方案 3：dynamic import（统一接口）：</p>
+        <pre class="code"><code class="lang-javascript">const X = (await import('x')).default;</code></pre>
+
+        <h3>场景 C · 用 exports 字段做 conditional export</h3>
+        <pre class="code"><code class="lang-json">{
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+
+      "browser": {
+        "import": "./browser/index.js",
+        "require": "./browser/index.cjs"
+      },
+
+      "node": {
+        "import": "./node/index.js",
+        "require": "./node/index.cjs"
+      },
+
+      "deno": "./deno/index.js",
+
+      "default": "./fallback/index.js"
+    }
+  }
+}</code></pre>
+        <p>不同环境（浏览器 / Node / Deno）加载不同实现 —— 比如浏览器版用 fetch，Node 版用 axios。</p>
+
+        <h3>场景 D · 修复 lodash tree shaking</h3>
+        <pre class="code"><code class="lang-bash"># 替换
+$ npm uninstall lodash
+$ npm install lodash-es
+
+# 类型
+$ npm install -D @types/lodash-es</code></pre>
+        <pre class="code"><code class="lang-typescript">// 之前
+import _ from 'lodash';
+_.debounce(fn);
+// → bundle 含整个 lodash (~70KB)
+
+// 之后
+import { debounce } from 'lodash-es';
+debounce(fn);
+// → bundle 只含 debounce 及其依赖 (~5KB)</code></pre>
+
+        <h3>场景 E · Vite SSR 打 ESM 输出</h3>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+export default {
+  build: {
+    ssr: true,
+    rollupOptions: {
+      input: 'src/entry-server.ts',
+      output: {
+        format: 'esm',                  // 输出 ESM
+        entryFileNames: '[name].js'
+      }
+    }
+  },
+  ssr: {
+    // 让某些 CJS-only 包打进 bundle
+    noExternal: ['cjs-only-pkg'],
+    // 让某些 ESM-only 包不打包（Node 直接 import）
+    external: ['node-fetch']
+  }
+};</code></pre>
+        <pre class="code"><code class="lang-json">// package.json
+{
+  "type": "module",         // 让 Node 把 .js 当 ESM
+  "scripts": {
+    "start": "node dist/server/entry-server.js"
+  }
+}</code></pre>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：CJS / ESM 互操作</span></h2>
+
+        <h3>用 tshy 发库（TS-first 现代标准）</h3>
+        <pre class="code"><code class="lang-bash">$ npm i -D tshy</code></pre>
+        <pre class="code"><code class="lang-json">// package.json
+{
+  "name": "my-lib",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tshy"
+  },
+  "tshy": {
+    "exports": {
+      ".": "./src/index.ts",
+      "./utils": "./src/utils.ts"
+    }
+  }
+}</code></pre>
+        <p>tshy 自动生成 dual format + types + exports 字段。</p>
+
+        <h3>检查 npm ls 看双重加载</h3>
+        <pre class="code"><code class="lang-bash">$ npm ls react
+
+my-app@1.0.0
+├─┬ react@19.0.0
+└─┬ some-pkg@1.2.0
+  └── react@18.3.1   ← 同包两版本！</code></pre>
+        <p>解决：</p>
+        <pre class="code"><code class="lang-bash">$ npm dedupe   # 尝试合并版本
+# 或用 yarn / pnpm overrides 强制单版本</code></pre>
+        <pre class="code"><code class="lang-json">// package.json (yarn / pnpm)
+{
+  "overrides": {
+    "react": "19.0.0"
+  }
+}</code></pre>
+
+        <h3>verify package exports 配置正确</h3>
+        <p>用 <strong>publint</strong>（Vite team 工具）检查包：</p>
+        <pre class="code"><code class="lang-bash">$ npm i -g publint
+$ cd my-lib
+$ publint
+✓ exports field configured correctly
+✓ types field present
+✗ "main" field used but no "exports" - consider adding exports
+...</code></pre>
+
+        <h3>用 are-the-types-wrong 检查 dual format types</h3>
+        <pre class="code"><code class="lang-bash">$ npm i -g @arethetypeswrong/cli
+$ attw my-lib-1.0.0.tgz
+✓ "node10" passed
+✓ "node16-cjs" passed
+✓ "node16-esm" passed
+✓ "bundler" passed</code></pre>
+
+        <h3>修复 dual package hazard</h3>
+        <pre class="code"><code class="lang-javascript">// 错误 pattern：CJS 和 ESM 各自有 module-level state
+// state-lib/dist/index.cjs
+let count = 0;
+exports.increment = () =&gt; ++count;
+
+// state-lib/dist/index.js
+let count = 0;
+export const increment = () =&gt; ++count;
+
+// → 两个独立 count 变量</code></pre>
+        <pre class="code"><code class="lang-javascript">// 修复 pattern：CJS wrapper 引用 ESM 实现
+// state-lib/dist/index.js (ESM, 真实现)
+let count = 0;
+export const increment = () =&gt; ++count;
+
+// state-lib/dist/index.cjs (CJS wrapper)
+const esm = require('./index.js');   // Node 22+ 同步 require ESM
+module.exports = esm;
+
+// 或用 __esModule + default 桥接技巧</code></pre>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：仍用 main 字段不用 exports</h3>
+        <p>2026 新发包<strong>必须用 exports</strong>。只用 main：</p>
+        <ul>
+          <li>不能区分 CJS / ESM</li>
+          <li>用户能 import 包内任意文件（破坏封装）</li>
+          <li>没有 conditional resolution</li>
+        </ul>
+        <p>Vite / Bun / Node 等现代工具优先看 exports。</p>
+
+        <h3>陷阱 2：exports 字段顺序错</h3>
+        <p>条件键<strong>顺序敏感</strong>。Node 按从上到下匹配第一个：</p>
+        <pre class="code"><code class="lang-json">// ❌ 错：default 在前面捕获所有
+"exports": {
+  ".": {
+    "default": "./fallback.js",
+    "types": "./types.d.ts"      // 永远不会匹配
+  }
+}
+
+// ✅ 正：types 优先，default 兜底
+"exports": {
+  ".": {
+    "types": "./types.d.ts",
+    "node": "./node.js",
+    "default": "./fallback.js"
+  }
+}</code></pre>
+        <p>规则：types 永远第一；default 永远最后。</p>
+
+        <h3>陷阱 3：dual format 但没修 dual package hazard</h3>
+        <p>发 dual format 包就要考虑 dual package hazard。<strong>不用 module-level state</strong>，或<strong>共享底层实现</strong>。</p>
+        <p>实测：用 <code>are-the-types-wrong</code> + 测试 CJS / ESM 两个 import 路径互通。</p>
+
+        <h3>陷阱 4：发 ESM-only 不留 CJS</h3>
+        <p>node-fetch 3 教训。<strong>除非有强烈理由</strong>，新库默认发 dual format。CJS 用户仍是大多数。</p>
+        <p>用 tsup / tshy 等工具发 dual format 是几乎免费的。</p>
+
+        <h3>陷阱 5：以为 import * 等同 default import</h3>
+        <pre class="code"><code class="lang-javascript">// CJS module: module.exports = { foo: 1 };
+
+// 不同 import 行为可能不同（依 bundler）
+import x from 'cjs-mod';                       // x = { foo: 1 } 或 x = { default: { foo: 1 } }
+import * as y from 'cjs-mod';                  // y = { default: { foo: 1 }, foo: 1 }（Vite/Webpack 自动 wrap）
+const z = require('cjs-mod');                  // z = { foo: 1 }（CJS 原始）
+
+// 安全做法：测试每个 bundler 行为</code></pre>
+
+        <h3>陷阱 6：忘记 @types 包</h3>
+        <p>很多 CJS 包没自带 types。需要 @types/X：</p>
+        <pre class="code"><code class="lang-bash">$ npm install -D @types/lodash @types/node-fetch
+# 等</code></pre>
+
+        <h3>陷阱 7：CJS 库内部用 require.cache 期望单例</h3>
+        <p>有些 CJS 库假设"每次 require('mylib') 都是同一实例"（用 require.cache 实现单例）。<strong>ESM 加载不走 require.cache</strong> → 单例假设破坏。</p>
+        <p>例：早期 React + react-dom 双 import 让 react 实例不一致 → "invalid hook call" 错误。React 18+ 用 exports 字段 + 强 dedupe 缓解。</p>
+
+        <h3>陷阱 8：用户代码混 ESM / CJS</h3>
+        <pre class="code"><code class="lang-javascript">// app.mjs (ESM)
+import { foo } from './utils.js';
+
+// utils.cjs (CJS)
+module.exports = { foo: 1 };
+
+// Node ESM 加载 .cjs 需要 createRequire
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { foo } = require('./utils.cjs');   // ✅</code></pre>
+        <p>实践：项目内代码<strong>统一一种格式</strong>（要么全 ESM 要么全 CJS），别混。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范 + 文档</h3>
+        <ul>
+          <li><a href="https://nodejs.org/api/packages.html" target="_blank" rel="noopener">Node Packages docs（exports 字段权威）</a></li>
+          <li><a href="https://nodejs.org/api/esm.html" target="_blank" rel="noopener">Node ESM docs</a></li>
+          <li><a href="https://github.com/nodejs/node-eps/blob/master/002-es-modules.md" target="_blank" rel="noopener">Node ESM proposal (历史)</a></li>
+        </ul>
+
+        <h3>关键文章</h3>
+        <ul>
+          <li><a href="https://nodejs.org/api/packages.html#dual-package-hazard" target="_blank" rel="noopener">Node 官方 · Dual Package Hazard</a></li>
+          <li><a href="https://gist.github.com/joepie91/bca2fda868c1e8b2c2caf76af7dfcad3" target="_blank" rel="noopener"><em>I'm tired of the ESM-vs-CJS holy war</em></a></li>
+          <li><a href="https://github.com/sindresorhus/meta/discussions/15" target="_blank" rel="noopener">Sindre Sorhus · <em>Get ready for ESM</em></a></li>
+        </ul>
+
+        <h3>工具</h3>
+        <ul>
+          <li><a href="https://tsup.egoist.dev/" target="_blank" rel="noopener">tsup</a> · 简单 dual format builder</li>
+          <li><a href="https://github.com/isaacs/tshy" target="_blank" rel="noopener">tshy</a> · TS-first dual format</li>
+          <li><a href="https://publint.dev/" target="_blank" rel="noopener">publint</a> · 包配置 lint</li>
+          <li><a href="https://arethetypeswrong.github.io/" target="_blank" rel="noopener">are-the-types-wrong</a> · 类型检查</li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="../04-tree-shaking/01-tree-shaking.html">P4 Tree Shaking 真相</a> · 为什么 ESM 才能 tree shake</li>
+          <li><a href="../06-compilers/01-esbuild-swc.html">P6.1 编译器后端</a></li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../node/03-modules/" target="_blank">Node P3 模块系统</a> · CJS/ESM 详细</li>
+          <li><a href="../../typescript/05-engineering/" target="_blank">TS P5 工程化</a> · TS module 配置</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

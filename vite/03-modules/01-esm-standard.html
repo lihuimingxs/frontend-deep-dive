@@ -1,0 +1,659 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ESM 标准 + import.meta + import attributes + dynamic import · P3.1 · Vite & 构建工具深度学习</title>
+    <meta name="description" content="ESM 是现代模块系统。静态分析（import 必须顶层 + 字符串 literal）让 tree shaking 成为可能；live binding 与 CJS 复制值不同；import.meta 提供模块元数据；import attributes（2025 stage 4）让 ESM 安全 import JSON/CSS/wasm；dynamic import + top-level await 是异步特性；import maps 让浏览器原生解析 bare specifier。bundler 的核心工作就是「把所有 import 解析 + 合并成产物」。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23bd34fe'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Vite & 构建工具深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.25 305); color: #fff">Vite</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · ESM vs CJS 模块系统</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-esm-standard.html" class="active">01 · ESM 标准</a></li>
+          <li><a href="02-cjs-interop.html">02 · CJS Interop + 双 Package Hazard</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Vite & 构建工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · ESM vs CJS 模块系统</a><span class="breadcrumb-sep">/</span>
+          <span>01 · ESM 标准</span>
+        </nav>
+        <h1>ESM 标准 + import.meta + import attributes + dynamic import</h1>
+        <p class="lead">
+          现代模块系统。<strong>关键特性</strong>：静态分析（import 必须顶层 + 字符串 literal）让 tree shaking 成为可能；live binding 与 CJS 复制值不同；import.meta 提供模块元数据；import attributes（2025 stage 4）让 ESM 安全 import JSON/CSS/wasm；dynamic import + top-level await 是异步特性；import maps 让浏览器原生解析 bare specifier。<strong>bundler 视角</strong>：bundler 的核心工作就是"把所有 import 解析 + 合并成产物"。每个 bundler 对 ESM spec 的覆盖度不同。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P2（Vite 架构）+ JS 基础</span>
+          <span><strong>主要来源</strong> ECMA-262 §16 · TC39 import attributes 提案 · MDN ESM 文档</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>ESM 是 Web 标准的"唯一模块系统"</strong>—— 与 CommonJS（Node 专属）/ AMD（已死）/ UMD（兼容包装）不同。<strong>ESM 是 ECMAScript 规范一部分</strong>，浏览器和 Node 都原生支持。</li>
+          <li><strong>静态 vs 动态的根本权衡</strong>—— ESM 是<strong>静态</strong>（import 必须在顶层 + 字符串 literal） → 编译时能分析依赖图 → tree shaking 可能。CJS 是<strong>动态</strong>（require 任意 string） → 编译时不能完全分析 → tree shaking 困难。</li>
+          <li><strong>live binding</strong>—— ESM 的 import 是<strong>引用</strong>不是复制值。<code>import { count } from './counter'</code>，外部能看到 count 后续变化。CJS 的 <code>const { count } = require('./counter')</code> 是复制，看不到后续变化。这是 ESM/CJS 互操作复杂的根源之一。</li>
+          <li><strong>import.meta</strong>—— 每个 module 有独立元数据。<code>import.meta.url</code> 是 module 的 URL；Vite/Webpack 等扩展 <code>import.meta.env</code>（环境变量）/ <code>import.meta.hot</code>（HMR API）。</li>
+          <li><strong>import attributes（2025 stage 4 → ECMA 2026）</strong>—— <code>import data from './data.json' with { type: 'json' }</code>。让 ESM 安全 import 非 JS 资源（JSON/CSS/wasm/...），替代旧的 import assertions。</li>
+          <li><strong>dynamic import + top-level await</strong>—— <code>const mod = await import('./foo')</code> 运行时 import；<code>top-level await</code> 让 module 顶层可 await。<strong>都让 ESM 更接近"应用语言"</strong>。</li>
+          <li><strong>bundler 的核心工作 = 模块解析 + 合并</strong>—— 拿到所有 import → 解析路径（node_modules / alias / relative）→ 合并成 chunk → 输出。每个 bundler 对 ESM spec 的覆盖度不同（如 import attributes 普遍支持，import maps 浏览器原生）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>ESM 历史 + spec 来源</h3>
+        <p>ESM 是 <strong>ECMAScript 2015（ES6）</strong>引入：</p>
+        <ul>
+          <li>2015-06：ECMA-262 6th Edition 发布；首次定义模块语法</li>
+          <li>2015-2017：规范完善（ES2017 加 dynamic import / ES2020 加 import.meta）</li>
+          <li>2017-2018：浏览器原生支持（Chrome 61 / Safari 10.1 / Firefox 60）</li>
+          <li>2019-12：Node 13 默认启用 ESM（require 仍兼容）</li>
+          <li>2020：Vite 等 ESM-first bundler 出现</li>
+          <li>2025-03：import attributes 进入 ES2025</li>
+        </ul>
+        <p>规范源详见 <a href="../../ecma/07-execution/04-module-system.html">ECMA P7.4 模块系统</a>。本章讲<strong>开发者视角 + bundler 视角</strong>。</p>
+
+        <h3>静态分析特性</h3>
+        <p>ESM 设计强约束：</p>
+        <p><strong>规则 1：import / export 必须在顶层</strong></p>
+        <pre class="code"><code class="lang-javascript">// ✅ 顶层
+import { foo } from './foo';
+
+// ❌ 不行
+if (cond) {
+  import { foo } from './foo';   // SyntaxError
+}
+
+function loadModule() {
+  import { foo } from './foo';   // SyntaxError
+}</code></pre>
+        <p>但<strong>dynamic import 可以任何位置</strong>：</p>
+        <pre class="code"><code class="lang-javascript">if (cond) {
+  const { foo } = await import('./foo');  // ✅ dynamic import 是函数调用
+}</code></pre>
+
+        <p><strong>规则 2：import 路径必须是字符串 literal</strong></p>
+        <pre class="code"><code class="lang-javascript">// ✅
+import x from './foo';
+
+// ❌ 不行
+const path = './foo';
+import x from path;             // SyntaxError
+
+// dynamic import 可以
+const x = await import(path);   // ✅</code></pre>
+
+        <p><strong>规则 3：export 必须在顶层</strong>—— 同上。</p>
+
+        <p><strong>这两条规则的意义</strong>：</p>
+        <p>编译时（不运行代码）就能知道 module 的所有 import / export 是什么。这让：</p>
+        <ul>
+          <li><strong>Tree shaking 成为可能</strong>—— 编译器知道每个 export 是否被用</li>
+          <li><strong>循环依赖检测</strong>—— 编译时构建依赖图</li>
+          <li><strong>bundler 优化</strong>—— scope hoisting / chunk splitting / 等</li>
+        </ul>
+        <p>CJS 的 require 是函数调用（动态），编译时不知道实际加载什么 → 所有这些优化都难。</p>
+
+        <h3>live binding（活引用）</h3>
+        <p>ESM 的 import 是<strong>引用</strong>不是复制：</p>
+        <pre class="code"><code class="lang-javascript">// counter.js
+export let count = 0;
+export function increment() { count++; }
+
+// app.js
+import { count, increment } from './counter';
+
+console.log(count);   // 0
+increment();
+console.log(count);   // 1   ← 看到了变化！</code></pre>
+        <p>CJS 行为不同：</p>
+        <pre class="code"><code class="lang-javascript">// counter.js
+let count = 0;
+exports.count = count;
+exports.increment = function() { count++; };
+
+// app.js
+const { count, increment } = require('./counter');
+
+console.log(count);   // 0
+increment();
+console.log(count);   // 0   ← 看不到变化（复制了值）</code></pre>
+        <p><strong>live binding 的实现</strong>：</p>
+        <p>底层 ESM 引擎为每个 import 创建一个<strong>引用槽</strong>。访问 <code>count</code> 时实际上是去 module 的命名空间里取当前值。</p>
+        <p><strong>影响</strong>：</p>
+        <ul>
+          <li>测试时 mock 简单（重新 import 拿最新值）</li>
+          <li>但 destructuring 后失去 live binding：<code>const { count } = mod</code> 复制了</li>
+          <li>CJS 互操作复杂 —— bundler 必须模拟 live binding</li>
+        </ul>
+
+        <h3>import.meta：模块元数据</h3>
+        <p>每个 ESM 模块有独立的 <code>import.meta</code> 对象：</p>
+        <pre class="code"><code class="lang-javascript">// 浏览器原生
+console.log(import.meta.url);   // "https://example.com/main.js"
+
+// Node ESM
+console.log(import.meta.url);   // "file:///path/to/main.js"
+console.log(import.meta.dirname);  // "/path/to" (Node 21+)
+console.log(import.meta.filename); // "/path/to/main.js"
+
+// Vite 扩展
+console.log(import.meta.env.MODE);    // 'development' | 'production'
+console.log(import.meta.env.DEV);     // true | false
+console.log(import.meta.env.VITE_API_URL);  // 自定义
+
+// HMR API（Vite/HMR runtime 注入）
+if (import.meta.hot) {
+  import.meta.hot.accept((newMod) =&gt; { ... });
+}
+
+// glob import（Vite 特性）
+const modules = import.meta.glob('./pages/*.tsx');
+// modules = { './pages/Home.tsx': () =&gt; import('./pages/Home.tsx'), ... }</code></pre>
+        <p><strong>import.meta.url 的实用价值</strong>：</p>
+        <pre class="code"><code class="lang-javascript">// 解析相对当前模块的资源路径
+const dataUrl = new URL('./data.json', import.meta.url);
+
+// Worker 用相对路径
+const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });</code></pre>
+
+        <h3>import attributes（2025 ES2025）</h3>
+        <p>原始问题：ESM import 默认期望 JS。要 import JSON / CSS / wasm 等怎么办？早期方案 import assertions（<code>assert { type: 'json' }</code>）2023 被 import attributes 替代：</p>
+        <pre class="code"><code class="lang-javascript">// 2025+ stage 4
+import data from './data.json' with { type: 'json' };
+import styles from './styles.css' with { type: 'css' };
+import wasmModule from './module.wasm' with { type: 'webassembly' };</code></pre>
+        <p><strong>实现状态</strong>：</p>
+        <ul>
+          <li>JSON：浏览器 / Node 都支持（2023+）</li>
+          <li>CSS：实验性（CSSStyleSheet 集成）</li>
+          <li>WebAssembly：实验性</li>
+          <li>bundler 端：Vite / Webpack / esbuild 都支持 JSON</li>
+        </ul>
+        <p>之前的方案：bundler 让你直接 <code>import data from './data.json'</code>（约定路径后缀），但这<strong>不是 spec</strong>。import attributes 是 spec 标准化版本。</p>
+
+        <h3>dynamic import</h3>
+        <pre class="code"><code class="lang-javascript">// 运行时 import；返回 Promise
+const mod = await import('./foo');
+console.log(mod.default);
+
+// 路径可以动态
+const moduleName = condition ? './a' : './b';
+const mod = await import(moduleName);
+
+// 用于 lazy loading
+async function loadHeavyModule() {
+  const { heavyFunc } = await import('./heavy');
+  return heavyFunc();
+}
+
+// React 用
+const Page = lazy(() =&gt; import('./Page'));</code></pre>
+        <p><strong>bundler 处理</strong>：</p>
+        <ul>
+          <li>静态分析：找出所有 dynamic import 调用 + 路径（文字部分）</li>
+          <li>每个 dynamic import 自动一个 chunk（code splitting 基础）</li>
+          <li>路径动态时（如 <code>import(\`./pages/${name}\`)</code>）：bundler 通常 glob 匹配可能路径，所有匹配文件都打成 chunk</li>
+        </ul>
+
+        <h3>top-level await</h3>
+        <p>ESM 模块顶层可以直接 await（不必包装在 async function 里）：</p>
+        <pre class="code"><code class="lang-javascript">// data.js
+const response = await fetch('/api/data');
+export const data = await response.json();
+
+// app.js
+import { data } from './data';   // ✅ 等待 data.js 完成
+console.log(data);</code></pre>
+        <p><strong>语义</strong>：模块的执行变成异步 —— import 它的模块也异步等待。</p>
+        <p><strong>限制</strong>：</p>
+        <ul>
+          <li>CJS 不兼容（CJS 是同步 require）</li>
+          <li>循环依赖可能 deadlock</li>
+          <li>不要随意用（让模块加载链变慢）</li>
+        </ul>
+        <p><strong>典型场景</strong>：</p>
+        <ul>
+          <li>动态 config 加载</li>
+          <li>WASM 模块初始化</li>
+          <li>数据库 / 资源连接</li>
+        </ul>
+
+        <h3>import maps（浏览器原生）</h3>
+        <p>浏览器原生 ESM 不支持 bare specifier（<code>import 'react'</code>）。<strong>import maps</strong> 解决：</p>
+        <pre class="code"><code class="lang-html">&lt;script type="importmap"&gt;
+{
+  "imports": {
+    "react": "https://esm.sh/react@19",
+    "react-dom": "https://esm.sh/react-dom@19",
+    "lodash-es": "/vendor/lodash-es.js"
+  }
+}
+&lt;/script&gt;
+
+&lt;script type="module"&gt;
+  import React from 'react';   // 浏览器查 import map → "https://esm.sh/react@19"
+&lt;/script&gt;</code></pre>
+        <p>Vite dev mode 内部用类似机制（但 server 端重写而不是 import map）。</p>
+        <p>2026 浏览器普遍支持 import maps（Chrome 89+ / Safari 16.4+ / Firefox 108+）。Deno 也用 import maps 配置依赖。</p>
+
+        <h3>module 命名空间（namespace）</h3>
+        <p>ESM 有<strong>命名导出</strong>和<strong>默认导出</strong>两种：</p>
+        <pre class="code"><code class="lang-javascript">// utils.js
+export const PI = 3.14;        // 命名导出
+export function add(a, b) { return a + b; }
+export default class Calc { ... }   // 默认导出（每模块只一个）
+
+// app.js
+import Calc, { PI, add } from './utils';   // 默认 + 命名
+
+// 全部导入为命名空间
+import * as utils from './utils';
+console.log(utils.PI, utils.add, utils.default);   // default 是默认导出</code></pre>
+        <p>命名空间对象是<strong>不可变</strong>（不能改字段）+ <strong>可枚举</strong>。</p>
+
+        <h3>bundler 怎么处理 ESM</h3>
+        <p>典型 bundler 处理流程：</p>
+        <p><strong>1. Resolve（路径解析）</strong>—— 把 import 字符串解析到具体文件：</p>
+        <ul>
+          <li>相对路径（./foo）→ 直接 resolve</li>
+          <li>绝对路径（/foo）→ 项目根 + foo</li>
+          <li>bare specifier（react）→ 从 node_modules 查找；用 package.json exports 字段</li>
+          <li>带 alias（@/foo）→ 应用 alias 配置</li>
+        </ul>
+        <p><strong>2. Load（读文件）</strong>—— 读 source code（含 source map）。</p>
+        <p><strong>3. Transform（编译）</strong>—— TS → JS / JSX → JS / 等。</p>
+        <p><strong>4. Module graph 构建</strong>—— 递归处理 imports，构建完整依赖图。</p>
+        <p><strong>5. Tree shaking</strong>—— 标记未使用 export（详见 <a href="../04-tree-shaking/01-tree-shaking.html">P4</a>）。</p>
+        <p><strong>6. Chunk 分割</strong>—— 按 dynamic import + manualChunks 分。</p>
+        <p><strong>7. Code generation</strong>—— 输出 ESM/CJS/UMD。</p>
+
+        <h3>ESM 与 bundler 的虚拟解析</h3>
+        <p>浏览器原生 ESM 用 URL（绝对 / 相对）。但 bundler 处理 <code>import 'react'</code> 时，"react" 不是 URL —— 是 bare specifier。bundler 必须做"<strong>虚拟 ESM 解析</strong>"：</p>
+        <p>用 <strong>Node Resolution Algorithm</strong>（虽然 ESM spec 不强制，但 bundler 实际遵循）：</p>
+        <ol>
+          <li>查 node_modules/react/package.json</li>
+          <li>看 exports 字段（首选）</li>
+          <li>看 module 字段（ESM）</li>
+          <li>看 main 字段（fallback）</li>
+          <li>解析到具体文件</li>
+        </ol>
+        <p>不同 bundler 实现细节略有差异（如对 conditional exports 的支持），导致<strong>同一个包在不同 bundler 行为不同</strong>。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · 用 dynamic import 实现 lazy loading</h3>
+        <pre class="code"><code class="lang-typescript">import { lazy, Suspense } from 'react';
+
+const Dashboard = lazy(() =&gt; import('./pages/Dashboard'));
+const Settings = lazy(() =&gt; import('./pages/Settings'));
+
+export default function App() {
+  return (
+    &lt;Routes&gt;
+      &lt;Route path="/dashboard" element={
+        &lt;Suspense fallback={&lt;Loading /&gt;}&gt;
+          &lt;Dashboard /&gt;
+        &lt;/Suspense&gt;
+      } /&gt;
+      &lt;Route path="/settings" element={
+        &lt;Suspense fallback={&lt;Loading /&gt;}&gt;
+          &lt;Settings /&gt;
+        &lt;/Suspense&gt;
+      } /&gt;
+    &lt;/Routes&gt;
+  );
+}</code></pre>
+        <p>每个 dynamic import 自动一个 chunk，按需加载。</p>
+
+        <h3>场景 B · 用 import.meta.glob 自动注册路由</h3>
+        <pre class="code"><code class="lang-typescript">// router.ts (Vite 特性)
+const pages = import.meta.glob('./pages/**/*.tsx');
+// pages = { './pages/Home.tsx': () =&gt; import(...), './pages/About.tsx': () =&gt; import(...) }
+
+const routes = Object.entries(pages).map(([path, loader]) =&gt; ({
+  path: path.replace('./pages', '').replace('.tsx', ''),
+  component: lazy(loader)
+}));</code></pre>
+
+        <h3>场景 C · 用 top-level await 加载 wasm</h3>
+        <pre class="code'><code class="lang-typescript">// wasm-mod.ts
+const wasmModule = await WebAssembly.instantiateStreaming(fetch('/my.wasm'));
+export const { add, multiply } = wasmModule.instance.exports;
+
+// app.ts
+import { add } from './wasm-mod';   // 自动等待 wasm 加载完
+console.log(add(2, 3));</code></pre>
+
+        <h3>场景 D · 用 import.meta.env 区分环境</h3>
+        <pre class="code"><code class="lang-typescript">const apiUrl = import.meta.env.PROD
+  ? 'https://api.example.com'
+  : 'http://localhost:3001';
+
+if (import.meta.env.DEV) {
+  // 仅 dev 启用 redux devtools
+  enableDevTools();
+}
+
+// 自定义 env（必须 VITE_ 前缀才暴露给客户端）
+const sentryDsn = import.meta.env.VITE_SENTRY_DSN;</code></pre>
+
+        <h3>场景 E · 浏览器原生 ESM + import maps（无 bundler）</h3>
+        <pre class="code"><code class="lang-html">&lt;!doctype html&gt;
+&lt;html&gt;
+  &lt;head&gt;
+    &lt;script type="importmap"&gt;
+    {
+      "imports": {
+        "react": "https://esm.sh/react@19?dev",
+        "react-dom/client": "https://esm.sh/react-dom@19/client?dev"
+      }
+    }
+    &lt;/script&gt;
+  &lt;/head&gt;
+  &lt;body&gt;
+    &lt;div id="root"&gt;&lt;/div&gt;
+    &lt;script type="module"&gt;
+      import React from 'react';
+      import { createRoot } from 'react-dom/client';
+
+      const App = () =&gt; React.createElement('h1', null, 'Hello!');
+      createRoot(document.getElementById('root')).render(React.createElement(App));
+    &lt;/script&gt;
+  &lt;/body&gt;
+&lt;/html&gt;</code></pre>
+        <p>这种"无 bundler"开发越来越流行（特别是 demo / 小工具）—— ESM CDN（esm.sh / unpkg）+ import maps 让你不需要 npm install。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：ESM 完整使用</span></h2>
+
+        <h3>命名导出 + 默认导出 + re-export</h3>
+        <pre class="code"><code class="lang-javascript">// utils.js
+
+// 命名导出
+export const VERSION = '1.0';
+export function add(a, b) { return a + b; }
+export class Calculator { ... }
+
+// 默认导出
+export default class App { ... }
+
+// 重新导出
+export { foo, bar } from './other';
+export * from './common';
+export { default as Helper } from './helper';</code></pre>
+        <pre class="code"><code class="lang-javascript">// 各种 import 形式
+
+// 默认导出
+import App from './utils';
+
+// 命名导出
+import { VERSION, add } from './utils';
+
+// 默认 + 命名
+import App, { VERSION, add } from './utils';
+
+// 重命名
+import { add as addNumbers } from './utils';
+
+// 全部为命名空间
+import * as Utils from './utils';
+// Utils.VERSION, Utils.add, Utils.default
+
+// 仅副作用（不获取任何 export）
+import './side-effects';</code></pre>
+
+        <h3>dynamic import 模式</h3>
+        <pre class="code"><code class="lang-javascript">// 简单 lazy load
+const mod = await import('./heavy');
+
+// 错误处理
+try {
+  const mod = await import('./optional');
+  mod.init();
+} catch (e) {
+  console.warn('Optional module failed to load:', e);
+}
+
+// 路径动态
+async function loadLocale(locale: string) {
+  const mod = await import(`./locales/${locale}.json`, { with: { type: 'json' } });
+  return mod.default;
+}
+
+// 并行 import
+const [a, b, c] = await Promise.all([
+  import('./a'),
+  import('./b'),
+  import('./c'),
+]);
+
+// React.lazy
+const HeavyComponent = lazy(() =&gt; import('./HeavyComponent'));</code></pre>
+
+        <h3>import attributes 实战</h3>
+        <pre class="code"><code class="lang-typescript">// 静态 import attributes
+import config from './config.json' with { type: 'json' };
+console.log(config.version);
+
+// dynamic import with attributes
+const data = await import('./data.json', { with: { type: 'json' } });
+
+// CSS modules（实验性，部分浏览器）
+import sheet from './styles.css' with { type: 'css' };
+document.adoptedStyleSheets = [sheet];</code></pre>
+
+        <h3>top-level await + 错误处理</h3>
+        <pre class="code"><code class="lang-typescript">// config-loader.ts
+const loadConfig = async () =&gt; {
+  const response = await fetch('/api/config');
+  if (!response.ok) throw new Error('Config load failed');
+  return response.json();
+};
+
+let config: Config;
+try {
+  config = await loadConfig();
+} catch (e) {
+  console.error('Failed to load config, using defaults:', e);
+  config = DEFAULT_CONFIG;
+}
+
+export { config };</code></pre>
+
+        <h3>Vite glob import 高级用法</h3>
+        <pre class="code"><code class="lang-typescript">// 同步 glob（编译时全部 import）
+const modules = import.meta.glob('./pages/*.tsx', { eager: true });
+// 编译时 modules = { './pages/Home.tsx': { default: HomeComponent }, ... }
+
+// 异步 glob（lazy load）
+const lazyModules = import.meta.glob('./pages/*.tsx');
+// lazyModules = { './pages/Home.tsx': () =&gt; import(...), ... }
+
+// 只 import 特定 export
+const components = import.meta.glob('./components/*.tsx', {
+  import: 'default',
+  eager: true
+});
+
+// 自定义 query（asset import）
+const images = import.meta.glob('./assets/*.png', {
+  query: '?url',
+  import: 'default',
+  eager: true
+});</code></pre>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：以为 destructuring 后还是 live binding</h3>
+        <pre class="code"><code class="lang-javascript">// counter.js
+export let count = 0;
+export const increment = () =&gt; { count++; };
+
+// app.js (live binding)
+import { count, increment } from './counter';
+increment();
+console.log(count);   // 1 ✅
+
+// app.js (destructuring 后 NOT live)
+import * as mod from './counter';
+const { count, increment } = mod;
+increment();
+console.log(count);   // 0 ❌ 复制了
+
+// 用 mod.count 仍是 live
+console.log(mod.count);   // 1 ✅</code></pre>
+
+        <h3>陷阱 2：以为 dynamic import 路径完全任意</h3>
+        <p>bundler 静态分析时仍要看路径中"字符串部分"。如果完全动态（如来自 user input），bundler 不能预知 → 不能 prebundle → 运行时可能失败：</p>
+        <pre class="code"><code class="lang-javascript">// ❌ bundler 不知道要 build 什么
+const userInput = getInput();
+const mod = await import(userInput);
+
+// ✅ bundler 看到 './pages/' prefix → glob 匹配所有 pages
+const mod = await import(`./pages/${name}.tsx`);</code></pre>
+
+        <h3>陷阱 3：top-level await 让模块加载阻塞</h3>
+        <p>过度用 top-level await 让 module 加载链变慢：</p>
+        <pre class="code"><code class="lang-javascript">// data.js
+export const data = await fetch('/api/slow').then(r =&gt; r.json());
+// 这个 fetch 5s 才完成
+
+// 任何 import data.js 的模块都阻塞 5s</code></pre>
+        <p>对策：把 fetch 包成 async function，让 caller 决定何时等：</p>
+        <pre class="code"><code class="lang-javascript">// data.js
+export async function loadData() {
+  return fetch('/api/slow').then(r =&gt; r.json());
+}
+
+// caller 决定何时 await
+const data = await loadData();</code></pre>
+
+        <h3>陷阱 4：循环依赖 + ESM</h3>
+        <p>ESM 比 CJS 处理循环依赖好（live binding 让"先 import 后赋值"工作），但仍可能出问题：</p>
+        <pre class="code"><code class="lang-javascript">// a.js
+import { b } from './b';
+console.log(b);   // 可能 undefined 取决于加载顺序
+export const a = 'a';
+
+// b.js
+import { a } from './a';
+console.log(a);   // 同样可能 undefined
+export const b = 'b';</code></pre>
+        <p>对策：</p>
+        <ul>
+          <li>避免循环依赖（架构层面）</li>
+          <li>把循环部分用 dynamic import</li>
+          <li>函数内访问而不是顶层访问（lazy）</li>
+        </ul>
+
+        <h3>陷阱 5：忘记 .js 扩展（Node ESM 严格）</h3>
+        <p>Node ESM 模式（package.json <code>"type": "module"</code>）<strong>必须显式 .js 扩展</strong>：</p>
+        <pre class="code"><code class="lang-javascript">// ❌ Node ESM 报错
+import { foo } from './utils';
+
+// ✅
+import { foo } from './utils.js';</code></pre>
+        <p>bundler（Vite/Webpack）通常自动补 .js 扩展（dev / build），<strong>但 Node 直接跑没自动</strong>。TS 用户特别注意：源码 <code>import './utils'</code>，编译后要 <code>import './utils.js'</code>。</p>
+
+        <h3>陷阱 6：default export 互操作问题</h3>
+        <p>当 ESM 模块 import CJS 模块的 default：</p>
+        <pre class="code"><code class="lang-javascript">// CJS module
+module.exports = { a: 1, b: 2 };
+
+// ESM 这样 import
+import obj from './cjs';
+console.log(obj);   // ?
+// 不同 bundler 行为不同：
+//   一些 bundler: { a: 1, b: 2 }
+//   一些 bundler: { default: { a: 1, b: 2 } }（要 obj.default.a）</code></pre>
+        <p>详见 <a href="02-cjs-interop.html">P3.2 CJS Interop</a>。</p>
+
+        <h3>陷阱 7：import.meta.env 暴露敏感变量</h3>
+        <p>Vite 默认<strong>只暴露 VITE_ 前缀</strong>的 env 给客户端 bundle。但有时不小心：</p>
+        <pre class="code"><code class="lang-text">// .env
+VITE_API_URL=https://api.example.com
+DATABASE_PASSWORD=secret123        ← 不会暴露（无 VITE_）
+VITE_SECRET_KEY=secret456          ← 会暴露！危险</code></pre>
+        <p>规则：<strong>VITE_ 前缀的只放 public 信息</strong>。secrets 永远不要给客户端。</p>
+
+        <h3>陷阱 8：忘记 type: "module"</h3>
+        <p>npm 包做 ESM 必须 package.json 声明：</p>
+        <pre class="code"><code class="lang-json">{
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js"
+    }
+  }
+}</code></pre>
+        <p>否则 Node 默认按 CJS 加载，import 报错。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范 + 提案</h3>
+        <ul>
+          <li><a href="https://tc39.es/ecma262/#sec-modules" target="_blank" rel="noopener">ECMA-262 §16 Modules</a></li>
+          <li><a href="https://github.com/tc39/proposal-import-attributes" target="_blank" rel="noopener">import attributes 提案</a></li>
+          <li><a href="https://github.com/tc39/proposal-top-level-await" target="_blank" rel="noopener">top-level await 提案</a></li>
+          <li><a href="https://github.com/WICG/import-maps" target="_blank" rel="noopener">import maps 提案</a></li>
+        </ul>
+
+        <h3>MDN + 浏览器</h3>
+        <ul>
+          <li><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules" target="_blank" rel="noopener">MDN: JavaScript modules</a></li>
+          <li><a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script/type/importmap" target="_blank" rel="noopener">MDN: import maps</a></li>
+        </ul>
+
+        <h3>Vite 特性</h3>
+        <ul>
+          <li><a href="https://vitejs.dev/guide/env-and-mode.html" target="_blank" rel="noopener">Vite Env Variables and Modes</a></li>
+          <li><a href="https://vitejs.dev/guide/features.html#glob-import" target="_blank" rel="noopener">Vite Glob Import</a></li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="02-cjs-interop.html">P3.2 CJS Interop + 双 Package Hazard</a></li>
+          <li><a href="../04-tree-shaking/01-tree-shaking.html">P4 Tree Shaking 真相</a></li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../ecma/07-execution/04-module-system.html">ECMA P7.4 模块系统</a> · spec 层语义</li>
+          <li><a href="../../javascript/04-modules/" target="_blank">JS P4 模块</a> · 开发者视角</li>
+          <li><a href="../../node/03-modules/" target="_blank">Node P3 模块</a> · Node CJS/ESM</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
