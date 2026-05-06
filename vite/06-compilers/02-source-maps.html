@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Source Maps 工程化 · P6.2 · Vite & 构建工具深度学习</title>
+    <meta name="description" content="Source maps 是「调试体验」基础。v3 格式 = JSON + mappings (VLQ encoded) + sources + names。VLQ 变长 base64 编码每行偏移让 sourcemap 紧凑。多层 sourcemap（composite）：source → TS → JS → bundled → minified；浏览器 devtools 自动追踪到原始 .ts。生产部署：inline 体积大不推荐 / external 浏览器按需加载 / 私有 CDN + Sentry 等错误追踪服务解析 stack trace。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23bd34fe'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Vite & 构建工具深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.25 305); color: #fff">Vite</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · 编译器后端</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-esbuild-swc.html">01 · esbuild Go vs SWC Rust vs Babel</a></li>
+          <li><a href="02-source-maps.html" class="active">02 · Source Maps 工程化</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Vite & 构建工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · 编译器后端</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Source Maps</span>
+        </nav>
+        <h1>Source Maps 工程化</h1>
+        <p class="lead">
+          Source maps 是<strong>调试体验</strong>基础——没它，production 错误几乎无法 debug，dev 时 minified 代码看不到原 TS / JSX。<strong>v3 格式</strong> = JSON + mappings (VLQ encoded) + sources + names。<strong>VLQ 变长 base64</strong> 让 sourcemap 紧凑。<strong>多层 sourcemap（composite）</strong>：source → TS → JS → bundled → minified；浏览器 devtools 自动追踪到原始 .ts。<strong>生产部署</strong>：inline 体积大不推荐 / external 浏览器按需加载 / 私有 CDN + Sentry 等错误追踪服务解析 stack trace。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P6.1（编译器后端）</span>
+          <span><strong>主要来源</strong> Source Map v3 spec · Sentry 文档 · Chrome DevTools 文档</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Source maps 的核心问题</strong>：编译后代码（minified / bundled）和源代码完全不同形态。如何让浏览器 devtools 显示<strong>原始源代码</strong>位置而不是编译后乱码？答案：source map 文件做<strong>位置映射</strong>。</li>
+          <li><strong>v3 格式（2011 主流）</strong>—— JSON 文件，关键字段：<code>version</code> / <code>file</code> / <code>sources</code>（原文件路径列表）/ <code>names</code>（标识符）/ <code>mappings</code>（VLQ 编码的位置数据）/ <code>sourcesContent</code>（可选，源代码 inline）。</li>
+          <li><strong>VLQ（Variable Length Quantity）编码</strong>—— 变长 base64 编码每行偏移；让 sourcemap 紧凑（vs 全文本 JSON）。每个 segment 5 个值：generated column / source index / source line / source column / name index。</li>
+          <li><strong>多层 sourcemap（composite）</strong>—— TS → JS（map 1）→ bundled JS（map 2）→ minified（map 3）。每步必须传递 sourcemap，<strong>任何一步丢就断链</strong>。浏览器自动追踪到最原始 .ts。</li>
+          <li><strong>生产部署 3 种策略</strong>：(1) <strong>inline</strong>（<code>//# sourceMappingURL=data:...</code>）—— 体积大不推荐；(2) <strong>external file</strong>（<code>//# sourceMappingURL=foo.js.map</code>）—— 浏览器按需加载，主流；(3) <strong>private CDN + 错误追踪服务</strong>（Sentry / Datadog 解析 stack trace）—— 不暴露公网。</li>
+          <li><strong>常见问题</strong>：HMR 后 sourcemap 错位 / Babel + esbuild 链 sourcemap 丢失 / Production stack trace 显示 minified 名字。<strong>都是 sourcemap 链路某一步失效</strong>。</li>
+          <li><strong>2026 工程化</strong>：sourcemap 必须<strong>上传 Sentry / Datadog</strong> 让生产 stack trace 可读；<strong>不部署 .map 到 public CDN</strong>（暴露源代码）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>问题：编译后代码和源代码不一样</h3>
+        <p>用户写：</p>
+        <pre class="code"><code class="lang-typescript">// src/Counter.tsx
+function Counter() {
+  const [count, setCount] = useState(0);
+  return &lt;button onClick={() =&gt; setCount(count + 1)}&gt;{count}&lt;/button&gt;;
+}</code></pre>
+        <p>浏览器收到（minified + bundled）：</p>
+        <pre class="code"><code class="lang-javascript">function p(){let[t,r]=u.useState(0);return o.jsx("button",{onClick:()=&gt;r(t+1),children:t})}</code></pre>
+        <p>报错时浏览器只能显示 minified 位置：<code>chunks/index-abc123.js:1:42</code>。<strong>无法 debug</strong>。</p>
+        <p>Source map 解决：附加一个 <code>.js.map</code> 文件，告诉浏览器 "minified line 1 col 42 = 原文件 src/Counter.tsx line 4 col 24"。浏览器 devtools 自动还原。</p>
+
+        <h3>Source Map v3 格式</h3>
+        <p>v3（2011 起，至今主流）是 JSON 文件：</p>
+        <pre class="code"><code class="lang-json">{
+  "version": 3,
+  "file": "out.js",
+  "sourceRoot": "",
+  "sources": ["foo.ts", "bar.ts"],
+  "sourcesContent": ["// foo.ts content...", "// bar.ts content..."],
+  "names": ["myFunc", "x", "y"],
+  "mappings": "AAAA;;;;;;;;;;;;;;;;CACO,oBAAS"
+}</code></pre>
+        <p><strong>字段含义</strong>：</p>
+        <ul>
+          <li><code>version</code>: 3</li>
+          <li><code>file</code>: 关联的输出文件名</li>
+          <li><code>sources</code>: 原文件路径列表</li>
+          <li><code>sourcesContent</code>:（可选）原文件内容（用于网络条件差时浏览器无需 fetch）</li>
+          <li><code>names</code>: 标识符（变量名 / 函数名）列表</li>
+          <li><code>mappings</code>: <strong>核心</strong> —— VLQ 编码的位置映射数据</li>
+        </ul>
+
+        <h3>VLQ 编码</h3>
+        <p>VLQ = Variable-Length Quantity。变长 base64 编码整数，让 sourcemap 紧凑。</p>
+        <p><strong>mappings 结构</strong>：</p>
+        <ul>
+          <li>用 <code>;</code> 分隔每行（generated line）</li>
+          <li>用 <code>,</code> 分隔每个 segment</li>
+          <li>每个 segment 含 1, 4, 或 5 个值</li>
+        </ul>
+        <p><strong>每 segment 的值</strong>（差量编码 = 相对前一个 segment）：</p>
+        <ol>
+          <li>generated column（输出列）</li>
+          <li>source index（sources 数组索引）</li>
+          <li>source line（源代码行）</li>
+          <li>source column（源代码列）</li>
+          <li>name index（names 数组索引）—— 可选</li>
+        </ol>
+        <p><strong>例子</strong>：<code>AAAA</code>（1 个 segment）：</p>
+        <ul>
+          <li>4 个 base64 字符 = 4 个 VLQ 数字</li>
+          <li>A = 0（base64）</li>
+          <li>所以是 <code>[0, 0, 0, 0]</code> = 输出列 0，source index 0，源 line 0，源 col 0</li>
+        </ul>
+        <p><strong>差量编码省空间</strong>：连续行的 segment 通常增量小（generated column +1, source line +0, source column +1）→ 编码出来 1-2 字节。</p>
+        <p><strong>VLQ 编码 base64 字符表</strong>：</p>
+        <pre class="code"><code class="lang-text">A-Z = 0-25
+a-z = 26-51
+0-9 = 52-61
++ = 62
+/ = 63
+
+每字符前 5 bit 是数据，第 6 bit 是 continuation flag
+如 'B' (1) → binary 000001 → flag=0, value=1
+如 'C' (2) → binary 000010 → flag=0, value=2 (差量 -1 用 zigzag 编码)</code></pre>
+
+        <h3>sourcemap 加载机制</h3>
+        <p>编译器输出 .js 文件末尾加注释：</p>
+        <pre class="code"><code class="lang-javascript">function p(){...}
+//# sourceMappingURL=out.js.map</code></pre>
+        <p>浏览器 devtools 检测到这个注释，<strong>自动 fetch out.js.map</strong>（仅在 devtools 打开时）。然后用 mappings 数据：</p>
+        <ol>
+          <li>用户在 devtools 看到 stack trace（指向 out.js）</li>
+          <li>devtools 查 sourcemap：out.js:1:42 → src/Counter.tsx:4:24</li>
+          <li>devtools 显示原 src/Counter.tsx 内容（从 sourcesContent 或 fetch）</li>
+        </ol>
+        <p>用户感觉就是直接调试源码。</p>
+
+        <h3>多层 sourcemap（composite）</h3>
+        <p>实际项目编译有<strong>多步</strong>：</p>
+        <pre class="code"><code class="lang-text">src/Counter.tsx           ← 原始源
+  ↓ TS compile (esbuild)
+.tmp/Counter.js + Counter.js.map   ← map 1
+  ↓ Bundle (Rollup)
+dist/index.js + index.js.map         ← map 2 (链接到 .tmp)
+  ↓ Minify (terser)
+dist/index.min.js + index.min.js.map  ← map 3 (链接到 dist)</code></pre>
+        <p>每一步都<strong>必须正确传递 sourcemap</strong>：</p>
+        <ul>
+          <li>esbuild 输出 .js + .js.map（指向 .tsx）</li>
+          <li>Rollup 接受 input map → 合并 → 输出新 map（指向最原始 .tsx）</li>
+          <li>terser 接受 input map → 输出最终 map（仍指向 .tsx）</li>
+        </ul>
+        <p><strong>浏览器只看最终 map</strong>—— 它已经 chain 到原始 .tsx。所以浏览器 devtools 直接显示 .tsx 源码。</p>
+        <p>这种"<strong>链式 sourcemap</strong>"是 v3 设计精髓。<strong>任何一步丢 sourcemap → 链断 → 浏览器看不到原 .tsx</strong>。</p>
+
+        <h3>build.sourcemap 选项详解</h3>
+        <p>Vite/Rollup 的 sourcemap 选项：</p>
+        <table>
+          <thead>
+            <tr><th>选项值</th><th>含义</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>true</code></td><td>生成 .map 文件 + 加 sourceMappingURL 注释</td></tr>
+            <tr><td><code>'inline'</code></td><td>整个 sourcemap inline 到 .js（base64 data URL）</td></tr>
+            <tr><td><code>'hidden'</code></td><td>生成 .map 文件但<strong>不加 sourceMappingURL 注释</strong>（浏览器不自动加载）</td></tr>
+            <tr><td><code>false</code></td><td>不生成（dev 用，体积小）</td></tr>
+          </tbody>
+        </table>
+        <p><strong>生产推荐 'hidden'</strong>—— 生成 .map 文件，上传到 Sentry / Datadog，但<strong>不部署到 public</strong>（用户浏览器不能 fetch，源代码不暴露）。</p>
+
+        <h3>sourcemap 安全考虑</h3>
+        <p>生产 sourcemap 等于<strong>暴露源代码</strong>：</p>
+        <ul>
+          <li><code>sourcesContent</code> 字段含原代码全文</li>
+          <li>没有它仍能 fetch sources URL（如果 .ts 部署）</li>
+          <li>用户直接看 minified .js + .map → 完全等同看源代码</li>
+        </ul>
+        <p><strong>除非是 open source 项目</strong>，否则 sourcemap<strong>不应该</strong>部署到 public。</p>
+        <p><strong>正确做法</strong>：</p>
+        <ol>
+          <li>build 时生成 sourcemap（<code>sourcemap: 'hidden'</code>）</li>
+          <li>CI 上传 .map 到 Sentry / Datadog（错误追踪服务）</li>
+          <li>不把 .map 部署到 public CDN</li>
+          <li>生产 stack trace 在错误追踪服务里被自动解析（用 sourcemap 把 minified 位置 → 原始位置）</li>
+        </ol>
+
+        <h3>Sentry / Datadog 集成</h3>
+        <p>Sentry 是错误追踪标准。流程：</p>
+        <pre class="code"><code class="lang-text">1. 用户浏览器报错 → Sentry SDK 上报 stack trace（minified 位置）
+   "Error in chunk-abc123.js:1:42"
+
+2. Sentry 服务端：
+   - 找对应的 release / sourcemap
+   - 用 sourcemap 把 minified 位置 → 原 .tsx 位置
+   - 在 Sentry UI 显示：
+     "Error in src/Counter.tsx:4:24"
+
+3. 开发者打开 Sentry 看到原始位置 + 上下文（前几行 / 后几行代码）</code></pre>
+        <p>Sentry CLI 上传 sourcemap：</p>
+        <pre class="code"><code class="lang-bash">$ sentry-cli sourcemaps upload \
+  --org=my-org \
+  --project=my-app \
+  --release=v1.2.3 \
+  ./dist</code></pre>
+        <p>Sentry 用 release / commit hash 关联 sourcemap 和实际部署版本。</p>
+
+        <h3>HMR 时 sourcemap 处理</h3>
+        <p>Vite dev mode HMR 后，sourcemap 仍要保持准确：</p>
+        <ul>
+          <li>esbuild dev transform 自动生成 sourcemap</li>
+          <li>HMR 替换模块时，浏览器收到新 .js + 新 sourcemap</li>
+          <li>devtools 自动用新 sourcemap 显示</li>
+        </ul>
+        <p>常见问题：HMR 后 stack trace 偶尔错位 → 可能是 plugin 没正确传 sourcemap。</p>
+
+        <h3>compiler 链 sourcemap 传递</h3>
+        <p>多 compiler 链（Babel + esbuild + Rollup）<strong>每步都要传 sourcemap</strong>。如果某步 plugin 不正确：</p>
+        <pre class="code"><code class="lang-text">src/foo.ts (line 10)
+  ↓ Babel transform   (会丢 sourcemap 如果 plugin bug)
+foo.js (line 5)
+  ↓ Rollup bundle      (Rollup 接 input map → 新 map)
+dist/index.js (line 100)
+
+最终 sourcemap 应该指向 foo.ts:10
+但如果 Babel 丢了 → sourcemap 指向 foo.js:5（无意义中间产物）</code></pre>
+        <p>调试方法：</p>
+        <ul>
+          <li>用 source-map-cli 解析 .map 文件看实际指向</li>
+          <li>检查每个 plugin 输出 RawSourceMap 是否正确</li>
+        </ul>
+
+        <h3>sourcemap 大小考虑</h3>
+        <p>典型 sourcemap 大小：</p>
+        <ul>
+          <li>50KB JS bundle → ~80-150KB sourcemap（含 sourcesContent）</li>
+          <li>500KB JS bundle → ~800KB-1.5MB sourcemap</li>
+        </ul>
+        <p>sourcemap 比 JS 还大是常态（因为 sourcesContent 含全部源码 + mappings 数据）。<strong>不要部署 sourcemap 到 public</strong>。</p>
+
+        <h3>devtoolModuleFilenameTemplate（Webpack 特性）</h3>
+        <p>Webpack 让你自定义 sourcemap 中 sources 字段的路径格式（debug 用）：</p>
+        <pre class="code"><code class="lang-javascript">module.exports = {
+  output: {
+    devtoolModuleFilenameTemplate: 'webpack:///[resource-path]?[hash]'
+  }
+};</code></pre>
+        <p>结果：sourcemap 里 sources = <code>['webpack:///./src/Counter.tsx?abc']</code>（自定义协议 + 路径）。</p>
+        <p>Vite 默认行为通常足够，不需要自定义。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · 生产部署 sourcemap 到 Sentry（不暴露公网）</h3>
+        <p>Vite 配置：</p>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+export default {
+  build: {
+    sourcemap: 'hidden'   // 生成 .map 但不加 sourceMappingURL
+  }
+};</code></pre>
+        <p>build 后 dist/ 里有 .js 和 .js.map。<strong>部署只 .js，把 .map 上传 Sentry</strong>：</p>
+        <pre class="code"><code class="lang-bash">$ npm run build
+$ sentry-cli sourcemaps upload \
+  --org=my-org --project=my-app --release=$VERSION \
+  dist/
+
+# 部署仅 .js（不 .map）
+$ rsync -av --exclude='*.map' dist/ server:/path/
+
+# 或部署后删 .map
+$ ssh server "find /path -name '*.map' -delete"</code></pre>
+
+        <h3>场景 B · 解析生产 stack trace</h3>
+        <p>用户上报 bug："点击 button 报错，console 显示 <code>chunk-abc123.js:1:42</code>"。</p>
+        <p>方案 1：去 Sentry 看（自动解析）</p>
+        <p>方案 2：手动用 source-map-cli：</p>
+        <pre class="code"><code class="lang-bash">$ npm install -g source-map-cli
+$ source-map-cli resolve dist/chunk-abc123.js.map 1 42
+{
+  "source": "src/Counter.tsx",
+  "line": 4,
+  "column": 24,
+  "name": "setCount"
+}</code></pre>
+
+        <h3>场景 C · 调试 dev 时 sourcemap 错位</h3>
+        <p>典型现象：浏览器 devtools 显示原 .ts 但 line number 错（指向 .ts 第 5 行实际是源代码第 10 行）。</p>
+        <p>可能原因：</p>
+        <ul>
+          <li>某个 Vite plugin 修改代码但没传 sourcemap</li>
+          <li>Babel preset 配置问题（modules: "auto" 让 ESM 转 CJS）</li>
+          <li>HMR transform 缺 sourcemap</li>
+        </ul>
+        <p>诊断：临时用 inline sourcemap 看实际生成的 .js + map：</p>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+export default {
+  build: { sourcemap: 'inline' }   // dev 也可以试 build 看
+};</code></pre>
+        <p>用浏览器 view-source: 看 .js 末尾的 base64 sourcemap → 解 base64 → 检查 mappings。</p>
+
+        <h3>场景 D · 大型 monorepo sourcemap path 问题</h3>
+        <p>monorepo 多个 package：</p>
+        <pre class="code"><code class="lang-text">my-monorepo/
+├── packages/
+│   ├── ui/
+│   ├── utils/
+│   └── app/
+└── ...</code></pre>
+        <p>app 引用 ui / utils，build 后 sourcemap 中的 sources 字段：</p>
+        <pre class="code"><code class="lang-json">"sources": [
+  "../ui/src/Button.tsx",        // 相对于 app/dist
+  "../utils/src/format.ts"
+]</code></pre>
+        <p>路径是相对的。<strong>部署到 server 时，server 上没有这些 ../</strong> → Sentry 找不到 source content。</p>
+        <p>对策：</p>
+        <ul>
+          <li>用 sourcesContent 字段（inline 源代码到 sourcemap）</li>
+          <li>Vite/Rollup 默认包含 sourcesContent</li>
+          <li>Sentry 优先用 sourcesContent</li>
+        </ul>
+
+        <h3>场景 E · 自定义 sourcemap 路径前缀（隐私）</h3>
+        <p>不想 sourcemap 中暴露绝对路径（如 <code>/Users/myname/myproject/src/Counter.tsx</code>）：</p>
+        <pre class="code"><code class="lang-javascript">// vite.config.js (Rollup 配置)
+export default {
+  build: {
+    rollupOptions: {
+      output: {
+        sourcemapPathTransform: (relativePath) =&gt; {
+          // 重写路径，去掉个人路径
+          return relativePath.replace(/^\.\.\/\.\.\/Users\/.*?\//, 'webpack:///');
+        }
+      }
+    }
+  }
+};</code></pre>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：sourcemap 完整工程化</span></h2>
+
+        <h3>Vite 生产 sourcemap 配置</h3>
+        <pre class="code"><code class="lang-typescript">// vite.config.ts
+import { defineConfig } from 'vite';
+import { sentryVitePlugin } from '@sentry/vite-plugin';
+
+export default defineConfig(({ mode }) =&gt; ({
+  build: {
+    sourcemap: 'hidden',          // 生成但不在 .js 加 sourceMappingURL
+    // 或 'inline' 用于 dev 调试
+  },
+
+  plugins: [
+    react(),
+
+    // Sentry 自动上传 sourcemap
+    mode === 'production' &amp;&amp; sentryVitePlugin({
+      org: process.env.SENTRY_ORG,
+      project: process.env.SENTRY_PROJECT,
+      authToken: process.env.SENTRY_AUTH_TOKEN,
+      sourcemaps: {
+        assets: ['./dist/**/*.js', './dist/**/*.map'],
+        ignore: ['node_modules'],
+        filesToDeleteAfterUpload: ['./dist/**/*.map']   // 上传后删
+      },
+      release: {
+        name: process.env.RELEASE_VERSION
+      }
+    })
+  ].filter(Boolean)
+}));</code></pre>
+        <p>这个 plugin 会：</p>
+        <ol>
+          <li>build 完后扫 dist/*.map</li>
+          <li>上传到 Sentry（关联 release）</li>
+          <li>上传成功后删 dist/*.map</li>
+          <li>部署 dist 不含 .map</li>
+        </ol>
+
+        <h3>验证 sourcemap 正确</h3>
+        <pre class="code"><code class="lang-bash">$ npx source-map-cli validate dist/assets/index-*.js.map
+
+dist/assets/index-abc123.js.map
+  Version: 3
+  Sources: 156
+  Has sourcesContent: true
+  Has names: true
+  Mappings entries: 5432
+  ✓ All sources accessible</code></pre>
+
+        <h3>手动解析 stack trace</h3>
+        <pre class="code"><code class="lang-typescript">// resolve-stack.ts
+import { SourceMapConsumer } from 'source-map';
+import * as fs from 'fs';
+
+const mapContent = fs.readFileSync('./dist/assets/index-abc123.js.map', 'utf8');
+const consumer = await new SourceMapConsumer(mapContent);
+
+const result = consumer.originalPositionFor({
+  line: 1,
+  column: 42
+});
+
+console.log(result);
+// {
+//   source: 'src/Counter.tsx',
+//   line: 4,
+//   column: 24,
+//   name: 'setCount'
+// }
+
+consumer.destroy();</code></pre>
+
+        <h3>看 inline sourcemap 内容</h3>
+        <pre class="code"><code class="lang-bash"># build with inline sourcemap
+$ vite build --sourcemap inline
+
+# 查看
+$ tail -1 dist/assets/index-*.js
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjoz...
+
+# 解码 base64 + 看 JSON
+$ tail -1 dist/assets/index-*.js | sed 's/.*base64,//' | base64 -d | jq '.sources'
+[
+  "src/main.tsx",
+  "src/App.tsx",
+  "src/Counter.tsx"
+]</code></pre>
+
+        <h3>测试 sourcemap chain</h3>
+        <pre class="code"><code class="lang-typescript">// test-sourcemap.ts
+import { SourceMapConsumer, SourceMapGenerator } from 'source-map';
+
+// 模拟多步 transform
+const stage1Map = '...'; // TS → JS map
+const stage2Map = '...'; // JS → bundled map
+
+// 链合并
+const stage1 = await new SourceMapConsumer(stage1Map);
+const stage2 = await new SourceMapConsumer(stage2Map);
+
+const merged = SourceMapGenerator.fromSourceMap(stage1);
+merged.applySourceMap(stage2, '...');
+
+console.log(merged.toString());</code></pre>
+
+        <h3>devtools workspace 持久化修改</h3>
+        <p>Chrome devtools 支持 "workspace" —— 让 sourcemap 显示的源文件可以直接编辑保存到磁盘（dev 用）：</p>
+        <ol>
+          <li>devtools → Sources → 右键 → "Add folder to workspace"</li>
+          <li>选你的项目根目录</li>
+          <li>devtools 自动 mapping 显示的 .ts 到本地文件</li>
+          <li>编辑直接保存</li>
+        </ol>
+        <p>结合 Vite HMR 让"在 devtools 编辑代码 + 立刻 HMR" 可行。</p>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：sourcemap 部署到 public 暴露源代码</h3>
+        <p>最常见 + 最危险。<strong>检查 production 部署</strong>：</p>
+        <pre class="code"><code class="lang-bash">$ curl -I https://my-app.com/assets/index-abc.js.map
+HTTP/1.1 200 OK   # ❌ 别人能直接下载 sourcemap → 拿到完整源代码！
+
+# 应该是
+HTTP/1.1 404 Not Found   # ✅</code></pre>
+        <p>修复：build 用 <code>sourcemap: 'hidden'</code> + 上传 Sentry + 部署不含 .map。</p>
+
+        <h3>陷阱 2：plugin 链丢 sourcemap</h3>
+        <p>典型：自定义 Vite plugin 做 transform 但没返回 map：</p>
+        <pre class="code"><code class="lang-javascript">// ❌ 错：没返回 map
+{
+  name: 'my-plugin',
+  transform(code, id) {
+    return modifiedCode;   // 丢了 sourcemap
+  }
+}
+
+// ✅ 正：返回 { code, map }
+{
+  name: 'my-plugin',
+  transform(code, id) {
+    const result = transform(code);   // 假设你的 transformer 返回 sourcemap
+    return {
+      code: result.code,
+      map: result.map
+    };
+  }
+}</code></pre>
+
+        <h3>陷阱 3：Babel modules: "auto" 破坏 sourcemap</h3>
+        <p>Babel preset-env 默认 modules: "auto"（在 build 环境转 CJS）。这会让一些 plugin 链失效。</p>
+        <p>对策：明确 <code>modules: false</code>（让 bundler 处理 ESM）。</p>
+
+        <h3>陷阱 4：HMR 后 stack trace 错位</h3>
+        <p>HMR 替换模块时，浏览器旧 stack trace 引用旧 sourcemap，但页面已加载新代码 → 显示错位。</p>
+        <p>典型现象：刷新页面后正常，HMR 后偶尔错位。</p>
+        <p>对策：通常无需特别处理（HMR 是 dev 行为，刷新即可）。如果频繁出现可能是 Vite plugin bug，开 issue。</p>
+
+        <h3>陷阱 5：sourcesContent 缺失但 .ts 文件不部署</h3>
+        <p>sourcemap 默认含 sourcesContent（源代码 inline）。如果<strong>关掉 sourcesContent</strong>（节省空间）但<strong>部署时没把 .ts 放出来</strong>：</p>
+        <pre class="code"><code class="lang-text">浏览器收到 sourcemap：
+  sources: ['src/Counter.tsx']
+  sourcesContent: null
+
+浏览器尝试 fetch /src/Counter.tsx → 404
+显示空源代码</code></pre>
+        <p>对策：保留 sourcesContent（默认 OK）；或确保 .ts 文件能 fetch 到。</p>
+
+        <h3>陷阱 6：自定义 sourcemap path 让 Sentry 找不到</h3>
+        <pre class="code"><code class="lang-javascript">// ❌ 用 webpack:// 协议
+sourcemapPathTransform: (path) =&gt; `webpack:///${path}`
+
+// Sentry 接收到 sourcemap，sources 是 ["webpack:///src/Counter.tsx"]
+// Sentry 找不到对应文件 → stack trace 显示原始 minified 位置</code></pre>
+        <p>对策：保持简单的相对路径。</p>
+
+        <h3>陷阱 7：minify 后还以为有名字</h3>
+        <pre class="code"><code class="lang-javascript">// 源
+function MyComponent() { ... }
+console.log(MyComponent.name);   // "MyComponent"
+
+// minified
+function p() { ... }
+// 即使有 sourcemap，运行时 .name 是 "p" 不是 "MyComponent"</code></pre>
+        <p>sourcemap 让 devtools 看代码位置，但<strong>不影响运行时 name 属性</strong>。</p>
+        <p>对策：esbuild <code>minify: { keepNames: true }</code>；terser <code>keep_classnames: true, keep_fnames: true</code>。</p>
+
+        <h3>陷阱 8：Webpack devtool 选错</h3>
+        <p>Webpack devtool 选项有几十个：</p>
+        <ul>
+          <li><code>'eval'</code>—— 最快 dev，但 sourcemap 弱</li>
+          <li><code>'eval-source-map'</code>—— 平衡</li>
+          <li><code>'source-map'</code>—— 标准 + 完整</li>
+          <li><code>'hidden-source-map'</code>—— production 推荐</li>
+          <li><code>'nosources-source-map'</code>—— 不含 sourcesContent</li>
+        </ul>
+        <p>选错让 sourcemap 不准 / production 暴露源码。Vite 简化为 <code>true / 'inline' / 'hidden' / false</code>，更清晰。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范 + 文档</h3>
+        <ul>
+          <li><a href="https://sourcemaps.info/spec.html" target="_blank" rel="noopener">Source Map v3 Spec</a></li>
+          <li><a href="https://web.dev/articles/source-maps" target="_blank" rel="noopener">web.dev: Source Maps under the hood</a></li>
+          <li><a href="https://developer.chrome.com/docs/devtools/javascript/source-maps" target="_blank" rel="noopener">Chrome DevTools: Source Maps</a></li>
+        </ul>
+
+        <h3>VLQ + 编码深度</h3>
+        <ul>
+          <li><a href="https://en.wikipedia.org/wiki/Variable-length_quantity" target="_blank" rel="noopener">VLQ on Wikipedia</a></li>
+          <li><a href="https://github.com/tc39/source-map-spec" target="_blank" rel="noopener">TC39 Source Map Spec（草案）</a></li>
+        </ul>
+
+        <h3>工具</h3>
+        <ul>
+          <li><a href="https://github.com/mozilla/source-map" target="_blank" rel="noopener">source-map (Mozilla)</a></li>
+          <li><a href="https://www.npmjs.com/package/source-map-cli" target="_blank" rel="noopener">source-map-cli</a></li>
+          <li><a href="https://docs.sentry.io/platforms/javascript/sourcemaps/" target="_blank" rel="noopener">Sentry Sourcemaps</a></li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="../07-plugins-and-next/01-plugins.html">P7.1 Vite/Rollup 插件</a></li>
+          <li><a href="../07-plugins-and-next/02-next-gen.html">P7.2 下一代构建工具横评</a></li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../browser-rendering/04-performance/01-load-metrics.html">浏览器渲染 P4.1 性能</a> · 生产监控</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>esbuild Go vs SWC Rust vs Babel · P6.1 · Vite & 构建工具深度学习</title>
+    <meta name="description" content="现代编译器后端横评。Babel（2014, JS 实现，插件最大但慢 100-1000ms/file）/ esbuild（2020, Go 实现，并行+AST in memory，极快 < 10ms/file 但 plugin 弱）/ SWC（2020, Rust 实现，接近 Babel 兼容性 + 接近 esbuild 速度，wasm plugin）。三者都做的工作：transform 现代 JS → 老 JS / JSX → React.createElement / TS → JS / polyfill 注入。性能 100x 差距 + 各自定位 + 何时选谁。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23bd34fe'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EV%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Vite & 构建工具深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.25 305); color: #fff">Vite</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · 编译器后端</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-esbuild-swc.html" class="active">01 · esbuild Go vs SWC Rust vs Babel</a></li>
+          <li><a href="02-source-maps.html">02 · Source Maps 工程化</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Vite & 构建工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · 编译器后端</a><span class="breadcrumb-sep">/</span>
+          <span>01 · esbuild vs SWC vs Babel</span>
+        </nav>
+        <h1>esbuild Go vs SWC Rust vs Babel</h1>
+        <p class="lead">
+          bundler 内部用什么编译器把 TS / JSX / 现代 JS → 浏览器能跑的 JS。<strong>三家鼎立</strong>：<strong>Babel</strong>（2014, JS 实现，插件最大但慢 100-1000ms/file）/ <strong>esbuild</strong>（2020, Go 实现，并行 + AST in memory，极快 &lt; 10ms/file 但 plugin 弱不能改 AST）/ <strong>SWC</strong>（2020, Rust 实现，接近 Babel 兼容性 + 接近 esbuild 速度，wasm plugin）。<strong>性能 100x 差距</strong>。三者都做：transform 现代 JS → 老 JS / JSX → React.createElement / TS → JS / polyfill 注入。本章讲清各自定位 + 何时选谁。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P3.1（ESM）</span>
+          <span><strong>主要来源</strong> Babel docs · esbuild docs · swc.rs · 各项目 README + benchmark</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>三个 compiler 不是替代关系，是三家鼎立</strong>—— Babel 仍是 plugin ecosystem 最大；esbuild 是 bundler 子组件 + 速度极致；SWC 是 Babel 替代品 + 接近 esbuild 速度。各有 sweet spot。</li>
+          <li><strong>Babel（2014-）</strong>—— JS 实现 + 插件 ecosystem 最大（@babel/preset-env / preset-react / preset-typescript / 各种第三方）+ 是事实标准 + <strong>慢</strong>（100-1000ms/file）。</li>
+          <li><strong>esbuild（2020-, Evan W）</strong>—— Go 实现 + 并行 + 单 pass + 自家 AST in memory + 不依赖第三方 parser → <strong>极快</strong>（&lt; 10ms/file）+ <strong>plugin 不能 AST 改写</strong>（只 resolve / load hooks）+ baseline 功能。</li>
+          <li><strong>SWC（2020-, DongYoon Kang / Vercel）</strong>—— Rust 实现 + 接近 Babel preset 兼容性 + 接近 esbuild 速度（~50x Babel）+ wasm plugin（用 Rust 写）+ Next.js 默认。</li>
+          <li><strong>三者都做的工作</strong>：(1) 现代 JS → 老 JS（箭头 / class / async）；(2) JSX → React.createElement 或 jsx-runtime；(3) TS → JS（类型擦除）；(4) polyfill 注入（@babel/preset-env auto polyfill）。</li>
+          <li><strong>性能数据（typical TS file）</strong>：Babel ~100-200ms / SWC ~5-10ms / esbuild ~3-5ms。1000 文件项目：Babel ~50-100s / SWC ~5-10s / esbuild ~1-5s。<strong>100x 差距</strong>。</li>
+          <li><strong>选择规则</strong>：库作者 → Babel + preset-env（最广 target 兼容）；app → esbuild / SWC（速度优先）；Next.js → SWC 默认；Vite → dev esbuild + build esbuild 或 Rollup（含 Babel/SWC plugin）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Babel：JS 实现 + 插件最大</h3>
+        <p><strong>历史</strong>：2014 Sebastian McKenzie 发布 6to5（后改名 Babel）。原始动机：让 ES6 代码跑在 ES5 浏览器（IE 11 / 旧 Safari）。Babel 通过 AST transform 实现"<strong>转译现代语法到旧语法</strong>"。</p>
+        <p><strong>架构</strong>：</p>
+        <ol>
+          <li>parse：源码 → AST（用 @babel/parser）</li>
+          <li>transform：AST → AST（plugins 链式应用）</li>
+          <li>generate：AST → 源码（用 @babel/generator）</li>
+        </ol>
+        <p><strong>plugin / preset 系统</strong>：</p>
+        <ul>
+          <li><strong>plugin</strong>：单个 transform（如 @babel/plugin-transform-arrow-functions）</li>
+          <li><strong>preset</strong>：plugin 集合（如 @babel/preset-env / @babel/preset-react / @babel/preset-typescript）</li>
+          <li><strong>preset-env 的特殊性</strong>：根据 browserslist target 自动选择需要的 plugin（不会过度转译）</li>
+        </ul>
+        <p>典型 babel.config.js：</p>
+        <pre class="code"><code class="lang-javascript">module.exports = {
+  presets: [
+    ['@babel/preset-env', {
+      targets: '&gt; 0.25%, not dead',
+      modules: false,         // 不转 ESM 模块
+      useBuiltIns: 'usage',    // 自动 polyfill
+      corejs: 3
+    }],
+    '@babel/preset-react',
+    '@babel/preset-typescript'
+  ],
+  plugins: [
+    'babel-plugin-transform-react-remove-prop-types',
+    '@babel/plugin-proposal-decorators'
+  ]
+};</code></pre>
+
+        <h4>Babel 慢的原因</h4>
+        <ul>
+          <li><strong>JS 实现</strong>：V8 单线程；字符串 / object 操作；GC 压力大</li>
+          <li><strong>插件链</strong>：每个 plugin 独立 visit AST → 多次遍历</li>
+          <li><strong>AST 重建</strong>：传 AST 在 plugin 间用 JS object → 内存压力</li>
+          <li><strong>preset-env 复杂</strong>：根据 target 决定哪些 plugin → 大量 if-else</li>
+        </ul>
+        <p>结果：Babel transform 一个 TS 文件 ~100-200ms 是常见。1000 文件项目 ~3-5 分钟。</p>
+
+        <h3>esbuild：Go 实现 + 极致速度</h3>
+        <p><strong>历史</strong>：2020-01 Evan W（化名 evanw，前 Figma 工程师）发布 esbuild 0.1。设计目标：<strong>构建速度 100x</strong>。</p>
+        <p><strong>关键设计选择</strong>：</p>
+        <p><strong>(1) Go 实现</strong>—— Goroutine 让<strong>真正多核并行</strong>。Babel/SWC 也并行（multi-process），但 Go 的 goroutine 比启动 process 轻量。</p>
+        <p><strong>(2) AST in memory + 自家 parser</strong>—— 不依赖现有库；为 esbuild 极致优化。Go 的 GC 比 V8 GC 对 compiler 工作负载更友好。</p>
+        <p><strong>(3) 单 pass</strong>—— parse + transform + bundle 在一次扫描完成（不像 Babel 多次 visit AST）。</p>
+        <p><strong>(4) 零依赖</strong>—— 自实现 minifier / tree shaker / sourcemap。不调外部 npm 包。</p>
+        <p><strong>(5) 字符串处理优化</strong>—— Go []byte 操作 + 避免不必要 allocation。</p>
+        <p>Evan W 的 essay <em>"Why is esbuild fast?"</em> 详细分析这些选择。</p>
+
+        <h4>esbuild plugin API 限制</h4>
+        <p>esbuild 只暴露<strong>resolve / load hooks</strong>：</p>
+        <pre class="code"><code class="lang-javascript">esbuild.build({
+  plugins: [{
+    name: 'my-plugin',
+    setup(build) {
+      // 1. 控制 resolve
+      build.onResolve({ filter: /\.svg$/ }, (args) =&gt; ({
+        path: args.path,
+        namespace: 'svg-ns'
+      }));
+
+      // 2. 控制 load
+      build.onLoad({ filter: /\.svg$/ }, (args) =&gt; ({
+        contents: 'export default ...',
+        loader: 'js'
+      }));
+    }
+  }]
+});</code></pre>
+        <p><strong>不能 AST transform</strong>—— 不能像 Babel/SWC 那样在 transform 阶段改 AST。这让 esbuild 不能完全替代 Babel/SWC（如果你需要复杂的 AST 操作）。</p>
+        <p><strong>设计权衡</strong>：</p>
+        <ul>
+          <li>没 AST plugin → 速度极致（不需暴露 AST 给 plugin → 可以高度优化内部）</li>
+          <li>有 AST plugin → plugin 灵活但慢（要序列化 AST + plugin 间通信）</li>
+        </ul>
+        <p>esbuild 选了前者。</p>
+
+        <h3>SWC：Rust 实现 + 兼容 Babel</h3>
+        <p><strong>历史</strong>：2020 DongYoon Kang（后被 Vercel 雇全职做 SWC）发布 SWC 1.0。<strong>定位</strong>：Babel 替代 + 速度接近 esbuild。</p>
+        <p><strong>关键设计</strong>：</p>
+        <p><strong>(1) Rust 实现</strong>—— 性能接近 Go；内存安全更强；与 Rust ecosystem 集成（Turbopack / Rspack 等）</p>
+        <p><strong>(2) Babel-compatible API</strong>—— 大部分 Babel preset 在 SWC 有对应（@swc/preset-env / @swc/preset-react）</p>
+        <p><strong>(3) Wasm plugin</strong>—— 让 Rust 写 plugin → 编译 wasm（详见 <a href="../../wasm/01-overview/01-history.html">WASM 主题</a>）→ SWC 加载执行。性能损失小（vs Native plugin）。</p>
+        <p><strong>(4) Next.js 默认</strong>—— 2022 Next.js 12 默认切到 SWC（替代 Babel），Vercel 重金推。</p>
+        <p>典型 SWC 配置（.swcrc）：</p>
+        <pre class="code"><code class="lang-json">{
+  "jsc": {
+    "parser": {
+      "syntax": "typescript",
+      "tsx": true,
+      "decorators": true
+    },
+    "transform": {
+      "react": {
+        "runtime": "automatic"
+      }
+    },
+    "target": "es2020"
+  },
+  "module": {
+    "type": "es6"
+  }
+}</code></pre>
+
+        <h4>SWC 用 wasm plugin</h4>
+        <p>SWC plugin 不像 Babel plugin（JS）；用 Rust 写编译 wasm：</p>
+        <pre class="code"><code class="lang-rust">// 我的 SWC plugin
+use swc_core::ecma::{ast::*, visit::FoldWith};
+
+#[plugin_transform]
+pub fn process_transform(program: Program, _metadata: TransformPluginProgramMetadata) -&gt; Program {
+    // 自定义 transform
+    program.fold_with(&amp;mut MyVisitor {})
+}</code></pre>
+        <pre class="code"><code class="lang-bash">$ cargo build --target wasm32-wasi --release
+# 产 my_plugin.wasm
+
+# 配置 .swcrc
+{
+  "jsc": {
+    "experimental": {
+      "plugins": [["./my_plugin.wasm", { ... }]]
+    }
+  }
+}</code></pre>
+        <p>性能：wasm plugin 比 native plugin 慢 ~2x，但比 Babel plugin（JS）快 ~10x。</p>
+
+        <h3>三家性能对比</h3>
+        <p>典型 TS 项目（500 文件，含 React JSX）：</p>
+        <table>
+          <thead>
+            <tr><th>步骤</th><th>Babel</th><th>SWC</th><th>esbuild</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>单文件 transform 平均</td><td>~100-200ms</td><td>~5-10ms</td><td>~3-5ms</td></tr>
+            <tr><td>500 文件总（serial）</td><td>~50-100s</td><td>~3-5s</td><td>~1-3s</td></tr>
+            <tr><td>500 文件总（4 核 parallel）</td><td>~15-30s</td><td>~1-2s</td><td>~0.5-1s</td></tr>
+            <tr><td>Memory peak</td><td>~500MB-1GB</td><td>~200-300MB</td><td>~100-200MB</td></tr>
+          </tbody>
+        </table>
+        <p><strong>实际差距 ~30-100x</strong>—— 不到营销宣称的 100x，但仍极显著。</p>
+
+        <h3>三者做的工作</h3>
+        <p>三者都做<strong>同样的 transformation</strong>：</p>
+        <h4>1. 现代 JS → 老 JS</h4>
+        <pre class="code"><code class="lang-javascript">// 源
+const greet = (name) =&gt; `Hello, ${name}!`;
+class Counter {
+  count = 0;
+  increment() { this.count++; }
+}
+async function loadData() {
+  const data = await fetch('/api');
+  return data.json();
+}
+
+// transform 到 ES5（target old browser）
+var greet = function(name) { return "Hello, " + name + "!"; };
+function Counter() {
+  this.count = 0;
+}
+Counter.prototype.increment = function() {
+  this.count++;
+};
+function loadData() {
+  return /* generator wrapper for async */ ...;
+}</code></pre>
+
+        <h4>2. JSX → React.createElement / jsx-runtime</h4>
+        <pre class="code"><code class="lang-javascript">// 源
+const App = () =&gt; &lt;div className="root"&gt;Hello&lt;/div&gt;;
+
+// 旧 React (createElement)
+const App = () =&gt; React.createElement('div', { className: 'root' }, 'Hello');
+
+// React 17+ jsx-runtime
+import { jsx as _jsx } from 'react/jsx-runtime';
+const App = () =&gt; _jsx('div', { className: 'root', children: 'Hello' });</code></pre>
+
+        <h4>3. TypeScript → JS（类型擦除）</h4>
+        <pre class="code"><code class="lang-typescript">// 源
+interface User { name: string; age: number; }
+function greet(user: User): string {
+  return `Hello, ${user.name}!`;
+}
+
+// 类型擦除后
+function greet(user) {
+  return `Hello, ${user.name}!`;
+}</code></pre>
+        <p><strong>注意</strong>：esbuild / SWC / Babel 都不做<strong>类型检查</strong>—— 只是把类型注解删掉。类型检查要单独跑 tsc 或编辑器（详见 <a href="../../typescript/05-engineering/" target="_blank">TS P5</a>）。</p>
+
+        <h4>4. polyfill 注入</h4>
+        <pre class="code"><code class="lang-javascript">// 源
+const set = new Set([1, 2, 3]);   // Set 老浏览器没有
+arr.includes(x);                   // Array.includes 老浏览器没有
+
+// Babel preset-env useBuiltIns: 'usage' 自动加
+import 'core-js/modules/es.set';
+import 'core-js/modules/es.array.includes';
+const set = new Set([1, 2, 3]);
+arr.includes(x);</code></pre>
+        <p>esbuild / SWC 也支持 polyfill 注入但功能不及 Babel preset-env 完善。</p>
+
+        <h3>选谁用：决策树</h3>
+        <p><strong>问题 1：你写的是什么？</strong></p>
+        <ul>
+          <li>npm 库（要广 target 兼容）→ Babel + preset-env（最稳）</li>
+          <li>Web app → SWC 或 esbuild（速度优先）</li>
+          <li>Next.js → SWC（Next 默认）</li>
+          <li>Vite → 已内置 esbuild（dev/build 都用）</li>
+        </ul>
+        <p><strong>问题 2：你需要什么 plugin？</strong></p>
+        <ul>
+          <li>需要复杂 AST plugin（装饰器 / 编译期 macro / styled-components）→ Babel 或 SWC（不能 esbuild）</li>
+          <li>只需要标准 transform（TS / JSX / preset-env）→ esbuild / SWC 都行</li>
+        </ul>
+        <p><strong>问题 3：性能优先级？</strong></p>
+        <ul>
+          <li>启动最快 → esbuild</li>
+          <li>稳态 + 大项目 → SWC（与 Rust ecosystem 集成）</li>
+          <li>兼容性最重要 → Babel</li>
+        </ul>
+
+        <h3>各场景选择</h3>
+        <table>
+          <thead>
+            <tr><th>场景</th><th>推荐</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Vite 项目</td><td>esbuild（dev）+ Rollup with esbuild plugin（build）</td></tr>
+            <tr><td>Next.js 项目</td><td>SWC（默认）</td></tr>
+            <tr><td>create-react-app</td><td>~~Babel~~（CRA 弃用，推荐迁 Vite）</td></tr>
+            <tr><td>Webpack 项目</td><td>Babel（Webpack 默认 babel-loader）或 SWC（swc-loader）</td></tr>
+            <tr><td>Rspack 项目</td><td>SWC（默认）</td></tr>
+            <tr><td>Bun 项目</td><td>Bun 内置 transformer</td></tr>
+            <tr><td>npm 库（广兼容）</td><td>Babel + @babel/preset-env</td></tr>
+            <tr><td>npm 库（modern only）</td><td>tsup（用 esbuild）</td></tr>
+            <tr><td>极致快 monorepo build</td><td>esbuild 直用</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Babel 不会消失的原因</h3>
+        <p>虽然 SWC / esbuild 速度碾压，<strong>Babel 仍存活</strong>：</p>
+        <ul>
+          <li>plugin ecosystem 最大（数千个 npm 包）</li>
+          <li>很多 framework 特定 plugin（React Server Components / styled-components / Solid 等）</li>
+          <li>preset-env 的 polyfill 处理最完善</li>
+          <li>新 ES proposal 通常先在 Babel 实现（让大家试用）</li>
+          <li>大量库的 build pipeline 已配 Babel + preset-env，不愿改</li>
+        </ul>
+        <p>2026 趋势：Babel 仍是<strong>"规范探索"层</strong>（新 proposal 试用）+ <strong>"老项目维护"</strong>；新 app 项目几乎都用 SWC / esbuild。</p>
+
+        <h3>tsc / TypeScript compiler 的位置</h3>
+        <p>TypeScript 自带 tsc compiler。但<strong>tsc 不适合做 bundler 的 transform</strong>：</p>
+        <ul>
+          <li>tsc 慢（与 Babel 量级，~100ms/file）</li>
+          <li>tsc 类型检查内置（不能纯类型擦除）</li>
+          <li>tsc 输出格式 / 兼容性配置不够灵活</li>
+        </ul>
+        <p>典型工程实践：</p>
+        <ul>
+          <li><strong>tsc</strong>：仅做 <strong>type checking</strong>（<code>tsc --noEmit</code>）</li>
+          <li><strong>esbuild / SWC</strong>：做 <strong>transform</strong>（类型擦除 + 转译）</li>
+        </ul>
+        <p>2024+ 还有 <strong>tsgo</strong>（Go 重写的 tsc，2024 stage 1）—— 让 tsc 也快 100x。但仍未替代 esbuild / SWC 做 build transform。</p>
+
+        <h3>compiler 与 bundler 的关系</h3>
+        <p>compiler（Babel/SWC/esbuild）和 bundler（Vite/Webpack/Rollup）<strong>不是替代关系</strong>：</p>
+        <ul>
+          <li>compiler 做 single-file transform（TS → JS / JSX → JS / 等）</li>
+          <li>bundler 做 multi-file 合并 + chunk 分割 + tree shaking</li>
+        </ul>
+        <p>典型组合：</p>
+        <ul>
+          <li>Vite (bundler) + esbuild (compiler)</li>
+          <li>Webpack (bundler) + babel-loader (compiler)</li>
+          <li>Webpack + swc-loader</li>
+          <li>Rspack + 内置 SWC</li>
+          <li>Rollup + @rollup/plugin-babel 或 @rollup/plugin-swc</li>
+        </ul>
+        <p>esbuild 自身既是 compiler 也是 bundler，但 bundler 功能不及完整的 Vite/Webpack/Rollup（详见 <a href="../01-overview/02-landscape.html">P1.2</a>）。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · Webpack 项目从 babel-loader 切换到 swc-loader</h3>
+        <p>典型 5-10x 加速：</p>
+        <pre class="code"><code class="lang-bash">$ npm uninstall babel-loader @babel/core @babel/preset-env @babel/preset-react @babel/preset-typescript
+$ npm install -D @swc/core swc-loader</code></pre>
+        <pre class="code"><code class="lang-javascript">// webpack.config.js
+module.exports = {
+  module: {
+    rules: [
+      {
+        test: /\.(jsx?|tsx?)$/,
+        exclude: /node_modules/,
+        use: {
+          loader: 'swc-loader',
+          options: {
+            jsc: {
+              parser: { syntax: 'typescript', tsx: true },
+              transform: { react: { runtime: 'automatic' }},
+              target: 'es2020'
+            }
+          }
+        }
+      }
+    ]
+  }
+};</code></pre>
+
+        <h3>场景 B · 写自定义 SWC plugin（Rust）</h3>
+        <pre class="code"><code class="lang-bash">$ cargo new --lib my-swc-plugin
+$ cd my-swc-plugin</code></pre>
+        <pre class="code"><code class="lang-toml"># Cargo.toml
+[package]
+name = "my-swc-plugin"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde = "1"
+serde_json = "1"
+swc_core = { version = "0.95", features = ["ecma_plugin_transform"] }</code></pre>
+        <pre class="code"><code class="lang-rust">// src/lib.rs
+use swc_core::ecma::{
+    ast::Program,
+    visit::{as_folder, FoldWith, VisitMut},
+};
+use swc_core::plugin::{plugin_transform, proxies::TransformPluginProgramMetadata};
+
+pub struct TransformVisitor;
+
+impl VisitMut for TransformVisitor {
+    // 你的 transform 逻辑
+}
+
+#[plugin_transform]
+pub fn process_transform(program: Program, _metadata: TransformPluginProgramMetadata) -&gt; Program {
+    program.fold_with(&amp;mut as_folder(TransformVisitor))
+}</code></pre>
+        <pre class="code"><code class="lang-bash">$ cargo build --target wasm32-wasi --release</code></pre>
+
+        <h3>场景 C · 用 esbuild 做单文件 transform（不 bundle）</h3>
+        <pre class="code"><code class="lang-javascript">import { transform } from 'esbuild';
+
+const result = await transform(
+  'const x: number = 5; export default x;',
+  {
+    loader: 'ts',
+    target: 'es2020',
+    format: 'esm'
+  }
+);
+console.log(result.code);
+// const x = 5;
+// export default x;</code></pre>
+
+        <h3>场景 D · Vite 用自定义 esbuild loader</h3>
+        <pre class="code"><code class="lang-javascript">// vite.config.js
+export default {
+  esbuild: {
+    jsxFactory: 'h',
+    jsxFragment: 'Fragment',
+    target: 'es2022',
+    drop: ['console', 'debugger']   // production 删 console.log
+  }
+};</code></pre>
+
+        <h3>场景 E · 检查 transform 输出</h3>
+        <pre class="code"><code class="lang-bash"># Babel
+$ npx babel src/foo.ts --presets=@babel/preset-env,@babel/preset-typescript
+
+# esbuild
+$ esbuild src/foo.ts --loader=ts --target=es2020
+
+# SWC
+$ npx @swc/cli src/foo.ts -o out.js</code></pre>
+        <p>对比三家输出，看差异。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：编译器配置</span></h2>
+
+        <h3>Babel preset-env（库典型）</h3>
+        <pre class="code"><code class="lang-javascript">// babel.config.js
+module.exports = {
+  presets: [
+    ['@babel/preset-env', {
+      targets: {
+        chrome: '90',
+        firefox: '90',
+        safari: '15',
+        edge: '90'
+      },
+      modules: false,         // 保留 ESM 给 bundler
+      useBuiltIns: 'usage',   // 自动 polyfill
+      corejs: 3
+    }],
+    ['@babel/preset-react', { runtime: 'automatic' }],
+    '@babel/preset-typescript'
+  ],
+  plugins: [
+    // 仅 dev 用
+    process.env.NODE_ENV === 'development' &amp;&amp; 'react-refresh/babel'
+  ].filter(Boolean)
+};</code></pre>
+
+        <h3>SWC 配置（Next.js 风格）</h3>
+        <pre class="code"><code class="lang-json">// .swcrc
+{
+  "$schema": "https://swc.rs/schema.json",
+  "jsc": {
+    "parser": {
+      "syntax": "typescript",
+      "tsx": true,
+      "decorators": true
+    },
+    "transform": {
+      "react": {
+        "runtime": "automatic",
+        "refresh": true
+      },
+      "decoratorMetadata": true,
+      "legacyDecorator": true
+    },
+    "target": "es2022",
+    "loose": false,
+    "experimental": {
+      "plugins": [
+        ["@swc/plugin-styled-components", { "displayName": true }]
+      ]
+    }
+  },
+  "module": {
+    "type": "es6"
+  }
+}</code></pre>
+
+        <h3>esbuild 完整 build script</h3>
+        <pre class="code"><code class="lang-javascript">// build.mjs
+import * as esbuild from 'esbuild';
+
+await esbuild.build({
+  entryPoints: ['src/index.ts'],
+  bundle: true,
+  outfile: 'dist/bundle.js',
+  format: 'esm',
+  platform: 'browser',
+  target: 'es2020',
+  jsx: 'automatic',
+  loader: {
+    '.png': 'file',
+    '.svg': 'text'
+  },
+  minify: true,
+  sourcemap: true,
+  plugins: [
+    {
+      name: 'my-resolver',
+      setup(build) {
+        build.onResolve({ filter: /^env$/ }, () =&gt; ({
+          path: 'env',
+          namespace: 'env-ns'
+        }));
+        build.onLoad({ filter: /.*/, namespace: 'env-ns' }, () =&gt; ({
+          contents: JSON.stringify(process.env),
+          loader: 'json'
+        }));
+      }
+    }
+  ]
+});</code></pre>
+
+        <h3>tsup（基于 esbuild 的库 builder）</h3>
+        <pre class="code"><code class="lang-typescript">// tsup.config.ts
+import { defineConfig } from 'tsup';
+
+export default defineConfig({
+  entry: ['src/index.ts'],
+  format: ['esm', 'cjs'],
+  dts: true,                  // 生成 .d.ts（用 tsc）
+  splitting: false,
+  sourcemap: true,
+  clean: true,
+  target: 'es2020'
+});</code></pre>
+        <pre class="code"><code class="lang-bash">$ tsup
+# 产 dist/index.mjs + index.cjs + index.d.ts</code></pre>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：以为 esbuild 能完全替代 Babel</h3>
+        <p>esbuild plugin 不能 AST transform。<strong>很多 Babel 特有 plugin 在 esbuild 不可能</strong>：</p>
+        <ul>
+          <li>装饰器（decorators）—— 复杂 transform</li>
+          <li>styled-components Babel plugin（自动加 displayName）</li>
+          <li>编译期 macro（@babel/plugin-transform-react-constant-elements）</li>
+        </ul>
+        <p>esbuild 适合<strong>baseline transform</strong>（TS / JSX / target）；复杂 plugin 用 SWC 或 Babel。</p>
+
+        <h3>陷阱 2：Babel preset-env 默认让 tree shaking 失效</h3>
+        <p>详见 <a href="../04-tree-shaking/01-tree-shaking.html">P4 Tree Shaking</a>。重要规则：<code>modules: false</code> 让 Babel 保留 ESM。</p>
+
+        <h3>陷阱 3：tsc + esbuild 重复 type 检查</h3>
+        <p>esbuild 不做 type 检查（只擦除类型）。tsc 做 type 检查。<strong>不要让 esbuild 跑 tsc</strong>：</p>
+        <pre class="code"><code class="lang-bash"># 错：让 esbuild 串 tsc
+$ tsc &amp;&amp; esbuild ...   # tsc 慢拖累
+
+# 对：分开跑（CI 同时）
+$ tsc --noEmit          # 只 type 检查（CI / pre-commit）
+$ esbuild ...           # transform（dev / build）</code></pre>
+
+        <h3>陷阱 4：SWC plugin 用错 wasm 版本</h3>
+        <p>SWC plugin（wasm）必须用与 SWC 兼容的 swc_core 版本。<strong>版本不匹配会报错或行为奇怪</strong>。</p>
+        <pre class="code"><code class="lang-toml"># Cargo.toml
+[dependencies]
+swc_core = { version = "0.95", features = ["..."] }   # 必须与目标 SWC 版本兼容</code></pre>
+        <p>检查：<a href="https://plugins.swc.rs/" target="_blank" rel="noopener">plugins.swc.rs</a> 兼容性表。</p>
+
+        <h3>陷阱 5：Babel 转 ES5 让 bundle 巨大</h3>
+        <p>preset-env 转 ES5（target IE 11）会加大量 polyfill + helper 代码。<strong>2026 不必要</strong>—— IE 已死。target 现代浏览器：</p>
+        <pre class="code"><code class="lang-json">{
+  "targets": "&gt; 0.5%, last 2 versions, Firefox ESR, not dead, not IE 11"
+}</code></pre>
+        <p>能省 30-50% bundle 体积。</p>
+
+        <h3>陷阱 6：用 swc-loader 但忘 SWC 配置</h3>
+        <p>不配置 .swcrc 时 swc-loader 用默认（target es2015）。可能输出过老或丢失你需要的特性。<strong>显式配置</strong>：</p>
+        <pre class="code"><code class="lang-javascript">// webpack.config.js
+{
+  loader: 'swc-loader',
+  options: {
+    // 显式 jsc 配置
+  }
+}</code></pre>
+
+        <h3>陷阱 7：esbuild minify 行为差异</h3>
+        <p>esbuild minify 不及 terser 激进。如果你的代码靠 Function.name / Class.name 等元信息，<strong>esbuild 默认 mangle 让 name 变化</strong>：</p>
+        <pre class="code"><code class="lang-javascript">// 源
+class MyComponent { ... }
+console.log(MyComponent.name);   // "MyComponent"
+
+// esbuild minify 后
+class A { ... }   // ← name 变了！
+console.log(A.name);   // "A" 而不是 "MyComponent"</code></pre>
+        <p>对策：<code>minify: { keepNames: true }</code>（esbuild）；或用 terser。</p>
+
+        <h3>陷阱 8：忘记 react-refresh/babel plugin</h3>
+        <p>用 Babel + Webpack 时，要用 react-refresh/babel 让 React Refresh 工作：</p>
+        <pre class="code"><code class="lang-javascript">// babel.config.js
+{
+  plugins: [
+    process.env.NODE_ENV === 'development' &amp;&amp; 'react-refresh/babel'
+  ].filter(Boolean)
+}</code></pre>
+        <p>+ webpack.config.js 加 ReactRefreshWebpackPlugin。</p>
+        <p>用 SWC 时直接 jsc.transform.react.refresh: true。</p>
+        <p>用 Vite 时 @vitejs/plugin-react 自动包含。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>各 compiler 官方</h3>
+        <ul>
+          <li><a href="https://babeljs.io/" target="_blank" rel="noopener">Babel</a></li>
+          <li><a href="https://esbuild.github.io/" target="_blank" rel="noopener">esbuild</a></li>
+          <li><a href="https://swc.rs/" target="_blank" rel="noopener">SWC</a></li>
+          <li><a href="https://github.com/microsoft/typescript-go" target="_blank" rel="noopener">tsgo（Go 重写 tsc）</a></li>
+        </ul>
+
+        <h3>设计深度</h3>
+        <ul>
+          <li><a href="https://esbuild.github.io/faq/#why-is-esbuild-fast" target="_blank" rel="noopener">esbuild · Why is esbuild fast?</a></li>
+          <li><a href="https://kdy1.dev/" target="_blank" rel="noopener">DongYoon Kang's blog（SWC 作者）</a></li>
+          <li><a href="https://blog.cloudflare.com/standards-still-need-champions/" target="_blank" rel="noopener">Babel 设计哲学（其他 Babel 作者博客）</a></li>
+        </ul>
+
+        <h3>实战</h3>
+        <ul>
+          <li><a href="https://tsup.egoist.dev/" target="_blank" rel="noopener">tsup（esbuild-based library builder）</a></li>
+          <li><a href="https://plugins.swc.rs/" target="_blank" rel="noopener">SWC Plugins 列表</a></li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="02-source-maps.html">P6.2 Source Maps 工程化</a></li>
+          <li><a href="../07-plugins-and-next/01-plugins.html">P7.1 Vite/Rollup 插件</a></li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../typescript/05-engineering/" target="_blank">TS P5 工程化</a> · TS 编译细节</li>
+          <li><a href="../../wasm/01-overview/01-history.html">WASM 主题</a> · SWC plugin 用 wasm</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
