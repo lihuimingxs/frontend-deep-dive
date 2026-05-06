@@ -1,0 +1,658 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Component Model + WIT + 典型应用 · P7.1 · WebAssembly 深度学习</title>
+    <meta name="description" content="WebAssembly 2026 终极形态。Component Model 让 wasm 成为「跨语言的二进制库格式」——Rust 库被 Go/Java/Python 当作 wasm component 引用不需 FFI/CGO/JNI。WIT (WebAssembly Interface Types) 是 IDL 类似 protobuf 但 wasm 原生。canonical ABI 定义跨组件传 string/list 的标准。典型应用：Figma C++ 布局引擎 / Photoshop Web / Google Earth / FFmpeg.wasm / SQLite WASM / DuckDB-WASM / Pyodide / Roblox / Shopify Functions / Envoy 插件 / 区块链合约。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23654ff0'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EWA%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>WebAssembly 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.22 290); color: #fff">WASM</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P7 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · Component Model 与应用</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-component-and-apps.html" class="active">01 · Component Model + WIT + 典型应用</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">WebAssembly</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · Component Model</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Component Model + 应用</span>
+        </nav>
+        <h1>Component Model + WIT + 典型应用</h1>
+        <p class="lead">
+          WebAssembly 2026 的<strong>终极形态</strong>在 Component Model + WIT —— 让 wasm 真正成为"<strong>跨语言的二进制库格式</strong>"。Rust 写组件 A → 编译 wasm component → 通过 WIT 接口被 Go 写的组件 B 调用，不需要 C ABI / FFI / CGO / JNI。<strong>WIT</strong>（WebAssembly Interface Types）是 IDL，类似 protobuf / thrift 但 wasm 原生；<strong>world</strong> 概念把一组 imports + exports 打包成"环境契约"。<strong>canonical ABI</strong> 定义跨组件传 string / list / record 的标准。<strong>典型应用</strong>：浏览器内（Figma / Photoshop Web / Google Earth / FFmpeg / SQLite / DuckDB / Pyodide）+ 服务端（Shopify Functions / Envoy plugins）+ 区块链（Polkadot / Internet Computer / NEAR）三大市场覆盖了 wasm 真正的用户群。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P6（WASI + runtime）</span>
+          <span><strong>主要来源</strong> github.com/WebAssembly/component-model · bytecodealliance.org · 各应用官方博客</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Component Model 是 wasm core 之上的封装层</strong>—— 加上"接口、类型、链接"概念。<strong>core module</strong> 只有 i32/i64/f32/f64/v128/funcref/externref；<strong>component</strong> 有 string / list / record / variant / option / result 等高级类型。</li>
+          <li><strong>WIT 是 IDL（接口定义语言）</strong>—— 类似 protobuf / thrift，但<strong>wasm 原生</strong>。WIT 文件定义函数签名 + 类型；wit-bindgen 工具生成各语言 binding（Rust / Go / JS / Python / Java / 等）。</li>
+          <li><strong>world = imports + exports = wasm 想要的环境契约</strong>—— 一个 component 可声明"我需要 wasi:filesystem + wasi:http"，宿主提供这些 worlds 的实现。WIT 让"WASI 兼容性" = "WIT 接口兼容性"。</li>
+          <li><strong>跨语言互操作的黄金路径</strong>—— Rust 写组件 A（暴露 WIT 接口）→ 编译 wasm component → 通过 WIT 接口被 Go 写的组件 B 调用。<strong>不需要 C ABI / FFI / CGO / JNI</strong>。这是 Component Model 的野心。</li>
+          <li><strong>wasm 杀手级应用 3 类</strong>—— (1) 浏览器内既有大代码库（Figma / Photoshop / SQLite / FFmpeg）；(2) 服务端 / Edge 多租户（Cloudflare / Fastly / Shopify）；(3) 区块链智能合约（Polkadot / NEAR / Internet Computer）。<strong>三类共同特点</strong>：需要安全沙箱 + 高性能 + 跨语言。</li>
+          <li><strong>wasm 不擅长的</strong>—— (1) 频繁调 DOM（跨边界税）；(2) 短小工具（启动 + glue 体积）；(3) 现有 JS 库已 mature 的场景（不要为了 wasm 而 wasm）。<strong>2026 趋势</strong>：wasm 不取代 JS，是<strong>性能敏感模块的 5%</strong>。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>为什么需要 Component Model</h3>
+        <p>core wasm（MVP + 2.0）的限制：</p>
+        <p><strong>(1) 类型贫乏</strong>—— 只有 i32/i64/f32/f64/v128 + ref types。要传 string / list / struct，必须手工序列化到 linear memory（详见 <a href="../03-host-interop/02-imports-exports.html">P3.2 序列化税</a>）。</p>
+        <p><strong>(2) 跨语言互操作困难</strong>—— Rust 写的 wasm 与 C 写的 wasm 互调，必须达成 ABI 约定（如 wasm-bindgen 的 Rust 特定 marshalling，C 没有）。</p>
+        <p><strong>(3) 没有"组件"概念</strong>—— core wasm 是 module；多个 module 互调要靠手工 linker（wasm-merge 等工具）。</p>
+        <p><strong>(4) 接口契约不正式</strong>—— WASI Preview 1 是一组 imports 名称；不是 IDL，不能 typecheck。</p>
+        <p>Component Model 解决：</p>
+        <ul>
+          <li>更丰富类型（string / list / record / variant / option / result）</li>
+          <li>跨语言 canonical ABI（任何语言遵循 = 互通）</li>
+          <li>组件链接（多个 component 自动 link）</li>
+          <li>WIT IDL（typecheck + 生成各语言 binding）</li>
+        </ul>
+
+        <h3>Component vs Module 区别</h3>
+        <p><strong>Module</strong>（core wasm）：</p>
+        <pre class="code"><code class="lang-text">(module
+  (import "env" "log" (func (param i32)))
+  (func (export "main") ...))</code></pre>
+        <p>imports / exports 类型受限于 wasm 数值类型 + memory + table。</p>
+        <p><strong>Component</strong>：</p>
+        <pre class="code"><code class="lang-text">(component
+  (import "wasi:logging/logger" (func (param "level" string) (param "message" string)))
+  (export "main" (func)))</code></pre>
+        <p>imports / exports 用 WIT 类型（string 等高级类型）；底层<strong>多个 core module 组成</strong>，外层是 component wrapper。</p>
+        <p>Component 二进制结构：<code>\0asm</code> magic + version （和 core 不同，有 layer 标志） + nested core modules + component-level type definitions。</p>
+
+        <h3>WIT 类型系统</h3>
+        <p>WIT 类型分几层：</p>
+        <h4>原始类型</h4>
+        <pre class="code"><code class="lang-text">bool, s8, s16, s32, s64, u8, u16, u32, u64, f32, f64, char, string</code></pre>
+        <h4>容器类型</h4>
+        <pre class="code"><code class="lang-text">list&lt;T&gt;              // 动态数组
+option&lt;T&gt;            // 可选值（None / Some(T)）
+result&lt;T, E&gt;         // 错误处理（Ok(T) / Err(E)）
+tuple&lt;T1, T2, ...&gt;   // 元组</code></pre>
+        <h4>用户定义类型</h4>
+        <pre class="code"><code class="lang-text">// record（类似 struct）
+record point {
+  x: f64,
+  y: f64,
+}
+
+// variant（类似 enum / sum type）
+variant http-status {
+  ok,
+  not-found,
+  error(string),
+}
+
+// enum（无 payload variant）
+enum direction {
+  north, south, east, west,
+}
+
+// flags（位标志集合）
+flags permissions {
+  read, write, execute,
+}</code></pre>
+        <h4>资源（resource，类似面向对象）</h4>
+        <pre class="code"><code class="lang-text">resource counter {
+  constructor(initial: u32);
+  increment: func() -&gt; u32;
+  get: func() -&gt; u32;
+}</code></pre>
+
+        <h3>WIT world 概念</h3>
+        <p>world 把一组 imports + exports 打包成<strong>环境契约</strong>：</p>
+        <pre class="code"><code class="lang-text">// hello.wit
+package example:hello@0.1.0;
+
+world hello-world {
+  // imports：宿主必须提供
+  import wasi:cli/environment@0.2.0;
+  import wasi:filesystem/preopens@0.2.0;
+  import wasi:io/streams@0.2.0;
+
+  // exports：本组件提供
+  export run: func() -&gt; result&lt;_, string&gt;;
+  export greet: func(name: string) -&gt; string;
+}</code></pre>
+        <p>组件实现这个 world → 任何宿主提供这些 imports → 跑得起来。这是<strong>"WASI 标准化"的真正机制</strong>。</p>
+
+        <h3>Canonical ABI</h3>
+        <p>Component Model 定义 <strong>canonical ABI</strong>—— 跨语言 component 互通的标准 ABI。</p>
+        <p>问题：不同语言对 string / list / record 的内存表示不一样：</p>
+        <ul>
+          <li>Rust String：长度 + capacity + ptr 三字段</li>
+          <li>C++ std::string：通常 SSO 优化（小字符串内联）</li>
+          <li>Java String：UTF-16</li>
+          <li>JS String：UTF-16</li>
+        </ul>
+        <p>canonical ABI 规定：</p>
+        <p><strong>(1) string 是 UTF-8 字节序列 + 长度</strong>—— 跨组件传 string 一律按这个布局</p>
+        <p><strong>(2) list&lt;T&gt; 是 ptr + len</strong>—— linear memory 中的连续元素</p>
+        <p><strong>(3) record 字段顺序 + 对齐</strong>—— 与 C struct 类似但更严格</p>
+        <p><strong>(4) variant tag + payload</strong>—— tag 在前，payload 紧随</p>
+        <p>每个语言 wit-bindgen 生成的 marshalling 代码都遵循这个 ABI，让<strong>跨语言互调透明</strong>。</p>
+
+        <h3>跨语言互操作的黄金路径</h3>
+        <p>设想你想用 Rust 写一个"图像滤镜"库，让 Go / Java / Python 都能调用。</p>
+        <p><strong>没 Component Model 时</strong>：</p>
+        <ul>
+          <li>Rust → C ABI → Go 调（用 CGO，部署痛）</li>
+          <li>Rust → JNI → Java 调（手写 native 代码）</li>
+          <li>Rust → CFFI → Python 调（手写 ctypes）</li>
+          <li>每个语言都要手写不同的 binding</li>
+        </ul>
+        <p><strong>Component Model 时代</strong>：</p>
+        <ul>
+          <li>Rust 写组件，定义 WIT 接口</li>
+          <li>cargo component build → image-filter.wasm（一个 wasm component）</li>
+          <li>Go：用 wit-bindgen-go 生成 Go binding，import 这个 component</li>
+          <li>Java：用 wit-bindgen-java 生成 Java binding</li>
+          <li>Python：用 wit-bindgen-python 生成 Python binding</li>
+          <li><strong>同一个 wasm 二进制服务所有语言</strong></li>
+        </ul>
+        <p>这是 Component Model 的<strong>野心</strong>：让 wasm 成为"跨语言的二进制库格式"，类似 jar 之于 JVM 语言、so/dll 之于系统语言。</p>
+
+        <h3>shared-nothing linking</h3>
+        <p>Component Model 默认 <strong>shared-nothing linking</strong>—— 组件之间<strong>不共享 memory</strong>。每个组件有自己的 linear memory 和 GC 堆。</p>
+        <p>跨组件通信通过 ABI marshalling：传 string / list 时，从源组件的 memory 拷贝到目标组件的 memory。</p>
+        <p>好处：</p>
+        <ul>
+          <li><strong>强隔离</strong>—— 一个组件 crash / OOM 不影响其他</li>
+          <li><strong>独立内存上限</strong>—— 每组件单独限制</li>
+          <li><strong>语言混合无障碍</strong>—— Rust 用 manual memory, Java 用 GC，互不影响</li>
+        </ul>
+        <p>代价：</p>
+        <ul>
+          <li>跨组件传大数据有拷贝开销（但 wasm 内存拷贝快）</li>
+          <li>不能共享对象引用（必须传值）</li>
+        </ul>
+
+        <h3>2026 Component Model 状态</h3>
+        <table>
+          <thead>
+            <tr><th>组件</th><th>状态</th><th>注</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Spec 核心</td><td>Preview 2 稳定（2024-01）</td><td>Preview 3 (async) 设计中</td></tr>
+            <tr><td>WIT 工具链</td><td>稳定</td><td>wit-bindgen / wasm-tools / cargo-component</td></tr>
+            <tr><td>Rust 支持</td><td>✅ 成熟</td><td>cargo-component 主流</td></tr>
+            <tr><td>JS 支持</td><td>✅ jco（jco transpile）</td><td>把 component 转 JS module</td></tr>
+            <tr><td>Go 支持</td><td>✅ wit-bindgen-go</td><td>2024+ 稳定</td></tr>
+            <tr><td>Python 支持</td><td>✅ componentize-py</td><td>把 Python 编译成 component</td></tr>
+            <tr><td>Java 支持</td><td>实验</td><td>jaybirdyz / 其他实验</td></tr>
+            <tr><td>wasmtime 实现</td><td>✅ 参考实现</td><td>v15+ 完整 Preview 2</td></tr>
+            <tr><td>wasmer 实现</td><td>✅</td><td>v4+ 支持</td></tr>
+            <tr><td>浏览器 Component</td><td>需要 jco transpile</td><td>2026 浏览器原生支持还在路上</td></tr>
+          </tbody>
+        </table>
+
+        <h3>典型应用 3 类</h3>
+        <h4>类别 1：浏览器内既有大代码库</h4>
+        <p><strong>共同特点</strong>：原本是 desktop / native app（C/C++ 写，几百万行代码），通过 wasm 移植到浏览器。</p>
+        <ul>
+          <li><strong>Figma</strong>（2017 上线 wasm 版）—— C++ 布局引擎；性能接近 native；wasm 处理 CRDT / 矢量计算 / 文本布局；JS 处理 React UI / 网络 / 协作。<strong>wasm 设计的"教科书案例"</strong>。</li>
+          <li><strong>Photoshop Web</strong>（Adobe 2023 上线）—— 完整 Photoshop C++ 代码库（数百万行）+ Emscripten 编译；用 wasm 跑滤镜引擎、用 WebGPU 加速渲染。</li>
+          <li><strong>Google Earth Web</strong>（C++ 3D 引擎）—— 把 desktop Google Earth 移植到浏览器。</li>
+          <li><strong>FFmpeg.wasm</strong>—— 视频转码 / 格式转换；浏览器内本地处理避免上传。多线程版需要 cross-origin isolated。</li>
+          <li><strong>SQLite WASM</strong>（官方支持）—— 浏览器内有真正的 SQL 数据库；OPFS 持久化；jSPI 让 SQLite C 代码原样跑。</li>
+          <li><strong>DuckDB-WASM</strong>—— 浏览器内 OLAP 数据库；SQL aggregation / join 在客户端跑；适合数据分析仪表板。</li>
+          <li><strong>Pyodide</strong>—— CPython + numpy/scipy/pandas 编译 wasm；JupyterLite 浏览器内 Jupyter。</li>
+          <li><strong>AutoDesk Tinkercad</strong>（CAD Web）—— C++ 几何引擎 → wasm。</li>
+          <li><strong>Roblox Studio Web</strong>（部分功能）—— Lua VM + 客户端 wasm。</li>
+        </ul>
+        <h4>类别 2：服务端 / Edge 多租户</h4>
+        <p><strong>共同特点</strong>：需要安全沙箱 + 快冷启动 + 跨语言。Docker 太重，wasm 刚好。</p>
+        <ul>
+          <li><strong>Cloudflare Workers</strong>（V8 isolate 跑 wasm）—— 每天调用百亿级；JS 主导，部分用户 Rust+wasm。</li>
+          <li><strong>Fastly Compute@Edge</strong>（wasmtime）—— Rust / Go (TinyGo) / AssemblyScript；冷启动 &lt; 1ms。</li>
+          <li><strong>Vercel Edge Functions</strong>（V8 isolate）—— 类似 Cloudflare 模型。</li>
+          <li><strong>Shopify Functions</strong>（Component Model 早期生产）—— 商家用 Rust/JS 写 wasm 插件影响商品定价 / 折扣 / 订单逻辑。</li>
+          <li><strong>Envoy Wasm Plugins</strong>（wazero 嵌入）—— 服务网格的扩展点；用户写 wasm filter，Envoy 在每请求跑。</li>
+          <li><strong>Tetrate Service Bridge</strong>（多租户 service mesh）。</li>
+          <li><strong>Spin (Fermyon)</strong>—— wasm 应用框架；本地开发 + Fermyon Cloud 部署。</li>
+          <li><strong>Database Functions</strong>—— 一些数据库（如 SingleStore / Aurora）开始支持 wasm UDF（用户定义函数）。</li>
+        </ul>
+        <h4>类别 3：区块链智能合约</h4>
+        <p><strong>共同特点</strong>：需要确定性执行 + 跨语言 + 沙箱。早期区块链用自家 VM（EVM / Solana BPF），新一代普遍 wasm 化。</p>
+        <ul>
+          <li><strong>Polkadot / Substrate</strong>—— wasm 是 runtime 升级机制（链可以改逻辑而不分叉）；智能合约用 ink!（Rust 框架）。</li>
+          <li><strong>NEAR Protocol</strong>—— 智能合约 wasm，编译自 Rust / AssemblyScript；NEAR 早期推 AS 给前端工程师。</li>
+          <li><strong>Internet Computer (DFINITY)</strong>—— canister = wasm 实例；每个 canister 独立 actor；可持久化。</li>
+          <li><strong>CosmWasm</strong>（Cosmos 生态）—— Cosmos SDK 的智能合约扩展。</li>
+          <li><strong>Fluence / Wasmer Edge</strong>—— 去中心化计算平台。</li>
+          <li><strong>Ethereum ewasm</strong>（实验性，未正式上线）—— EVM 的 wasm 替代品，进展慢。</li>
+        </ul>
+
+        <h3>wasm 不擅长的</h3>
+        <p>三类场景<strong>不要用 wasm</strong>：</p>
+        <p><strong>(1) 频繁调 DOM</strong>—— wasm 调 DOM 必须经 JS 桥（跨边界税 ~20ns/call）。频繁 DOM 操作（rAF 内大量 setText）反而比纯 JS 慢。Rust SPA 框架（Yew/Leptos）通过 wasm 内 VDOM 计算 + 批量 DOM 更新缓解，但仍不如 React 顺。</p>
+        <p><strong>(2) 短小工具</strong>—— 启动开销（compile + instantiate ~50-100ms）+ glue 体积（150KB+）让小工具用 wasm 不划算。10 行计算 / 小数据处理用 JS 直接做。</p>
+        <p><strong>(3) 现有 JS 库已 mature</strong>—— 不要为了 wasm 而 wasm。lodash / date-fns / immutable.js 等通用库 JS 实现已极致；用 wasm 重写体积大、维护贵、性能不一定快。</p>
+        <p><strong>规则</strong>：wasm 是<strong>性能敏感模块的 5%</strong>，不是替代 JS 的"主流"。</p>
+
+        <h3>wasm 未来：3 个方向</h3>
+        <p><strong>方向 1：Component Model 走向生产</strong>—— 2024 Preview 2 / 2026 Preview 3（async）/ 2027+ 跨语言互操作真正普及。Bytecode Alliance 在用 Cloudflare / Fastly / Shopify 等大客户驱动。</p>
+        <p><strong>方向 2：浏览器内 wasm 与 WebGPU 融合</strong>—— 大型应用（Figma/Photoshop）已是 wasm + WebGPU 双引擎；onnxruntime-web 类似。<strong>未来 wasm 是 CPU 性能通道，WebGPU 是并行加速通道</strong>。</p>
+        <p><strong>方向 3：服务端 wasm 与容器互补</strong>—— wasm 不取代 Docker，但占据 "lambda / edge function / 多租户插件" 市场。K8s + runwasi 让 wasm workload 像普通 container 调度。<strong>2030 预期：5-15% 服务端 workload 是 wasm</strong>。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · 用 Rust 写 Component 让 Go / JS 调用</h3>
+        <p>1. 写 WIT 定义：</p>
+        <pre class="code"><code class="lang-text">// hash.wit
+package example:hash@0.1.0;
+
+world hash {
+  export sha256: func(input: list&lt;u8&gt;) -&gt; list&lt;u8&gt;;
+}</code></pre>
+        <p>2. Rust 实现（cargo-component）：</p>
+        <pre class="code"><code class="lang-rust">// src/lib.rs
+mod bindings;
+use bindings::Guest;
+use sha2::{Sha256, Digest};
+
+struct Component;
+
+impl Guest for Component {
+    fn sha256(input: Vec&lt;u8&gt;) -&gt; Vec&lt;u8&gt; {
+        let mut hasher = Sha256::new();
+        hasher.update(&amp;input);
+        hasher.finalize().to_vec()
+    }
+}
+
+bindings::export!(Component with_types_in bindings);</code></pre>
+        <p>3. 构建：</p>
+        <pre class="code"><code class="lang-bash">$ cargo component build --release
+# 产 hash.component.wasm</code></pre>
+        <p>4. Go 调用（wasmtime-go SDK + wit-bindgen-go）：</p>
+        <pre class="code"><code class="lang-go">// Go 端通过 wit-bindgen-go 生成的 binding 调用
+hash := example.NewHash(componentBytes)
+result := hash.Sha256([]byte("hello"))
+fmt.Printf("%x", result)</code></pre>
+        <p>5. JS 调用（jco transpile）：</p>
+        <pre class="code"><code class="lang-bash">$ jco transpile hash.component.wasm -o hash-js
+# 产生 hash-js/ 目录，含 JS module + glue</code></pre>
+        <pre class="code"><code class="lang-javascript">import { sha256 } from './hash-js/hash.js';
+const hash = sha256(new TextEncoder().encode("hello"));
+console.log(hash);</code></pre>
+
+        <h3>场景 B · Spin 应用部署到 Fermyon Cloud</h3>
+        <pre class="code"><code class="lang-toml"># spin.toml
+spin_manifest_version = 2
+
+[application]
+name = "image-resizer"
+version = "0.1.0"
+
+[[trigger.http]]
+route = "/resize"
+component = "resizer"
+
+[component.resizer]
+source = "target/wasm32-wasip2/release/resizer.wasm"
+allowed_outbound_hosts = ["https://*.r2.cloudflarestorage.com"]
+
+[component.resizer.build]
+command = "cargo component build --release"</code></pre>
+        <pre class="code"><code class="lang-bash">$ spin build
+$ spin up                  # 本地跑
+$ spin deploy              # 部署到 Fermyon Cloud</code></pre>
+
+        <h3>场景 C · Shopify Functions 写商品折扣插件</h3>
+        <pre class="code"><code class="lang-rust">use shopify_function::prelude::*;
+
+#[shopify_function]
+fn function(input: input::ResponseData) -&gt; Result&lt;output::FunctionResult&gt; {
+    let cart = input.cart;
+    let discounts = if cart.cost.subtotal_amount.amount &gt; "100".parse()? {
+        vec![output::Discount {
+            value: output::Value::Percentage(output::Percentage { value: dec!(10) }),
+            targets: vec![output::Target::OrderSubtotal(output::OrderSubtotalTarget {
+                excluded_variant_ids: vec![],
+            })],
+            message: Some("10% off orders over $100".to_string()),
+        }]
+    } else { vec![] };
+
+    Ok(output::FunctionResult {
+        discounts,
+        discount_application_strategy: output::DiscountApplicationStrategy::First,
+    })
+}</code></pre>
+        <p>商家在 Shopify Admin 上传 wasm，每次结账时 Shopify 调用 wasm 决定折扣。Capability：function 只看到自己被传入的 cart，<strong>不能访问其他商家数据</strong>。</p>
+
+        <h3>场景 D · 分析仪表板用 DuckDB-WASM</h3>
+        <pre class="code"><code class="lang-javascript">import * as duckdb from '@duckdb/duckdb-wasm';
+
+const bundle = await duckdb.selectBundle({
+  mvp: { mainModule: '/duckdb-mvp.wasm', mainWorker: '/duckdb-mvp.worker.js' },
+  eh: { mainModule: '/duckdb-eh.wasm', mainWorker: '/duckdb-eh.worker.js' },
+});
+const worker = await duckdb.createWorker(bundle.mainWorker);
+const db = new duckdb.AsyncDuckDB(logger, worker);
+await db.instantiate(bundle.mainModule);
+
+// 注册数据 file
+const conn = await db.connect();
+await conn.insertCSVFromPath('sales.csv', { name: 'sales' });
+
+// 跑 SQL
+const result = await conn.query(`
+  SELECT region, SUM(amount) as total
+  FROM sales
+  WHERE date &gt; '2026-01-01'
+  GROUP BY region
+  ORDER BY total DESC
+`);
+
+// 渲染图表
+renderChart(result.toArray());</code></pre>
+        <p>1GB CSV 在浏览器内查询，~2-5 秒返回（多线程 + SIMD）。<strong>不需要 server</strong>。</p>
+
+        <h3>场景 E · 用 Polkadot ink! 写智能合约</h3>
+        <pre class="code"><code class="lang-rust">#![cfg_attr(not(feature = "std"), no_std, no_main)]
+
+#[ink::contract]
+mod counter {
+    #[ink(storage)]
+    pub struct Counter { value: u32 }
+
+    impl Counter {
+        #[ink(constructor)]
+        pub fn new() -&gt; Self { Self { value: 0 } }
+
+        #[ink(message)]
+        pub fn increment(&amp;mut self) { self.value += 1; }
+
+        #[ink(message)]
+        pub fn get(&amp;self) -&gt; u32 { self.value }
+    }
+}</code></pre>
+        <pre class="code"><code class="lang-bash">$ cargo contract build
+# 产 counter.wasm + counter.contract（含 metadata）
+$ cargo contract upload --suri //Alice
+$ cargo contract instantiate --suri //Alice
+$ cargo contract call --message increment --suri //Alice</code></pre>
+        <p>智能合约部署到 Polkadot 网络，全球节点都能调用。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：完整 Component 项目</span></h2>
+
+        <h3>项目：image filter component（Rust 写，Go + JS 都能用）</h3>
+        <p>1. WIT 定义：</p>
+        <pre class="code"><code class="lang-text">// wit/world.wit
+package example:image-filter@0.1.0;
+
+interface filter {
+  variant filter-type {
+    grayscale,
+    invert,
+    blur(u32),
+    threshold(u8),
+  }
+
+  record image-data {
+    width: u32,
+    height: u32,
+    pixels: list&lt;u8&gt;,
+  }
+
+  apply: func(input: image-data, kind: filter-type) -&gt; image-data;
+}
+
+world image-filter {
+  export filter;
+}</code></pre>
+        <p>2. Rust 实现：</p>
+        <pre class="code"><code class="lang-rust">// src/lib.rs
+mod bindings;
+
+use bindings::exports::example::image_filter::filter::{
+    Guest, ImageData, FilterType
+};
+
+struct Component;
+
+impl Guest for Component {
+    fn apply(input: ImageData, kind: FilterType) -&gt; ImageData {
+        let mut pixels = input.pixels.clone();
+        match kind {
+            FilterType::Grayscale =&gt; {
+                for chunk in pixels.chunks_exact_mut(4) {
+                    let r = chunk[0] as u32;
+                    let g = chunk[1] as u32;
+                    let b = chunk[2] as u32;
+                    let gray = ((r * 299 + g * 587 + b * 114) / 1000) as u8;
+                    chunk[0] = gray; chunk[1] = gray; chunk[2] = gray;
+                }
+            }
+            FilterType::Invert =&gt; {
+                for chunk in pixels.chunks_exact_mut(4) {
+                    chunk[0] = 255 - chunk[0];
+                    chunk[1] = 255 - chunk[1];
+                    chunk[2] = 255 - chunk[2];
+                }
+            }
+            FilterType::Threshold(t) =&gt; {
+                for chunk in pixels.chunks_exact_mut(4) {
+                    let avg = (chunk[0] as u32 + chunk[1] as u32 + chunk[2] as u32) / 3;
+                    let v = if avg &gt; t as u32 { 255 } else { 0 };
+                    chunk[0] = v; chunk[1] = v; chunk[2] = v;
+                }
+            }
+            FilterType::Blur(_radius) =&gt; { /* ... 简化省略 ... */ }
+        }
+        ImageData {
+            width: input.width,
+            height: input.height,
+            pixels,
+        }
+    }
+}
+
+bindings::export!(Component with_types_in bindings);</code></pre>
+        <p>3. 构建：</p>
+        <pre class="code"><code class="lang-bash">$ cargo component build --release
+$ ls target/wasm32-wasip2/release/*.wasm
+target/wasm32-wasip2/release/image_filter.wasm</code></pre>
+        <p>4. JS 端用 jco：</p>
+        <pre class="code"><code class="lang-bash">$ jco transpile target/wasm32-wasip2/release/image_filter.wasm -o image-filter-js
+$ ls image-filter-js
+filter.js
+image_filter.core.wasm
+image_filter.d.ts
+package.json</code></pre>
+        <pre class="code"><code class="lang-javascript">import { filter } from './image-filter-js/image_filter.js';
+
+const imageData = ctx.getImageData(0, 0, w, h);
+const result = filter.apply(
+  { width: w, height: h, pixels: imageData.data },
+  { tag: 'grayscale' }
+);
+
+const newImageData = new ImageData(
+  new Uint8ClampedArray(result.pixels),
+  result.width,
+  result.height
+);
+ctx.putImageData(newImageData, 0, 0);</code></pre>
+        <p>5. Go 端用 wit-bindgen-go：</p>
+        <pre class="code"><code class="lang-bash">$ wit-bindgen-go generate --out-dir gen wit/world.wit</code></pre>
+        <pre class="code"><code class="lang-go">// 用生成的 binding
+import "example.com/myapp/gen"
+
+result := imagefilter.Apply(input, imagefilter.FilterTypeGrayscale)</code></pre>
+        <p><strong>同一个 wasm component 服务 JS / Go / 任何能用 wit-bindgen 的语言</strong>。这是 Component Model 的目标。</p>
+
+        <h3>例：用 Spin 部署完整 wasm app</h3>
+        <pre class="code"><code class="lang-toml"># spin.toml
+spin_manifest_version = 2
+
+[application]
+name = "thumbs"
+version = "0.1.0"
+
+[[trigger.http]]
+route = "/thumbs/..."
+component = "thumbs"
+
+[component.thumbs]
+source = { url = "https://github.com/spin-examples/thumbs/releases/download/v0.1.0/thumbs.wasm" }
+allowed_outbound_hosts = []
+files = [{ source = "static", destination = "/static" }]
+
+[component.thumbs.build]
+command = "cargo component build --release"</code></pre>
+        <pre class="code"><code class="lang-bash">$ spin up
+$ curl http://localhost:3000/thumbs/cat.jpg
+# 返回缩略图</code></pre>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：以为 Component = 编译好的 wasm</h3>
+        <p>core wasm module 和 component 是<strong>不同二进制格式</strong>。普通 <code>cargo build --target wasm32-wasip1</code> 产 module；<code>cargo component build --target wasm32-wasip2</code> 产 component。<strong>不能混用</strong>。</p>
+        <p>检查产物：</p>
+        <pre class="code"><code class="lang-bash">$ wasm-tools print my.wasm | head -1
+(module ...)        # core module
+# 或
+(component ...)     # component</code></pre>
+
+        <h3>陷阱 2：Component Model 工具链不稳</h3>
+        <p>2026-05 cargo-component / wit-bindgen / jco / wasm-tools 仍在快速演进。<strong>API 可能 break</strong>，每隔几个月需要更新工具版本。</p>
+        <p>生产用 Component Model 要：</p>
+        <ul>
+          <li>锁定工具版本（Cargo.toml + .tool-versions）</li>
+          <li>跟踪 spec 进度（github.com/WebAssembly/component-model）</li>
+          <li>有 Preview 1 fallback 计划</li>
+        </ul>
+
+        <h3>陷阱 3：把 Component 直接给浏览器</h3>
+        <p>浏览器原生<strong>还不支持 Component</strong>（只支持 core module）。要在浏览器跑，需 jco transpile：</p>
+        <pre class="code"><code class="lang-bash">$ jco transpile my.component.wasm -o my-js
+# 产 JS module + core wasm，浏览器能加载</code></pre>
+        <p>2026 浏览器原生 Component 支持还在路上。</p>
+
+        <h3>陷阱 4：以为 wasm 取代所有 JS</h3>
+        <p>反复强调：<strong>wasm 不是 JS 替代</strong>。2026 浏览器代码量 95%+ 仍 JS / TS。wasm 是性能敏感模块的 5%。把 wasm 看成"<strong>高性能补丁</strong>"，不是"下一代 JS"。</p>
+
+        <h3>陷阱 5：跨组件传大数据用值传递</h3>
+        <p>Component Model 默认 shared-nothing，跨组件传 list&lt;u8&gt; / string 都拷贝。<strong>大数据（&gt; MB）拷贝开销不小</strong>。</p>
+        <p>方案：</p>
+        <ul>
+          <li>设计 API 让组件自己读 / 写共享存储（filesystem / OPFS / S3 等）</li>
+          <li>用 wasi:io/streams 流式传输（避免一次拷贝整块）</li>
+          <li>等待 spec 引入 shared memory linking（实验中）</li>
+        </ul>
+
+        <h3>陷阱 6：误用资源（resource）</h3>
+        <p>WIT 的 resource 类似面向对象 class，但<strong>跨组件边界传递时</strong>是 handle（不是值）。源组件持有真实数据，目标组件持有 handle，调用时 RPC。频繁跨组件方法调用<strong>不便宜</strong>。</p>
+
+        <h3>陷阱 7：高估 Component Model 普及</h3>
+        <p>2026 现实：</p>
+        <ul>
+          <li>Cloudflare Workers 仍主要 Preview 1（迁移中）</li>
+          <li>Fastly Compute@Edge 早期支持</li>
+          <li>Shopify Functions / Spin 已用</li>
+          <li>大部分生产 wasm 仍 Preview 1</li>
+        </ul>
+        <p>Component Model<strong>潜力大但实际部署慢</strong>。新项目可以押注；现有项目按需迁移。</p>
+
+        <h3>陷阱 8：不评估 wasm 适用性就引入</h3>
+        <p>常见错误：看到 wasm 流行就引入。但 wasm 工具链复杂、调试难、体积大、跨边界税。<strong>评估清单</strong>：</p>
+        <p>(1) 真有性能瓶颈吗？JS Profile 看清</p>
+        <p>(2) 有现成 wasm 库吗？（FFmpeg.wasm / SQLite WASM 等）→ 直接用</p>
+        <p>(3) 是计算密集（不是 IO 密集）吗？wasm 才有意义</p>
+        <p>(4) 团队有 Rust / C++ 能力吗？工具链投入大</p>
+        <p>(5) 体积 / 启动时间预算够吗？</p>
+        <p>5 个都"是"才考虑 wasm。否则 JS 实现更划算。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>Component Model + WIT</h3>
+        <ul>
+          <li><a href="https://github.com/WebAssembly/component-model" target="_blank" rel="noopener">github.com/WebAssembly/component-model</a></li>
+          <li><a href="https://component-model.bytecodealliance.org/" target="_blank" rel="noopener">Component Model book</a></li>
+          <li><a href="https://github.com/bytecodealliance/wit-bindgen" target="_blank" rel="noopener">wit-bindgen</a></li>
+          <li><a href="https://github.com/bytecodealliance/cargo-component" target="_blank" rel="noopener">cargo-component</a></li>
+          <li><a href="https://github.com/bytecodealliance/jco" target="_blank" rel="noopener">jco (JS Component tool)</a></li>
+          <li><a href="https://github.com/bytecodealliance/componentize-py" target="_blank" rel="noopener">componentize-py</a></li>
+        </ul>
+
+        <h3>典型应用</h3>
+        <ul>
+          <li>Figma · <a href="https://www.figma.com/blog/webassembly-cut-figmas-load-time-by-3x/" target="_blank" rel="noopener">WebAssembly cut Figma's load time by 3x</a></li>
+          <li>Photoshop Web · <a href="https://web.dev/articles/ps-on-the-web" target="_blank" rel="noopener">Photoshop's journey to the web</a></li>
+          <li>Google Earth · <a href="https://blog.chromium.org/2019/06/webassembly-brings-google-earth-to-more.html" target="_blank" rel="noopener">WebAssembly brings Google Earth to more browsers</a></li>
+          <li>FFmpeg.wasm · <a href="https://ffmpegwasm.netlify.app/" target="_blank" rel="noopener">ffmpegwasm.netlify.app</a></li>
+          <li>SQLite WASM · <a href="https://sqlite.org/wasm/" target="_blank" rel="noopener">sqlite.org/wasm</a></li>
+          <li>DuckDB-WASM · <a href="https://duckdb.org/docs/api/wasm/overview" target="_blank" rel="noopener">duckdb.org/docs/api/wasm</a></li>
+          <li>Pyodide · <a href="https://pyodide.org/" target="_blank" rel="noopener">pyodide.org</a></li>
+        </ul>
+
+        <h3>服务端 / Edge</h3>
+        <ul>
+          <li>Shopify Functions · <a href="https://shopify.engineering/shopify-webassembly" target="_blank" rel="noopener">Shopify engineering: WebAssembly</a></li>
+          <li>Spin · <a href="https://www.fermyon.com/spin" target="_blank" rel="noopener">fermyon.com/spin</a></li>
+          <li>Envoy Wasm · <a href="https://www.envoyproxy.io/docs/envoy/latest/configuration/other_features/wasm" target="_blank" rel="noopener">envoyproxy.io/wasm</a></li>
+        </ul>
+
+        <h3>区块链</h3>
+        <ul>
+          <li>Polkadot ink! · <a href="https://use.ink/" target="_blank" rel="noopener">use.ink</a></li>
+          <li>NEAR Protocol · <a href="https://docs.near.org/" target="_blank" rel="noopener">docs.near.org</a></li>
+          <li>Internet Computer · <a href="https://internetcomputer.org/" target="_blank" rel="noopener">internetcomputer.org</a></li>
+          <li>CosmWasm · <a href="https://cosmwasm.com/" target="_blank" rel="noopener">cosmwasm.com</a></li>
+        </ul>
+
+        <h3>本主题收尾</h3>
+        <ul>
+          <li><a href="../01-overview/01-history.html">P1.1 WASM 项目史</a> · 回到起点：现在你能更全面理解每个历史决策</li>
+          <li><a href="../index.html">主题首页</a> · 全 13 章总览</li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../v8/06-wasm/01-wasm-pipeline.html">V8 P6.1 V8 Wasm 流水线</a></li>
+          <li><a href="../../react/index.html">React</a> · 前端框架与 wasm 协作</li>
+          <li><a href="../../bun/index.html">Bun</a> · Bun 嵌入 wasm</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
