@@ -1,0 +1,621 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>托管语言 + 其他：Go / AssemblyScript / Java / Kotlin / Dart / .NET / Python · P4.2 · WebAssembly 深度学习</title>
+    <meta name="description" content="带 runtime / GC 的语言怎么编译到 wasm。Go 两条路：官方 GOOS=js 带完整 GC（~2MB） vs TinyGo 子集（~50KB）。AssemblyScript = TypeScript 子集 → wasm，前端友好但有 GC + 性能不及 Rust。WasmGC（2023）让 Java/Kotlin/Dart/.NET/OCaml 等托管语言不必带自己的 GC runtime——这是 wasm 历史"用户群扩展最大"的单个特性。Pyodide = CPython 解释器编译 wasm + 数值库（不是 Python 编译，是「在 wasm 里跑 Python 解释器」）。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23654ff0'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EWA%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>WebAssembly 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.22 290); color: #fff">WASM</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · 跨语言编译路径</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-systems-langs.html">01 · 系统语言</a></li>
+          <li><a href="02-managed-and-others.html" class="active">02 · 托管语言 + 其他</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">WebAssembly</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · 跨语言编译路径</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 托管语言 + 其他</span>
+        </nav>
+        <h1>托管语言 + 其他：Go / AssemblyScript / Java / Kotlin / Dart / .NET / Python</h1>
+        <p class="lead">
+          带 runtime / GC 的语言编译到 wasm 的<strong>核心难题</strong>是 GC：要么把 GC runtime 一起编译进去（产物大、慢），要么用宿主 GC（依赖 WasmGC 提案）。<strong>2023 WasmGC 落地</strong>（V8 + SpiderMonkey 同时启用）让 Java/Kotlin/Dart/.NET/OCaml 等托管语言一等公民——这是 wasm 历史"用户群扩展最大"的单个特性。<strong>Go</strong> 是例外（runtime 强耦合自己的 GC，不接受 WasmGC，仍走 GOOS=js 或 TinyGo 两条路）。<strong>Pyodide</strong> 不是 Python 编译，是 CPython 解释器编译 wasm + numpy/scipy/pandas 预编译。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P4.1（系统语言） + P5.2（WasmGC，简短了解即可）</span>
+          <span><strong>主要来源</strong> golang.org/wasm · tinygo.org · kotlinlang.org/wasm · pyodide.org · v8.dev/blog/wasm-gc-porting</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>WasmGC 是托管语言转折点</strong>—— 2023 之前 Java/Kotlin/Dart 编译 wasm 都是工程奇迹（带 JVM/runtime 太重）；2023+ 这些语言变成"一等公民"。Kotlin/Wasm（JetBrains 官方）/ Dart Flutter Web（替代 dart2js）/ .NET Blazor（NativeAOT + WasmGC 替代 mono）。</li>
+          <li><strong>Go 不接受 WasmGC，走两条路</strong>—— 官方 <code>GOOS=js GOARCH=wasm</code> 带完整 GC runtime（~2MB hello world，启动慢）；<strong>TinyGo</strong> 子集编译器（~50KB hello world，缺一些标准库）。Go runtime 强耦合自己的 GC（写 barrier / GMP 调度），WasmGC 不能直接接管。</li>
+          <li><strong>AssemblyScript 是 TypeScript 子集</strong>—— 语法亲切（前端工程师无障碍），但有自家 GC（产物 50-200KB），性能不及 Rust。<strong>2026 用户群在缩小</strong>，Rust + wasm-bindgen 在浏览器端已成熟到吸纳大部分场景；AssemblyScript 仍在嵌入式 / 智能合约（NEAR）有用户。</li>
+          <li><strong>Kotlin/Wasm 是 WasmGC 的旗手</strong>—— JetBrains 官方 target；让 Compose Multiplatform 跑在 Web；Kotlin 1.9（2023）alpha，1.10+（2024）稳定。Compose Web Wasm 启动 ~500ms（vs 老 Kotlin/JS 的 1-2s）。</li>
+          <li><strong>Pyodide 不是"Python → wasm"</strong>—— 是 CPython 解释器（C 代码）编译成 wasm，然后跑 Python 字节码。性能比原生 CPython 慢 2-5x；适合数值计算 + 教育（Jupyter / Streamlit），不适合 hot path。<strong>numpy/scipy/pandas 是预编译的二进制 wheels</strong>。</li>
+          <li><strong>选语言的判据</strong>—— 浏览器纯计算 → Rust（70%+ 项目）；既有 Java/Kotlin/Dart 大代码库 → 它们的 WasmGC target；学习成本最低 → AssemblyScript；Python 数据科学 → Pyodide；Go 项目（一定要 Go）→ TinyGo（小）或官方（兼容性高）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>"带 GC 语言"编译 wasm 的根本难题</h3>
+        <p>系统语言（Rust/C/C++/Zig）<strong>没有 runtime</strong>——内存管理在编译期 / 显式调用。它们编译 wasm 简单：直接产数值类型 + linear memory 操作。</p>
+        <p>托管语言（Java/Kotlin/Dart/Go/Python/.NET）<strong>有 runtime</strong>——GC + 调度器 + 类元数据 + 字符串池等。要在 wasm 里跑，必须解决：</p>
+        <p><strong>问题 1：GC 怎么实现</strong>—— wasm linear memory 没有"对象"概念，怎么 mark / sweep？</p>
+        <p><strong>问题 2：runtime 怎么部署</strong>—— Go runtime ~1.5MB，Java JVM ~50MB+；编译进 wasm 让产物巨大</p>
+        <p><strong>问题 3：调度器</strong>—— Go goroutine / Java Thread / Dart isolate；wasm MVP 是单线程</p>
+        <p>历史上有<strong>3 种应对策略</strong>：</p>
+        <p><strong>策略 A · 编译完整 runtime 进 wasm</strong>—— Go 官方 / Java 早期 TeaVM；产物大、启动慢，但兼容性好</p>
+        <p><strong>策略 B · 子集编译器</strong>—— TinyGo / Subset Java；放弃部分语言特性换体积，但生态分裂</p>
+        <p><strong>策略 C · WasmGC 提案</strong>（2023+）—— wasm spec 直接支持 GC managed 类型（struct/array/i31ref），引擎 GC 接管；产物轻、性能好；<strong>主流方案</strong></p>
+
+        <h3>WasmGC：2023 转折点</h3>
+        <p>WasmGC 提案（2017 起，2023-12 phase 5）引入 GC managed 类型（详见 <a href="../05-advanced/02-gc-tail-eh-jspi.html">P5.2</a>）：</p>
+        <pre class="code"><code class="lang-text">(type $Person (struct
+  (field $name (ref $String))
+  (field $age i32)))
+
+(func $create_person (param $name (ref $String)) (param $age i32) (result (ref $Person))
+  (struct.new $Person (local.get $name) (local.get $age)))</code></pre>
+        <p>关键属性：</p>
+        <ul>
+          <li><strong>引擎实现 GC</strong>—— V8 用 Orinoco（详见 <a href="../../v8/04-memory/02-orinoco-gc.html">V8 P4.2</a>）；SpiderMonkey 用自己的；JSC 用自己的</li>
+          <li><strong>WasmGC 对象不在 linear memory</strong>—— 在引擎 GC 堆，独立内存空间</li>
+          <li><strong>自动管理</strong>—— 编译器不用生成 mark/sweep 代码</li>
+          <li><strong>跨语言 GC 共享</strong>—— Java + Kotlin + Dart 三个 wasm module 共享同一引擎 GC</li>
+        </ul>
+        <p><strong>WasmGC 受益最大的语言</strong>：Java / Kotlin / Dart / .NET / OCaml / Scala。它们都<strong>不再需要自带 GC runtime</strong>，wasm 产物从 5-50MB 缩到 200KB-2MB。</p>
+
+        <h3>Go → wasm：两条独立路线</h3>
+        <p>Go 是<strong>例外</strong>：不接受 WasmGC（Go runtime 与自家 GC 紧耦合，写 barrier / GMP 调度都要自己实现），仍走两条独立路线。</p>
+        <h4>路线 A · 官方 GOOS=js GOARCH=wasm</h4>
+        <p>Go 1.11+（2018）支持。完整 Go runtime + GC + goroutine 编译进 wasm：</p>
+        <pre class="code"><code class="lang-bash">$ GOOS=js GOARCH=wasm go build -o main.wasm main.go
+# 产物 main.wasm 通常 1.5-3MB</code></pre>
+        <p>需要 wasm_exec.js（Go 提供，把 GMP 调度桥到 JS Promise / setTimeout）：</p>
+        <pre class="code"><code class="lang-html">&lt;script src="wasm_exec.js"&gt;&lt;/script&gt;
+&lt;script&gt;
+const go = new Go();
+WebAssembly.instantiateStreaming(fetch("main.wasm"), go.importObject)
+  .then((result) =&gt; { go.run(result.instance); });
+&lt;/script&gt;</code></pre>
+        <p><strong>优点</strong>：</p>
+        <ul>
+          <li>Go 标准库完整（fmt / encoding/json / net/http client / etc.）</li>
+          <li>goroutine 工作（用 setTimeout 调度）</li>
+          <li>兼容性好，Go 已写代码改动极小</li>
+        </ul>
+        <p><strong>缺点</strong>：</p>
+        <ul>
+          <li>体积大（~2MB hello world）</li>
+          <li>启动慢（runtime init ~200ms+）</li>
+          <li>性能：Go runtime 在 wasm 里比 native 慢 2-5x（GMP 调度通过 setTimeout 模拟）</li>
+        </ul>
+        <h4>路线 B · TinyGo</h4>
+        <p>TinyGo 是 Go 的<strong>子集编译器</strong>，2018 起社区项目，2026 仍是 Go wasm 的"轻量化方案"：</p>
+        <pre class="code"><code class="lang-bash">$ tinygo build -o main.wasm -target wasm main.go
+# 产物 main.wasm 通常 30-100KB</code></pre>
+        <p><strong>TinyGo 的子集策略</strong>：</p>
+        <ul>
+          <li>放弃完整 <code>reflect</code>（部分支持）</li>
+          <li>放弃 <code>net/http</code> server（client OK）</li>
+          <li>简化 GC（mark-and-sweep，不带分代）</li>
+          <li>简化 goroutine（cooperative scheduling）</li>
+          <li>放弃 cgo（嵌入式平台不可用）</li>
+        </ul>
+        <p><strong>TinyGo 适合</strong>：</p>
+        <ul>
+          <li>Edge / Cloudflare Workers / Fastly Compute@Edge（体积关键）</li>
+          <li>嵌入式（Arduino / 树莓派）</li>
+          <li>智能合约（NEAR 等）</li>
+          <li>简单 wasm 工具</li>
+        </ul>
+        <p><strong>TinyGo 不适合</strong>：</p>
+        <ul>
+          <li>需要完整 Go 标准库的项目</li>
+          <li>大量用 reflect 的代码（如 GORM / encoding/gob）</li>
+          <li>cgo 依赖项目</li>
+        </ul>
+        <p><strong>典型选择</strong>：你的 Go 代码改 5 行能跑 → TinyGo（轻）；改 100 行才能跑 → 官方（兼容）。</p>
+
+        <h3>AssemblyScript：TypeScript 写 wasm</h3>
+        <p>AssemblyScript（2018-）是 <strong>TypeScript 严格子集 → wasm</strong>。让前端工程师"不用学新语言"就能写 wasm。</p>
+        <p>语法看起来就是 TypeScript：</p>
+        <pre class="code"><code class="lang-typescript">// add.ts
+export function add(a: i32, b: i32): i32 {
+  return a + b;
+}
+
+export function fib(n: i32): i32 {
+  if (n &lt; 2) return n;
+  return fib(n - 1) + fib(n - 2);
+}</code></pre>
+        <p>编译：</p>
+        <pre class="code"><code class="lang-bash">$ npm install -g assemblyscript
+$ asc add.ts -o add.wasm -O</code></pre>
+        <p><strong>关键差异（vs TypeScript）</strong>：</p>
+        <ul>
+          <li>类型严格——必须 i32 / i64 / f32 / f64 / 等 wasm 类型；不能 number / any</li>
+          <li>没有 union / intersection types</li>
+          <li>没有 destructuring（部分支持）</li>
+          <li>带<strong>自家 GC runtime</strong>（mark-and-sweep；产物 ~50-200KB）</li>
+          <li>有限标准库（不是完整 TS / Node lib）</li>
+        </ul>
+        <p><strong>AssemblyScript 2026 现状</strong>：</p>
+        <ul>
+          <li><strong>用户群在缩小</strong>—— Rust + wasm-bindgen 已吸纳大部分浏览器 wasm 场景</li>
+          <li>仍有用户：智能合约（NEAR Protocol 主推）/ 简单算法库 / 教学</li>
+          <li>性能不及 Rust（GC 开销 + 不及 LLVM 优化）</li>
+          <li>体积比 Rust 释放后大（带 AS 自家 GC）</li>
+        </ul>
+        <p><strong>什么时候用</strong>：(1) 学习 wasm 入门，TypeScript 背景；(2) 智能合约（NEAR 等）；(3) 不想引入 Rust 工具链的小项目。否则<strong>2026 优先 Rust</strong>。</p>
+
+        <h3>Java / Kotlin / Dart / .NET：WasmGC 翻身</h3>
+        <h4>Kotlin/Wasm（JetBrains 官方）</h4>
+        <p>Kotlin 1.9（2023）开始 alpha，1.10+（2024）稳定。基于 WasmGC：</p>
+        <pre class="code"><code class="lang-kotlin">// main.kt
+fun add(a: Int, b: Int): Int = a + b
+
+fun greet(name: String): String = "Hello, $name!"
+
+fun main() {
+    println(greet("Kotlin/Wasm"))
+}</code></pre>
+        <p>构建（Gradle）：</p>
+        <pre class="code"><code class="lang-kotlin">// build.gradle.kts
+kotlin {
+    wasmJs {
+        browser()
+        binaries.executable()
+    }
+}</code></pre>
+        <p><strong>Compose Multiplatform Web</strong>（2024+）让 Kotlin UI 跑在 Web（基于 Kotlin/Wasm + WasmGC + Skia/CanvasKit 渲染）。Jetbrains 自家 Fleet IDE 部分用此架构。</p>
+        <h4>Dart / Flutter Web</h4>
+        <p>Flutter Web 2024 起转 wasm 部署：</p>
+        <pre class="code"><code class="lang-bash">$ flutter build web --wasm</code></pre>
+        <p>替代旧的 dart2js（编译到 JS）；启动 / 渲染都改善。基于 WasmGC + Skia。</p>
+        <h4>Java / Scala / Clojure</h4>
+        <p>历史上：</p>
+        <ul>
+          <li><strong>TeaVM</strong>（早，2014-）—— Java 字节码 → JS 或 wasm；wasm 部分用 WasmGC（2024+）</li>
+          <li><strong>CheerpJ</strong>（商业）—— 完整 JVM 跑在浏览器（带 wasm runtime）</li>
+        </ul>
+        <p>2026 trend：直接<strong>Java → WasmGC</strong>（OpenJDK 实验中，Project Leyden / Loom 关联）。Scala / Clojure 等 JVM 语言通过 Java bytecode → WasmGC 跟进。</p>
+        <h4>.NET / Blazor</h4>
+        <p>Blazor 是 Microsoft 的 .NET → wasm 方案。两条路：</p>
+        <ul>
+          <li><strong>Blazor Server</strong>—— 服务端渲染 + SignalR；不真正用 wasm</li>
+          <li><strong>Blazor WebAssembly</strong>—— 客户端 wasm；早期带 mono runtime（产物 ~5MB），<strong>2024+ NativeAOT + WasmGC</strong>（产物 ~1MB）</li>
+        </ul>
+
+        <h3>Pyodide：把 CPython 编译到 wasm</h3>
+        <p>Pyodide（Mozilla, 2018-）是 wasm 在数据科学领域的旗舰项目。<strong>关键：不是"Python → wasm"，是"CPython 解释器（C 代码）→ wasm，然后 wasm 跑 Python"</strong>：</p>
+        <pre class="code"><code class="lang-text">  Python 源码 (.py)
+       ↓
+  CPython 解释器（写在 C 里）
+       ↓ 用 Emscripten 编译
+  cpython.wasm（含解释器）
+       ↓ 加载 .py 文件
+  Python 程序在 wasm 里跑</code></pre>
+        <p><strong>Pyodide 包含</strong>：</p>
+        <ul>
+          <li>CPython 解释器（~10MB wasm）</li>
+          <li>预编译的 numpy / scipy / pandas / matplotlib / 等（每个 ~MB 级 wheels）</li>
+          <li>JS-Python 双向互操作 helper</li>
+        </ul>
+        <p><strong>性能</strong>：纯 Python 代码比原生 CPython 慢 ~2-5x（额外 wasm 间接开销）；numpy / scipy 数值代码因为底层 C 已编译 wasm，性能与原生差距小。</p>
+        <p><strong>典型用户</strong>：</p>
+        <ul>
+          <li>JupyterLite（浏览器内 Jupyter，不用 server）</li>
+          <li>Streamlit Cloud（部分应用 Pyodide 做客户端 demo）</li>
+          <li>教育平台（CodeCademy / DataCamp 部分场景）</li>
+          <li>数据可视化博客（直接在博客内跑 numpy / pandas）</li>
+        </ul>
+        <p><strong>启动慢</strong>—— 第一次加载 ~10MB Pyodide 核心 + 各包；缓存后好转。不适合首屏关键路径。</p>
+
+        <h3>Ruby / PHP / 其他动态语言</h3>
+        <p>Ruby（mruby-wasm / Wasmer Ruby）和 PHP（PHP-WASM, WordPress Playground）都通过类似 Pyodide 的方式（解释器 → wasm）。</p>
+        <p>WordPress Playground 让 WordPress（PHP + MySQL）整个跑在浏览器，是有趣的工程奇迹：</p>
+        <ul>
+          <li>PHP 解释器编译 wasm</li>
+          <li>SQLite 替代 MySQL（也是 wasm）</li>
+          <li>整个 stack 跑在浏览器</li>
+        </ul>
+        <p>详见 <a href="https://wordpress.github.io/wordpress-playground/" target="_blank" rel="noopener">wordpress.github.io/wordpress-playground</a>。</p>
+
+        <h3>跨语言对比表（2026-05）</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>语言</th>
+              <th>方案</th>
+              <th>hello world 体积</th>
+              <th>启动时间</th>
+              <th>性能 (vs native)</th>
+              <th>2026 状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Rust</td>
+              <td>rustc + wasm-bindgen</td>
+              <td>~10KB（优化后）</td>
+              <td>&lt; 50ms</td>
+              <td>~95%</td>
+              <td>主流（70%+ 浏览器 wasm）</td>
+            </tr>
+            <tr>
+              <td>C/C++</td>
+              <td>Emscripten / WASI SDK</td>
+              <td>~30-50KB（优化后）</td>
+              <td>~50-200ms</td>
+              <td>~90-95%</td>
+              <td>大型项目（FFmpeg/SQLite/Photoshop）</td>
+            </tr>
+            <tr>
+              <td>Zig</td>
+              <td>zig build</td>
+              <td>~200B（极致）</td>
+              <td>&lt; 30ms</td>
+              <td>~95%</td>
+              <td>小众但增长</td>
+            </tr>
+            <tr>
+              <td>Go (官方)</td>
+              <td>GOOS=js GOARCH=wasm</td>
+              <td>~2MB</td>
+              <td>~200ms+</td>
+              <td>~30-50%（GMP 模拟慢）</td>
+              <td>有用户但体积痛</td>
+            </tr>
+            <tr>
+              <td>Go (TinyGo)</td>
+              <td>tinygo build</td>
+              <td>~50KB</td>
+              <td>~50ms</td>
+              <td>~70%（不是完整 Go）</td>
+              <td>Edge / 嵌入式</td>
+            </tr>
+            <tr>
+              <td>AssemblyScript</td>
+              <td>asc</td>
+              <td>~50-200KB</td>
+              <td>~100ms</td>
+              <td>~70-80%</td>
+              <td>萎缩，被 Rust 吸纳</td>
+            </tr>
+            <tr>
+              <td>Kotlin/Wasm</td>
+              <td>Gradle + WasmGC</td>
+              <td>~500KB</td>
+              <td>~200ms</td>
+              <td>~80%</td>
+              <td>2024 稳定，Compose 推动</td>
+            </tr>
+            <tr>
+              <td>Dart (Flutter Web)</td>
+              <td>flutter build web --wasm</td>
+              <td>~2-5MB（含 Flutter UI）</td>
+              <td>~500ms</td>
+              <td>~80%</td>
+              <td>Flutter 主推</td>
+            </tr>
+            <tr>
+              <td>Java (TeaVM/WasmGC)</td>
+              <td>TeaVM / OpenJDK 实验</td>
+              <td>~500KB-2MB</td>
+              <td>~300ms</td>
+              <td>~70%</td>
+              <td>探索期</td>
+            </tr>
+            <tr>
+              <td>.NET (Blazor)</td>
+              <td>Blazor WASM + NativeAOT</td>
+              <td>~1-3MB</td>
+              <td>~300ms</td>
+              <td>~80%</td>
+              <td>Microsoft 主推</td>
+            </tr>
+            <tr>
+              <td>Python (Pyodide)</td>
+              <td>CPython → wasm</td>
+              <td>~10MB+（含 CPython）</td>
+              <td>~2-5s（首次）</td>
+              <td>~30%（pure Python） / ~90%（numpy）</td>
+              <td>数据科学主流</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · 选语言：跨决策树</h3>
+        <p><strong>问题 1</strong>：你已有大代码库吗？</p>
+        <ul>
+          <li>已有 Rust → Rust + wasm-bindgen</li>
+          <li>已有 C++ → Emscripten 或 WASI SDK</li>
+          <li>已有 Java/Kotlin/Scala → 等待官方 WasmGC target（2026 仍 alpha-beta）</li>
+          <li>已有 Dart Flutter → flutter build web --wasm</li>
+          <li>已有 .NET → Blazor</li>
+          <li>已有 Python → Pyodide（数据科学）或重写</li>
+        </ul>
+        <p><strong>问题 2</strong>：浏览器 vs 服务端？</p>
+        <ul>
+          <li>浏览器 → Rust（最成熟 ecosystem）；AssemblyScript（前端友好）</li>
+          <li>服务端 → Rust + WASI；Go (TinyGo) + WASI</li>
+        </ul>
+        <p><strong>问题 3</strong>：体积 vs 兼容性？</p>
+        <ul>
+          <li>体积优先 → Rust / Zig / TinyGo</li>
+          <li>兼容性优先 → Go 官方 / Pyodide / Blazor（带 runtime）</li>
+        </ul>
+
+        <h3>场景 B · TinyGo 写 Cloudflare Workers</h3>
+        <pre class="code"><code class="lang-go">// main.go
+package main
+
+import (
+    "github.com/syumai/workers"
+)
+
+func main() {
+    workers.Serve(workers.HandlerFunc(handle))
+}
+
+func handle(w workers.ResponseWriter, r *workers.Request) {
+    w.Write([]byte("Hello from TinyGo Worker!"))
+}</code></pre>
+        <pre class="code"><code class="lang-bash">$ tinygo build -o build/app.wasm -target wasm main.go
+$ wrangler deploy</code></pre>
+        <p>典型 TinyGo Worker 产物 ~150-300KB（含 worker SDK）；冷启动 &lt; 5ms。</p>
+
+        <h3>场景 C · Kotlin/Wasm + Compose UI</h3>
+        <pre class="code"><code class="lang-kotlin">// App.kt
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+
+@Composable
+fun App() {
+    var count by remember { mutableStateOf(0) }
+    Column(modifier = Modifier.padding(16.dp)) {
+        Text("Count: $count")
+        Button(onClick = { count++ }) { Text("Increment") }
+    }
+}
+
+fun main() {
+    onWasmReady {
+        ComposeViewport(viewportContainerId = "ComposeTarget") {
+            App()
+        }
+    }
+}</code></pre>
+        <p>构建：</p>
+        <pre class="code"><code class="lang-bash">$ ./gradlew wasmJsBrowserProductionWebpack</code></pre>
+
+        <h3>场景 D · Pyodide 跑 numpy 在浏览器</h3>
+        <pre class="code"><code class="lang-html">&lt;script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"&gt;&lt;/script&gt;
+&lt;script&gt;
+async function main() {
+  let pyodide = await loadPyodide();
+  await pyodide.loadPackage(['numpy', 'pandas']);
+
+  const result = pyodide.runPython(`
+import numpy as np
+arr = np.array([1, 2, 3, 4, 5])
+arr.mean()
+  `);
+
+  console.log(result);  // 3.0
+}
+main();
+&lt;/script&gt;</code></pre>
+        <p>第一次加载 Pyodide 核心 ~10MB（含 CPython）；缓存后好转。numpy ~3MB 也缓存。</p>
+
+        <h3>场景 E · NEAR Protocol 智能合约（AssemblyScript）</h3>
+        <pre class="code"><code class="lang-typescript">// contract.ts
+import { context, storage, logging } from "near-sdk-as";
+
+@nearBindgen
+export class Counter {
+  count: i32 = 0;
+
+  increment(): void {
+    this.count += 1;
+    logging.log("Counter incremented to " + this.count.toString());
+  }
+
+  get(): i32 {
+    return this.count;
+  }
+}</code></pre>
+        <p>NEAR 生态历史上推 AssemblyScript（前端工程师友好）+ Rust（性能 + 安全）。两条路并行。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：跨语言对比</span></h2>
+
+        <h3>同样的"fib(20)"实现：5 种语言</h3>
+
+        <h4>Rust</h4>
+        <pre class="code"><code class="lang-rust">use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+pub fn fib(n: i32) -&gt; i32 {
+    if n &lt; 2 { n } else { fib(n - 1) + fib(n - 2) }
+}</code></pre>
+        <p>体积：~300 字节 wasm（无 wasm-bindgen 时）</p>
+
+        <h4>AssemblyScript</h4>
+        <pre class="code"><code class="lang-typescript">export function fib(n: i32): i32 {
+  if (n &lt; 2) return n;
+  return fib(n - 1) + fib(n - 2);
+}</code></pre>
+        <p>体积：~200 字节 wasm（无 GC 引用时）</p>
+
+        <h4>TinyGo</h4>
+        <pre class="code"><code class="lang-go">package main
+
+//export fib
+func fib(n int32) int32 {
+    if n &lt; 2 {
+        return n
+    }
+    return fib(n-1) + fib(n-2)
+}
+
+func main() {}</code></pre>
+        <p>体积：~50KB（带 TinyGo runtime）</p>
+
+        <h4>Kotlin/Wasm</h4>
+        <pre class="code"><code class="lang-kotlin">@JsExport
+fun fib(n: Int): Int = if (n &lt; 2) n else fib(n - 1) + fib(n - 2)</code></pre>
+        <p>体积：~500KB（带 Kotlin/Wasm 标准库 + WasmGC）</p>
+
+        <h4>Zig</h4>
+        <pre class="code"><code class="lang-zig">export fn fib(n: i32) i32 {
+    if (n &lt; 2) return n;
+    return fib(n - 1) + fib(n - 2);
+}</code></pre>
+        <p>体积：~150 字节 wasm（极致）</p>
+
+        <h3>同样的字符串处理：4 种方式</h3>
+        <h4>Rust + wasm-bindgen</h4>
+        <pre class="code"><code class="lang-rust">#[wasm_bindgen]
+pub fn process(input: &amp;str) -&gt; String {
+    input.to_uppercase()
+}</code></pre>
+
+        <h4>Go (TinyGo)</h4>
+        <pre class="code"><code class="lang-go">// 复杂：Go wasm 字符串处理需手工 marshalling
+//export process
+func process(strPtr *uint8, strLen int) *uint8 {
+    str := unsafe.String(strPtr, strLen)
+    upper := strings.ToUpper(str)
+    return unsafe.StringData(upper)
+}</code></pre>
+
+        <h4>AssemblyScript</h4>
+        <pre class="code"><code class="lang-typescript">export function process(input: string): string {
+  return input.toUpperCase();
+}
+// AssemblyScript 自家 GC 自动处理 string</code></pre>
+
+        <h4>Pyodide（不编译，运行时解释）</h4>
+        <pre class="code"><code class="lang-python">def process(s: str) -&gt; str:
+    return s.upper()</code></pre>
+        <pre class="code"><code class="lang-javascript">pyodide.runPython(`
+def process(s):
+    return s.upper()
+`);
+const upper = pyodide.globals.get('process')("hello");
+console.log(upper);  // "HELLO"</code></pre>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：用 Go 官方 GOOS=js 做生产 web app</h3>
+        <p>~2MB hello world + 启动 ~200ms+ 让用户体验差。<strong>Web 生产</strong>用 TinyGo（容忍子集）或换 Rust。Go 官方 wasm 适合：(1) 内部工具 / dashboard（用户少要求低）；(2) 验证 / demo。</p>
+
+        <h3>陷阱 2：以为 AssemblyScript "等于 TypeScript"</h3>
+        <p>AssemblyScript<strong>是 TypeScript 严格子集</strong>，不能用：</p>
+        <ul>
+          <li><code>any</code>、union types、mapped types</li>
+          <li>大部分 array methods 没实现或行为不同</li>
+          <li><code>Object.fromEntries</code> / <code>Promise</code> 等高级 API 缺失</li>
+          <li>动态属性访问 / 反射</li>
+        </ul>
+        <p>把 TS 代码扔进 AS 编译器通常报一堆错。<strong>必须按 AS 文档重写</strong>。</p>
+
+        <h3>陷阱 3：Pyodide 用在性能关键路径</h3>
+        <p>纯 Python wasm 慢 ~2-5x；不要把 hot path（每秒上千调用）用 Pyodide 实现。Pyodide 适合：</p>
+        <ul>
+          <li>数据科学交互式探索（Jupyter / Streamlit demo）</li>
+          <li>教育（学 Python 不用装环境）</li>
+          <li>偶发性 numpy / pandas 计算</li>
+        </ul>
+
+        <h3>陷阱 4：以为 WasmGC = 垃圾收集 API 暴露给 wasm</h3>
+        <p>WasmGC 不是"通用 GC API"。spec <strong>不暴露</strong> mark/sweep/compact 控制。引擎自由实现。开发者只能用 <code>struct.new</code> / <code>array.new</code> / <code>ref.cast</code> / 等高层操作。详见 <a href="../05-advanced/02-gc-tail-eh-jspi.html">P5.2</a>。</p>
+
+        <h3>陷阱 5：Kotlin/Wasm 误用 Kotlin/JS 文档</h3>
+        <p>Kotlin 有<strong>3 个</strong> Web target：Kotlin/JS（编译到 JS）、Kotlin/Wasm（编译到 WasmGC）、Kotlin/Native（编译到 wasm32-unknown，无 GC）。<strong>互不兼容</strong>。文档要看 wasm 那一份。</p>
+
+        <h3>陷阱 6：Flutter Web wasm 误以为加载快</h3>
+        <p>Flutter Web wasm 产物含 Skia/CanvasKit + Flutter framework，整体 ~2-5MB。<strong>启动 ~500ms-2s</strong>。适合后续交互密集 app；不适合"闪开网页就关"场景。</p>
+
+        <h3>陷阱 7：cgo / JNI 项目不能直接编译 wasm</h3>
+        <p>Go 项目用 cgo（call C）→ TinyGo 不支持，官方 GOOS=js 不支持 cgo。<strong>必须先去掉 cgo</strong>（用纯 Go 替代）才能编译 wasm。</p>
+        <p>Java JNI 类似 —— 调 native 库的 Java 项目不能直接 → wasm。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>各语言官方</h3>
+        <ul>
+          <li><a href="https://github.com/golang/go/wiki/WebAssembly" target="_blank" rel="noopener">Go WebAssembly Wiki</a></li>
+          <li><a href="https://tinygo.org/docs/guides/webassembly/" target="_blank" rel="noopener">TinyGo + WebAssembly</a></li>
+          <li><a href="https://www.assemblyscript.org/" target="_blank" rel="noopener">AssemblyScript</a></li>
+          <li><a href="https://kotlinlang.org/docs/wasm-overview.html" target="_blank" rel="noopener">Kotlin/Wasm 文档</a></li>
+          <li><a href="https://docs.flutter.dev/platform-integration/web/wasm" target="_blank" rel="noopener">Flutter Web WASM</a></li>
+          <li><a href="https://learn.microsoft.com/en-us/aspnet/core/blazor/" target="_blank" rel="noopener">Blazor 文档</a></li>
+          <li><a href="https://pyodide.org/" target="_blank" rel="noopener">Pyodide 文档</a></li>
+          <li><a href="https://wordpress.github.io/wordpress-playground/" target="_blank" rel="noopener">WordPress Playground (PHP wasm)</a></li>
+        </ul>
+
+        <h3>WasmGC 深度</h3>
+        <ul>
+          <li><a href="https://v8.dev/blog/wasm-gc-porting" target="_blank" rel="noopener">V8: How WasmGC simplified life for compiler engineers</a></li>
+          <li><a href="https://github.com/WebAssembly/gc" target="_blank" rel="noopener">WasmGC 提案</a></li>
+        </ul>
+
+        <h3>性能对比</h3>
+        <ul>
+          <li><a href="https://wasm-benchmark.dev/" target="_blank" rel="noopener">wasm-benchmark.dev</a> · 跨语言基准</li>
+          <li><a href="https://github.com/WebAssembly/awesome-wasm-langs" target="_blank" rel="noopener">awesome-wasm-langs</a> · 语言目录</li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="../05-advanced/01-threads-simd.html">P5.1 Threads + SIMD</a> · 跨语言性能优化</li>
+          <li><a href="../05-advanced/02-gc-tail-eh-jspi.html">P5.2 WasmGC + Tail call + EH + JSPI</a> · 提案细节</li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../v8/04-memory/02-orinoco-gc.html">V8 P4.2 Orinoco GC</a> · 被 WasmGC 复用</li>
+          <li><a href="../../typescript/index.html">TypeScript</a> · AssemblyScript 类型系统对照</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

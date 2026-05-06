@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>系统语言：Rust / C / C++ / Zig · P4.1 · WebAssembly 深度学习</title>
+    <meta name="description" content="手动内存管理 + LLVM 后端语言怎么编译到 wasm。Rust + wasm-pack + wasm-bindgen 是黄金组合（70%+ 生产 wasm）；C/C++ via Emscripten 让现有代码不改源就能跑（产物大、启动慢，已被 WASI SDK + clang 直编替代）；Zig 原生支持 wasm32/wasm64 target 编译器内置无需 Emscripten。代码体积管理 wasm-opt + strip + panic abort + lto。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23654ff0'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EWA%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>WebAssembly 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.22 290); color: #fff">WASM</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · 跨语言编译路径</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-systems-langs.html" class="active">01 · 系统语言：Rust / C / C++ / Zig</a></li>
+          <li><a href="02-managed-and-others.html">02 · 托管语言 + 其他</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">WebAssembly</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · 跨语言编译路径</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 系统语言：Rust / C / C++ / Zig</span>
+        </nav>
+        <h1>系统语言：Rust / C / C++ / Zig</h1>
+        <p class="lead">
+          手动内存管理 + LLVM 后端语言怎么编译到 wasm。<strong>Rust</strong> 是 wasm 一等公民（70%+ 生产 wasm），<code>rustc --target wasm32-unknown-unknown</code> 直接产出 + wasm-pack/wasm-bindgen 工具链生成 npm 包；<strong>C/C++</strong> via Emscripten 让现有代码不改源就能跑（带 libc 模拟，产物大），现代倾向 WASI SDK + clang 直编（更轻、与 WASI 自然集成）；<strong>Zig</strong> 原生支持 wasm32 / wasm64 target，编译器内置不需要 emscripten，"显式分配"哲学契合 wasm 内存模型。<strong>代码体积管理是工程化第一关</strong>：wasm-opt + strip + panic abort + lto fat + opt-level z 是组合拳。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P3（与宿主互操作）</span>
+          <span><strong>主要来源</strong> rustwasm.github.io · emscripten.org · ziglang.org · wasi-sdk</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Rust 是 wasm 黄金组合</strong>—— 70%+ 生产 wasm 用 Rust。原因：(1) LLVM 后端、(2) 无 GC 不带 runtime、(3) wasm-bindgen 自动 marshalling、(4) Cargo 生态、(5) Mozilla 同时推 Rust 和 wasm。Cloudflare Workers / Shopify Functions / Figma 等大型 wasm 项目都 Rust 主导。</li>
+          <li><strong>C/C++ via Emscripten 是历史路径</strong>—— Emscripten = clang + 模拟 POSIX runtime + JS glue。让 Unity / Unreal / FFmpeg / SQLite 等现有 C/C++ 代码不改源就能跑。<strong>但</strong> 产物大（hello world &gt; 100KB）、启动慢；现代趋势是 <strong>WASI SDK + clang 直编</strong>（轻、与 WASI 集成）。</li>
+          <li><strong>Zig 原生 wasm 支持</strong>—— Zig 编译器内置 wasm32 / wasm64 target，不需要 Emscripten。Zig 的 "显式分配 + comptime" 哲学契合 wasm（内存可控 / 编译期生成）。Bun 用 Zig + JavaScriptCore 也部分支持嵌入 Zig wasm。</li>
+          <li><strong>编译目标的两条路</strong>：<code>wasm32-unknown-unknown</code>（裸 wasm，只能用 imports 自己提供）vs <code>wasm32-wasi</code>（导入 WASI 函数，能用 fs / env / clock）。前者用于浏览器 / 嵌入；后者用于服务端。</li>
+          <li><strong>代码体积优化是组合拳</strong>—— Rust：<code>panic = "abort"</code>（省 unwinding）+ <code>lto = "fat"</code>（跨 crate inline）+ <code>codegen-units = 1</code>（让 LTO 彻底）+ <code>opt-level = "z"</code>（极致体积）+ <code>strip = true</code> + 跑 <code>wasm-opt -Oz</code>。组合后 hello world 从 ~150KB 压到 ~10KB。</li>
+          <li><strong>C/C++ 内存安全在 wasm 里被部分修复</strong>—— C/C++ buffer overflow 写不出 wasm sandbox 外（受 linear memory bounds check 限制）；这是 wasm 给老旧 C/C++ 代码的"额外保险"。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Rust → wasm：黄金组合的根因</h3>
+        <p>2026 年 Rust 是 wasm 事实标准（npm 上 wasm-bindgen 包占大多数）。背后是<strong>5 个设计契合</strong>：</p>
+        <p><strong>(1) LLVM 后端</strong>—— rustc 用 LLVM；LLVM 已有 wasm32 backend；rustc <code>--target wasm32-unknown-unknown</code> 直接产出 wasm，无需中间 IR / 自定义编译器</p>
+        <p><strong>(2) 无 GC</strong>—— Rust 用所有权 + 借用编译期检查内存安全；不需要运行时 GC。这意味着 Rust wasm <strong>不带 GC runtime</strong>，体积小 / 启动快 / 性能可预测</p>
+        <p><strong>(3) wasm-bindgen 自动 marshalling</strong>—— 宏 <code>#[wasm_bindgen]</code> 标注函数 / struct，自动生成 JS glue（详见 <a href="../03-host-interop/02-imports-exports.html">P3.2</a>）。开发者不必手写跨边界 marshalling</p>
+        <p><strong>(4) Cargo 生态</strong>—— Cargo / crates.io 让"添加依赖"一行；wasm-pack 让"build + publish to npm"一行。比 Emscripten 的"配置半天"友好</p>
+        <p><strong>(5) Mozilla 同时推</strong>—— Mozilla 同时推 Rust（Servo / Firefox CSS engine）+ wasm（Bytecode Alliance）；社区融合自然</p>
+        <p><strong>2026 Rust wasm 工具链</strong>：</p>
+        <ul>
+          <li><strong>rustc</strong>—— Rust 编译器；产 wasm 二进制</li>
+          <li><strong>cargo</strong>—— 项目管理 + 依赖</li>
+          <li><strong>wasm-bindgen</strong>—— 跨边界 marshalling 宏 + glue 生成器（70%+ 项目用）</li>
+          <li><strong>wasm-pack</strong>—— 一站式 build + 测 + 发 npm 包工具</li>
+          <li><strong>web-sys / js-sys</strong>—— Rust binding for browser API（document / fetch / WebGL 等）</li>
+          <li><strong>wasm-opt</strong>—— Binaryen 后处理优化器</li>
+          <li><strong>cargo-component</strong>—— Component Model 工具（详见 <a href="../07-component-model/01-component-and-apps.html">P7</a>）</li>
+        </ul>
+
+        <h3>Rust 编译目标对比</h3>
+        <p>Rust 有 4 个 wasm target：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Target</th>
+              <th>用途</th>
+              <th>imports</th>
+              <th>典型场景</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>wasm32-unknown-unknown</code></td>
+              <td>裸 wasm</td>
+              <td>需自己提供</td>
+              <td>浏览器（配 wasm-bindgen 注入 JS imports）</td>
+            </tr>
+            <tr>
+              <td><code>wasm32-wasi</code> (preview1)</td>
+              <td>WASI Preview 1</td>
+              <td>WASI imports（fs / clock / env）</td>
+              <td>服务端 wasmtime / wasmer 早期</td>
+            </tr>
+            <tr>
+              <td><code>wasm32-wasip2</code></td>
+              <td>WASI Preview 2 + Component</td>
+              <td>WIT 接口</td>
+              <td>2024+ 服务端 wasm + Cloudflare Workers</td>
+            </tr>
+            <tr>
+              <td><code>wasm32-unknown-emscripten</code></td>
+              <td>Emscripten 兼容（罕用）</td>
+              <td>Emscripten POSIX 模拟</td>
+              <td>历史 / 兼容旧项目</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>wasm-bindgen 工作原理</h3>
+        <p>当你写 <code>#[wasm_bindgen]</code> 标注函数：</p>
+        <pre class="code"><code class="lang-rust">#[wasm_bindgen]
+pub fn greet(name: &amp;str) -&gt; String {
+    format!("Hello, {}!", name)
+}</code></pre>
+        <p>实际编译产物有<strong>4 个东西</strong>：</p>
+        <p><strong>(1) wasm 二进制</strong>—— 包含 <code>greet</code> 实际实现，但参数 / 返回值类型变成 wasm 原生：<code>(func $greet (param i32 i32 i32) (result i32))</code></p>
+        <p>i32 i32 = string ptr + len（指向 wasm linear memory）；返回 i32 = "ABI 区"指针，包含返回 string 的 ptr + len</p>
+        <p><strong>(2) <code>__wbindgen_*</code> imports</strong>—— wasm 调 JS 端 helper：<code>__wbindgen_string_new</code>（new JS String from ptr/len）/ <code>__wbindgen_alloc</code> / 等</p>
+        <p><strong>(3) JS glue 文件</strong>（<code>my_wasm.js</code>）—— 包装 wasm exports：</p>
+        <pre class="code"><code class="lang-javascript">// 简化的 wasm-bindgen 生成的 glue
+import * as wasm from './my_wasm_bg.wasm';
+
+export function greet(name) {
+  // 编码 string 到 wasm memory
+  const ptr = passStringToWasm0(name, wasm.__wbindgen_alloc, ...);
+  const len = WASM_VECTOR_LEN;
+
+  // 调 wasm
+  const ret = wasm.greet(ptr, len);
+
+  // 读返回 string
+  const r0 = getInt32Memory0()[ret / 4 + 0];
+  const r1 = getInt32Memory0()[ret / 4 + 1];
+  const result = getStringFromWasm0(r0, r1);
+
+  // free wasm 端的返回 buffer
+  wasm.__wbindgen_free(r0, r1, 1);
+
+  return result;
+}</code></pre>
+        <p><strong>(4) TypeScript 类型声明</strong>—— <code>my_wasm.d.ts</code> 让 TS 用户得到类型提示</p>
+        <p>这套机制让<strong>开发者写 Rust 就像普通 Rust</strong>，glue 完全透明。</p>
+
+        <h3>C/C++ via Emscripten：模拟 POSIX 哲学</h3>
+        <p>Emscripten 的核心思想：<strong>让现有 C/C++ 代码不改源就能跑在浏览器</strong>。要做到这一点，必须把 C 标准库（fopen / printf / malloc / pthread / signal 等）<strong>模拟到浏览器</strong>。</p>
+        <p>Emscripten 模拟层（部分）：</p>
+        <ul>
+          <li><strong>libc 模拟</strong>—— 实现 musl 子集（malloc / free / printf / fopen / mmap / 等）；运行时调用 JS imports</li>
+          <li><strong>filesystem (MEMFS / IDBFS / WORKERFS)</strong>—— 内存文件系统 / IndexedDB-backed / Worker 共享；让 fopen / fread 工作</li>
+          <li><strong>pthread 模拟</strong>—— 用 Web Workers + SharedArrayBuffer 实现 pthread_create / mutex / 等</li>
+          <li><strong>signal 模拟</strong>—— 大部分 signal 转成 noop 或 throw</li>
+          <li><strong>OpenGL 桥接</strong>—— OpenGL ES 2 / 3 调用映射到 WebGL</li>
+          <li><strong>SDL / Bullet / 其他库</strong>—— 集成 port，预编译版本</li>
+        </ul>
+        <p><strong>典型 Emscripten 命令</strong>：</p>
+        <pre class="code"><code class="lang-bash">$ emcc hello.c -o hello.html
+# 产生 hello.wasm + hello.js（loader） + hello.html（demo）
+
+$ emcc -O3 -s WASM=1 -s EXPORTED_FUNCTIONS='["_my_func"]' \
+       -s ALLOW_MEMORY_GROWTH=1 hello.c -o hello.js</code></pre>
+        <p><strong>Emscripten 产物结构</strong>：</p>
+        <ul>
+          <li>hello.wasm（C/C++ 编译结果 + libc 实现）</li>
+          <li>hello.js（loader，初始化 runtime + module 加载）</li>
+          <li>hello.html（可选 demo 页）</li>
+        </ul>
+        <p><strong>Emscripten 的代价</strong>：</p>
+        <p><strong>(1) 产物大</strong>—— hello world ~100KB+（带 libc）；优化后能压到 ~30KB 但仍比裸 wasm 重</p>
+        <p><strong>(2) 启动慢</strong>—— runtime init（FS 挂载 / 内存分配 / 主函数包装）开销几十 ms</p>
+        <p><strong>(3) 与 wasm 哲学冲突</strong>—— wasm 本意"无环境假设"；Emscripten 偷偷塞 libc，让产物背离 wasm 简单沙箱原则</p>
+        <p><strong>(4) 工具链复杂</strong>—— emsdk / emcc / 各种 -s 参数；学习曲线陡</p>
+
+        <h3>WASI SDK + clang：现代 C/C++ → wasm</h3>
+        <p>2024+ 趋势：用 <strong>WASI SDK</strong>（bytecodealliance 维护的 clang + WASI libc）替代 Emscripten。</p>
+        <p>WASI SDK 的不同：</p>
+        <ul>
+          <li><strong>不模拟 POSIX</strong>—— 直接用 WASI imports（fd_read / fd_write / clock_time_get）；更轻、与 WASI 自然集成</li>
+          <li><strong>libc 是 wasi-libc</strong>（musl fork）—— 把系统调用映射到 WASI imports</li>
+          <li><strong>没有 JS glue</strong>—— 产物纯 wasm，由 wasmtime / wasmer / Cloudflare Workers / Node 等执行</li>
+          <li><strong>没有 OpenGL / SDL 桥接</strong>—— 服务端场景不需要</li>
+        </ul>
+        <p>典型命令：</p>
+        <pre class="code"><code class="lang-bash"># 用 WASI SDK 的 clang
+$ /opt/wasi-sdk/bin/clang -O3 hello.c -o hello.wasm
+
+# 跑
+$ wasmtime hello.wasm</code></pre>
+        <p>产物明显更小：</p>
+        <ul>
+          <li>Emscripten hello world ~50KB（优化后）</li>
+          <li>WASI SDK hello world ~10KB</li>
+        </ul>
+        <p><strong>什么时候用哪个</strong>：</p>
+        <ul>
+          <li>浏览器 + 现有 C++ 代码（带 OpenGL / SDL / 复杂 IO）→ Emscripten</li>
+          <li>服务端 / Edge / WASI runtime → WASI SDK</li>
+          <li>新项目纯 C/C++ + 不依赖 POSIX → WASI SDK 或纯 clang wasm32</li>
+        </ul>
+
+        <h3>Zig → wasm：原生支持</h3>
+        <p>Zig 编译器（自家实现，<strong>不依赖 LLVM</strong> 在某些场景）原生支持 wasm32 / wasm64 target。Zig 哲学契合 wasm：</p>
+        <p><strong>(1) 显式分配</strong>—— Zig 没有 hidden allocation；malloc 必须显式调 <code>allocator.alloc</code>。这与 wasm 内存模型（手工管理 linear memory）契合</p>
+        <p><strong>(2) comptime</strong>—— 编译期执行代码 / 生成代码；让"零成本抽象"在 wasm 也能用（比 Rust trait 更激进）</p>
+        <p><strong>(3) C 互操作</strong>—— Zig 能直接 import C 头文件，编译 C 代码；适合"渐进迁移"现有 C 项目</p>
+        <p>Zig wasm 命令：</p>
+        <pre class="code"><code class="lang-bash"># wasi 目标
+$ zig build-exe hello.zig -target wasm32-wasi
+
+# freestanding（裸 wasm）
+$ zig build-lib hello.zig -target wasm32-freestanding -dynamic --export=add</code></pre>
+        <p><strong>Zig 用 wasm 的典型项目</strong>：</p>
+        <ul>
+          <li>Bun（Bun 自己用 Zig，但也接受用户 wasm 模块）</li>
+          <li>TigerBeetle（金融数据库，用 Zig 写）</li>
+          <li>Roc 语言（Roc compiler 用 Zig 写，支持产 wasm）</li>
+        </ul>
+        <p>Zig wasm 生态相对小（vs Rust），但<strong>未来潜力大</strong>—— Zig 编译器自身轻量、产物小、与 wasm 哲学契合。</p>
+
+        <h3>代码体积优化：工程化第一关</h3>
+        <p>Rust + wasm-pack 默认 hello world ~150KB。<strong>不优化的 wasm 在生产几乎不可接受</strong>：</p>
+        <ul>
+          <li>4G 网络下载 150KB ~1.5s</li>
+          <li>解压 + parse + 编译 ~50-100ms</li>
+          <li>启动延迟严重影响 LCP（详见 <a href="../../browser-rendering/04-performance/01-load-metrics.html">浏览器渲染 P4.1</a>）</li>
+        </ul>
+        <p><strong>组合拳优化</strong>：</p>
+        <h4>步骤 1：Cargo profile 优化</h4>
+        <pre class="code"><code class="lang-toml">[profile.release]
+opt-level = "z"          # 极致体积优化（z &gt; s &gt; 3 &gt; 2 &gt; 1 &gt; 0）
+lto = "fat"              # 全 crate Link Time Optimization
+codegen-units = 1        # 单线程编译让 LTO 彻底
+panic = "abort"          # 省 panic unwinding 代码（~30KB）
+strip = "symbols"        # 去 debug symbols
+overflow-checks = false  # release 通常不需要</code></pre>
+        <p>这一步：~150KB → ~80KB</p>
+        <h4>步骤 2：wasm-opt 后处理</h4>
+        <pre class="code"><code class="lang-bash">$ wasm-opt -Oz pkg/my_wasm_bg.wasm -o pkg/my_wasm_bg.wasm</code></pre>
+        <p>Binaryen wasm-opt 做<strong>wasm 特定优化</strong>（DCE / inline / 寄存器复用 / 指令选择），LLVM 不擅长。</p>
+        <p>这一步：~80KB → ~30KB</p>
+        <h4>步骤 3：移除不用的标准库</h4>
+        <p>Rust 默认依赖 std；某些只需要 core / alloc：</p>
+        <pre class="code"><code class="lang-rust">#![no_std]                              // 不要 std
+extern crate alloc;                     // 但要 alloc
+
+use alloc::vec::Vec;
+use alloc::string::String;
+
+#[wasm_bindgen]
+pub fn process(input: Vec&lt;u8&gt;) -&gt; Vec&lt;u8&gt; {
+    input.into_iter().map(|x| x.wrapping_add(1)).collect()
+}</code></pre>
+        <p>这一步：~30KB → ~15KB</p>
+        <h4>步骤 4：Brotli 传输压缩</h4>
+        <p>设置 HTTP 服务 Brotli 压缩 .wasm 文件。wasm 二进制 Brotli 压缩比通常 70-80%：</p>
+        <pre class="code"><code class="lang-text">15KB wasm × 0.25 = ~4KB 传输</code></pre>
+        <p>所以最终用户感受 ~4KB 下载。</p>
+
+        <h3>Rust panic 与 wasm 错误处理</h3>
+        <p>Rust panic 默认在 wasm 里<strong>静默触发 trap</strong>（unreachable instruction）：</p>
+        <pre class="code"><code class="lang-rust">#[wasm_bindgen]
+pub fn divide(x: i32, y: i32) -&gt; i32 {
+    x / y  // y=0 时 panic
+}</code></pre>
+        <p>JS 端调 <code>divide(1, 0)</code> 报：</p>
+        <pre class="code"><code class="lang-text">RuntimeError: unreachable executed</code></pre>
+        <p>看不到 panic message。<strong>开发时设 panic_hook</strong>：</p>
+        <pre class="code"><code class="lang-rust">#[wasm_bindgen(start)]
+pub fn main() {
+    console_error_panic_hook::set_once();
+}</code></pre>
+        <p>之后 panic 会 console.error + throw JS Error，能看到 message + stack。</p>
+        <p><strong>release 时</strong>设 <code>panic = "abort"</code>，panic 直接 trap（不走 unwinding，省体积）。</p>
+
+        <h3>C/C++ 内存安全：wasm 帮的忙</h3>
+        <p>C/C++ 经典痛：buffer overflow / use-after-free / null deref。在 wasm 里<strong>部分被修复</strong>：</p>
+        <p><strong>(1) Buffer overflow 不能逃出 sandbox</strong>—— C 的 <code>strcpy(buf, attacker_input)</code> 写超了 buf；写入仍在 wasm linear memory 内（不能写到 V8 堆 / OS 内存）；最坏情况是写坏 wasm 自己的内存，引起 wasm crash 但不会感染宿主</p>
+        <p><strong>(2) 仍能 corrupt wasm 自己内部状态</strong>—— 如果攻击者能精确控制溢出位置，可能改 wasm 内的函数指针 → 间接调用恶意函数。但<strong>call_indirect 检查类型签名</strong>，不能跳到任意位置；攻击难度大幅上升</p>
+        <p><strong>(3) 不能 use-after-free 出 wasm</strong>—— free 后的内存仍是 wasm 管理；可能 corrupt wasm 状态但不污染宿主</p>
+        <p>这是 wasm 给老旧 C/C++ 代码（比如 SQLite / FFmpeg / Photoshop 内核）的"<strong>免费保险</strong>"——把不可信 C/C++ 装到 wasm 里跑，比直接跑 native 更安全。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · 用 Rust 写 SPA 框架（Yew / Leptos / Dioxus）</h3>
+        <p>Rust SPA 框架（类似 React）通过 wasm 跑在浏览器：</p>
+        <ul>
+          <li><strong>Yew</strong>—— 老牌 Rust SPA，VDOM + JSX-like 宏</li>
+          <li><strong>Leptos</strong>—— signals 反应式（类似 Solid）；性能优于 Yew</li>
+          <li><strong>Dioxus</strong>—— React 风格，跨 desktop / mobile / web</li>
+        </ul>
+        <p>典型项目：</p>
+        <pre class="code"><code class="lang-rust">use leptos::*;
+
+#[component]
+fn Counter() -&gt; impl IntoView {
+    let (count, set_count) = create_signal(0);
+    view! {
+        &lt;button on:click=move |_| set_count.update(|n| *n += 1)&gt;
+            "Clicked: " {count}
+        &lt;/button&gt;
+    }
+}
+
+fn main() {
+    leptos::mount_to_body(Counter);
+}</code></pre>
+        <p><strong>性能 vs JS 框架</strong>：Rust SPA 框架的 wasm 体积通常 ~150-300KB（vs React+ReactDOM ~150KB），但<strong>启动后</strong>响应快（无 GC 暂停）。适合性能敏感场景；不适合"小项目+追求最小依赖"。</p>
+
+        <h3>场景 B · 把 SQLite 编译到 wasm（C → wasm 经典案例）</h3>
+        <p>SQLite 有官方 wasm 版本（<a href="https://sqlite.org/wasm" target="_blank" rel="noopener">sqlite.org/wasm</a>），用 Emscripten 编译：</p>
+        <pre class="code"><code class="lang-bash">$ emcc -O3 -s WASM=1 \
+       -s EXPORTED_FUNCTIONS='["_sqlite3_open", "_sqlite3_exec", ...]' \
+       -s EXPORTED_RUNTIME_METHODS='["ccall", "cwrap"]' \
+       -s ALLOW_MEMORY_GROWTH=1 \
+       sqlite3.c -o sqlite3.js</code></pre>
+        <p>JS 端：</p>
+        <pre class="code"><code class="lang-javascript">import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
+
+const sqlite3 = await sqlite3InitModule({
+  print: console.log,
+  printErr: console.error
+});
+
+const db = new sqlite3.oo1.OpfsDb('mydb.db');
+db.exec('CREATE TABLE users (id INTEGER, name TEXT);');
+db.exec('INSERT INTO users VALUES (1, "Alice");');
+const rows = db.exec({ sql: 'SELECT * FROM users', returnValue: 'resultRows' });</code></pre>
+        <p>SQLite WASM 包含：~1MB wasm + JS glue。OPFS（Origin Private File System）做持久化。</p>
+
+        <h3>场景 C · FFmpeg.wasm 视频转码</h3>
+        <p>Emscripten 编译 FFmpeg：</p>
+        <pre class="code"><code class="lang-javascript">import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { fetchFile, toBlobURL } from '@ffmpeg/util';
+
+const ffmpeg = new FFmpeg();
+await ffmpeg.load({
+  coreURL: await toBlobURL('/ffmpeg-core.js', 'text/javascript'),
+  wasmURL: await toBlobURL('/ffmpeg-core.wasm', 'application/wasm'),
+});
+
+await ffmpeg.writeFile('input.mp4', await fetchFile(file));
+await ffmpeg.exec(['-i', 'input.mp4', '-c:v', 'libx264', 'output.mp4']);
+const data = await ffmpeg.readFile('output.mp4');</code></pre>
+        <p>FFmpeg 完整 wasm ~30MB（多线程版需要 cross-origin isolated）。这种场景<strong>SIMD + threads</strong>是性能关键（详见 <a href="../05-advanced/01-threads-simd.html">P5.1</a>）。</p>
+
+        <h3>场景 D · Cloudflare Workers 用 Rust + WASI</h3>
+        <pre class="code"><code class="lang-toml"># Cargo.toml
+[package]
+name = "my-worker"
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+worker = "0.1"
+serde_json = "1"</code></pre>
+        <pre class="code"><code class="lang-rust">use worker::*;
+
+#[event(fetch)]
+async fn main(req: Request, env: Env, ctx: Context) -&gt; Result&lt;Response&gt; {
+    Response::ok("Hello from Rust + WASM at the edge!")
+}</code></pre>
+        <p>构建：</p>
+        <pre class="code"><code class="lang-bash">$ wrangler deploy</code></pre>
+        <p>Cloudflare 把 wasm 在 V8 isolate 里跑（不是 wasmtime），冷启动 &lt; 5ms。</p>
+
+        <h3>场景 E · Zig 写小工具 wasm</h3>
+        <pre class="code"><code class="lang-zig">// hello.zig
+const std = @import("std");
+
+export fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+export fn fib(n: i32) i32 {
+    if (n &lt; 2) return n;
+    return fib(n - 1) + fib(n - 2);
+}</code></pre>
+        <p>编译：</p>
+        <pre class="code"><code class="lang-bash">$ zig build-lib hello.zig \
+       -target wasm32-freestanding \
+       -dynamic --export=add --export=fib \
+       -O ReleaseSmall</code></pre>
+        <p>产物 hello.wasm 只有 ~200 字节（无 std）。比 Rust hello world 小一个数量级（因为 Zig 没有"默认带 std"）。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：完整 Rust 项目</span></h2>
+
+        <h3>项目结构</h3>
+        <pre class="code"><code class="lang-text">my-wasm/
+├── Cargo.toml
+├── src/
+│   └── lib.rs
+└── pkg/                  # wasm-pack build 产出
+    ├── my_wasm_bg.wasm
+    ├── my_wasm.js
+    ├── my_wasm.d.ts
+    └── package.json</code></pre>
+
+        <h3>Cargo.toml</h3>
+        <pre class="code"><code class="lang-toml">[package]
+name = "my-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "console", "Document", "Window", "Element", "HtmlElement"
+]}
+console_error_panic_hook = { version = "0.1", optional = true }
+
+[features]
+default = ["console_error_panic_hook"]
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true</code></pre>
+
+        <h3>src/lib.rs</h3>
+        <pre class="code"><code class="lang-rust">use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen(start)]
+pub fn init() {
+    #[cfg(feature = "console_error_panic_hook")]
+    console_error_panic_hook::set_once();
+}
+
+// 简单数值函数
+#[wasm_bindgen]
+pub fn add(a: i32, b: i32) -&gt; i32 { a + b }
+
+// 字符串处理
+#[wasm_bindgen]
+pub fn greet(name: &amp;str) -&gt; String {
+    format!("Hello, {}!", name)
+}
+
+// 数组处理（zero-copy view，更快）
+#[wasm_bindgen]
+pub fn sum_array(data: &amp;[f64]) -&gt; f64 {
+    data.iter().sum()
+}
+
+// 带状态的 struct
+#[wasm_bindgen]
+pub struct Calculator {
+    history: Vec&lt;f64&gt;,
+}
+
+#[wasm_bindgen]
+impl Calculator {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -&gt; Self { Self { history: Vec::new() } }
+
+    pub fn compute(&amp;mut self, expr: &amp;str) -&gt; Result&lt;f64, JsValue&gt; {
+        // 简化：只支持 a + b
+        let parts: Vec&lt;&amp;str&gt; = expr.split('+').collect();
+        if parts.len() != 2 {
+            return Err(JsValue::from_str("invalid expression"));
+        }
+        let a: f64 = parts[0].trim().parse()
+            .map_err(|e: std::num::ParseFloatError| JsValue::from_str(&amp;e.to_string()))?;
+        let b: f64 = parts[1].trim().parse()
+            .map_err(|e: std::num::ParseFloatError| JsValue::from_str(&amp;e.to_string()))?;
+        let result = a + b;
+        self.history.push(result);
+        Ok(result)
+    }
+
+    pub fn history_len(&amp;self) -&gt; usize { self.history.len() }
+    pub fn last(&amp;self) -&gt; Option&lt;f64&gt; { self.history.last().copied() }
+}
+
+// 调 JS console
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console)]
+    fn log(s: &amp;str);
+}
+
+#[wasm_bindgen]
+pub fn debug(message: &amp;str) {
+    log(&amp;format!("[Rust] {}", message));
+}
+
+// 异步函数（自动生成 JS Promise）
+#[wasm_bindgen]
+pub async fn fetch_data(url: &amp;str) -&gt; Result&lt;JsValue, JsValue&gt; {
+    let window = web_sys::window().unwrap();
+    let resp_promise = window.fetch_with_str(url);
+    let resp_value = wasm_bindgen_futures::JsFuture::from(resp_promise).await?;
+    let resp: web_sys::Response = resp_value.dyn_into()?;
+    let text_promise = resp.text()?;
+    let text_value = wasm_bindgen_futures::JsFuture::from(text_promise).await?;
+    Ok(text_value)
+}</code></pre>
+
+        <h3>JS 使用</h3>
+        <pre class="code"><code class="lang-javascript">import init, {
+  add, greet, sum_array, Calculator, debug, fetch_data
+} from './pkg/my_wasm.js';
+
+await init();
+
+console.log(add(2, 3));                    // 5
+console.log(greet("alice"));               // "Hello, alice!"
+console.log(sum_array(new Float64Array([1, 2, 3, 4])));  // 10
+
+const calc = new Calculator();
+calc.compute("1 + 2");
+calc.compute("5 + 10");
+console.log(calc.history_len());           // 2
+console.log(calc.last());                  // 15
+
+debug("hello from JS");                    // [Rust] hello from JS
+
+const data = await fetch_data("/api/info"); // wasm 内部 fetch
+console.log(data);
+
+// 释放 calc（重要！）
+calc.free();</code></pre>
+
+        <h3>构建</h3>
+        <pre class="code"><code class="lang-bash"># 安装工具链
+$ rustup target add wasm32-unknown-unknown
+$ cargo install wasm-pack
+
+# 构建
+$ wasm-pack build --target web --release
+
+# 优化
+$ wasm-opt -Oz pkg/my_wasm_bg.wasm -o pkg/my_wasm_bg.wasm
+
+# 检查体积
+$ ls -lh pkg/*.wasm
+-rw-r--r--  1 user  staff   12K  ...  pkg/my_wasm_bg.wasm</code></pre>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：用 Cargo dev profile 上线</h3>
+        <p>dev profile 不优化体积（hello world ~500KB），生产必须 release。</p>
+        <pre class="code"><code class="lang-bash">$ wasm-pack build --release   # 不是 --dev</code></pre>
+
+        <h3>陷阱 2：忘记跑 wasm-opt</h3>
+        <p>wasm-opt 是 Binaryen 提供的<strong>wasm 特定</strong>后处理。LLVM 不会做 wasm 特定优化（如 register reuse / instruction selection for stack machine）。<strong>必须跑</strong> wasm-opt -Oz。</p>
+
+        <h3>陷阱 3：Rust panic 在 release 看不到 message</h3>
+        <p>release + panic = "abort"，panic 直接 trap，看不到 message（错误是 "unreachable executed"）。</p>
+        <p>调试方案：</p>
+        <p><strong>(1) dev build 加 panic_hook</strong>—— console.error 显示完整 panic info</p>
+        <p><strong>(2) production 用 Result + ? 显式处理错误</strong>—— 把可能 panic 的代码（unwrap / expect）改成 Result</p>
+
+        <h3>陷阱 4：Emscripten + 多线程忘记 cross-origin isolated</h3>
+        <p>Emscripten 多线程（pthread）依赖 SharedArrayBuffer，必须 COOP/COEP（详见 <a href="../../browser-rendering/02-multi-process/02-site-isolation.html">浏览器渲染 P2.2</a>）。</p>
+        <p>检查：JS 端 <code>self.crossOriginIsolated === true</code>。否则 SAB 不可用，Emscripten 回退单线程。</p>
+
+        <h3>陷阱 5：用 Emscripten 编译 server-side wasm</h3>
+        <p>Emscripten 假设浏览器环境（带 JS glue）。<strong>服务端不要用 Emscripten</strong>，用 WASI SDK：</p>
+        <pre class="code"><code class="lang-bash"># ❌ 服务端不要这样
+$ emcc hello.c -o hello.js  # 产 JS glue，wasmtime 不能直跑
+
+# ✅ 服务端用 WASI SDK
+$ /opt/wasi-sdk/bin/clang -O3 hello.c -o hello.wasm</code></pre>
+
+        <h3>陷阱 6：Rust struct 跨 wasm-bindgen 边界忘记 free</h3>
+        <pre class="code"><code class="lang-javascript">function process() {
+  const calc = new Calculator();
+  calc.compute("1 + 2");
+  return calc.last();
+  // ❌ calc 没 free，Rust struct 一直在 wasm memory
+}
+
+// ✅ 显式 free
+function process() {
+  const calc = new Calculator();
+  try {
+    calc.compute("1 + 2");
+    return calc.last();
+  } finally {
+    calc.free();
+  }
+}</code></pre>
+        <p>新版 wasm-bindgen 用 FinalizationRegistry 自动 free，但延迟不可控；性能敏感场景手动 free。</p>
+
+        <h3>陷阱 7：Zig wasm 没有标准库 panic</h3>
+        <p>Zig wasm32-freestanding 默认没 panic handler；越界访问 / 整数溢出会导致 wasm trap。需要自己定义：</p>
+        <pre class="code"><code class="lang-zig">pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
+    @setCold(true);
+    // 调 JS imports 报告 panic
+    js_panic(msg.ptr, msg.len);
+    @trap();
+}</code></pre>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>Rust + wasm</h3>
+        <ul>
+          <li><a href="https://rustwasm.github.io/" target="_blank" rel="noopener">Rust and WebAssembly Book</a></li>
+          <li><a href="https://rustwasm.github.io/wasm-bindgen/" target="_blank" rel="noopener">wasm-bindgen Guide</a></li>
+          <li><a href="https://rustwasm.github.io/wasm-pack/" target="_blank" rel="noopener">wasm-pack docs</a></li>
+          <li><a href="https://rustwasm.github.io/docs/book/game-of-life/introduction.html" target="_blank" rel="noopener">Conway's Game of Life tutorial</a></li>
+        </ul>
+
+        <h3>Emscripten</h3>
+        <ul>
+          <li><a href="https://emscripten.org/docs/index.html" target="_blank" rel="noopener">Emscripten 文档</a></li>
+          <li><a href="https://emscripten.org/docs/porting/connecting_cpp_and_javascript/embind.html" target="_blank" rel="noopener">Embind 文档</a></li>
+          <li><a href="https://floooh.github.io/2018/06/02/one-source-different-builds.html" target="_blank" rel="noopener">Andre Weissflog: Cross-platform with Emscripten</a></li>
+        </ul>
+
+        <h3>WASI SDK + Zig</h3>
+        <ul>
+          <li><a href="https://github.com/WebAssembly/wasi-sdk" target="_blank" rel="noopener">WASI SDK</a></li>
+          <li><a href="https://ziglang.org/documentation/master/#WebAssembly" target="_blank" rel="noopener">Zig WebAssembly docs</a></li>
+          <li><a href="https://surma.dev/things/c-to-webassembly/" target="_blank" rel="noopener">Surma: Compiling C to WebAssembly without Emscripten</a></li>
+        </ul>
+
+        <h3>体积优化</h3>
+        <ul>
+          <li><a href="https://rustwasm.github.io/book/reference/code-size.html" target="_blank" rel="noopener">Rust+wasm: Shrinking .wasm Code Size</a></li>
+          <li><a href="https://github.com/WebAssembly/binaryen" target="_blank" rel="noopener">Binaryen wasm-opt</a></li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="02-managed-and-others.html">P4.2 托管语言 + 其他</a> · Go / Java / Kotlin / Dart / Python</li>
+          <li><a href="../06-wasi-runtime/01-wasi.html">P6.1 WASI Preview 1 / Preview 2</a></li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../bun/02-internals/" target="_blank">Bun P2 内部</a> · Zig 语言用 wasm</li>
+          <li><a href="../../v8/06-wasm/01-wasm-pipeline.html">V8 P6.1 V8 Wasm 流水线</a></li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
