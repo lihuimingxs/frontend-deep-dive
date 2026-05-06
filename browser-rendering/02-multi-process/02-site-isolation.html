@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Spectre 后的浏览器安全模型重构 · P2.2 · 浏览器渲染管线深度学习</title>
-    <meta name="description" content="Spectre 漏洞（2018）后浏览器安全模型的根本性变化。Site Isolation（2018，每个 origin 独立 Renderer）+ Out-of-Process iframes（OOPIF，跨域 iframe 跑独立进程）+ COOP / COEP（让网页声明 cross-origin isolated 状态，重新启用 SharedArrayBuffer）+ CORS / CORP。" />
+    <title>Site Isolation + OOPIF + COOP/COEP：Spectre 后的安全模型重构 · P2.2 · 浏览器渲染管线深度学习</title>
+    <meta name="description" content="Spectre 漏洞 (2018) 后浏览器安全模型的根本性变化。Site Isolation（每个 origin 独立 Renderer）+ Out-of-Process iframes + COOP/COEP 让网页声明 cross-origin isolated 状态重新启用 SharedArrayBuffer。" />
     <link rel="stylesheet" href="../../assets/styles.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234285F4'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EB%3C/text%3E%3C/svg%3E" />
   </head>
@@ -45,9 +45,9 @@
           <a href="index.html">P2 · 多进程架构</a><span class="breadcrumb-sep">/</span>
           <span>02 · Site Isolation + OOPIF + COOP/COEP</span>
         </nav>
-        <h1>Spectre 后的浏览器安全模型重构</h1>
+        <h1>Site Isolation + OOPIF + COOP/COEP：Spectre 后的安全模型重构</h1>
         <p class="lead">
-          Spectre 漏洞（2018）后浏览器安全模型的根本性变化。Site Isolation（2018，每个 origin 独立 Renderer）+ Out-of-Process iframes（OOPIF，跨域 iframe 跑独立进程）+ COOP / COEP（让网页声明 cross-origin isolated 状态，重新启用 SharedArrayBuffer）+ CORS / CORP。
+          <strong>Spectre / Meltdown</strong>（2018）是硬件级 CPU 漏洞，让恶意 JS 能跨进程读其他 site 数据；触发了浏览器安全模型的根本性重构。这一章讲透 <strong>Site Isolation</strong>（2018，每个 origin 独立 Renderer 进程）+ <strong>Out-of-Process iframes (OOPIF)</strong>（跨域 iframe 跑独立进程）+ <strong>COOP / COEP</strong>（让网页声明 cross-origin isolated 状态，重新启用 SharedArrayBuffer + 其他高级 API）。<strong>关键洞察</strong>：Spectre 是软件层面的 trust boundary 不足以防硬件漏洞 → Web 平台被迫重构。
         </p>
         <div class="chapter-meta">
           <span><strong>阅读时长</strong> ~25 分钟</span>
@@ -55,53 +55,202 @@
           <span><strong>主要来源</strong> chromium.org/Home/chromium-security/site-isolation · web.dev/coop-coep</span>
         </div>
 
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>本章为<strong>骨架</strong>。已完成大纲与关键知识点列表（见各段标题下的 bullet），正文撰写中。可参考 <a href="../outline.md">outline.md</a> 了解完整覆盖范围。</p>
-        </div>
-
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
-          <li><em>正文待写。</em></li>
+          <li><strong>Spectre 漏洞 (2018) 让原 Web 安全模型崩塌</strong>—— 之前假设"软件层 same-origin policy 够安全"，Spectre 证明硬件漏洞能绕过软件 trust boundary。浏览器被迫重构。</li>
+          <li><strong>Site Isolation 是 Spectre 的工程响应</strong>—— 每个 origin 独立 Renderer 进程，恶意 site 不能直接读其他 origin 的内存（即使利用 Spectre）。代价是内存增加 ~10-20%。</li>
+          <li><strong>COOP / COEP 是「想用 SharedArrayBuffer 的网页要负责证明 cross-origin isolated」</strong>—— Spectre 后 SAB 默认禁用，只在网页发了正确 header 才重新启用。这让 SAB 从「免费」变「需配置」。</li>
         </ol>
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
-        <p><em>正文待写。本章覆盖：Spectre / Meltdown 2018 · Site Isolation · OOPIF · COOP · COEP · cross-origin isolated · SharedArrayBuffer 限制 · CORP</em></p>
+
+        <h3>Spectre / Meltdown：硬件级 CPU 漏洞</h3>
+        <p>2018 年 1 月公开的 <strong>Spectre 和 Meltdown</strong> 是<strong>硬件层面</strong>的 CPU 漏洞——影响 Intel / AMD / ARM 等几乎所有现代 CPU。核心机制是<strong>"侧信道攻击" (side-channel attack) 利用 CPU 推测执行 (speculative execution)</strong>：</p>
+        <p><strong>(1) CPU 为加速会预测分支</strong>—— 看到 <code>if (x &lt; arr.length) y = arr[x]</code>，CPU 会推测 <code>x &lt; arr.length</code> 是 true，提前执行 <code>y = arr[x]</code>，等真实结果出来才决定保留还是回滚。</p>
+        <p><strong>(2) 推测执行可能访问越界数据</strong>—— 即使 <code>x &gt; arr.length</code>，CPU 在确认前可能已经把 <code>arr[x]</code>（实际是某个内存地址）读进 cache。</p>
+        <p><strong>(3) 越界数据通过 cache timing 泄露</strong>—— 攻击者通过测量后续 cache 访问时间能推断出"哪些地址被预读到 cache"，反推出泄露的数据值。</p>
+        <p>这套攻击的<strong>致命之处</strong>：<strong>它绕过软件层 sandbox</strong>。原本浏览器假设"Renderer 进程在沙箱里读不到其他 origin 数据"——但 Spectre 让恶意 JS 能<strong>读 Renderer 进程内任何位置</strong>的内存。如果同一 Renderer 跑了多个 origin（之前 Site Isolation 前的设计），恶意 JS 能读其他 origin 的 cookie / 密码。</p>
+        <p>Spectre 公开后，浏览器厂商 emergency patch——大部分用<strong>软件层 mitigation</strong>（禁用某些高精度 timer / 限制 SharedArrayBuffer / 改 JS 引擎避免某些代码模式）。但软件 mitigation 不彻底——根本解决要让<strong>每个 origin 独立 Renderer 进程</strong>，这就是 Site Isolation。</p>
+
+        <h3>Site Isolation：「每个 origin 独立 Renderer」</h3>
+        <p>Chrome 67 (2018-05) 默认启用 <strong>Site Isolation</strong>。变化：</p>
+        <p><strong>之前（Site Isolation 前）</strong>：Renderer 进程按 tab 分配——一个 tab = 一个 Renderer，tab 内的 main page + iframes（跨域也行）共享同一 Renderer。</p>
+        <p><strong>之后（Site Isolation 后）</strong>：Renderer 进程按 site 分配（site = scheme + eTLD+1，如 <code>https://foo.com</code>）。<strong>每个 site 独立 Renderer，不再共享</strong>。如果一个 tab 的 main page 是 a.com、嵌入 b.com iframe，<strong>两个 origin 在两个 Renderer</strong>。</p>
+        <p>即使 Spectre 攻击者能读自己 Renderer 进程的内存，它<strong>读不到其他 origin 的 Renderer</strong>——它们在不同进程，物理上隔离。</p>
+        <p><strong>"site" 不等于 "origin"</strong>这一区别很关键。Site = scheme + eTLD+1（<code>https://foo.com</code>），origin = scheme + host + port（<code>https://app.foo.com:443</code>）。<code>app.foo.com</code> 和 <code>www.foo.com</code> 是同一个 site（共享 Renderer）但不同 origin。Site Isolation 隔离的是 site，不是 origin——这是性能 + 安全的折中（如果按 origin 隔离，进程数会多得多）。</p>
+        <p><strong>"Origin Isolation"</strong>（2024+ Chrome 实验）是更激进版本——按 origin 隔离。要网页发 <code>Origin-Agent-Cluster: ?1</code> header 显式请求。给极敏感的应用（如银行）用，代价更多内存。</p>
+
+        <h3>OOPIF：跨域 iframe 跑独立进程</h3>
+        <p><strong>Out-of-Process iframes (OOPIF)</strong>是 Site Isolation 的重要部分——<strong>跨域 iframe 跑独立 Renderer 进程</strong>。</p>
+        <p>之前 iframe 行为：</p>
+        <p><strong>same-origin iframe</strong>：和 main page 共享 DOM tree、共享 JS 环境（<code>iframe.contentWindow</code> 能直接调函数）。一直是这样。</p>
+        <p><strong>cross-origin iframe</strong>：DOM 隔离（不能 access iframe.contentDocument），但<strong>共享 Renderer 进程</strong>（Site Isolation 前）。Spectre 后这种共享有风险。</p>
+        <p>OOPIF 让<strong>cross-origin iframe 跑在独立 Renderer 进程</strong>。Main page 的 DOM 操作 iframe 时通过 IPC（不是直接函数调用）。<code>postMessage</code> 仍然 work（本来就是为跨进程设计的）；<code>document.cookie</code> 跨域本来就不能访问；CORS 同样适用。</p>
+        <p>这种隔离让 main page <strong>不能通过 Spectre 攻击 iframe</strong>—— iframe 在另一个进程，物理隔离。</p>
+        <p><strong>"Embedder" 不能完全控制 OOPIF</strong>——这是 OOPIF 的安全特性。如果你的页面嵌入第三方广告 / Google Maps / YouTube embed，那些第三方在独立进程跑，你的代码不能"偷看"它们的内存（即使利用 Spectre）。这对嵌入恶意 / 不信任的第三方内容很重要（如评论系统、UGC 平台）。</p>
+
+        <h3>SharedArrayBuffer：从默认可用到默认禁用</h3>
+        <p><strong>SharedArrayBuffer (SAB)</strong>是 ES2017 引入的<strong>多线程共享内存</strong>原语——多个 worker 能共享同一块内存，比 postMessage（结构化克隆 + 拷贝）快得多。详见 <a href="../../ecma/07-execution/05-memory-model.html">ECMA P7.5 §24 Memory Model</a>。</p>
+        <p>2018 年 Spectre 后，SAB 成了攻击的"放大镜"——配合高精度 timer（<code>performance.now()</code> 微秒精度）能极大提高 Spectre 攻击精度。浏览器厂商<strong>紧急禁用 SAB</strong>+ 把 timer 精度降到毫秒级。这让一些 WASM 多线程应用突然不工作。</p>
+        <p>2020 年 Chrome 91 (2021-05) 引入<strong>「条件性启用 SAB」</strong>机制——网页要发<strong>正确的 COOP / COEP header</strong>声明自己是 cross-origin isolated，才能重新用 SAB。</p>
+
+        <h3>COOP / COEP：cross-origin isolated 的实现</h3>
+        <p>要让网页 cross-origin isolated（重新启用 SAB），要满足三个条件：</p>
+        <p><strong>(1) <code>Cross-Origin-Opener-Policy: same-origin</code></strong>——COOP。让浏览器隔离这个网页与<strong>opener / popup</strong>（用 window.open 打开此网页的页面）。如果 opener 是不同 origin → opener 不能访问此网页的 window。</p>
+        <p><strong>(2) <code>Cross-Origin-Embedder-Policy: require-corp</code></strong>——COEP。要求所有<strong>嵌入资源</strong>（image / script / style / iframe）都<strong>显式声明允许嵌入</strong>。资源要发 <code>Cross-Origin-Resource-Policy: same-site</code>（CORP）或 <code>cross-origin</code>，否则浏览器拒绝加载。</p>
+        <p><strong>(3) 当前 Renderer 与所有嵌入的 OOPIF 都满足上述</strong>—— 任何嵌入的 iframe / worker 也要发 COOP/COEP，否则整个网页 cross-origin isolated 失败。</p>
+        <p>满足这三条后，<code>self.crossOriginIsolated === true</code>，SAB 可用。</p>
+        <p><strong>具体配置</strong>：</p>
+        <pre class="code"><code class="lang-http">HTTP/1.1 200 OK
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+
+# 嵌入的资源也要发：
+Cross-Origin-Resource-Policy: same-site
+# 或：
+Cross-Origin-Resource-Policy: cross-origin</code></pre>
+        <p><strong>对开发者的影响</strong>：</p>
+        <p>(1) <strong>第三方资源要支持 CORP</strong>——CDN / 字体 / image / script 要发 CORP header。Cloudflare / AWS CloudFront / fastly 等都支持，但需要配置。</p>
+        <p>(2) <strong>嵌入第三方 iframe 困难</strong>——YouTube embed / Google Maps embed / 广告 SDK 等大部分不发 COEP，所以你的页面想 cross-origin isolated 就不能嵌它们。这是 COOP/COEP 最大的实操痛点。</p>
+        <p>(3) <strong>本地 dev 也要配置</strong>——dev server（Vite / Next.js）要发 COOP/COEP header；本地静态文件 server 也要配。</p>
+
+        <h3>COOP / COEP 的实操：评估「值不值得开」</h3>
+        <p>开 cross-origin isolation 让 SAB / 高精度 timer / 其他高级 API 可用，但成本不低。判据：</p>
+        <p><strong>(1) 你需要 SAB / WASM 多线程？</strong> → 是 → 必须开。常见场景：FFmpeg.wasm、SQLite WASM、游戏、音视频处理、3D 引擎。</p>
+        <p><strong>(2) 你需要 measureUserAgentSpecificMemory()？</strong> → 是 → 必须开。监控生产 web app 内存的高级 API，需要 cross-origin isolated。</p>
+        <p><strong>(3) 你嵌入大量第三方 iframe / 资源？</strong> → 是 → 困难。要联系第三方让它们支持 CORP，或换替代方案。</p>
+        <p><strong>(4) 你是简单网站，不用这些 API？</strong> → 不必开。开了反而引入限制（很多嵌入资源失效），收益小。</p>
+        <p>综合：<strong>cross-origin isolated 不是默认状态，是有特定需求才开</strong>。简单 web app 不用追求；复杂场景（WASM / 监控 / 游戏）才值得花成本配置。</p>
+
+        <h3>Spectre 之外的安全机制</h3>
+        <p>除了 Site Isolation + COOP/COEP，浏览器还有其他相关机制：</p>
+        <p><strong>(1) CORS (Cross-Origin Resource Sharing)</strong>—— 控制跨域<strong>请求</strong>是否被允许（用 <code>Access-Control-Allow-Origin</code> header）。CORS 比 COOP/COEP 早 10+ 年。</p>
+        <p><strong>(2) CSP (Content Security Policy)</strong>—— 让网页声明"只允许这些 origin 的资源"，防 XSS。<code>Content-Security-Policy</code> header。</p>
+        <p><strong>(3) SOP (Same-Origin Policy)</strong>—— 经典浏览器安全模型。同 origin 的 JS / DOM / Cookie 互通；跨 origin 默认不通（除非 CORS / postMessage）。</p>
+        <p><strong>(4) MIME sniffing protection</strong>—— X-Content-Type-Options: nosniff，防止浏览器把文件当错误类型执行。</p>
+        <p><strong>(5) Permissions Policy</strong>—— 控制 iframe / 嵌入资源能用哪些 API（geolocation / camera / payment 等）。</p>
+        <p>这些机制层叠在一起构成现代 Web 安全模型。COOP/COEP 是最新一层（2020+），针对硬件漏洞防御。</p>
+
+        <h3>Spectre 教训：trust boundary 的根本性重构</h3>
+        <p>Spectre 给浏览器安全的<strong>根本性教训</strong>：</p>
+        <p><strong>(1) 软件 trust boundary 不足以防硬件漏洞</strong>——Same-origin policy 是软件层概念，假设 CPU 行为正确。Spectre 让这个假设崩塌。</p>
+        <p><strong>(2) 进程边界是更可靠的 trust boundary</strong>——OS 进程隔离由内核保证，比浏览器内的 origin 隔离更硬。Site Isolation 实质是把 trust boundary 从"软件 origin"升到"OS process"。</p>
+        <p><strong>(3) 安全 + 性能必须 trade-off</strong>——Site Isolation 增加 ~10-20% 内存。COOP/COEP 限制嵌入第三方资源。这些都是必要代价。</p>
+        <p><strong>(4) 设计要考虑硬件的可能漏洞</strong>—— 未来类似 Spectre 的硬件漏洞还会出现。Web 平台需要持续重构，不是一次性 patch。</p>
+        <p>这种"<strong>对硬件不可信</strong>"的设计哲学已经在 Linux 内核 / 操作系统层流行多年（kernel 自己 paranoid），Web 平台是 2018 年才被强制接受。</p>
+
+        <h3>Origin-Agent-Cluster：更激进的隔离</h3>
+        <p>Chrome 88+ 引入<strong>Origin-Agent-Cluster</strong>实验——让网页发 <code>Origin-Agent-Cluster: ?1</code> header 请求<strong>按 origin 而非 site 隔离</strong>。</p>
+        <p>用例：极敏感应用（银行 / 政府）想要最严格的隔离——不仅 cross-site 隔离，还要 cross-origin 隔离（同 site 不同 origin 也独立进程）。代价更多内存，但安全收益最高。</p>
+        <p>这个特性<strong>仍是实验性</strong>——2026 年大部分网站不开。但说明 Web 安全持续在向"更细粒度隔离"演进。未来可能 default 就是 Origin Agent Cluster。</p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 A · 给 WASM 多线程项目配置 cross-origin isolated</h3>
+          <p>项目要用 FFmpeg.wasm / SQLite WASM 多线程版（依赖 SAB）—— 必须 cross-origin isolated。具体配置：(1) 后端发 <code>Cross-Origin-Opener-Policy: same-origin</code> + <code>Cross-Origin-Embedder-Policy: require-corp</code>；(2) 所有嵌入资源（image / font / script）发 <code>Cross-Origin-Resource-Policy: same-site</code> 或 <code>cross-origin</code>；(3) JS 检测 <code>self.crossOriginIsolated === true</code>；(4) 加载 WASM。<strong>常见踩坑</strong>：(1) CDN 字体不发 CORP → 字体不显示；(2) Google Maps embed 不支持 COEP → 嵌入失败；(3) dev server 没配 COOP/COEP → 本地 SAB 不可用。规避：检查所有嵌入资源源 + 配置 dev server header + 用 <code>credentialless</code> COEP（更宽松，2024+ 可用）。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 B · 评估「Site Isolation 对我们 SaaS 多 subdomain 的影响」</h3>
+          <p>SaaS 用 a.foo.com（dashboard）+ b.foo.com（admin）+ c.foo.com（api）多 subdomain——Site Isolation 让<strong>每个 subdomain 是同一个 site</strong>（site = eTLD+1 = foo.com），所以共享 Renderer 进程。但<strong>不同 origin</strong>（host 不同）—— cross-origin XHR / cookie 受 SOP 限制。<strong>对你的影响</strong>：(1) 内存上 OK（同 site = 共享 Renderer）；(2) 跨 origin 通信仍要 CORS / postMessage；(3) 如果你想 origin 级别隔离（防同 site 不同 origin 互访），用 Origin-Agent-Cluster。综合：典型 SaaS 多 subdomain 场景下 Site Isolation 不增加显著成本——比设计的"按 origin 隔离"更宽松。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 C · 排查「我嵌入的第三方 iframe 不工作」</h3>
+          <p>项目页面发了 COEP: require-corp，嵌入的 YouTube / Google Maps / Twitter embed 不显示。原因：第三方 iframe 没发对应的 CORP / COEP header。<strong>排查</strong>：(1) DevTools Network panel 看 iframe 请求的 response headers；(2) 看 Console 是否有 CORP / COEP 相关错误；(3) 第三方支持 COEP 文档（YouTube 部分支持，需要特殊 embed URL）。<strong>规避</strong>：(1) 不需要 SAB → 不开 COEP，让嵌入正常；(2) 必须要 SAB → 接受嵌入失败，或换 credentialless COEP（更宽松）；(3) 用 credentialless：<code>Cross-Origin-Embedder-Policy: credentialless</code>—— 浏览器不发 cookie 给嵌入资源，作为换取嵌入许可的代价。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 D</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 D · 给做敏感应用（银行 / 医疗）评估 Origin Agent Cluster</h3>
+          <p>项目是银行 / 医疗 web app，对安全要求极高——评估 Origin Agent Cluster。判据：(1) <strong>多 subdomain 是否需要进程级隔离</strong>—— bank.foo.com / admin.foo.com 分独立进程能防同 site 不同 origin 互相干扰；(2) <strong>合规要求</strong>—— 某些金融 / 医疗合规可能要求最严隔离；(3) <strong>性能成本</strong>—— Origin Agent Cluster 让进程数翻几倍，内存占用增加；(4) <strong>用户群</strong>—— 用户机器普遍 8GB+ 内存能承受；用户多老旧设备就慎重。综合：对极敏感场景值得开；普通业务不必。具体做法：发 <code>Origin-Agent-Cluster: ?1</code> header 请求；JS 检测 <code>document.featurePolicy</code> 验证生效。</p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
         <div class="code-block">
           <span class="code-label">javascript</span>
-<pre class="code"><code class="lang-js">// 正文待写</code></pre>
+<pre class="code"><code class="lang-js">// 检测 cross-origin isolated 状态
+console.log('isolated:', self.crossOriginIsolated);
+// true: 可以用 SAB / 高级 API
+// false: COOP/COEP 没配对
+
+// 检测 SharedArrayBuffer 可用
+if (typeof SharedArrayBuffer !== 'undefined') {
+  const sab = new SharedArrayBuffer(1024);
+  const view = new Int32Array(sab);
+  // 可以传给 Worker 共享
+}
+
+// 检测 measureUserAgentSpecificMemory 可用
+if (self.crossOriginIsolated &amp;&amp; 'measureUserAgentSpecificMemory' in performance) {
+  const memory = await performance.measureUserAgentSpecificMemory();
+  console.log('memory:', memory.bytes);
+}</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// Express / Node 配置 COOP/COEP header
+import express from 'express';
+const app = express();
+
+app.use((req, res, next) =&gt; {
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+  // 或更宽松：'credentialless'
+
+  // 静态资源也要 CORP
+  if (req.path.match(/\.(js|css|png|jpg|woff2)$/)) {
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
+  }
+  next();
+});
+
+app.use(express.static('public'));
+app.listen(3000);</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">html</span>
+<pre class="code"><code class="lang-html">&lt;!-- Vite dev server 配置 COOP/COEP --&gt;
+&lt;!-- vite.config.ts --&gt;
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  server: {
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    },
+  },
+});
+
+&lt;!-- 静态 HTML 用 meta（部分场景）--&gt;
+&lt;!-- COOP 不能用 meta（必须 HTTP header）--&gt;
+&lt;!-- COEP 也不能用 meta（必须 HTTP header）--&gt;
+&lt;!-- 必须服务端配置！--&gt;</code></pre>
         </div>
 
         <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
         <div class="pitfall">
-          <div class="pitfall-title">陷阱标题</div>
-          <p><em>正文待写。</em></p>
+          <div class="pitfall-title">期待 COOP/COEP 用 meta tag 配置</div>
+          <p>新手有时想用 <code>&lt;meta http-equiv="Cross-Origin-Opener-Policy"&gt;</code> 配 COOP—— <strong>不工作</strong>。COOP / COEP <strong>必须服务端 HTTP header</strong>，不能 meta tag。原因：浏览器要在<strong>请求阶段</strong>就知道这些 policy 决定如何加载页面，meta tag 是 HTML parse 后才能知道太晚。规避：在服务端 / dev server 配 header；如果你只能控制 HTML 不能控制 server，开 COOP/COEP 不可能（要 hosting 商支持）。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">第三方资源 CDN 不发 CORP 卡住整个网页</div>
+          <p>启用 COEP: require-corp 后，<strong>所有嵌入资源都要发 CORP</strong>。如果你引用了某个第三方 CDN（如 cdnjs / unpkg）的 JS，那个 JS 默认<strong>不发 CORP</strong>—— 浏览器拒绝加载，整个网页崩。<strong>规避</strong>：(1) 用支持 CORP 的 CDN（Cloudflare / Cloudfront 默认支持）；(2) 把第三方资源 self-host（控制 header）；(3) 用 COEP: credentialless（2024+ 可用，更宽松）。开 COEP 前先 audit 所有嵌入资源源。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">认为 Site Isolation 让 cross-origin 通信也变难</div>
+          <p>Site Isolation 是<strong>底层进程隔离</strong>，不影响上层 Web API 的行为。<code>postMessage</code> / CORS / iframe 通信都和之前一样工作—— 只是底层走 IPC 而非函数调用。<strong>对 Web 开发者透明</strong>。如果你的 cross-origin 通信本来 work，Site Isolation 后仍然 work。规避：不要把 Site Isolation 误读为"打破 cross-origin 通信"。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">把 Spectre mitigation 只当浏览器问题</div>
+          <p>Spectre 不只影响浏览器——<strong>所有跑用户代码的进程都受影响</strong>（Node.js / Cloudflare Workers / Deno / Lambda 等）。每个 runtime 都要 mitigation。Cloudflare Workers 用<strong>per-request V8 isolate</strong>+ 限制 timer 精度作为 mitigation；Node.js 较少接到不可信代码所以默认不开严格 mitigation。<strong>对你的影响</strong>：如果你做 multi-tenant runtime（用户提交代码跑），要参考浏览器的 mitigation 设计。Spectre 不是"已解决"，是持续的设计约束。</p>
         </div>
 
         <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
         <ul>
-          <li><a href="https://web.dev/" target="_blank" rel="noopener">web.dev</a></li>
-          <li>回到主题首页 → <a href="../index.html">浏览器渲染管线深度学习</a></li>
+          <li><a href="https://www.chromium.org/Home/chromium-security/site-isolation/" target="_blank" rel="noopener">Chromium · Site Isolation</a> · 设计文档</li>
+          <li><a href="https://web.dev/articles/coop-coep" target="_blank" rel="noopener">web.dev · COOP/COEP guide</a> · 实操指南</li>
+          <li><a href="https://meltdownattack.com/" target="_blank" rel="noopener">Meltdown / Spectre</a> · 漏洞官方页面</li>
+          <li><a href="https://developer.chrome.com/blog/origin-agent-cluster/" target="_blank" rel="noopener">Origin-Agent-Cluster docs</a></li>
+          <li>对照 SharedArrayBuffer → <a href="../../ecma/07-execution/05-memory-model.html">ECMA P7.5 §24 Memory Model</a></li>
+          <li>下一章 → <a href="../03-crp/01-parse-dom-cssom.html">P3.1 · HTML → DOM → CSSOM 解析</a></li>
         </ul>
 
         <nav class="chapter-nav" aria-label="章节翻页">

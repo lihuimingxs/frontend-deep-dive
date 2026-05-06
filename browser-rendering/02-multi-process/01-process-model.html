@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Browser / Renderer / GPU / Network / Utility 5 类进程职责 · P2.1 · 浏览器渲染管线深度学习</title>
-    <meta name="description" content="讲清 Browser process（UI / 标签管理）/ Renderer（跑网页）/ GPU process（合成 + 硬件加速）/ Network process（所有网络请求）/ Utility processes（临时任务）各自职责 + Mojo IPC + 主线程 vs Compositor thread。Renderer 内部「主线程一切」是 INP / Long Tasks 的来源。" />
+    <title>Chromium 进程模型：Browser / Renderer / GPU / Network / Utility · P2.1 · 浏览器渲染管线深度学习</title>
+    <meta name="description" content="Chrome 2008 立项的核心创新：多进程架构。讲透 Browser / Renderer / GPU / Network / Utility 5 类进程职责、Mojo IPC、主线程与 Compositor thread 分工。Renderer 内部「主线程一切」是 INP / Long Tasks 的来源。" />
     <link rel="stylesheet" href="../../assets/styles.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234285F4'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EB%3C/text%3E%3C/svg%3E" />
   </head>
@@ -45,63 +45,236 @@
           <a href="index.html">P2 · 多进程架构</a><span class="breadcrumb-sep">/</span>
           <span>01 · Chromium 进程模型</span>
         </nav>
-        <h1>Browser / Renderer / GPU / Network / Utility 5 类进程职责</h1>
+        <h1>Chromium 进程模型：Browser / Renderer / GPU / Network / Utility</h1>
         <p class="lead">
-          讲清 Browser process（UI / 标签管理）/ Renderer（跑网页）/ GPU process（合成 + 硬件加速）/ Network process（所有网络请求）/ Utility processes（临时任务）各自职责 + Mojo IPC + 主线程 vs Compositor thread。Renderer 内部「主线程一切」是 INP / Long Tasks 的来源。
+          Chrome 2008 年立项的核心创新：<strong>多进程架构</strong>——把网页 / 浏览器 UI / GPU / 网络各放独立进程。这一章讲透 5 类进程的职责、Mojo IPC 通信机制、主线程 vs Compositor thread 分工。<strong>关键洞察</strong>：Renderer 内部「主线程一切」是 INP / Long Tasks 的来源——JS / Layout / Paint 都在主线程跑，long task 卡所有渲染。这条认识是后面 P4 性能章节的基础。
         </p>
         <div class="chapter-meta">
           <span><strong>阅读时长</strong> ~25 分钟</span>
-          <span><strong>前置</strong> P1.2</span>
+          <span><strong>前置</strong> P1.2 + <a href="../../node/05-multicore-native/01-worker-cluster.html">Node P5.1 多核</a>（多进程概念对照）</span>
           <span><strong>主要来源</strong> chromium.org/developers/design-documents/multi-process-architecture</span>
-        </div>
-
-        <div class="callout warn">
-          <div class="callout-title">📝 章节状态</div>
-          <p>本章为<strong>骨架</strong>。已完成大纲与关键知识点列表（见各段标题下的 bullet），正文撰写中。可参考 <a href="../outline.md">outline.md</a> 了解完整覆盖范围。</p>
         </div>
 
         <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
         <ol>
-          <li><em>正文待写。</em></li>
+          <li><strong>多进程架构是 Chrome 击败 Firefox / IE 的核心创新</strong>——2008 年其他浏览器都是单进程，Chrome 一个 tab 崩不影响其他、恶意网页不能访问系统资源、多核可利用。</li>
+          <li><strong>5 类进程：Browser / Renderer / GPU / Network / Utility</strong>，各自职责清晰。Browser 是 UI + 协调，Renderer 跑网页，GPU 合成屏幕，Network 处理所有请求，Utility 跑临时任务。</li>
+          <li><strong>Renderer 内部「主线程一切」</strong>——JS、Layout、Paint 都在 Renderer 主线程跑；Compositor thread 单独跑 GPU 合成。这种分工决定了为什么 transform/opacity 动画顺滑（走 Compositor）而 width/height 动画卡（走主线程）。</li>
         </ol>
 
         <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
-        <p><em>正文待写。本章覆盖：Browser / Renderer / GPU / Network / Utility · Mojo IPC · 主线程 vs Compositor thread · Worker threads · 多进程的 4 个收益（安全/稳定/性能/内存）</em></p>
+
+        <h3>为什么多进程：Chrome 2008 的设计动机</h3>
+        <p>2008 年其他浏览器（Firefox / Safari / IE）都是<strong>单进程</strong>——一个浏览器 = 一个 OS process，所有 tab + UI + plugin 共享同一进程地址空间。这有三个根本问题：</p>
+        <p><strong>(1) 安全</strong>：恶意网页能通过浏览器漏洞访问系统资源（fs / network / 进程间通信），整个 OS 都暴露。IE 6 时代 ActiveX 让任何网页跑 native 代码，间谍软件泛滥。</p>
+        <p><strong>(2) 稳定</strong>：一个 tab 的 JS bug / 内存崩溃 → 整个浏览器挂。常见情况：用户开 20 个 tab 工作，某一个网页用 Flash 卡死 → 全部 tab 关闭重启 → 工作丢失。</p>
+        <p><strong>(3) 性能</strong>：单进程不能利用多核。2008 年消费级 CPU 已经普遍 2-4 核，但浏览器只跑在一个核上。一个 CPU 密集任务卡所有 tab。</p>
+        <p>Chrome 2008 推出多进程架构解决这三个问题：每个 tab 独立 Renderer 进程，跑在沙箱内（不能访问系统资源），主进程协调 UI。如果一个 Renderer 崩溃 → 显示「Aw, snap!」错误页面但其他 tab 不受影响。多个 Renderer 并行跑利用多核。</p>
+        <p>这套架构 2008 年是革命性的——其他浏览器陆续跟进：Firefox 2017 「Quantum」、Safari macOS 2014、IE 退出后 Edge 直接 Chromium。<strong>多进程已经是现代浏览器的事实标准</strong>。</p>
+
+        <h3>Browser 进程：UI + 协调中枢</h3>
+        <p><strong>Browser process</strong>（也叫 main process）是浏览器的<strong>唯一主进程</strong>——一个浏览器实例只有一个 Browser process。职责：</p>
+        <p><strong>(1) UI 控制</strong>：菜单 / 地址栏 / 标签栏 / 设置面板 / 下载管理 / 书签 / 历史。整个浏览器外壳都是 Browser process 跑的。</p>
+        <p><strong>(2) 进程协调</strong>：决定何时创建 / 销毁 Renderer 进程，把每个 tab 分配给哪个 Renderer，路由 IPC 消息。所有跨进程通信都经过 Browser process 中转（或建立 direct channel 后绕过）。</p>
+        <p><strong>(3) 系统级操作</strong>：访问 OS API（文件对话框 / 系统通知 / 安装 PWA / 注册 protocol handler）。Renderer 进程在沙箱内不能直接访问系统，要请求 Browser process 代为执行。</p>
+        <p><strong>(4) 安全策略</strong>：决定哪些请求允许、哪些 origin 隔离、CSP / CORS / sandbox 等安全策略的执行点。</p>
+        <p>Browser process 是<strong>不能崩溃的关键进程</strong>——如果 Browser 崩了，整个浏览器关闭。所以 Chrome 团队对 Browser 代码质量要求极高，新功能默认放 Renderer 或 Utility 进程，不放 Browser。</p>
+
+        <h3>Renderer 进程：跑网页内容</h3>
+        <p><strong>Renderer process</strong>是<strong>跑网页</strong>的进程——HTML/CSS/JS 在这里执行，Layout / Paint 在这里发生。每个 tab 通常 1 个 Renderer（Site Isolation 后每个 origin 独立）。</p>
+        <p>Renderer 内部结构：</p>
+        <p><strong>主线程（Main thread）</strong>：跑大部分工作——HTML parser、CSS parser、Style 计算、Layout、Paint、JS 执行、DOM 操作、event 处理。这是<strong>「Renderer 主线程一切」</strong>的来源。</p>
+        <p><strong>Compositor thread</strong>：独立线程跑 GPU 合成。接受主线程的 paint records → 合并 layer → 上传 GPU → 显示。<strong>不会被主线程阻塞</strong>——所以 transform/opacity 动画即使主线程卡也能保持 60fps（详见 <a href="../03-crp/03-paint-composite.html">P3.3</a>）。</p>
+        <p><strong>Worker threads</strong>：Web Workers / Service Worker 跑在独立线程，不阻塞主线程。但 DOM 操作仍只能在主线程。</p>
+        <p><strong>Raster threads</strong>：把 paint records 真正栅格化为像素。多个 raster thread 并行处理不同 tile（详见 <a href="../03-crp/03-paint-composite.html">P3.3 tile-based rasterization</a>）。</p>
+        <p>Renderer 跑在<strong>沙箱（sandbox）</strong>内——不能访问 fs / 不能起子进程 / 不能直接调系统 API。要做这些操作必须通过 IPC 请求 Browser process 代为执行。这是 Chrome 安全模型的核心。</p>
+        <p>Renderer 内部跑<strong>1 个 V8 Isolate</strong>—— V8 的隔离单元（详见 <a href="../../v8/05-embedding/01-embedder-api.html">V8 P5.1 嵌入 V8</a>）。一个 Isolate 包含完整的 V8 状态（heap / context / 内置对象）。Worker / iframe 等可能有独立 Isolate。</p>
+
+        <h3>GPU 进程：合成 + 硬件加速</h3>
+        <p><strong>GPU process</strong>是<strong>专门负责 GPU 操作</strong>的进程——只 1 个，所有 Renderer 共享。职责：</p>
+        <p><strong>(1) 合成（Compositing）</strong>：把所有 Renderer 提交的 layer tree 合成成最终屏幕图像。详见 <a href="../03-crp/03-paint-composite.html">P3.3</a>。</p>
+        <p><strong>(2) 硬件加速绘制</strong>：把 paint records 用 GPU 栅格化（GPU raster，2020+ 默认开启）。比 CPU raster 快 5-10x。</p>
+        <p><strong>(3) WebGL / WebGPU</strong>：浏览器的 3D 图形 API 都在 GPU process 实现。</p>
+        <p><strong>(4) 视频解码</strong>：硬件视频解码器在 GPU process。</p>
+        <p>GPU 进程<strong>独立的好处</strong>：(1) GPU driver 崩溃（很常见）不会影响 Browser 或 Renderer——整个浏览器仍然可用，只是动画 / 视频暂时降级到 CPU；(2) 可以共享给所有 Renderer，避免每个 Renderer 单独管理 GPU 资源。</p>
+        <p>Chromium 还在演进 <strong>OOP-D（Out-of-Process Display Compositor）</strong>——把 display compositor（最终把所有 Renderer 的合成结果输出到屏幕的组件）独立到 GPU process 或新进程。这让 Renderer 崩溃时屏幕不闪烁。</p>
+
+        <h3>Network 进程：所有网络请求集中</h3>
+        <p><strong>Network process</strong>处理<strong>所有网络请求</strong>—— HTTP / HTTPS / WebSocket / WebRTC（部分） / DNS。Chrome 2017 之后独立出来（之前 Network 是 Browser process 的一部分）。</p>
+        <p>独立的好处：</p>
+        <p><strong>(1) 安全</strong>：网络代码（TLS / HTTP parser / cookies）历史上 bug 多，独立沙箱让漏洞不能直接访问其他进程数据。</p>
+        <p><strong>(2) 资源管理</strong>：所有请求集中管理 → 连接池复用、HTTP/2 多路复用、QUIC 连接共享、缓存共享。</p>
+        <p><strong>(3) 多 Renderer 共享</strong>：所有 Renderer 的请求都走 Network process，连接 / 缓存 / cookies 共享。</p>
+        <p>Network process 用 Mojo IPC 与其他进程通信——Renderer 调 fetch() 时实际是发 Mojo 消息给 Network，Network 处理 + 响应。这套机制对 fetch / XHR API 透明。</p>
+
+        <h3>Utility 进程：临时任务的隔离沙箱</h3>
+        <p><strong>Utility processes</strong>是<strong>每个临时任务一个进程</strong>——音频解码 / 图像解码 / PDF 渲染 / Spell check / Print preview / Storage / IndexedDB 等。任务完成后进程销毁。</p>
+        <p>这套设计的<strong>动机</strong>：</p>
+        <p><strong>(1) 隔离</strong>：每个解码 / 渲染任务有独立沙箱，恶意文件（畸形 PNG / 恶意 PDF）不能访问主进程数据。</p>
+        <p><strong>(2) 资源</strong>：任务完成立即销毁进程释放内存——比让 Renderer 长期持有解码状态更高效。</p>
+        <p><strong>(3) 解耦</strong>：每个 Utility 类型可以独立优化 / 升级 / 重启，不影响其他。</p>
+        <p>Utility 进程数量随用户行为波动——一个时刻可能有几十个 Utility 进程跑（每个 PDF / 视频 / 图片解码一个），用户关掉相关 tab 后逐渐释放。</p>
+
+        <h3>Mojo IPC：进程间通信框架</h3>
+        <p>这么多进程怎么通信？答案是 <strong>Mojo</strong>—— Chromium 自家 IPC 框架（2014+ 替代老的 Chrome IPC）。</p>
+        <p>Mojo 核心特性：</p>
+        <p><strong>(1) message passing</strong>：进程间发送结构化消息（类似 Protocol Buffers），跨语言 / 跨平台。</p>
+        <p><strong>(2) shared memory</strong>：大数据（image bitmap / video frame）通过共享内存零拷贝传递，不走消息队列。</p>
+        <p><strong>(3) 接口绑定</strong>：每个进程暴露的接口用 .mojom 文件声明，编译期生成 binding 代码。</p>
+        <p><strong>(4) 通用 vs 特定通道</strong>：进程之间可以建立 generic broker（走 Browser 转发）或 direct broker（绕过 Browser 直连）。direct broker 性能高但建立有开销。</p>
+        <p>Mojo 是 Chromium 多进程架构的基石——所有跨进程调用都用 Mojo。Web 开发者通常感知不到 Mojo（fetch / postMessage / requestAnimationFrame 等 API 在浏览器内部转化为 Mojo 调用），但理解 Mojo 能让你看懂 Chromium 源码（如果你想贡献 Chromium）。</p>
+
+        <h3>多进程的代价</h3>
+        <p>多进程架构有成本：</p>
+        <p><strong>(1) 内存翻倍</strong>：每个 Renderer 独立 V8 + 自家堆 + 标准库。Site Isolation 后每个 origin 独立 Renderer，内存可能 100-200MB / origin。开 20 个 tab 用 4GB+ 内存是常态。</p>
+        <p><strong>(2) 启动慢</strong>：创建新进程比创建新线程慢得多（OS 层 fork + setup 沙箱 + 加载 V8 等）。所以 Chrome 用<strong>进程预热</strong>—— 后台维护 1-2 个空 Renderer，新 tab 直接用预热的进程。</p>
+        <p><strong>(3) IPC 开销</strong>：跨进程调用比函数调用慢几个数量级。Mojo 优化得好但仍有开销。这就是为什么 Chrome 在低端机器（&lt; 4GB 内存）上有时不如单进程浏览器顺畅。</p>
+        <p>Chrome 团队的应对：动态调整进程数（系统资源紧张时把多个 site 合并到同一 Renderer）、Renderer 进程复用（关 tab 不立即销毁进程）、内存压缩（把不活跃 tab 的内存压缩或 swap）。</p>
+
+        <h3>主线程的重要性 + INP / Long Tasks 的来源</h3>
+        <p>Renderer 主线程是<strong>所有 Web 性能问题的核心</strong>。它跑：</p>
+        <p><strong>(1) JS 执行</strong>—— 你的应用代码 + framework（React / Vue / etc.）</p>
+        <p><strong>(2) Style 计算</strong>—— 给每个元素算 computed style</p>
+        <p><strong>(3) Layout</strong>—— 算每个元素的位置和尺寸</p>
+        <p><strong>(4) Paint</strong>—— 生成 paint records（不是真绘制，真绘制在 raster thread）</p>
+        <p><strong>(5) DOM 操作</strong>—— 用户代码改 DOM 触发 invalidation</p>
+        <p><strong>(6) Event 处理</strong>—— 鼠标 / 键盘 / 触摸事件分发</p>
+        <p>这些任务<strong>串行</strong>跑——一个任务长（&gt; 50ms）就是 <strong>Long Task</strong>，期间无法处理用户输入 / 渲染下一帧。这是 INP（Interaction to Next Paint）metric 的根本来源（详见 <a href="../04-performance/02-inp-long-tasks.html">P4.2 INP / Long Tasks</a>）。</p>
+        <p>对比 Compositor thread——它<strong>独立运行</strong>，不被主线程阻塞。所以：</p>
+        <p>✅ <strong>transform / opacity 动画</strong>走 Compositor → 即使主线程卡 100ms，动画仍 60fps 顺滑。</p>
+        <p>❌ <strong>width / height / left / top 动画</strong>走主线程 → 主线程卡 → 动画掉帧。</p>
+        <p>这条主线程 vs Compositor thread 分工<strong>是 Web 性能优化的核心模式</strong>—— 把动画放 Compositor 路径，把重 JS 放 Worker 或 scheduler。详见 P4.</p>
+
+        <h3>查看进程情况：Chrome 内置工具</h3>
+        <p>实操工具：</p>
+        <p><strong>(1) <code>chrome://process-internals</code></strong>—— 看当前所有进程的列表 + 类型 + 关联 URL。能看到 site isolation 是否生效。</p>
+        <p><strong>(2) <code>chrome://memory-internals</code></strong>—— 详细内存分布。</p>
+        <p><strong>(3) Task Manager（Shift + Esc）</strong>—— 浏览器内置任务管理器，看每个进程的 CPU / 内存。</p>
+        <p><strong>(4) <code>chrome://gpu</code></strong>—— GPU 进程状态、driver 版本、硬件加速是否启用。</p>
+        <p>这些工具是诊断浏览器性能 / 内存 / 安全问题的入口。每个 Web 开发者应该知道这些路径。</p>
 
         <h2 id="usage"><span class="h-num">03</span> <span>应用场景</span></h2>
         <div class="scenario">
-          <h3 class="scenario-title">场景 A</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 A · 解释「为什么 transform 动画顺滑而 width 动画卡」</h3>
+          <p>团队成员问"我用 width 做尺寸动画卡，改成 transform: scale 就顺滑，为什么"——多进程架构给出明确解释。<strong>Width 动画</strong>触发 Layout（需要重新计算所有元素位置）→ Layout 在主线程跑 → 如果你的页面同时有 JS / DOM 操作，主线程被阻塞 → 动画掉帧。<strong>Transform 动画</strong>不触发 Layout（transform 只改变 visual，不改变 layout box）→ 走 Compositor thread → 即使主线程被卡，Compositor 仍 60fps 跑动画 → 顺滑。这条认识是 Web 动画优化的基础。最佳实践：动画用 transform / opacity（详见 <a href="../04-performance/03-cls-animation.html">P4.3</a>），避免 width / height / margin / padding 动画。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 B</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 B · 排查「Chrome 内存占用过高」</h3>
+          <p>用户报"Chrome 用了 8GB 内存"——理解多进程能给出诊断框架。<strong>步骤</strong>：(1) <strong>开 Task Manager（Shift + Esc）</strong>看每个进程的内存；(2) <strong>看类型分布</strong>—— 大部分是 Renderer 进程？还是 GPU 进程？还是某个 Utility 进程异常？(3) <strong>Renderer 内存高</strong>—— 通常是某个 site 的网页内存泄漏（DOM 引用 / 闭包持有）。用 DevTools Heap Snapshot 排查。(4) <strong>GPU 进程内存高</strong>—— 通常是 GPU resource 泄漏（WebGL / video）。检查 layer 数 + GPU memory。(5) <strong>很多小 Renderer</strong>—— Site Isolation 让每个 origin 独立进程，多 origin 自然多进程。这是设计而非 bug。开很多 tab 内存自然多。这套排查框架是 Chrome 内存问题的入口。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 C</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 C · 决策「我们的 SaaS 要不要用多 origin 架构」</h3>
+          <p>团队设计 SaaS 架构——多 subdomain（app.foo.com / api.foo.com / cdn.foo.com）vs 单 domain。多进程架构对决策的影响：(1) <strong>Site Isolation 让每个 origin 独立 Renderer 进程</strong> → 多 origin = 用户多内存；(2) <strong>跨 origin 的 cookie / SharedArrayBuffer / Worker 受限</strong>——如果你的应用需要这些，单 origin 更顺；(3) <strong>每个 Renderer 独立沙箱</strong>—— 多 origin 在安全上是好事（一个 origin 漏洞不影响其他）。综合：(1) 主应用（用户长时间使用）单 origin 减内存；(2) 第三方嵌入（embed / iframe）多 origin 增隔离；(3) CDN / static asset 用专门 domain（与主应用分离）。这种 origin 设计是 Web 架构的隐性决策点。</p>
         </div>
         <div class="scenario">
-          <h3 class="scenario-title">场景 D</h3>
-          <p><em>正文待写。</em></p>
+          <h3 class="scenario-title">场景 D · 给做 Web 安全的工程师：理解多进程的安全边界</h3>
+          <p>做 Web 安全相关项目——理解多进程是基础。Chrome 沙箱模型：(1) <strong>Renderer 沙箱</strong>—— Renderer 进程不能直接访问 fs / network / 其他进程内存，只能通过 Mojo IPC 请求 Browser；(2) <strong>Browser 是「安全协调中枢」</strong>—— 决定每个 IPC 请求是否允许，CSP / CORS 等策略在这里执行；(3) <strong>Site Isolation</strong>—— 每个 origin 独立 Renderer，恶意 site 不能直接读其他 origin 的内存；(4) <strong>GPU 沙箱</strong>—— GPU 进程也在沙箱内（虽比 Renderer 弱）；(5) <strong>Utility 沙箱</strong>—— 临时任务也在沙箱里。这套设计让浏览器是<strong>当前最复杂的「最小信任系统」</strong>—— 每个组件只能信任自己最少的范围。理解这套模型让你设计安全 Web 应用时知道哪些边界可以依赖。</p>
         </div>
 
         <h2 id="examples"><span class="h-num">04</span> <span>典型代码</span></h2>
         <div class="code-block">
           <span class="code-label">javascript</span>
-<pre class="code"><code class="lang-js">// 正文待写</code></pre>
+<pre class="code"><code class="lang-js">// 验证「主线程一切」：故意阻塞主线程看效果
+function blockMainThread(ms) {
+  const start = performance.now();
+  while (performance.now() - start &lt; ms) {
+    // 同步循环阻塞主线程
+  }
+}
+
+// 启动一个 transform 动画（走 Compositor）
+const box = document.querySelector('.box');
+box.style.transition = 'transform 2s';
+box.style.transform = 'translateX(500px)';
+
+// 1 秒后阻塞主线程 500ms
+setTimeout(() =&gt; {
+  console.log('blocking main thread');
+  blockMainThread(500);
+  console.log('done');
+}, 1000);
+
+// 观察：transform 动画在 main thread 阻塞期间 仍然顺滑
+// 因为 Compositor thread 独立运行
+// 这就是「主线程 vs Compositor thread」分工的实证</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// 用 Web Worker 把重 JS 移出主线程
+// 主线程不被阻塞 → 用户交互响应 / 动画顺滑
+
+// main.js
+const worker = new Worker('./worker.js');
+
+worker.postMessage({ type: 'compute', data: largeArray });
+
+worker.onmessage = (e) =&gt; {
+  console.log('result:', e.data);
+};
+
+// 主线程继续响应用户输入 / 渲染
+document.addEventListener('click', () =&gt; {
+  console.log('main thread responsive!');
+});
+
+// worker.js
+self.onmessage = (e) =&gt; {
+  if (e.data.type === 'compute') {
+    // 这段重 CPU 工作在 Worker 跑，主线程不被阻塞
+    const result = e.data.data.map(x =&gt; expensive(x)).reduce((a, b) =&gt; a + b);
+    self.postMessage(result);
+  }
+};</code></pre>
+        </div>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+<pre class="code"><code class="lang-js">// 检测当前 tab 在哪个 Renderer 进程
+// 通过 performance.measureUserAgentSpecificMemory() (限 cross-origin isolated 页面)
+
+if ('measureUserAgentSpecificMemory' in performance) {
+  const memory = await performance.measureUserAgentSpecificMemory();
+  console.log('current process memory:', memory);
+  // {
+  //   bytes: ~50000000,
+  //   breakdown: [
+  //     { bytes: ..., types: ['JavaScript'] },
+  //     { bytes: ..., types: ['DOM'] },
+  //     ...
+  //   ]
+  // }
+}
+
+// 这个 API 让你知道当前 Renderer 进程的内存详情
+// 监控生产 web app 内存泄漏的关键工具</code></pre>
         </div>
 
         <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
         <div class="pitfall">
-          <div class="pitfall-title">陷阱标题</div>
-          <p><em>正文待写。</em></p>
+          <div class="pitfall-title">假设「主线程 = JS 单线程 = 单核」</div>
+          <p>有人推论"既然 Renderer 主线程是单线程跑 JS，那 Chrome 不能利用多核"——错。Chrome 多进程让<strong>不同 tab 跑在不同核上</strong>；Renderer 内部的 Compositor thread / Worker thread / Raster threads 也利用多核；GPU process 独立利用 GPU。Chrome 整体能很好利用多核，只是<strong>同一个 Renderer 主线程是单线程</strong>。这是设计选择（DOM 操作并发太复杂），不是限制。规避：理解多核利用的机制；不要把"主线程单线程"误读为"浏览器单核"。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">Site Isolation 让多 subdomain 内存翻倍</div>
+          <p>项目用 a.foo.com / b.foo.com / c.foo.com 等多 subdomain——Site Isolation 默认让每个 origin 独立 Renderer 进程。如果你的用户同时打开多个 subdomain，内存可能翻 3-5x。<strong>注意</strong>：subdomain 是不同 origin（即使共享 root domain）。如果你的设计假设 subdomain 共享内存 / 共享 worker，Site Isolation 后不再成立。规避：(1) 评估是否真需要多 subdomain；(2) 用 single domain + path-based routing；(3) 接受多 origin 的内存代价（安全收益更重要）。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">用 SharedArrayBuffer 不知道需要 cross-origin isolated</div>
+          <p>SharedArrayBuffer（SAB）允许多线程共享内存——但 Spectre 后默认禁用，<strong>只在 cross-origin isolated 网页可用</strong>（详见 <a href="02-site-isolation.html">P2.2</a>）。要让你的网页 cross-origin isolated，要发 <code>Cross-Origin-Opener-Policy: same-origin</code> + <code>Cross-Origin-Embedder-Policy: require-corp</code> 两个 header。<strong>常见踩坑</strong>：项目想用 WASM 多线程（依赖 SAB）但页面没设这两个 header → SAB 报 ReferenceError → WASM 失败。规避：先发 COOP/COEP header + 验证 <code>self.crossOriginIsolated === true</code>，再用 SAB。</p>
+        </div>
+        <div class="pitfall">
+          <div class="pitfall-title">在 Renderer 进程沙箱里期待访问系统资源</div>
+          <p>Renderer 进程在沙箱内——不能直接访问 fs / 子进程 / 系统设置。Web API 看起来访问"系统"（fetch / Notification / Geolocation）实际是<strong>通过 IPC 请求 Browser process 代为执行</strong>。这层隐性请求有性能开销 + 受 Browser 安全策略限制（CORS / CSP / permission prompt）。<strong>对你的影响</strong>：(1) 不要假设 Web API 「免费」—— 跨进程 IPC 有 ~ms 开销；(2) 受限是设计而非 bug——某些"native 能做的事"Web 永远做不到（比如启动子进程、读任意文件路径）。</p>
         </div>
 
         <h2 id="further"><span class="h-num">06</span> <span>延伸阅读</span></h2>
         <ul>
-          <li><a href="https://web.dev/" target="_blank" rel="noopener">web.dev</a></li>
-          <li>回到主题首页 → <a href="../index.html">浏览器渲染管线深度学习</a></li>
+          <li><a href="https://www.chromium.org/developers/design-documents/multi-process-architecture/" target="_blank" rel="noopener">Chromium · Multi-Process Architecture</a> · 设计文档</li>
+          <li><a href="https://developer.chrome.com/blog/inside-browser-part1" target="_blank" rel="noopener">Inside look at modern web browser</a> · Chrome team 4 部曲</li>
+          <li><a href="https://www.chromium.org/developers/mojo/" target="_blank" rel="noopener">Chromium · Mojo IPC</a> · IPC 框架文档</li>
+          <li><a href="https://developer.chrome.com/docs/web-platform/cross-origin-isolation-guide/" target="_blank" rel="noopener">Cross-Origin Isolation Guide</a> · COOP/COEP 实操</li>
+          <li>对照 V8 Isolate → <a href="../../v8/05-embedding/01-embedder-api.html">V8 P5.1 嵌入 V8</a></li>
+          <li>对照 Node 多进程 → <a href="../../node/05-multicore-native/01-worker-cluster.html">Node P5.1 Worker / Cluster</a></li>
+          <li>下一章 → <a href="02-site-isolation.html">P2.2 · Site Isolation + OOPIF + COOP/COEP</a></li>
         </ul>
 
         <nav class="chapter-nav" aria-label="章节翻页">
