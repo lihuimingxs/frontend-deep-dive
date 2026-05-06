@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WASI Preview 1 / Preview 2 + Capability-based 安全 · P6.1 · WebAssembly 深度学习</title>
+    <meta name="description" content="WASI = WebAssembly System Interface，让 wasm 在浏览器外（服务端 / Edge / 嵌入式）有「系统接口」。Preview 1（2020）POSIX 风格 imports 广泛实现但有缺陷（POSIX 假设单语言可信进程，wasm 是多语言不可信沙箱）。Preview 2（2024）转向 Component Model + WIT + capability-based 安全。capability-based 让宿主显式授予能力（只能读这目录、连这域名），比 Linux capabilities 细粒度。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23654ff0'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EWA%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>WebAssembly 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.22 290); color: #fff">WASM</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · WASI 与服务端运行时</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-wasi.html" class="active">01 · WASI Preview 1 / Preview 2</a></li>
+          <li><a href="02-server-runtimes.html">02 · 服务端 Runtime + wasm vs Docker</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">WebAssembly</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · WASI 与服务端运行时</a><span class="breadcrumb-sep">/</span>
+          <span>01 · WASI Preview 1 / Preview 2</span>
+        </nav>
+        <h1>WASI Preview 1 / Preview 2 + Capability-based 安全</h1>
+        <p class="lead">
+          WASI = WebAssembly System Interface，让 wasm 在浏览器外（服务端 / Edge / 嵌入式）<strong>有"系统接口"</strong>——文件 / 网络 / 时钟 / 环境变量。<strong>Preview 1</strong>（2020-2022）POSIX 风格 imports（fd_read / fd_write / clock_time_get），广泛实现但有<strong>设计缺陷</strong>：POSIX 假设单语言可信进程，wasm 是多语言不可信沙箱。<strong>Preview 2</strong>（2024-01 正式）整体重构，转向 <strong>Component Model + WIT</strong> + capability-based 安全模型。<strong>Capability-based</strong> 让宿主显式授予能力（"只能读这目录"），比 Docker 的"Linux capabilities + namespace"细粒度。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P3（host interop）+ P4（编译路径）</span>
+          <span><strong>主要来源</strong> wasi.dev · github.com/WebAssembly/WASI · bytecodealliance.org · hacks.mozilla.org WASI 系列</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>WASI 是 wasm 的"操作系统接口"</strong>—— 浏览器 wasm 通过 JS API 访问环境（fetch / DOM）；服务端 wasm 通过 WASI 访问 fs / net / clock / random / env。WASI 让 wasm 摆脱"必须在浏览器"的限制，是 wasm 走出浏览器的关键。</li>
+          <li><strong>Bytecode Alliance 是 WASI 主导组织</strong>—— Mozilla / Fastly / Intel / Red Hat 2019 成立。2026 主推 Preview 2 + Component Model；wasmtime 是参考实现。</li>
+          <li><strong>Preview 1 (2020)</strong>—— 第一版 WASI；POSIX 风格 imports；<strong>广泛实现但有根本缺陷</strong>（POSIX 不适合 wasm）。Rust <code>wasm32-wasi</code> target、Go wasi 编译、Zig 等都基于 Preview 1。</li>
+          <li><strong>Preview 1 设计缺陷</strong>—— (1) 复制 POSIX 但 wasm 没进程概念，fork/exec/signal 没意义；(2) 网络模型不完整（仅 socket fd 抽象，没 DNS/TLS/HTTP）；(3) 不支持 async；(4) 没有"接口定义"标准（不同 runtime 实现可能差异）。</li>
+          <li><strong>Preview 2 (2024-01) 整体重构</strong>—— 转向 <strong>Component Model + WIT</strong>；不再列 POSIX 风格 imports，用 WIT（WebAssembly Interface Types）定义接口。新模型：wasi:io / wasi:filesystem / wasi:clocks / wasi:random / wasi:http / wasi:sockets 等 worlds。</li>
+          <li><strong>Capability-based 安全模型</strong>—— 宿主显式授予能力："这个 wasm 只能读 /workdir，不能读其他目录"；"只能连 example.com:443，不能连其他"。与 Docker 的"Linux capabilities + namespace"（粗粒度）不同——更细。这让 wasm 适合"运行不可信第三方代码"（plugin / edge functions / 智能合约）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>为什么 wasm 需要 WASI</h3>
+        <p>2017-2020 wasm 已在浏览器成熟。但有两个问题让它不能直接走向服务端：</p>
+        <p><strong>问题 1：浏览器外没有"宿主 imports"</strong>—— 浏览器给 wasm 提供 console.log / fetch / DOM API 等。服务端没有浏览器，wasm 调"打印一行"都没有 import。</p>
+        <p><strong>问题 2：每个 runtime 自己定一套 imports → 生态分裂</strong>—— Cloudflare 自家 runtime 一套 API、Fastly 自家一套、wasmtime 一套；同一个 wasm 不能跨 runtime。</p>
+        <p>WASI 解决：<strong>定义一个标准化"系统接口"</strong>。wasm 模块声明 <code>(import "wasi_snapshot_preview1" "fd_write" ...)</code>，所有兼容 runtime 都提供这个 import。<strong>一次编译，跨 runtime 跑</strong>。</p>
+        <p>这是 wasm 的"<strong>POSIX 时刻</strong>"——POSIX 让 C 代码能跨 Unix 跑；WASI 让 wasm 能跨 runtime 跑。</p>
+
+        <h3>Preview 1：POSIX 致敬</h3>
+        <p>2020-04 WASI Preview 1 第一版正式发布。设计哲学：<strong>致敬 POSIX</strong>。</p>
+        <p>Preview 1 imports（部分）：</p>
+        <pre class="code"><code class="lang-text">wasi_snapshot_preview1::args_get          // 命令行参数
+wasi_snapshot_preview1::args_sizes_get
+wasi_snapshot_preview1::environ_get        // 环境变量
+wasi_snapshot_preview1::clock_time_get     // 读时钟
+wasi_snapshot_preview1::fd_read            // 从 fd 读
+wasi_snapshot_preview1::fd_write           // 写到 fd
+wasi_snapshot_preview1::fd_close           // 关 fd
+wasi_snapshot_preview1::fd_seek
+wasi_snapshot_preview1::fd_fdstat_get      // 查 fd 属性
+wasi_snapshot_preview1::path_open          // 打开文件
+wasi_snapshot_preview1::path_create_directory
+wasi_snapshot_preview1::path_remove_directory
+wasi_snapshot_preview1::path_rename
+wasi_snapshot_preview1::random_get         // 读随机字节
+wasi_snapshot_preview1::poll_oneoff        // 多路 IO
+wasi_snapshot_preview1::proc_exit          // 退出
+wasi_snapshot_preview1::sock_accept        // socket 接收
+wasi_snapshot_preview1::sock_recv
+wasi_snapshot_preview1::sock_send</code></pre>
+        <p>看起来就是 POSIX read/write/open/close/socket。</p>
+        <p><strong>Preview 1 立刻被广泛采纳</strong>：</p>
+        <ul>
+          <li>wasmtime / wasmer / WasmEdge / wazero 都实现 Preview 1</li>
+          <li>Rust 的 <code>wasm32-wasi</code> target（编译成 Preview 1）</li>
+          <li>Go 编译 wasm 时（用 wasi 后端，2021+）</li>
+          <li>Zig 内置支持</li>
+          <li>WASI SDK（C/C++ → wasm + WASI）</li>
+        </ul>
+
+        <h3>Preview 1 设计缺陷</h3>
+        <p>但 Preview 1 在 2021-2022 暴露根本问题：</p>
+        <h4>缺陷 1：POSIX 假设与 wasm 不符</h4>
+        <p>POSIX 假设：<strong>单一可信进程</strong>。fork / exec / signal / shared memory（mmap MAP_SHARED）都基于这个假设。</p>
+        <p>wasm 现实：<strong>多语言不可信沙箱</strong>。wasm 没有进程概念（多个 instance 是逻辑概念，不是 OS 进程）；fork 没意义（wasm 没"复制进程"操作）；signal 没接受方（wasm 是单调用栈）。</p>
+        <p>Preview 1 包含 <code>proc_exit</code>（OK）但试图加 fork 时发现没法实现。</p>
+
+        <h4>缺陷 2：网络模型不完整</h4>
+        <p>Preview 1 只有 socket fd 抽象（sock_accept / sock_recv / sock_send）。但服务端 wasm 大量场景需要：</p>
+        <ul>
+          <li>DNS 解析（wasi 没标准化）</li>
+          <li>TLS 握手（wasi 没暴露）</li>
+          <li>HTTP client / server（wasi 完全不涉及）</li>
+        </ul>
+        <p>结果：每个 runtime 自己实现网络扩展（wasmtime 的 wasmtime-wasi-net、Cloudflare 的 fetch API、Fastly 的 hyper-light），不兼容。</p>
+
+        <h4>缺陷 3：不支持 async</h4>
+        <p>Preview 1 imports 全是<strong>同步</strong>（fd_read 阻塞直到读完）。但浏览器的 fetch / IndexedDB 都是异步；服务端的 epoll / io_uring 也是异步。同步语义需要包装异步底层（spinlock / OS 阻塞），效率差。</p>
+        <p>Asyncify 提案试图修复（编译时把同步函数转 state machine），但是 hack 不是干净方案。</p>
+
+        <h4>缺陷 4：没有"接口定义"标准</h4>
+        <p>Preview 1 是<strong>一组 imports 名称</strong>，没有正式 IDL。不同 runtime 实现细节可能略有差异（如 fd 0/1/2 是否预绑定 stdin/stdout/stderr）。文档化不足。</p>
+        <p>这让"WASI 兼容性"难定义——同一 wasm 在 wasmtime 跑得好不一定在 wasmer 跑得好。</p>
+
+        <h3>Preview 2：Component Model + WIT 重启</h3>
+        <p>2022-2023 Bytecode Alliance 决定<strong>整体重启 WASI</strong>。Preview 2（2024-01-25 minor 0.2.0 发布，2026 完善中）：</p>
+        <p><strong>(1) 不再 POSIX 风格</strong>—— 接受"wasm 不是 Unix 进程"事实，重新设计</p>
+        <p><strong>(2) 转向 Component Model + WIT</strong>—— 详见 <a href="../07-component-model/01-component-and-apps.html">P7.1</a>。WIT 是 IDL（类似 protobuf / thrift），定义接口签名 + 类型</p>
+        <p><strong>(3) Capability-based 安全</strong>—— 宿主授权细粒度</p>
+        <p><strong>(4) 标准化 worlds</strong>—— 一组 imports + exports = 一个 world，是 wasm 想要的环境契约</p>
+        <p>Preview 2 的核心 worlds（部分）：</p>
+        <pre class="code"><code class="lang-text">wasi:io/poll              // 异步 IO 多路复用
+wasi:io/streams           // 输入 / 输出流
+wasi:filesystem/types     // 文件系统类型 + 操作
+wasi:filesystem/preopens  // 预开目录
+wasi:clocks/wall-clock    // 墙钟
+wasi:clocks/monotonic-clock
+wasi:random/random        // 随机
+wasi:cli/environment      // 环境变量
+wasi:cli/exit             // 退出
+wasi:cli/stdin / stdout / stderr
+wasi:http/types           // HTTP 类型
+wasi:http/incoming-handler
+wasi:http/outgoing-handler
+wasi:sockets/network      // 网络 sockets
+wasi:sockets/tcp / udp
+wasi:keyvalue/store       // 键值存储（草案）</code></pre>
+        <p>每个 world 定义在 WIT 文件里。例如 <code>wasi:filesystem</code>（部分）：</p>
+        <pre class="code"><code class="lang-text">interface types {
+  enum descriptor-type {
+    unknown,
+    block-device,
+    character-device,
+    directory,
+    fifo,
+    symbolic-link,
+    regular-file,
+    socket,
+  }
+
+  resource descriptor {
+    read-via-stream: func(offset: filesize) -&gt; result&lt;input-stream, error-code&gt;;
+    write-via-stream: func(offset: filesize) -&gt; result&lt;output-stream, error-code&gt;;
+    sync: func() -&gt; result&lt;_, error-code&gt;;
+    set-size: func(size: filesize) -&gt; result&lt;_, error-code&gt;;
+    ...
+  }
+}</code></pre>
+
+        <h3>Capability-based 安全模型</h3>
+        <p>"Capability"（能力）= 一个 token / handle 代表"能做某事"。Capability-based 安全：<strong>能力必须从外部显式授予，wasm 不能凭空创建</strong>。</p>
+        <p>对比传统 Unix 安全模型（ambient authority）：</p>
+        <ul>
+          <li>Unix 进程<strong>从启动起就有</strong> uid / gid → 能 access 该 uid/gid 允许的所有文件</li>
+          <li>Linux capabilities（CAP_NET_BIND / CAP_SYS_ADMIN 等）粒度仍粗</li>
+        </ul>
+        <p>Capability-based：</p>
+        <ul>
+          <li>wasm 启动时<strong>没有任何能力</strong>—— 不能读任何文件，不能连任何网络</li>
+          <li>宿主显式给"<strong>directory descriptor for /workdir</strong>"作 capability —— wasm 现在能 access /workdir 下文件，但不是其他目录</li>
+          <li>给 "<strong>tcp socket factory bound to example.com:443</strong>" —— wasm 能连 example.com:443，但不是其他主机</li>
+        </ul>
+        <p>这种模型对<strong>多租户场景</strong>（Shopify Functions / Cloudflare Workers / 智能合约）极适合：</p>
+        <ul>
+          <li>租户 A 的 wasm 只看到租户 A 的存储 / 网络</li>
+          <li>租户 B 的 wasm 完全隔离</li>
+          <li>恶意 wasm 偷不到其他租户数据，因为根本没有能力</li>
+        </ul>
+
+        <h3>WASI 与浏览器的关系</h3>
+        <p>浏览器 wasm 不直接用 WASI（用 JS API）。但有<strong>趋同迹象</strong>：</p>
+        <ul>
+          <li><strong>WASIX</strong>（wasmer 推动）—— 把 WASI Preview 1 + 浏览器 fetch / DOM 等"统一"</li>
+          <li><strong>wasi:http vs 浏览器 fetch</strong>—— 试图标准化但 Cloudflare/Fastly 已自家实现，进度慢</li>
+          <li><strong>wasi-browser</strong>（实验）—— 让 WASI 兼容 wasm 在浏览器跑</li>
+        </ul>
+        <p>2026 现实：浏览器仍主要用 JS API；服务端 / Edge 用 WASI。两个生态并行。</p>
+
+        <h3>WIT 文件示例</h3>
+        <p>WIT 是 Preview 2 的核心。一个简单 WIT 文件：</p>
+        <pre class="code"><code class="lang-text">// counter.wit
+package my:counter@0.1.0;
+
+world counter {
+  export increment: func() -&gt; u32;
+  export get: func() -&gt; u32;
+  export reset: func();
+}</code></pre>
+        <p>Rust 端用 cargo-component 生成 binding：</p>
+        <pre class="code"><code class="lang-rust">// src/lib.rs
+mod bindings;
+use bindings::Guest;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+static COUNT: AtomicU32 = AtomicU32::new(0);
+
+struct Component;
+
+impl Guest for Component {
+    fn increment() -&gt; u32 {
+        COUNT.fetch_add(1, Ordering::SeqCst) + 1
+    }
+    fn get() -&gt; u32 { COUNT.load(Ordering::SeqCst) }
+    fn reset() { COUNT.store(0, Ordering::SeqCst); }
+}
+
+bindings::export!(Component with_types_in bindings);</code></pre>
+        <p>构建：</p>
+        <pre class="code"><code class="lang-bash">$ cargo component build --release
+# 产 counter.component.wasm（不是普通 wasm，是 Component）</code></pre>
+
+        <h3>Preview 1 vs Preview 2 兼容性</h3>
+        <p><strong>Preview 1 不会马上消失</strong>。Rust <code>wasm32-wasip1</code> target 仍主流；很多生产代码基于 Preview 1。</p>
+        <p>2026 状态：</p>
+        <ul>
+          <li>新项目推荐 Preview 2（component-based）</li>
+          <li>已有项目可继续 Preview 1，逐步迁移</li>
+          <li>wasmtime / wasmer 同时支持两者</li>
+          <li>Cloudflare Workers / Fastly 仍主要 Preview 1（迁移中）</li>
+        </ul>
+
+        <h3>WASI 0.3 / 异步</h3>
+        <p>Preview 2 仍主要同步语义（async 在 component 层模拟）。<strong>WASI 0.3</strong> 提案（进行中）将原生 async：</p>
+        <ul>
+          <li>imports 函数能返回 future</li>
+          <li>component 间能传 stream</li>
+          <li>解决 Preview 2 仍存在的 spin-loop 问题</li>
+        </ul>
+        <p>2026 进度：design 阶段；2026-2027 预期实现。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · 用 Rust 写 WASI 命令行工具</h3>
+        <p>Preview 1 兼容性好，仍是 CLI 工具的首选：</p>
+        <pre class="code"><code class="lang-rust">// src/main.rs
+use std::io::{self, Read, Write};
+
+fn main() -&gt; io::Result&lt;()&gt; {
+    let mut input = String::new();
+    io::stdin().read_to_string(&amp;mut input)?;
+    let upper = input.to_uppercase();
+    io::stdout().write_all(upper.as_bytes())?;
+    Ok(())
+}</code></pre>
+        <p>构建：</p>
+        <pre class="code"><code class="lang-bash">$ cargo build --target wasm32-wasip1 --release
+$ wasmtime target/wasm32-wasip1/release/upper.wasm &lt; input.txt</code></pre>
+
+        <h3>场景 B · Cloudflare Workers (Preview 1 + 自家扩展)</h3>
+        <p>Cloudflare Workers 不严格用 WASI。它们提供自家 fetch / KV / R2 / D1 等 API，wasm 通过 imports 访问：</p>
+        <pre class="code"><code class="lang-rust">use worker::*;
+
+#[event(fetch)]
+async fn main(req: Request, env: Env, _ctx: Context) -&gt; Result&lt;Response&gt; {
+    let kv = env.kv("MY_KV")?;
+    let value = kv.get("counter").text().await?.unwrap_or("0".to_string());
+    let next = value.parse::&lt;u32&gt;().unwrap() + 1;
+    kv.put("counter", next.to_string())?.execute().await?;
+    Response::ok(format!("count: {next}"))
+}</code></pre>
+        <p>这里的 worker crate 包装了 Cloudflare 自家 imports（不是标准 WASI）。<strong>2026 Cloudflare 在跟进 wasi:http 标准化</strong>。</p>
+
+        <h3>场景 C · Fastly Compute@Edge（Preview 1 + Hyper-light）</h3>
+        <p>Fastly 用 wasmtime + 自家 hyper-light（HTTP 处理）：</p>
+        <pre class="code"><code class="lang-rust">use fastly::{Request, Response, Error};
+
+#[fastly::main]
+fn main(req: Request) -&gt; Result&lt;Response, Error&gt; {
+    Ok(Response::from_body("Hello from Fastly Compute@Edge"))
+}</code></pre>
+        <p>编译产 wasm，Fastly 平台部署。冷启动 &lt; 1ms（wasmtime AOT cache）。</p>
+
+        <h3>场景 D · Shopify Functions（Component Model 实战）</h3>
+        <p>Shopify Functions 是<strong>Preview 2 + Component Model</strong>的早期生产用户。商家用 Rust/JS 写 wasm 插件，影响 Shopify 商品定价 / 折扣 / 订单逻辑：</p>
+        <pre class="code"><code class="lang-rust">// 简化的 Shopify Function
+use shopify_function::prelude::*;
+
+#[shopify_function]
+fn function(input: input::ResponseData) -&gt; Result&lt;output::FunctionResult&gt; {
+    let discount = if input.cart.cost.subtotal_amount.amount &gt; 100.0 {
+        Some(output::Discount {
+            value: output::Value::Percentage(output::Percentage { value: 10.0 }),
+            ...
+        })
+    } else { None };
+    Ok(output::FunctionResult { discounts: vec![discount].into_iter().flatten().collect(), ... })
+}</code></pre>
+        <p>Shopify 用 WIT 定义 input/output schema（capability-based：function 只能看到自己被传入的 cart 数据，不能访问其他商家数据）。</p>
+
+        <h3>场景 E · Spin（Fermyon）—— Preview 2 全面用</h3>
+        <p>Spin 是基于 Preview 2 + Component Model 的 wasm 应用框架：</p>
+        <pre class="code"><code class="lang-toml"># spin.toml
+spin_manifest_version = 2
+
+[application]
+name = "hello"
+version = "0.1.0"
+
+[[trigger.http]]
+route = "/..."
+component = "hello"
+
+[component.hello]
+source = "target/wasm32-wasip2/release/hello.wasm"
+allowed_outbound_hosts = ["https://api.example.com"]   # ← capability 授权</code></pre>
+        <p>Rust 代码：</p>
+        <pre class="code"><code class="lang-rust">use spin_sdk::http::{IntoResponse, Request, Response};
+use spin_sdk::http_component;
+
+#[http_component]
+fn handle(_req: Request) -&gt; anyhow::Result&lt;impl IntoResponse&gt; {
+    Ok(Response::builder()
+        .status(200)
+        .header("content-type", "text/plain")
+        .body("Hello from Spin")
+        .build())
+}</code></pre>
+        <p>Spin 通过 spin.toml 显式声明 capability（哪些主机能连），wasm 不能突破。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：完整 WASI 工具</span></h2>
+
+        <h3>例 1：手写 wat 调 WASI Preview 1（Hello World）</h3>
+        <pre class="code"><code class="lang-text">(module
+  ;; 导入 fd_write
+  (import "wasi_snapshot_preview1" "fd_write"
+    (func $fd_write (param i32 i32 i32 i32) (result i32)))
+
+  (memory (export "memory") 1)
+
+  ;; "Hello, WASI!\n" 在 memory 偏移 8 处
+  (data (i32.const 8) "Hello, WASI!\n")
+
+  ;; iovec: ptr=8, len=13 在 memory 偏移 0 处
+  (data (i32.const 0)
+    "\08\00\00\00"   ;; ptr = 8
+    "\0d\00\00\00")  ;; len = 13
+
+  (func $_start (export "_start")
+    (call $fd_write
+      (i32.const 1)   ;; fd 1 = stdout
+      (i32.const 0)   ;; iovec ptr
+      (i32.const 1)   ;; iovec count
+      (i32.const 24)) ;; bytes_written 写到这（不用，drop）
+    drop))</code></pre>
+        <p>编译运行：</p>
+        <pre class="code"><code class="lang-bash">$ wat2wasm hello.wat
+$ wasmtime hello.wasm
+Hello, WASI!</code></pre>
+
+        <h3>例 2：Rust + WASI Preview 1 完整 CLI</h3>
+        <pre class="code"><code class="lang-rust">// src/main.rs
+use std::env;
+use std::fs;
+use std::io::{self, Write};
+
+fn main() -&gt; io::Result&lt;()&gt; {
+    let args: Vec&lt;String&gt; = env::args().collect();
+    if args.len() &lt; 2 {
+        eprintln!("Usage: {} &lt;file&gt;", args[0]);
+        std::process::exit(1);
+    }
+    let path = &amp;args[1];
+    let contents = fs::read_to_string(path)?;
+    let lines = contents.lines().count();
+    let words = contents.split_whitespace().count();
+    let chars = contents.chars().count();
+    println!("{} {} {} {}", lines, words, chars, path);
+    Ok(())
+}</code></pre>
+        <pre class="code"><code class="lang-bash">$ cargo build --release --target wasm32-wasip1
+$ wasmtime --dir=. target/wasm32-wasip1/release/wc.wasm input.txt
+# 必须 --dir=. 显式授权当前目录</code></pre>
+
+        <h3>例 3：Capability-based 限制（wasmtime 命令行）</h3>
+        <pre class="code"><code class="lang-bash"># 不授权任何 dir → wasm 不能读任何文件
+$ wasmtime my.wasm
+Error: failed to find a pre-opened file descriptor
+
+# 显式授权 ./data 目录
+$ wasmtime --dir=./data my.wasm
+
+# 映射宿主路径到 wasm 内路径
+$ wasmtime --dir=./data::/app/data my.wasm
+# wasm 内代码访问 /app/data，宿主对应 ./data
+
+# 授权环境变量（默认不传任何 env）
+$ wasmtime --env=API_KEY=secret my.wasm
+
+# 限制内存（fuel 计费）
+$ wasmtime --invoke main --fuel 1_000_000 my.wasm</code></pre>
+
+        <h3>例 4：Component Model + WIT（Preview 2）</h3>
+        <p><strong>WIT 文件</strong>（add.wit）：</p>
+        <pre class="code"><code class="lang-text">package example:adder@0.1.0;
+
+world adder {
+  export add: func(a: u32, b: u32) -&gt; u32;
+}</code></pre>
+        <p><strong>Rust 实现</strong>（用 cargo-component）：</p>
+        <pre class="code"><code class="lang-rust">// src/lib.rs
+#[allow(warnings)]
+mod bindings;
+use bindings::Guest;
+
+struct Component;
+
+impl Guest for Component {
+    fn add(a: u32, b: u32) -&gt; u32 {
+        a + b
+    }
+}
+
+bindings::export!(Component with_types_in bindings);</code></pre>
+        <p>构建：</p>
+        <pre class="code"><code class="lang-bash">$ cargo install cargo-component
+$ cargo component new adder
+# 编辑 wit/world.wit + src/lib.rs
+$ cargo component build --release
+# 产 adder.wasm（是 Component 不是 plain module）</code></pre>
+        <p>多语言互操作：用 wit-bindgen 生成 Go / JS / Python binding 调用此 component。</p>
+
+        <h3>例 5：用 wasmtime API 嵌入 WASI</h3>
+        <pre class="code"><code class="lang-rust">// 在 Rust 程序里嵌入 wasmtime 跑 wasm
+use wasmtime::{Engine, Module, Store, Linker};
+use wasmtime_wasi::{WasiCtxBuilder, WasiCtx};
+
+fn main() -&gt; anyhow::Result&lt;()&gt; {
+    let engine = Engine::default();
+    let mut linker = Linker::new(&amp;engine);
+    wasmtime_wasi::preview1::add_to_linker_sync(&amp;mut linker, |s| s)?;
+
+    // capability：只授权当前目录 + 标准输入输出
+    let wasi = WasiCtxBuilder::new()
+        .inherit_stdio()
+        .preopened_dir(".", "/").unwrap()
+        .build_p1();
+
+    let mut store = Store::new(&amp;engine, wasi);
+    let module = Module::from_file(&amp;engine, "guest.wasm")?;
+    let instance = linker.instantiate(&amp;mut store, &amp;module)?;
+    let start = instance.get_typed_func::&lt;(), ()&gt;(&amp;mut store, "_start")?;
+    start.call(&amp;mut store, ())?;
+    Ok(())
+}</code></pre>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：用 Preview 1 期望 Preview 2 特性</h3>
+        <p>Preview 1 不支持：</p>
+        <ul>
+          <li>HTTP（要用第三方 wasi-net 或 runtime 自家扩展）</li>
+          <li>Async（同步语义）</li>
+          <li>Component 间通信（要 Preview 2）</li>
+        </ul>
+        <p>需要这些特性 → 用 Preview 2 / Component Model。</p>
+
+        <h3>陷阱 2：忘记 --dir 授权</h3>
+        <p>wasmtime 默认<strong>不授权任何文件系统访问</strong>。直接 <code>wasmtime my.wasm</code> 让 wasm 看不到任何文件。<strong>必须 --dir 授权</strong>：</p>
+        <pre class="code"><code class="lang-bash">$ wasmtime --dir=. my.wasm   # 授权当前目录</code></pre>
+        <p>这是 capability-based 安全的<strong>体现</strong>—— 默认 deny，必须显式 allow。</p>
+
+        <h3>陷阱 3：以为 WASI 模拟完整 POSIX</h3>
+        <p>Preview 1 是 POSIX 子集，<strong>很多 POSIX 调用没有</strong>：</p>
+        <ul>
+          <li>fork / exec —— 没有进程概念</li>
+          <li>signal / sigaction —— 没接受方</li>
+          <li>mmap / munmap —— linear memory 自己管</li>
+          <li>setuid / setgid —— 没用户概念</li>
+          <li>ioctl —— 大部分</li>
+        </ul>
+        <p>用这些 API 的 C 代码编译会 link error 或 runtime trap。</p>
+
+        <h3>陷阱 4：同步 IO 阻塞所有 worker</h3>
+        <p>WASI Preview 1 的 fd_read 是同步的。在多线程 wasm runtime 里，一个线程阻塞 fd_read 不影响其他线程；<strong>但</strong>在浏览器主线程或 Cloudflare Workers 单线程模型，阻塞让整个 worker 卡住。</p>
+        <p>方案：(1) 用 JSPI（浏览器）；(2) 用 Preview 2 async；(3) 永远在 worker thread 内做同步 IO。</p>
+
+        <h3>陷阱 5：Preview 1 vs 2 binary 不兼容</h3>
+        <p>Preview 1 wasm（普通 module）和 Preview 2 component 不是同一种二进制：</p>
+        <ul>
+          <li>Preview 1: <code>(module ...)</code>，跑在 <code>wasmtime</code> 经典模式</li>
+          <li>Preview 2: <code>(component ...)</code>，跑在 <code>wasmtime serve</code> 或 <code>wasmtime run -W component-model</code></li>
+        </ul>
+        <p>不能混用。<strong>cargo-component vs cargo build 产物不同</strong>。</p>
+
+        <h3>陷阱 6：自定义 imports 与 WASI 冲突</h3>
+        <p>如果 wasm 同时用 WASI imports 和自家 imports，要注意命名空间：</p>
+        <pre class="code"><code class="lang-text">(import "wasi_snapshot_preview1" "fd_write" ...)   ;; WASI
+(import "env" "my_func" ...)                       ;; 自家</code></pre>
+        <p>自家 imports 用 <code>env</code> 或自家 namespace，不要用 <code>wasi_*</code>。</p>
+
+        <h3>陷阱 7：Component Model 工具链不成熟</h3>
+        <p>2026-05 cargo-component / wit-bindgen / wasm-tools 仍在快速演进。<strong>API 不稳定</strong>，rebuild 时可能 break。</p>
+        <p>生产用 Preview 2 + Component 要：</p>
+        <ul>
+          <li>锁定工具版本</li>
+          <li>有 fallback 计划（能切回 Preview 1）</li>
+          <li>跟踪 spec 进度（github.com/WebAssembly/component-model）</li>
+        </ul>
+
+        <h3>陷阱 8：WASI HTTP 互操作差</h3>
+        <p>wasi:http（Preview 2）尝试标准化 HTTP，但 Cloudflare / Fastly 已自家实现。<strong>同一个 wasm 不一定跨平台</strong>：</p>
+        <ul>
+          <li>Cloudflare Workers 用自家 fetch API（不严格遵循 wasi:http）</li>
+          <li>Fastly 用 hyper-light（部分 wasi:http 兼容）</li>
+          <li>Spin / wasmtime serve 严格用 wasi:http</li>
+        </ul>
+        <p>跨平台部署需要 abstraction layer（如 Spin SDK）。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>规范 + 提案</h3>
+        <ul>
+          <li><a href="https://wasi.dev/" target="_blank" rel="noopener">wasi.dev</a> · 主页</li>
+          <li><a href="https://github.com/WebAssembly/WASI" target="_blank" rel="noopener">github.com/WebAssembly/WASI</a></li>
+          <li><a href="https://github.com/WebAssembly/component-model" target="_blank" rel="noopener">Component Model + WIT</a></li>
+          <li><a href="https://github.com/bytecodealliance/wasi-cli" target="_blank" rel="noopener">wasi-cli</a></li>
+          <li><a href="https://github.com/WebAssembly/wasi-http" target="_blank" rel="noopener">wasi-http 提案</a></li>
+        </ul>
+
+        <h3>关键文章</h3>
+        <ul>
+          <li>Lin Clark, <a href="https://hacks.mozilla.org/2019/03/standardizing-wasi/" target="_blank" rel="noopener"><em>Standardizing WASI: A system interface to run WebAssembly outside the web</em></a> · 2019 WASI 起源</li>
+          <li>Lin Clark, <a href="https://hacks.mozilla.org/2023/02/webassemblys-road-to-2024/" target="_blank" rel="noopener"><em>WebAssembly's road to 2024 + WIT</em></a> · 2023 Component Model 介绍</li>
+          <li><a href="https://bytecodealliance.org/articles/announcing-wasi-preview-2" target="_blank" rel="noopener"><em>Announcing WASI Preview 2</em></a> · 2024-01 Preview 2 发布</li>
+          <li><a href="https://www.fermyon.com/blog/wasi-preview-2-launched" target="_blank" rel="noopener"><em>WASI 0.2 Launched</em></a> · Fermyon 视角</li>
+        </ul>
+
+        <h3>实战</h3>
+        <ul>
+          <li><a href="https://wasmtime.dev/" target="_blank" rel="noopener">wasmtime</a></li>
+          <li><a href="https://www.fermyon.com/spin" target="_blank" rel="noopener">Spin (Fermyon)</a></li>
+          <li><a href="https://shopify.github.io/shopify-functions/" target="_blank" rel="noopener">Shopify Functions</a></li>
+          <li><a href="https://github.com/bytecodealliance/cargo-component" target="_blank" rel="noopener">cargo-component</a></li>
+        </ul>
+
+        <h3>Capability-based 安全</h3>
+        <ul>
+          <li><a href="http://habitatchronicles.com/2017/05/what-are-capabilities/" target="_blank" rel="noopener">What Are Capabilities?</a> · Marc Stiegler 经典</li>
+          <li><a href="https://en.wikipedia.org/wiki/Capability-based_security" target="_blank" rel="noopener">Wikipedia: Capability-based security</a></li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="02-server-runtimes.html">P6.2 服务端 Runtime + wasm vs Docker</a></li>
+          <li><a href="../07-component-model/01-component-and-apps.html">P7.1 Component Model + 应用</a></li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../v8/05-embedding/01-embedder-api.html">V8 P5.1 V8 Embedder API</a> · Cloudflare 用 V8 isolate 跑 wasm 的对照</li>
+          <li><a href="../../bun/index.html">Bun</a> · Bun 也支持嵌入 wasm（用 JSC）</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

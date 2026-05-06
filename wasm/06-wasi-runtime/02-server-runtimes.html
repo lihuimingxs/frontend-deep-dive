@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>服务端 Runtime 家族 + wasm vs Docker · P6.2 · WebAssembly 深度学习</title>
+    <meta name="description" content="浏览器外跑 wasm 的运行时家族。wasmtime（Bytecode Alliance, Rust + Cranelift, 事实标准）/ wasmer（多后端商业公司）/ wazero（纯 Go 零 C 依赖）/ WasmEdge（CNCF, AI 优化）/ V8 isolate（Cloudflare Workers 用 V8 跑 wasm）。wasm vs Docker：冷启动快两个数量级（< 1ms vs 100ms-1s），内存基线小 50x（< 1MB vs 50MB+），capability-based 比 Linux capabilities 细粒度。典型应用 Cloudflare Workers / Fastly Compute@Edge / Vercel Edge / Shopify Functions / Envoy 插件 / 区块链合约。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23654ff0'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EWA%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>WebAssembly 深度学习</span><span class="site-title-badge" style="background: oklch(0.5 0.22 290); color: #fff">WASM</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · WASI 与服务端运行时</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-wasi.html">01 · WASI Preview 1 / Preview 2</a></li>
+          <li><a href="02-server-runtimes.html" class="active">02 · 服务端 Runtime + wasm vs Docker</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">WebAssembly</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · WASI 与服务端运行时</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 服务端 Runtime + wasm vs Docker</span>
+        </nav>
+        <h1>服务端 Runtime 家族 + wasm vs Docker</h1>
+        <p class="lead">
+          浏览器外跑 wasm 的运行时家族。<strong>wasmtime</strong>（Bytecode Alliance, Rust + Cranelift, 事实标准）/ <strong>wasmer</strong>（多后端 Cranelift/LLVM/Singlepass，商业公司）/ <strong>wazero</strong>（纯 Go 零 C 依赖，Go 项目嵌入首选）/ <strong>WasmEdge</strong>（CNCF, C++ 实现，AI 推理优化）/ <strong>V8 isolate</strong>（Cloudflare Workers / Bun / Node 用 JS 引擎跑 wasm）。<strong>wasm vs Docker</strong>：冷启动快两个数量级（&lt; 1ms vs 100ms-1s），内存基线小 50x（&lt; 1MB vs 50MB+），capability-based 比 Linux capabilities 细粒度。<strong>不是替代而是补足</strong>"边缘 / 插件 / 多租户"场景。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P6.1（WASI）</span>
+          <span><strong>主要来源</strong> wasmtime.dev · wasmer.io · wazero.io · wasmedge.org · 各 Edge 平台技术博客</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>wasmtime 是事实标准</strong>—— Bytecode Alliance 维护，Rust 实现，Cranelift 后端。Fastly Compute@Edge / Spin / 大量服务端项目用它。<strong>spec 实现最完整 + 安全审计严</strong>。</li>
+          <li><strong>wasmer 是商业玩家 + 多后端</strong>—— 同时提供 Cranelift / LLVM / Singlepass 三个后端：Cranelift 平衡 / LLVM 性能极致 / Singlepass 启动最快。商业公司维护，<strong>跨语言 SDK 最丰富</strong>（Python / JS / Go / Java / C / Ruby / 等）。</li>
+          <li><strong>wazero 是 Go 项目嵌入首选</strong>—— Tetrate 开发，<strong>纯 Go 实现 + 零 C 依赖</strong>。让 Go 应用嵌入 wasm 不需 CGO（CGO 是 Go 部署痛点）。Envoy / Hashicorp 工具链 / Tetrate Service Bridge 用它。</li>
+          <li><strong>WasmEdge 是 CNCF + AI 优化</strong>—— C++ 实现，针对 cloud-native + AI 推理优化（内置 LLM 加速 / TensorFlow / OpenVINO 集成）。Kubernetes 生态 + 边缘 AI 场景。</li>
+          <li><strong>V8 isolate 是另一种部署模型</strong>—— Cloudflare Workers / Bun / Node 用 JS 引擎跑 wasm，<strong>与 JS 共享 runtime</strong>；不用 wasmtime。优势：已有 V8 平台加 wasm 几乎零成本；劣势：wasm-specific 优化少。Cloudflare Workers 是这种模型最大用户。</li>
+          <li><strong>wasm 不取代 Docker</strong>—— wasm 适合"短生命周期 / 按请求实例化 / 不可信代码"；Docker 适合"长生命周期 / 整机系统镜像"。两者并存。<strong>2026 趋势</strong>：Edge / Functions / 插件用 wasm；微服务 / 数据库 / 复杂 stateful 应用仍 Docker。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>wasmtime：事实标准</h3>
+        <p>wasmtime（Bytecode Alliance）是 wasm 服务端事实标准。架构：</p>
+        <p><strong>(1) Cranelift 编译器后端</strong>—— Rust 实现的编译器框架（同时是 Rust nightly 备选 LLVM 替代）；wasm → native 一次编译到位</p>
+        <p><strong>(2) WASI 实现</strong>—— Preview 1 + Preview 2 都支持</p>
+        <p><strong>(3) Component Model 支持</strong>—— wasmtime 是 Component Model 参考实现</p>
+        <p><strong>(4) Embedder API</strong>—— 让其他程序嵌入 wasmtime（Rust API 最丰富，Python/Go/C 等也有 binding）</p>
+        <p>关键特性：</p>
+        <ul>
+          <li><strong>AOT 编译 + 缓存</strong>—— wasmtime 把 wasm 提前编译成 native shared object 缓存（<code>.cwasm</code> 文件）；下次启动直接 mmap，毫秒级</li>
+          <li><strong>Module instantiation pooling</strong>—— 每请求 new instance（隔离）但复用编译产物</li>
+          <li><strong>Fuel metering</strong>—— 每条 wasm 指令计费，让 multi-tenant 平台限制单 module 占用</li>
+          <li><strong>Epoch interruption</strong>—— 让 host 中断长跑 wasm（防 DoS）</li>
+        </ul>
+        <p><strong>wasmtime 命令行</strong>：</p>
+        <pre class="code"><code class="lang-bash">$ wasmtime my.wasm
+$ wasmtime --dir=. --invoke add my.wasm 2 3
+$ wasmtime compile my.wasm -o my.cwasm    # AOT 编译
+$ wasmtime --allow-precompiled my.cwasm   # 跑预编译
+$ wasmtime serve --addr 0.0.0.0:8080 component.wasm   # 跑 wasi:http component</code></pre>
+
+        <h3>wasmer：商业 + 多后端</h3>
+        <p>wasmer（商业公司，Rust）的差异：</p>
+        <ul>
+          <li><strong>3 个后端</strong>：</li>
+          <li>- <code>Cranelift</code>（编译速度中、性能中，默认）</li>
+          <li>- <code>LLVM</code>（编译慢、性能极致 ~100% native）</li>
+          <li>- <code>Singlepass</code>（编译极快 ~1µs/byte，性能 60-70% native）</li>
+        </ul>
+        <p>多后端让 wasmer 适应不同场景：</p>
+        <ul>
+          <li>启动敏感（短生命周期 lambda）→ Singlepass</li>
+          <li>稳态性能敏感（长跑服务）→ LLVM</li>
+          <li>平衡 → Cranelift（与 wasmtime 等价）</li>
+        </ul>
+        <p><strong>wasmer 跨语言 SDK</strong>—— wasmer-python / wasmer-js / wasmer-go / wasmer-java / wasmer-c-api / wasmer-ruby / 等都是官方维护，比 wasmtime 多。</p>
+        <p><strong>WAPM (wasmer package manager)</strong>—— wasm 包管理器，类似 npm；2026 仍小众，没成事实标准。</p>
+
+        <h3>wazero：纯 Go 零依赖</h3>
+        <p>wazero（Tetrate, 2021-）的最大差异：<strong>纯 Go 实现，零 C 依赖</strong>。</p>
+        <p>为什么这是杀手锏：</p>
+        <p>(1) Go 项目用 CGO 是部署痛点 —— CGO 让交叉编译困难（要 C 工具链）、动态链接 libc、性能开销</p>
+        <p>(2) wasmtime / wasmer 都是 Rust 实现，C ABI 暴露给 Go → 必须 CGO</p>
+        <p>(3) wazero 全 Go 实现 → Go 项目嵌入 wasm 不需要 CGO，<strong>cross-compile / static link 都正常</strong></p>
+        <p><strong>wazero 用户</strong>：</p>
+        <ul>
+          <li>Envoy proxy 的 wasm filter（用 Go 写代理插件，wazero 跑用户 wasm）</li>
+          <li>Hashicorp Boundary / Vault 等 Go 项目嵌入 wasm 插件</li>
+          <li>Tetrate Service Bridge（服务网格扩展点）</li>
+          <li>Buildless / Mosn 等 Go 服务端项目</li>
+        </ul>
+        <p><strong>性能</strong>：wazero 解释器比 wasmtime 慢 5-10x（纯 Go 无 JIT）；2024+ wazero 加了 optimizing compiler（也是 Go 实现），追平到 ~50% wasmtime。</p>
+
+        <h3>WasmEdge：CNCF + AI</h3>
+        <p>WasmEdge（CNCF Sandbox 2021，毕业 2024）C++ 实现。差异：</p>
+        <ul>
+          <li><strong>针对 cloud-native 优化</strong>—— Kubernetes / containerd / Docker 集成最好（runwasi shim）</li>
+          <li><strong>AI 推理</strong>—— 内置 wasi-nn 实现（TensorFlow / PyTorch / OpenVINO 集成）；让 wasm 调用 ML 推理 API</li>
+          <li><strong>边缘场景</strong>—— ARM / RISC-V 嵌入式平台支持好</li>
+          <li><strong>JS / Python interpreter 集成</strong>—— 在 wasm 里跑 JS / Python（用 QuickJS / Pyodide）</li>
+        </ul>
+        <p>典型 WasmEdge 用户：边缘 AI 推理、Kubernetes wasm workload、IoT 设备。</p>
+
+        <h3>V8 isolate 跑 wasm（Cloudflare Workers / Bun / Node）</h3>
+        <p>另一种部署模型：<strong>不用专门 wasm runtime，用 JS 引擎</strong>。</p>
+        <p>原因：</p>
+        <ul>
+          <li>已有 V8 / JSC 平台（运行 JS）</li>
+          <li>V8 / JSC 都内置 wasm 实现（详见 <a href="../../v8/06-wasm/01-wasm-pipeline.html">V8 P6.1</a>）</li>
+          <li>加 wasm 几乎零成本（不需要新 runtime）</li>
+          <li>JS / wasm 在同 isolate，跨边界开销小</li>
+        </ul>
+        <p>典型用户：</p>
+        <ul>
+          <li><strong>Cloudflare Workers</strong>—— 用 V8 isolate；每请求一个 isolate，wasm 在 isolate 内</li>
+          <li><strong>Bun</strong>—— 用 JSC（详见 <a href="../../bun/index.html">Bun 主题</a>）；wasm import 像 JS module</li>
+          <li><strong>Node</strong>—— 用 V8；<code>WebAssembly.instantiate</code> 与浏览器一致</li>
+          <li><strong>Deno</strong>—— 用 V8；同 Node</li>
+          <li><strong>Vercel Edge Functions</strong>—— V8 isolate（Cloudflare 提供基础设施）</li>
+        </ul>
+        <p><strong>JS 引擎跑 wasm 的限制</strong>：</p>
+        <ul>
+          <li>WASI 支持有限（Cloudflare 自家扩展，不严格 WASI 标准）</li>
+          <li>Component Model 支持滞后（V8 / JSC 都是 wasm core 优先）</li>
+          <li>wasm 优化方向偏 JS 协作，不是单独 wasm 性能</li>
+        </ul>
+
+        <h3>对比表（2026-05）</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Runtime</th>
+              <th>语言</th>
+              <th>JIT</th>
+              <th>WASI</th>
+              <th>Component</th>
+              <th>主要场景</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>wasmtime</td>
+              <td>Rust</td>
+              <td>Cranelift (单后端)</td>
+              <td>Preview 1 + 2</td>
+              <td>✅ 参考实现</td>
+              <td>事实标准 / Spin / Fastly</td>
+            </tr>
+            <tr>
+              <td>wasmer</td>
+              <td>Rust</td>
+              <td>Cranelift / LLVM / Singlepass</td>
+              <td>Preview 1 + 2</td>
+              <td>✅</td>
+              <td>跨语言 SDK / 商业</td>
+            </tr>
+            <tr>
+              <td>wazero</td>
+              <td>Go</td>
+              <td>Optimizing Go compiler</td>
+              <td>Preview 1（Preview 2 部分）</td>
+              <td>部分</td>
+              <td>Go 项目嵌入</td>
+            </tr>
+            <tr>
+              <td>WasmEdge</td>
+              <td>C++</td>
+              <td>LLVM</td>
+              <td>Preview 1 + AI 扩展</td>
+              <td>实验</td>
+              <td>K8s / Edge AI</td>
+            </tr>
+            <tr>
+              <td>V8 (Node/Cloudflare)</td>
+              <td>C++</td>
+              <td>Liftoff + TurboFan</td>
+              <td>有限（Cloudflare 自家扩展）</td>
+              <td>核心可用</td>
+              <td>Workers / Edge / Node</td>
+            </tr>
+            <tr>
+              <td>JSC (Bun)</td>
+              <td>C++</td>
+              <td>BBQ + OMG</td>
+              <td>有限</td>
+              <td>实验</td>
+              <td>Bun runtime / Safari</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>wasm vs Docker：详细对比</h3>
+        <table>
+          <thead>
+            <tr><th>维度</th><th>Docker / Container</th><th>wasm runtime</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>冷启动</td><td>100ms-1s（image pull / namespace 设置）</td><td>&lt; 1ms（AOT 缓存 mmap）</td></tr>
+            <tr><td>内存基线</td><td>50MB+（Linux 内核 + libc + 应用）</td><td>&lt; 1MB（仅 wasm linear memory）</td></tr>
+            <tr><td>CPU 开销</td><td>&lt; 5%（namespace + cgroup 几乎免费）</td><td>5-10%（wasm sandbox + bounds check）</td></tr>
+            <tr><td>安全模型</td><td>Linux namespace + cgroup + capabilities</td><td>capability-based + memory sandbox</td></tr>
+            <tr><td>跨平台</td><td>需 build per arch（amd64 / arm64）</td><td>一次编译跑所有</td></tr>
+            <tr><td>系统能力</td><td>完整 Linux（fork/exec/signal/网络/...）</td><td>WASI 子集</td></tr>
+            <tr><td>语言生态</td><td>任何 Linux 二进制</td><td>~50 种语言（受 wasm 提案限制）</td></tr>
+            <tr><td>调度生态</td><td>K8s / Mesos / Nomad（成熟）</td><td>K8s（runwasi 实验）/ Spin / 新生态</td></tr>
+            <tr><td>典型场景</td><td>微服务 / 数据库 / 复杂 stateful</td><td>Edge / Functions / 插件 / 多租户</td></tr>
+          </tbody>
+        </table>
+        <p><strong>关键洞察</strong>：</p>
+        <p><strong>(1) wasm 比 Docker 快 ~100x 启动 + 50x 内存</strong>—— 这是"按请求实例化"场景的杀手特性。Docker 1000 个 instance 占 50GB 内存，wasm 占 1GB。</p>
+        <p><strong>(2) Docker 安全靠 Linux 内核，wasm 安全靠 sandbox + spec</strong>—— Docker 漏洞通常源于 Linux 内核 bug；wasm 漏洞通常源于 spec 实现 bug。两者攻击面不同。</p>
+        <p><strong>(3) wasm 跨平台是 Docker 没有的</strong>—— 一个 wasm 跑 amd64 / arm64 / RISC-V，Docker 必须 build per arch。</p>
+        <p><strong>(4) Docker 系统能力完整</strong>—— 你能跑 Postgres / Redis / Kafka 在 Docker；wasm 还跑不了这些（系统调用太多没标准化）。</p>
+
+        <h3>wasm + K8s：runwasi shim</h3>
+        <p>2024+ Kubernetes 通过 <strong>runwasi</strong>（containerd shim）支持 wasm workload：</p>
+        <pre class="code"><code class="lang-yaml"># Pod spec
+apiVersion: v1
+kind: Pod
+spec:
+  runtimeClassName: wasmtime    # ← 用 wasmtime 而不是 runc
+  containers:
+  - name: my-wasm-app
+    image: my-registry/my-wasm:v1
+    # image 实际是 OCI 包装的 wasm</code></pre>
+        <p>原理：containerd 看到 RuntimeClass = wasmtime，调 runwasi shim 而不是 runc；shim 用 wasmtime 跑 wasm。让 wasm workload 像普通 container 一样调度。</p>
+        <p>2026 仍属早期，但 Kubernetes / wasm 集成在快速演进。</p>
+
+        <h3>Cloudflare Workers vs Fastly Compute@Edge：两种部署模型</h3>
+        <table>
+          <thead>
+            <tr><th>维度</th><th>Cloudflare Workers</th><th>Fastly Compute@Edge</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Runtime</td><td>V8 isolate</td><td>wasmtime</td></tr>
+            <tr><td>语言</td><td>JS / TS / Rust（wasm）/ Python（wasm）</td><td>Rust / Go (TinyGo) / AssemblyScript</td></tr>
+            <tr><td>冷启动</td><td>&lt; 5ms（V8 isolate 复用）</td><td>&lt; 1ms（wasmtime AOT cache）</td></tr>
+            <tr><td>WASI</td><td>有限（自家扩展）</td><td>Preview 1 严格</td></tr>
+            <tr><td>Component Model</td><td>实验</td><td>✅ 早期支持</td></tr>
+            <tr><td>API</td><td>Cloudflare 自家（KV / R2 / D1 / Durable Objects / etc.）</td><td>Fastly 自家（hyper-light / edge dictionary / etc.）</td></tr>
+            <tr><td>部署</td><td>wrangler</td><td>fastly</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Cloudflare 选 V8 不选 wasmtime 的根因</strong>—— 已有 V8 平台跑 JS，加 wasm 几乎零成本；而 Fastly 没 JS 平台，从头建 wasmtime。<strong>历史路径依赖</strong>。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 A · 选 runtime 决策树</h3>
+        <p><strong>问题 1：嵌入语言是什么？</strong></p>
+        <ul>
+          <li>Rust → wasmtime（同语言，API 顺）</li>
+          <li>Go → wazero（不需要 CGO）</li>
+          <li>C/C++ → wasmtime / wasmer（C-API）</li>
+          <li>Python → wasmer-python（最完整）</li>
+          <li>JavaScript / Node → 直接用 V8 内置 WebAssembly API</li>
+        </ul>
+        <p><strong>问题 2：场景需求？</strong></p>
+        <ul>
+          <li>Edge / Functions（短跑）→ Cloudflare Workers / Fastly Compute / Spin / wasmtime</li>
+          <li>Plugin / 多租户 → wasmer / wasmtime（fuel metering）</li>
+          <li>K8s workload → WasmEdge / wasmtime（runwasi）</li>
+          <li>边缘 AI 推理 → WasmEdge（wasi-nn）</li>
+          <li>区块链智能合约 → wasmer / wasmtime（多用 fork 版本）</li>
+        </ul>
+        <p><strong>问题 3：性能优先级？</strong></p>
+        <ul>
+          <li>启动最快 → wasmer Singlepass</li>
+          <li>稳态最快 → wasmer LLVM</li>
+          <li>平衡 → wasmtime / wasmer Cranelift</li>
+        </ul>
+
+        <h3>场景 B · Spin 部署完整 wasm 应用</h3>
+        <p>Spin（Fermyon）是基于 wasmtime + Component Model 的应用框架：</p>
+        <pre class="code"><code class="lang-toml"># spin.toml
+spin_manifest_version = 2
+
+[application]
+name = "my-app"
+version = "0.1.0"
+
+[[trigger.http]]
+route = "/api/..."
+component = "api"
+
+[component.api]
+source = "target/wasm32-wasip2/release/api.wasm"
+allowed_outbound_hosts = ["https://example.com"]   # capability
+
+[component.api.build]
+command = "cargo component build --release"</code></pre>
+        <pre class="code"><code class="lang-bash">$ spin build
+$ spin up                    # 本地跑
+$ spin deploy                # 部署到 Fermyon Cloud</code></pre>
+
+        <h3>场景 C · Envoy wasm filter（用 wazero 嵌入）</h3>
+        <p>Envoy 代理通过 wasm filter 让用户写自定义代理逻辑：</p>
+        <pre class="code"><code class="lang-rust">// Rust filter
+use proxy_wasm::traits::*;
+use proxy_wasm::types::*;
+
+#[no_mangle]
+pub fn _start() {
+    proxy_wasm::set_log_level(LogLevel::Trace);
+    proxy_wasm::set_http_context(|_, _| -&gt; Box&lt;dyn HttpContext&gt; {
+        Box::new(MyHttpFilter)
+    });
+}
+
+struct MyHttpFilter;
+impl HttpContext for MyHttpFilter {
+    fn on_http_request_headers(&amp;mut self, _: usize, _: bool) -&gt; Action {
+        if let Some(value) = self.get_http_request_header("x-special") {
+            self.send_http_response(200, vec![], Some(b"intercepted"));
+            return Action::Pause;
+        }
+        Action::Continue
+    }
+}</code></pre>
+        <p>编译产 wasm，Envoy 配置加载 → wasm filter 跑在每个请求。Envoy 内部用 wazero（Go 代码）嵌入。</p>
+
+        <h3>场景 D · K8s 跑 wasm workload（runwasi）</h3>
+        <p>用 spin-runtime-class（Fermyon 维护）：</p>
+        <pre class="code"><code class="lang-yaml">apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: wasmtime-spin-v2
+handler: spin
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-spin
+spec:
+  template:
+    spec:
+      runtimeClassName: wasmtime-spin-v2
+      containers:
+      - name: hello
+        image: ghcr.io/fermyon/spin-hello:latest
+        # image 实际是 OCI 包装的 spin app</code></pre>
+        <p>Pod 启动时 containerd 调 spin shim，用 wasmtime 跑 wasm。冷启动 &lt; 100ms（vs Docker 1-3s）。</p>
+
+        <h3>场景 E · 把 wasmtime 嵌入 Rust 程序（plugin 系统）</h3>
+        <pre class="code"><code class="lang-rust">use wasmtime::*;
+use wasmtime_wasi::WasiCtxBuilder;
+
+fn run_plugin(wasm_path: &amp;str, input: &amp;str) -&gt; anyhow::Result&lt;String&gt; {
+    let engine = Engine::default();
+    let mut linker = Linker::new(&amp;engine);
+    wasmtime_wasi::preview1::add_to_linker_sync(&amp;mut linker, |s: &amp;mut WasiCtx| s)?;
+
+    // capability：只允许读 /tmp，不允许其他 dir
+    let wasi = WasiCtxBuilder::new()
+        .preopened_dir("/tmp", "/tmp").unwrap()
+        .build_p1();
+
+    let mut store = Store::new(&amp;engine, wasi);
+    let module = Module::from_file(&amp;engine, wasm_path)?;
+    let instance = linker.instantiate(&amp;mut store, &amp;module)?;
+
+    // 调 plugin 的 process 函数
+    let process = instance.get_typed_func::&lt;(i32, i32), i32&gt;(&amp;mut store, "process")?;
+
+    // 写 input 到 wasm memory，调 process，读返回
+    // ... (省略 marshalling 细节) ...
+    Ok(result)
+}</code></pre>
+        <p>这种 pattern 让任何 Rust 应用支持 wasm plugin（用户提交 wasm，沙箱内跑）。</p>
+
+        <h3>场景 F · Bun 嵌入 wasm</h3>
+        <pre class="code"><code class="lang-typescript">// Bun import wasm 像普通 module
+import { add } from './my.wasm';
+console.log(add(2, 3));  // 5
+
+// 或用 Bun 的 WebAssembly API
+const wasm = Bun.file('./my.wasm');
+const { instance } = await WebAssembly.instantiate(await wasm.arrayBuffer());
+console.log(instance.exports.add(2, 3));</code></pre>
+        <p>Bun 用 JSC 的 wasm 实现（详见 <a href="../../bun/index.html">Bun 主题</a>），与浏览器 Safari 一致行为。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：完整集成</span></h2>
+
+        <h3>例 1：Go 项目用 wazero 嵌入 wasm</h3>
+        <pre class="code"><code class="lang-go">package main
+
+import (
+    "context"
+    "fmt"
+    "os"
+
+    "github.com/tetratelabs/wazero"
+    "github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // Runtime 配置
+    r := wazero.NewRuntime(ctx)
+    defer r.Close(ctx)
+
+    // 注册 WASI imports
+    wasi_snapshot_preview1.MustInstantiate(ctx, r)
+
+    // 加载 wasm
+    wasmBytes, err := os.ReadFile("my.wasm")
+    if err != nil { panic(err) }
+
+    // 配置 capability：stdout / stderr inherit
+    config := wazero.NewModuleConfig().
+        WithStdout(os.Stdout).
+        WithStderr(os.Stderr).
+        WithFSConfig(wazero.NewFSConfig().WithDirMount(".", "/data"))
+
+    // 实例化并跑 _start
+    _, err = r.InstantiateWithConfig(ctx, wasmBytes, config)
+    if err != nil { panic(err) }
+}</code></pre>
+
+        <h3>例 2：wasmtime CLI + AOT 缓存</h3>
+        <pre class="code"><code class="lang-bash"># AOT 编译（一次）
+$ wasmtime compile big-module.wasm -o big-module.cwasm
+
+# 跑预编译版本（启动 ~1ms vs ~50ms 原 wasm）
+$ wasmtime --allow-precompiled big-module.cwasm
+
+# 部署：把 .cwasm 上传，运行时跳过 compile</code></pre>
+
+        <h3>例 3：fuel metering 限制 wasm 资源</h3>
+        <pre class="code"><code class="lang-rust">// 嵌入 wasmtime 时启用 fuel
+let mut config = Config::new();
+config.consume_fuel(true);
+let engine = Engine::new(&amp;config)?;
+
+let mut store = Store::new(&amp;engine, ());
+store.set_fuel(1_000_000)?;   // 给 1M units fuel
+
+let module = Module::from_file(&amp;engine, "untrusted.wasm")?;
+let instance = Linker::new(&amp;engine).instantiate(&amp;mut store, &amp;module)?;
+
+// 跑 wasm；如果消耗 &gt; 1M units，trap fuel exhausted
+match instance.get_typed_func::&lt;(), ()&gt;(&amp;mut store, "main")?.call(&amp;mut store, ()) {
+    Ok(()) =&gt; println!("OK; fuel left: {}", store.get_fuel().unwrap()),
+    Err(e) =&gt; println!("trapped: {}", e),
+}</code></pre>
+        <p>用于 multi-tenant：每用户限制 fuel，防止单 wasm 跑死整机。</p>
+
+        <h3>例 4：epoch interruption 中断长跑 wasm</h3>
+        <pre class="code"><code class="lang-rust">use std::sync::Arc;
+use std::time::Duration;
+
+let mut config = Config::new();
+config.epoch_interruption(true);
+let engine = Arc::new(Engine::new(&amp;config)?);
+
+let mut store = Store::new(&amp;engine, ());
+store.set_epoch_deadline(1);   // 1 epoch 后 trap
+
+// 启动后台线程定时增加 epoch
+let engine_clone = engine.clone();
+std::thread::spawn(move || {
+    loop {
+        std::thread::sleep(Duration::from_millis(100));
+        engine_clone.increment_epoch();
+    }
+});
+
+// wasm 运行 100ms 后会 trap "interrupted"</code></pre>
+        <p>用于 server-side wasm 防 DoS：单请求最多跑 100ms，超时中断。</p>
+
+        <h3>例 5：wasmer 选不同 backend</h3>
+        <pre class="code"><code class="lang-rust">use wasmer::{Store, Module, Instance, imports};
+use wasmer_compiler_cranelift::Cranelift;
+use wasmer_compiler_singlepass::Singlepass;
+use wasmer_compiler_llvm::LLVM;
+
+// 启动最快（短生命周期）
+let mut store = Store::new(Singlepass::new());
+
+// 性能极致（长跑）
+let mut store = Store::new(LLVM::new());
+
+// 平衡（默认）
+let mut store = Store::new(Cranelift::new());
+
+let module = Module::from_file(&amp;store, "my.wasm")?;
+let instance = Instance::new(&amp;mut store, &amp;module, &amp;imports! {})?;</code></pre>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <h3>陷阱 1：以为 wasm 取代 Docker</h3>
+        <p>2026 年 Docker 仍是<strong>主流容器运行时</strong>。wasm 补足"按请求实例化 / 多租户 / 边缘"场景，但跑 Postgres / Redis / Kafka 等复杂应用仍用 Docker。<strong>不要为了 wasm 而 wasm</strong>。</p>
+
+        <h3>陷阱 2：选错 runtime</h3>
+        <p>常见错误：</p>
+        <ul>
+          <li>Go 项目用 wasmer（要 CGO 部署痛）→ 应该用 wazero</li>
+          <li>性能极致用 wasmtime（Cranelift 中等）→ 应该用 wasmer LLVM</li>
+          <li>启动敏感 lambda 用 wasmtime 默认 → 应该用 wasmer Singlepass</li>
+        </ul>
+
+        <h3>陷阱 3：以为冷启动一定 &lt; 1ms</h3>
+        <p>需要前提：(1) AOT 缓存命中；(2) 模块小 / instantiate 复用编译产物；(3) imports 简单。<strong>第一次跑（无 AOT cache）启动可能 100ms+</strong>。生产部署必须 AOT 编译 + 缓存。</p>
+
+        <h3>陷阱 4：Cloudflare Workers 期望严格 WASI</h3>
+        <p>Cloudflare 用 V8 isolate + 自家扩展，<strong>不严格遵循 WASI</strong>。在 wasmtime 跑得好的 wasm 不一定在 Cloudflare 跑得好。</p>
+        <p>方案：用 Cloudflare 推荐的 worker SDK（有 WASI 抽象层）；或用 Spin SDK（多平台）。</p>
+
+        <h3>陷阱 5：忘记 capability 授权</h3>
+        <p>wasmtime / wasmer / WasmEdge 默认<strong>不授权任何文件 / 网络</strong>。直接跑 wasm 看不到任何文件。<strong>必须显式 --dir / --env / etc.</strong>。</p>
+
+        <h3>陷阱 6：fuel metering 误用</h3>
+        <p>fuel 计费每条 wasm 指令 1 unit；不同操作消耗一致。<strong>不能精确限制时间</strong>（指令执行速度受 CPU / cache 影响）。fuel 适合"防止无限循环"，不适合"严格限制 100ms"。</p>
+        <p>严格时间限制用 epoch interruption。</p>
+
+        <h3>陷阱 7：嵌入式 runtime 内存不释放</h3>
+        <p>Rust 嵌入 wasmtime / wasmer 时，每次 instantiate 会分配 wasm linear memory。<strong>store 不 drop 内存不释放</strong>。multi-tenant 场景必须管理 store 生命周期：</p>
+        <pre class="code"><code class="lang-rust">// 每请求 new store + drop
+{
+    let mut store = Store::new(&amp;engine, wasi);
+    let instance = linker.instantiate(&amp;mut store, &amp;module)?;
+    // 处理请求 ...
+}   // store drop, memory 释放</code></pre>
+
+        <h3>陷阱 8：用 Singlepass 跑长跑服务</h3>
+        <p>Singlepass 启动快（~1µs/byte 编译），但稳态性能 60-70% native。<strong>长跑服务（大流量持续运行）不要用 Singlepass</strong>，用 Cranelift / LLVM。Singlepass 适合<strong>启动密集 + 短生命周期</strong>（lambda 类）。</p>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <h3>各 Runtime 官方</h3>
+        <ul>
+          <li><a href="https://wasmtime.dev/" target="_blank" rel="noopener">wasmtime</a></li>
+          <li><a href="https://wasmer.io/" target="_blank" rel="noopener">wasmer</a></li>
+          <li><a href="https://wazero.io/" target="_blank" rel="noopener">wazero</a></li>
+          <li><a href="https://wasmedge.org/" target="_blank" rel="noopener">WasmEdge</a></li>
+          <li><a href="https://www.fermyon.com/spin" target="_blank" rel="noopener">Spin</a></li>
+        </ul>
+
+        <h3>Edge 平台</h3>
+        <ul>
+          <li><a href="https://workers.cloudflare.com/" target="_blank" rel="noopener">Cloudflare Workers</a></li>
+          <li><a href="https://www.fastly.com/products/edge-compute" target="_blank" rel="noopener">Fastly Compute@Edge</a></li>
+          <li><a href="https://vercel.com/docs/functions/edge-functions" target="_blank" rel="noopener">Vercel Edge Functions</a></li>
+          <li><a href="https://shopify.github.io/shopify-functions/" target="_blank" rel="noopener">Shopify Functions</a></li>
+        </ul>
+
+        <h3>K8s + wasm</h3>
+        <ul>
+          <li><a href="https://github.com/containerd/runwasi" target="_blank" rel="noopener">runwasi</a> · containerd shim for wasm</li>
+          <li><a href="https://www.cncf.io/blog/2023/03/13/welcoming-wasmedge-to-the-cncf-incubator/" target="_blank" rel="noopener">WasmEdge CNCF</a></li>
+          <li><a href="https://www.fermyon.com/blog/spin-on-kubernetes" target="_blank" rel="noopener">Spin on K8s</a></li>
+        </ul>
+
+        <h3>对比文章</h3>
+        <ul>
+          <li><a href="https://wasmer.io/posts/wasmtime-vs-wasmer" target="_blank" rel="noopener">wasmer vs wasmtime（wasmer 视角）</a></li>
+          <li><a href="https://blog.cloudflare.com/cloud-computing-without-containers/" target="_blank" rel="noopener">Cloudflare: Cloud computing without containers</a></li>
+          <li><a href="https://www.docker.com/blog/docker-wasm-technical-preview/" target="_blank" rel="noopener">Docker + wasm tech preview</a></li>
+        </ul>
+
+        <h3>本主题后续</h3>
+        <ul>
+          <li><a href="../07-component-model/01-component-and-apps.html">P7.1 Component Model + 典型应用</a></li>
+        </ul>
+
+        <h3>跨主题</h3>
+        <ul>
+          <li><a href="../../v8/05-embedding/01-embedder-api.html">V8 P5.1 V8 Embedder API</a> · Cloudflare Workers 的 V8 isolate 模型</li>
+          <li><a href="../../bun/index.html">Bun</a> · 用 JSC 跑 wasm</li>
+          <li><a href="../../node/index.html">Node.js</a> · WebAssembly API + WASI 支持</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
