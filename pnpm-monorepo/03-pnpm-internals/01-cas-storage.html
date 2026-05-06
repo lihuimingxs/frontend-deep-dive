@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>内容寻址存储 (CAS) + symlink 拓扑 · P3.1 · pnpm & monorepo 深度学习</title>
+    <meta name="description" content="pnpm 内容寻址存储 (CAS) + 3 层 hardlink/symlink 拓扑 + 节省磁盘真实数字 + 跨分区退路 + node-linker 选项。把 pnpm "省磁盘 + 严格"如何同时实现讲透。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23f69220'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EP%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>pnpm & monorepo 深度学习</span><span class="site-title-badge" style="background: oklch(0.7 0.18 60); color: #fff">pnpm</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · pnpm 内部</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-cas-storage.html" class="active">01 · CAS + symlink 拓扑</a></li>
+          <li><a href="02-lockfile-peers-hooks.html">02 · lockfile + 严格 peer + hooks</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">pnpm & monorepo</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · pnpm 内部</a><span class="breadcrumb-sep">/</span>
+          <span>01 · CAS + symlink 拓扑</span>
+        </nav>
+        <h1>内容寻址存储 (CAS) + symlink 拓扑</h1>
+        <p class="lead">
+          pnpm 不是"一个更快的 npm"，是<strong>用 CAS + 链接拓扑彻底重做 node_modules 的物理布局</strong>。本章把这套机制——全局 store + hardlink + 三层 symlink——讲清楚。理解了它你才知道为什么 pnpm 既能省磁盘 70-95%，又能从结构上消除幻影依赖（P2.2 的痛点）。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P2 全部（resolution + layout + 幻影依赖）</span>
+          <span><strong>主要来源</strong> pnpm.io / Zoltan Kochan blog + GitHub discussions / pnpm 源码</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>pnpm 的设计是 2 层</strong> —— (1) <strong>全局 CAS store</strong>（<code>~/.pnpm-store/</code>，按 SHA-512 hash 切片，每个 <code>包@版本</code> 全机一份物理文件）；(2) <strong>项目本地 symlink 拓扑</strong>（用 hardlink 引用 store + symlink 控制可见性）。两层组合实现"<strong>磁盘最省 + 严格性最高</strong>"双赢。</li>
+          <li><strong>3 层链接拓扑</strong>：
+            <ul>
+              <li>Layer 1：<code>~/.pnpm-store/files/&lt;hash&gt;</code> → 物理文件（全机唯一）</li>
+              <li>Layer 2：<code>node_modules/.pnpm/&lt;name&gt;@&lt;ver&gt;/node_modules/&lt;name&gt;/...</code> → <strong>hardlink</strong> 到 store</li>
+              <li>Layer 3：<code>node_modules/&lt;name&gt;</code> → <strong>symlink</strong> 到 .pnpm 中的版本目录（仅声明的依赖出现在顶层）</li>
+            </ul>
+          </li>
+          <li><strong>磁盘节省真实数字</strong> —— 同一台机器装 5 个相同 React 项目：npm 占 1.25 GB（每个 250 MB × 5）；pnpm 占 ~250 MB（store 一份 + 5 个项目仅 hardlink，几乎零额外）。<strong>多项目场景节省 70-95%</strong>。</li>
+          <li><strong>Hardlink vs Reflink vs Copy 三种引用方式</strong> —— hardlink 是默认（同分区零成本）；reflink（APFS / Btrfs / XFS / ZFS）是 copy-on-write 的 hardlink，跨子卷可用；copy 是退路（跨设备 / 不支持 hardlink 的网络盘）。pnpm 自动检测，不用手动配。</li>
+          <li><strong>node-linker 选项</strong> —— 默认 <code>isolated</code>（symlink 拓扑，原 pnpm 模式）；可选 <code>hoisted</code>（npm 风格扁平，兼容老工具）；<code>pnp</code>（实验性，类似 Yarn PnP）。<strong>除非有兼容性需求，保持默认</strong>。</li>
+          <li><strong>side-effects-cache</strong> —— pnpm 8.0+ 默认开启。缓存 <code>postinstall</code> 脚本副作用（如 esbuild 下载二进制、prisma generate）；reinstall 时直接复用，省时间。</li>
+          <li><strong>Windows 一级支持</strong> —— Windows 10+ 默认支持 hardlink 和 directory junction（替代 symlink）。pnpm 在 Windows 上行为与 macOS / Linux 一致；<strong>2017 年早期的 Windows 兼容问题已基本解决</strong>。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>什么是内容寻址存储（CAS）</h3>
+        <p>"内容寻址" 来自 git 等系统。原则：<strong>把文件的 hash 作为它的存储地址</strong>。</p>
+        <p>具体到 pnpm：</p>
+        <ul>
+          <li>装包时把 tarball 解压，<strong>每个文件按内容 SHA-512 hash 单独存放</strong>到 <code>~/.pnpm-store/files/&lt;hash[0:2]&gt;/&lt;hash[2:]&gt;</code></li>
+          <li>同样内容的文件，<strong>无论来自哪个包哪个版本</strong>，都映射到同一个 hash 地址，物理上只存一份</li>
+          <li>store 还存了 metadata：<code>包@版本</code> 对应的文件清单（哪些 hash 组成这个包）</li>
+        </ul>
+
+        <p><strong>实际效果：跨包文件去重</strong>。例如 <code>react@18.3.1</code> 和 <code>react@18.3.0</code> 大部分文件可能内容相同（仅 1-2 个文件改了）；CAS 下相同的文件复用同一份物理存储，仅不同的部分单独存。</p>
+
+        <p><strong>CAS 的另一个名字：content-addressable filesystem</strong>。这套思路在 git / IPFS / Docker layer / Nix store 等系统中都见到。<strong>pnpm 是 JS 包管理领域第一个工业级 CAS 实现</strong>。</p>
+
+        <h3>3 层链接拓扑详解</h3>
+        <p>用一个具体例子展开。my-app 直接依赖 react 和 lodash；react 传递依赖 loose-envify，loose-envify 又依赖 js-tokens。</p>
+
+        <div class="code-block">
+          <span class="code-label">完整 pnpm 拓扑</span>
+          <pre class="code"><code class="lang-text"># Layer 1: 全局 CAS store（每台机器只有一份）
+~/.pnpm-store/
+├── v3/
+│   ├── files/
+│   │   ├── 0a/
+│   │   │   └── b1c2...  ← 物理文件（按 hash 寻址）
+│   │   ├── 1f/
+│   │   └── ...
+│   └── index/
+│       └── files/        ← 包到 hash 的索引
+
+# Layer 2: 项目本地 .pnpm 目录（每个项目自己一份）
+my-app/
+└── node_modules/
+    ├── .pnpm/
+    │   ├── react@18.3.1/
+    │   │   └── node_modules/
+    │   │       ├── react/                     ← hardlink 到 ~/.pnpm-store/files/...
+    │   │       │   ├── package.json
+    │   │       │   ├── index.js
+    │   │       │   └── lib/...
+    │   │       └── loose-envify              ← symlink → ../../loose-envify@1.4.0/...
+    │   ├── lodash@4.17.21/
+    │   │   └── node_modules/
+    │   │       └── lodash/                    ← hardlink 到 ~/.pnpm-store/files/...
+    │   ├── loose-envify@1.4.0/
+    │   │   └── node_modules/
+    │   │       ├── loose-envify/              ← hardlink 到 store
+    │   │       └── js-tokens                  ← symlink → ../../js-tokens@4.0.0/...
+    │   └── js-tokens@4.0.0/
+    │       └── node_modules/
+    │           └── js-tokens/                 ← hardlink 到 store
+    │
+    # Layer 3: 项目顶层（只有声明的依赖）
+    ├── react        ← symlink → .pnpm/react@18.3.1/node_modules/react
+    └── lodash       ← symlink → .pnpm/lodash@4.17.21/node_modules/lodash</code></pre>
+        </div>
+
+        <p><strong>每层的角色</strong>：</p>
+
+        <p><strong>Layer 1（CAS store）</strong>：</p>
+        <ul>
+          <li>全机唯一，所有项目共享</li>
+          <li>同一 <code>包@版本</code> 全机只存一份</li>
+          <li>更进一步：同 hash 的文件全机也只存一份（跨包去重）</li>
+          <li>store 不直接被 Node 读——只通过 hardlink 暴露给项目</li>
+        </ul>
+
+        <p><strong>Layer 2（.pnpm 沙箱）</strong>：</p>
+        <ul>
+          <li>每个 <code>包@版本</code> 在项目内有<strong>独立的 sandbox 目录</strong></li>
+          <li>包文件用 hardlink 指向 store（零拷贝）</li>
+          <li>它的传递依赖在<strong>同一 sandbox 内</strong>用 symlink 引用——这样 Node resolution 找它的依赖时只能看到 .pnpm 中对应版本</li>
+          <li>关键：<strong>每个包的依赖图是封闭的</strong>，不会"漂"到别的包的依赖</li>
+        </ul>
+
+        <p><strong>Layer 3（项目顶层）</strong>：</p>
+        <ul>
+          <li>只有 <code>package.json</code> 直接声明的依赖出现</li>
+          <li>每个顶层条目是 symlink，指向 .pnpm 中对应版本</li>
+          <li>Node resolution 从源码出发，<strong>顶层 node_modules 看不到的包就 require 不到</strong>——幻影依赖结构性消除</li>
+        </ul>
+
+        <h3>从源码 require 的视角追一遍</h3>
+        <p>假设 my-app/src/main.js 写：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// my-app/src/main.js
+const React = require('react');           // ✅ 声明的
+const lodash = require('lodash');          // ✅ 声明的
+const envify = require('loose-envify');    // ❌ 未声明（幻影）</code></pre>
+        </div>
+
+        <p>Node resolution 走法：</p>
+        <ul>
+          <li><code>require('react')</code> 从 my-app/src 出发逐级向上 → my-app/src/node_modules（无）→ my-app/node_modules/react（命中 symlink）→ 跟随 symlink 到 .pnpm/react@18.3.1/node_modules/react ✅</li>
+          <li><code>require('lodash')</code> 同理，命中顶层 symlink ✅</li>
+          <li><code>require('loose-envify')</code> 从 my-app/src 出发逐级向上 → my-app/node_modules（<strong>顶层没有 loose-envify！</strong>）→ /node_modules（无）→ throw <code>MODULE_NOT_FOUND</code> ❌</li>
+        </ul>
+
+        <p>这就是<strong>结构性消除幻影依赖</strong>——Node 算法不变，pnpm 通过摆放让"未声明的依赖"在 resolution 路径上不可见。</p>
+
+        <p>反过来，从 react 内部代码 require：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// node_modules/.pnpm/react@18.3.1/node_modules/react/lib/foo.js
+const envify = require('loose-envify');   // ✅ react 声明了 loose-envify</code></pre>
+        </div>
+
+        <ul>
+          <li>Node 从 .pnpm/react@18.3.1/node_modules/react/lib 出发逐级向上</li>
+          <li>第一站 .pnpm/react@18.3.1/node_modules（命中 loose-envify symlink → .pnpm/loose-envify@1.4.0/node_modules/loose-envify）✅</li>
+          <li>每个包的依赖在自己的 sandbox 内能找到，但<strong>不会跨包污染</strong></li>
+        </ul>
+
+        <h3>磁盘节省真实数字</h3>
+        <p>用一个典型 React + Next.js 项目（300+ 包，~250 MB node_modules）作对比。复现条件：macOS APFS / 同一台机器 / 同一个 package.json。</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>场景</th>
+              <th>npm 占用</th>
+              <th>pnpm 占用（项目内）</th>
+              <th>pnpm 占用（store + 项目）</th>
+              <th>节省</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>第一次装项目</td>
+              <td>250 MB</td>
+              <td>0（全 hardlink）</td>
+              <td>250 MB（store 首装）</td>
+              <td>0</td>
+            </tr>
+            <tr>
+              <td>装第 2 个相同项目</td>
+              <td>+250 MB（共 500）</td>
+              <td>+0（共 0）</td>
+              <td>+0（store 已有）</td>
+              <td>~100%（增量）</td>
+            </tr>
+            <tr>
+              <td>装第 5 个相同项目</td>
+              <td>+250 MB（共 1.25 GB）</td>
+              <td>+0（共 0）</td>
+              <td>+0（store 已有）</td>
+              <td>~100%（增量）</td>
+            </tr>
+            <tr>
+              <td>装第 6 个升级的项目（30% 包升级）</td>
+              <td>+250 MB</td>
+              <td>+0</td>
+              <td>+~75 MB（仅新版本）</td>
+              <td>~70%（增量）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p><strong>结论</strong>：</p>
+        <ul>
+          <li>第一次装某项目时 pnpm 不省（store 仍要存）</li>
+          <li>第二次起省得显著（hardlink 零开销）</li>
+          <li>多项目共享同版本依赖时，节省最大</li>
+          <li>多版本同时存在时，仍按版本独立存（不能跨版本去重）</li>
+        </ul>
+
+        <p>对个人开发者（一台机器多个项目）的实际收益：<strong>磁盘节省 50-200 GB 不夸张</strong>。对 CI（每次 fresh install）收益小（仍需下载到 store）。</p>
+
+        <h3>Hardlink vs Reflink vs Copy 三种引用方式</h3>
+
+        <p><strong>Hardlink（硬链接）</strong>：</p>
+        <ul>
+          <li>同一文件系统内多个目录项指向同一个 inode</li>
+          <li>零额外磁盘开销，零 IO 开销</li>
+          <li>只能在<strong>同一 filesystem / 同一分区</strong>内</li>
+          <li>修改 hardlink 文件等于修改 store 文件——但 pnpm <strong>把 store 文件设为 read-only</strong>，意外修改时会复制（copy-on-write 行为）</li>
+          <li>这是 pnpm 默认且最优的引用方式</li>
+        </ul>
+
+        <p><strong>Reflink（CoW 链接，APFS / Btrfs / XFS / ZFS / ReFS）</strong>：</p>
+        <ul>
+          <li>看起来是独立文件，但底层共享 block，写时才 copy（copy-on-write）</li>
+          <li>跨子卷 / 跨 dataset 可用（hardlink 不行）</li>
+          <li>修改一份不影响另一份（与 hardlink 不同）</li>
+          <li>需要 filesystem 支持。macOS APFS / Linux Btrfs+XFS / Windows ReFS（少见）支持</li>
+          <li>pnpm 自动检测——APFS 上比 hardlink 更安全（因为修改不会 propagate）</li>
+        </ul>
+
+        <p><strong>Copy（复制，退路）</strong>：</p>
+        <ul>
+          <li>真实复制文件内容</li>
+          <li>跨设备 / 网络盘 / 不支持 hardlink 时使用</li>
+          <li>占用 N 倍磁盘</li>
+          <li>速度最慢</li>
+          <li>pnpm 仅在前两种都不行时回落</li>
+        </ul>
+
+        <p><strong>配置选项</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">.npmrc</span>
+          <pre class="code"><code class="lang-text"># 自动选择最优（默认；推荐保持）
+package-import-method=auto
+
+# 强制用 hardlink（同分区时最快）
+package-import-method=hardlink
+
+# 强制 copy（用于 store 在网络盘 / 项目在本地的情况）
+package-import-method=copy
+
+# 强制 clone（reflink）
+package-import-method=clone
+
+# Linux 上 Btrfs 使用 reflink
+package-import-method=clone-or-copy</code></pre>
+        </div>
+
+        <h3>跨分区 / 跨文件系统的退路</h3>
+        <p>典型场景：开发者把 <code>~/.pnpm-store</code> 放在快速 NVMe SSD（系统盘），但项目放在大容量 HDD 或外置硬盘。这种情况下 hardlink 不能跨分区，pnpm 自动 fallback 到 copy（或者 reflink，如果两边都是 Btrfs/ZFS）。</p>
+
+        <p><strong>解决方案：把 store 移到与项目同分区</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 看当前 store 路径
+pnpm store path
+# /Users/me/.pnpm-store
+
+# 如果项目在 /Volumes/external/projects/my-app，把 store 也移过去
+pnpm config set store-dir /Volumes/external/.pnpm-store
+
+# 或者写到 .npmrc
+echo "store-dir=/Volumes/external/.pnpm-store" &gt;&gt; ~/.npmrc</code></pre>
+        </div>
+
+        <p><strong>Docker / CI 场景</strong>：CI 通常用 ephemeral container，每次都 fresh install。<strong>store 不在镜像里就没意义</strong>。常见做法：</p>
+        <ul>
+          <li>用 GitHub Actions / GitLab cache <strong>缓存 ~/.pnpm-store</strong> 跨 build 复用</li>
+          <li>Docker 用 BuildKit 的 <code>--mount=type=cache,id=pnpm-store</code> 跨 build 复用</li>
+          <li>在 Dockerfile 中显式 <code>pnpm fetch --prod</code> 把 store 装好作为镜像层</li>
+        </ul>
+
+        <h3>node-linker 选项</h3>
+        <p>pnpm 8+ 引入 <code>node-linker</code> 配置，让用户在严格性 / 兼容性间选：</p>
+
+        <p><strong><code>node-linker=isolated</code>（默认）</strong>：上面讲的 symlink 拓扑。严格 + 高效，但少数老工具不兼容。</p>
+
+        <p><strong><code>node-linker=hoisted</code></strong>：</p>
+        <ul>
+          <li>装出来类似 npm 的扁平 hoisting 布局</li>
+          <li>顶层 node_modules 包含所有传递依赖（牺牲严格性）</li>
+          <li>但 store + hardlink 仍保留（仍省磁盘）</li>
+          <li>用于：兼容某些假设扁平布局的老工具（如 React Native 早期版本、某些 Native binding 工具）</li>
+        </ul>
+
+        <p><strong><code>node-linker=pnp</code></strong>（实验性）：</p>
+        <ul>
+          <li>类似 Yarn PnP，无 node_modules + .pnp.cjs loader</li>
+          <li>2026 年仍 experimental，生态成熟度低于 Yarn PnP</li>
+          <li>不推荐生产</li>
+        </ul>
+
+        <p><strong>选哪个</strong>：</p>
+        <ul>
+          <li>99% 项目用默认 <code>isolated</code>——这是 pnpm 价值的核心</li>
+          <li>只在工具兼容性确实卡住时才换 <code>hoisted</code>，且要清楚牺牲了严格性</li>
+          <li><code>pnp</code> 留给极客团队 + Yarn PnP 用户做对比试验</li>
+        </ul>
+
+        <h3>side-effects-cache · 重装时的副作用快进</h3>
+        <p>很多包有 <code>postinstall</code> 脚本：</p>
+        <ul>
+          <li>esbuild：下载平台对应的 native binary</li>
+          <li>sharp：编译 libvips bindings</li>
+          <li>prisma：generate type definitions</li>
+          <li>better-sqlite3：编译 native module</li>
+        </ul>
+
+        <p>第一次装包跑这些脚本要几秒到一分钟。重装时 pnpm 默认<strong>缓存这些副作用</strong>到 store——下次 install 直接复用，不再跑脚本。这就是 <code>side-effects-cache</code>。</p>
+
+        <p><strong>开关</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">.npmrc</span>
+          <pre class="code"><code class="lang-text"># pnpm 8.0+ 默认开启
+side-effects-cache=true
+
+# 关闭（在 CI 上某些场景需要）
+side-effects-cache=false</code></pre>
+        </div>
+
+        <p><strong>实际收益</strong>：典型项目的 <code>pnpm install --frozen-lockfile</code>（CI 模式）：</p>
+        <ul>
+          <li>第一次：~30 秒（下载 + postinstall）</li>
+          <li>第二次（store 已有）：~5 秒</li>
+          <li>第二次但关 cache：~15 秒（要重跑 postinstall）</li>
+        </ul>
+
+        <h3>Windows 一级支持</h3>
+        <p>2017 年 pnpm 早期，Windows 用户报告大量"symlink 创建失败"问题——Windows 创建 symlink 默认要管理员权限。pnpm 改用 <strong>directory junction</strong>（Windows 自家的目录链接，不需要管理员权限）替代 symlink，问题大幅缓解。</p>
+
+        <p>2026 年的 Windows 现状：</p>
+        <ul>
+          <li>Windows 10 1703+ 默认开启"开发者模式"后 symlink 不需要管理员</li>
+          <li>pnpm 在 Windows 上行为与 macOS / Linux 一致</li>
+          <li>Hardlink 和 junction 都已稳定支持</li>
+          <li>NTFS 上 hardlink 极快（媲美 Linux ext4）</li>
+        </ul>
+
+        <p><strong>剩余 Windows 问题</strong>：长路径（&gt; 260 字符）。Win10+ 的 <code>LongPathsEnabled</code> 注册表项可启用 32K 路径，pnpm 利用此特性避免大型 monorepo 路径长度问题。</p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 关键洞见：pnpm 的"严格 + 省磁盘"是同一套机制的两面</div>
+          <p>表面上看，"严格性"和"省磁盘"是两个独立优点。但 pnpm 的 CAS + 链接拓扑设计让它们其实是<strong>同一个机制的两面</strong>——把每个 <code>包@版本</code> 物理上唯一存放（省磁盘）+ 用 symlink 控制可见性（严格性）。这是 pnpm 设计的精妙处：<strong>不是用复杂换两个优点，是用一个简洁机制同时拿两个</strong>。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 个人开发者磁盘吃紧</h3>
+          <p><strong>背景</strong>：开发者笔记本 256 GB SSD，30+ 个 Node 项目。<code>du -sh ~/code</code> 显示 60 GB，其中 50 GB 是 node_modules。怎么省？</p>
+          <p><strong>方案</strong>：</p>
+          <ul>
+            <li>所有项目切 pnpm（删 node_modules + package-lock.json，<code>pnpm install</code>）</li>
+            <li>预期：第一个项目 store 装 ~250 MB，后续项目 hardlink 几乎 0</li>
+            <li>30 个项目装完后总占用：1-2 GB（store）+ ~50 MB × 30（仅 node_modules 元数据）= ~3 GB</li>
+            <li>从 50 GB → 3 GB，<strong>节省 47 GB</strong></li>
+          </ul>
+          <p>这是 pnpm 个人开发者收益最大的场景。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · CI 速度优化（store 跨 build 缓存）</h3>
+          <p><strong>背景</strong>：GitHub Actions 上 pnpm install 每次 ~30 秒。能否更快？</p>
+          <p><strong>方案</strong>：</p>
+          <div class="code-block">
+            <span class="code-label">yaml</span>
+            <pre class="code"><code class="lang-yaml"># .github/workflows/ci.yml
+- uses: pnpm/action-setup@v4
+- name: Get pnpm store path
+  id: pnpm-cache
+  run: echo "STORE_PATH=$(pnpm store path)" &gt;&gt; $GITHUB_OUTPUT
+
+- uses: actions/cache@v4
+  with:
+    path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+    key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+    restore-keys: |
+      ${{ runner.os }}-pnpm-store-
+
+- run: pnpm install --frozen-lockfile</code></pre>
+          </div>
+          <p>cache 命中后 install 时间从 30 秒降到 ~5 秒。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · 用 Docker BuildKit 缓存 store</h3>
+          <p><strong>背景</strong>：Docker 镜像构建时每次 <code>pnpm install</code> 都重头来。怎么用缓存？</p>
+          <p><strong>方案</strong>：</p>
+          <div class="code-block">
+            <span class="code-label">dockerfile</span>
+            <pre class="code"><code class="lang-text"># Dockerfile
+# syntax=docker/dockerfile:1.4
+FROM node:22-alpine
+RUN corepack enable
+
+WORKDIR /app
+COPY package.json pnpm-lock.yaml ./
+
+# BuildKit cache mount: store 跨 build 复用
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
+
+COPY . .
+RUN pnpm build
+
+# 构建命令
+# DOCKER_BUILDKIT=1 docker build -t my-app .</code></pre>
+          </div>
+          <p>第二次 build 时 cache mount 复用，install 部分接近瞬时。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">查看 store 信息</span>
+          <pre class="code"><code class="lang-bash"># store 路径
+pnpm store path
+
+# store 状态（哪些包、占用多少）
+pnpm store status
+
+# 清理未被任何项目引用的包（节省磁盘）
+pnpm store prune
+
+# 检查 store 完整性（hash 校验）
+pnpm store status --verify-store-integrity</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">.npmrc 关键配置</span>
+          <pre class="code"><code class="lang-text"># pnpm 推荐的 .npmrc
+auto-install-peers=true               # 自动装 peer 依赖（详见 P3.2）
+strict-peer-dependencies=false        # 严格但不报错（warn）；true 时报错
+package-import-method=auto            # 自动选 hardlink/reflink/copy
+side-effects-cache=true               # 缓存 postinstall（默认 true）
+node-linker=isolated                  # 默认严格拓扑
+
+# CI 推荐
+frozen-lockfile=true                  # 装包时不修改 lockfile</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">查看具体包的 hardlink 关系</span>
+          <pre class="code"><code class="lang-bash"># Linux/macOS
+ls -li node_modules/.pnpm/react@18.3.1/node_modules/react/index.js
+# 1234567 -rw-r--r-- 5 me me 4096 ... index.js
+#                    ^ inode + link count（5 个 hardlink 指向同 inode）
+
+# 找出哪些项目共享了这个文件
+find ~/.pnpm-store -inum 1234567
+
+# Windows（PowerShell）
+Get-Item node_modules\.pnpm\react@18.3.1\node_modules\react\index.js |
+  Select-Object FullName, LinkType, Target</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">验证幻影依赖被消除</span>
+          <pre class="code"><code class="lang-bash"># 用 pnpm 装一个仅声明 react 的项目
+mkdir test-pnpm && cd test-pnpm
+echo '{"dependencies":{"react":"^18"}}' &gt; package.json
+pnpm install
+
+# 顶层只有 react
+ls node_modules/
+# react
+
+# 不能 require 未声明的包
+node -e "require('loose-envify')"
+# Error: Cannot find module 'loose-envify'
+
+# 但在 react 内部 require 是 OK 的
+ls node_modules/.pnpm/react@18.3.1/node_modules/
+# react  loose-envify   ← react 的依赖在它的 sandbox 内</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 把 store 放在不同分区导致 fallback 到 copy</div>
+          <p>用户把项目放在 D 盘 / 外置硬盘，但 store 仍在 C 盘 ~/。pnpm 自动 fallback 到 copy，磁盘占用恢复到 npm 水平。<strong>修复</strong>：把 store 也移到项目同分区（<code>pnpm config set store-dir D:\\.pnpm-store</code>）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 修改 node_modules 内的代码，意外同步到所有项目</div>
+          <p>调试时直接改 node_modules 里某个包的源代码——因为是 hardlink，<strong>修改会反映到 store + 所有共享同包的项目</strong>。pnpm 默认把 store 文件设为 read-only 防止此类意外，但仍偶有用户绕过权限改写。<strong>正确做法</strong>：用 <code>pnpm patch &lt;pkg&gt;</code> 创建独立 patch（详见 P3.2）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 在 Docker 里不挂载 store 缓存</div>
+          <p>Dockerfile 里 <code>RUN pnpm install</code> 不用 BuildKit cache mount，每次 build 都全量装。<strong>损失</strong>：每次 build 慢 10-20 秒；BuildKit cache 让 install 部分几乎瞬时。<strong>修复</strong>：用 <code>--mount=type=cache</code>（如上面 Docker 场景代码）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 用 cp -r 备份项目然后 pnpm install</div>
+          <p>把项目目录 <code>cp -r</code> 到另一处，期待原地用。但 cp 默认不保留 hardlink；新位置的 node_modules 变成"假 hardlink"指向原位置文件——一旦原位置删除，引用断裂。<strong>修复</strong>：用 <code>cp -al</code>（保留 hardlink）或在新位置 <code>pnpm install</code> 重建链接。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 担心 hardlink 跨项目"互相影响"</div>
+          <p>新手怀疑："多个项目 hardlink 同一个 store 文件，A 项目改了 B 也变？" —— <strong>不会</strong>。store 文件是 read-only，hardlink 也是 read-only。任何修改都会触发 <code>EACCES</code>，迫使你<strong>用 patch 而非直接改</strong>。这是 pnpm 设计的安全保护。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://pnpm.io/symlinked-node-modules-structure" target="_blank" rel="noopener">pnpm Docs · Symlinked node_modules Structure</a></li>
+          <li><a href="https://pnpm.io/motivation" target="_blank" rel="noopener">pnpm Motivation（设计哲学）</a></li>
+          <li><a href="https://pnpm.io/npmrc" target="_blank" rel="noopener">pnpm .npmrc 配置全表</a></li>
+          <li><a href="https://en.wikipedia.org/wiki/Content-addressable_storage" target="_blank" rel="noopener">Wikipedia · Content-addressable storage</a></li>
+          <li><a href="https://en.wikipedia.org/wiki/Hard_link" target="_blank" rel="noopener">Wikipedia · Hard link</a></li>
+          <li><a href="https://docs.docker.com/build/cache/" target="_blank" rel="noopener">Docker BuildKit cache mounts</a></li>
+          <li><a href="https://github.com/pnpm/action-setup" target="_blank" rel="noopener">pnpm GitHub Action（CI cache 集成）</a></li>
+          <li><a href="../02-node-modules/02-phantom-deps.html">P2.2 · 幻影依赖详解（本站，前一章）</a></li>
+          <li><a href="02-lockfile-peers-hooks.html">P3.2 · pnpm-lock + 严格 peer + hooks（下一章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../02-node-modules/02-phantom-deps.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P2.2 · 幻影依赖与双 package hazard</span>
+          </a>
+          <a class="next" href="02-lockfile-peers-hooks.html">
+            <span class="label">下一章 →</span>
+            <span class="title">02 · pnpm-lock + 严格 peer + hooks</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

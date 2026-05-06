@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>pnpm-lock + 严格 peer + hooks · P3.2 · pnpm & monorepo 深度学习</title>
+    <meta name="description" content="pnpm-lock.yaml 三段结构（importers/packages/snapshots）+ 严格 peer dependency 解析 + .pnpmfile.cjs hooks（readPackage / afterAllResolved）+ patches 子系统 + resolution-mode time-based。把 pnpm 的依赖解析行为讲透。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23f69220'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EP%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>pnpm & monorepo 深度学习</span><span class="site-title-badge" style="background: oklch(0.7 0.18 60); color: #fff">pnpm</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · pnpm 内部</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-cas-storage.html">01 · CAS + symlink 拓扑</a></li>
+          <li><a href="02-lockfile-peers-hooks.html" class="active">02 · lockfile + 严格 peer + hooks</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">pnpm & monorepo</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · pnpm 内部</a><span class="breadcrumb-sep">/</span>
+          <span>02 · lockfile + 严格 peer + hooks</span>
+        </nav>
+        <h1>pnpm-lock.yaml + 严格 peer + hooks</h1>
+        <p class="lead">
+          上章讲了 pnpm 的"<strong>物理布局</strong>"（CAS + symlink）。本章讲它的"<strong>解析行为</strong>"——pnpm-lock.yaml 怎么记录依赖图、严格 peer 模式如何工作、<code>.pnpmfile.cjs</code> hooks 如何让你 patch 上游、<code>pnpm patch</code> 如何持久化代码修改。理解这些后你就有能力<strong>系统性管理 monorepo 依赖</strong>，不只是"<code>pnpm install</code> 然后祈祷"。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P3.1（CAS + symlink 拓扑）</span>
+          <span><strong>主要来源</strong> pnpm.io 官方文档 + pnpm GitHub discussions + Zoltan Kochan blog</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>pnpm-lock.yaml 三段结构</strong> —— (1) <strong>importers</strong>（每个 workspace package 的直接依赖 + 解析版本，monorepo 的入口）；(2) <strong>packages</strong>（所有 transitive 包的 metadata，包括 resolution / engines / peerDependencies）；(3) <strong>snapshots</strong>（每个 <code>包@版本</code> 在<strong>具体上下文中</strong>实际安装的依赖图——peer 解析后才确定）。</li>
+          <li><strong>YAML 不是任意选择</strong> —— pnpm-lock 是<strong>diff 友好的</strong>：行级别变化清晰，merge conflict 容易解决。对比 package-lock.json 的嵌套 JSON（一处版本变化导致大段 diff），yaml 易读且自动化处理友好。</li>
+          <li><strong>严格 peer dependency 模式</strong> —— pnpm 默认对 peer dep 不自动满足，缺失会 warn。这与 npm/Yarn classic 默默装入的行为不同——<strong>pnpm 把"peer 是不是匹配"的责任放回用户</strong>，避免静默不一致。</li>
+          <li><strong>auto-install-peers</strong> —— pnpm 7+ 默认开启。如果某个 peer 缺失但有合理范围，pnpm 自动装。这是严格性 + 易用性的折衷——发包工程师有意识，普通用户不被 warn 淹没。</li>
+          <li><strong>resolution-mode</strong> —— pnpm 8+ 引入：<code>highest</code>（传统，取最新满足范围版本）/ <code>time-based</code>（取 lockfile 创建后才发布的版本以避免踩到刚发布烂包）/ <code>lowest-direct</code>（取最低满足范围的直接依赖，反向兼容老用户）。<strong>time-based 是新项目推荐</strong>。</li>
+          <li><strong><code>.pnpmfile.cjs</code> 是 monorepo 的"系统 patch 中心"</strong> —— 通过 <code>readPackage(pkg)</code> hook 改写任何包的 package.json（fix 错误的 peer range、强制版本统一、添加 missing dep）。比 patch-package 更轻量——不改源码，只改 metadata。</li>
+          <li><strong><code>pnpm patch &lt;pkg&gt;</code> 是代码级 patch</strong> —— 把包源码 checkout 到 <code>node_modules/.pnpm/.tmp/</code>，编辑后 <code>pnpm patch-commit &lt;path&gt;</code> 生成 .patch 文件并写入 lockfile。重装时自动应用。<strong>替代社区的 patch-package + 集成进 lockfile</strong>。</li>
+          <li><strong>side-effects-cache</strong>（P3.1 提过）—— 与 lockfile 配合：postinstall 副作用按 lockfile 中的 <code>包@版本</code> 缓存，重装时跳过。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>pnpm-lock.yaml 三段结构详解</h3>
+
+        <p>用一个 monorepo 例子（apps/web 和 packages/ui，apps/web 依赖 react + @app/ui，@app/ui 依赖 react）展开。</p>
+
+        <div class="code-block">
+          <span class="code-label">pnpm-lock.yaml 完整骨架</span>
+          <pre class="code"><code class="lang-yaml">lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+# Section 1: importers - 每个 workspace package 的直接依赖
+importers:
+  .:
+    devDependencies:
+      typescript:
+        specifier: ^5.6.0
+        version: 5.6.3
+
+  apps/web:
+    dependencies:
+      '@app/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui          # workspace 内部用 link
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
+
+  packages/ui:
+    dependencies:
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
+
+# Section 2: packages - 所有外部包的 metadata
+packages:
+  react@18.3.1:
+    resolution: {integrity: sha512-...}
+    engines: {node: '&gt;=0.10.0'}
+
+  scheduler@0.23.2:
+    resolution: {integrity: sha512-...}
+
+  loose-envify@1.4.0:
+    resolution: {integrity: sha512-...}
+    hasBin: true
+
+# Section 3: snapshots - 每个包在上下文中的实际依赖图
+snapshots:
+  react@18.3.1:
+    dependencies:
+      loose-envify: 1.4.0
+
+  scheduler@0.23.2:
+    dependencies:
+      loose-envify: 1.4.0
+
+  loose-envify@1.4.0:
+    dependencies:
+      js-tokens: 4.0.0
+
+  js-tokens@4.0.0: {}</code></pre>
+        </div>
+
+        <p><strong>importers</strong>（最高层）：</p>
+        <ul>
+          <li><code>.</code> 是根 workspace（顶层 package.json）</li>
+          <li>monorepo 中每个 package（apps/web / packages/ui）都是一个 importer</li>
+          <li>每个 importer 列出它<strong>直接依赖</strong>的包：specifier（package.json 写的范围）+ version（pnpm 解析出的具体版本）</li>
+          <li>workspace 内部依赖用 <code>version: link:&lt;path&gt;</code> 表示——这不会出现在 packages section</li>
+        </ul>
+
+        <p><strong>packages</strong>（中间层）：</p>
+        <ul>
+          <li>所有<strong>外部</strong>包（不是 workspace 内）的元数据</li>
+          <li>每个 <code>包@版本</code> 一个条目：integrity hash（防篡改）+ engines（node 版本要求）+ peerDependencies（peer 范围）+ hasBin（是否有 CLI）</li>
+          <li><strong>这一段不包含依赖关系</strong>——只是包的"身份证"</li>
+        </ul>
+
+        <p><strong>snapshots</strong>（具体实例化层）：</p>
+        <ul>
+          <li>每个 <code>包@版本</code> 在<strong>具体上下文</strong>中的依赖图</li>
+          <li>"上下文"指 peer 解析结果——同一个 react@18.3.1 在依赖它的不同包看来，配套的 react-dom 可能是不同 instance，pnpm 用括号表示</li>
+          <li>例如 <code>react-dom@18.3.1(react@18.3.1)</code> 表示"<strong>react-dom 18.3.1 在 react 18.3.1 上下文下的解析</strong>"</li>
+          <li>这是 lockfile 最复杂、变化最频繁的部分</li>
+        </ul>
+
+        <h3>peer 解析的复杂性 · 为什么需要 snapshots</h3>
+
+        <p><strong>问题</strong>：同一个 <code>包@版本</code>（比如 <code>react-dom@18.3.1</code>）声明 <code>peerDependencies: { react: "^18" }</code>。在不同上下文下，react 的具体实例可能不同：</p>
+        <ul>
+          <li>app 直接装了 react@18.3.1 + react-dom@18.3.1 → react-dom 看到的 react 是顶层那个</li>
+          <li>某个 dep 装了 react@18.2.0 + react-dom@18.3.1 → react-dom 看到的 react 是 18.2.0</li>
+          <li>monorepo 内 packages/ui 用 react@18.3.1，packages/admin 用 react@18.3.0 → 两份 react-dom（虽然 SHA 相同）需要分别配套</li>
+        </ul>
+
+        <p>pnpm 给每个 <code>包@版本(peer 上下文)</code> 创建独立的 sandbox 目录：</p>
+        <div class="code-block">
+          <span class="code-label">node_modules/.pnpm 中的 peer 区分</span>
+          <pre class="code"><code class="lang-text">node_modules/.pnpm/
+├── react-dom@18.3.1(react@18.3.1)/      ← peer = react 18.3.1
+│   └── node_modules/
+│       ├── react-dom/
+│       └── react → ../../react@18.3.1/...
+└── react-dom@18.3.1(react@18.3.0)/      ← peer = react 18.3.0
+    └── node_modules/
+        ├── react-dom/                    ← 同样的物理文件（hardlink 到同 store）
+        └── react → ../../react@18.3.0/...</code></pre>
+        </div>
+        <p>这就是 pnpm 严格 peer 模式的物理实现——<strong>每个 peer 上下文都有独立 sandbox，让运行时拿到正确的 peer instance</strong>。npm/Yarn classic 因为扁平 hoisting，无法做到这种区分（最多 dedupe 到一个）。</p>
+
+        <h3>严格 peer dependency · pnpm 的核心论点</h3>
+        <p><code>peerDependencies</code> 字段 npm 早就有，但<strong>处理行为分歧</strong>：</p>
+        <ul>
+          <li><strong>npm 7+</strong>：peer 不满足时<strong>自动装满足版本</strong>（这是 npm 对老用户的折衷）</li>
+          <li><strong>Yarn classic</strong>：peer 不满足只 warn，需要用户自己装</li>
+          <li><strong>pnpm 默认（&lt; 7.x）</strong>：peer 不满足只 warn，不自动装</li>
+          <li><strong>pnpm 7+ <code>auto-install-peers=true</code> 默认</strong>：自动装</li>
+        </ul>
+
+        <p><strong>为什么 pnpm 早期默认不装</strong>？因为 peer 自动装可能掩盖真正的问题：</p>
+        <ul>
+          <li>包作者错误声明 peer 范围（写成 <code>react: ^17</code> 实际兼容 18），用户被自动装了不必要的 react@17</li>
+          <li>monorepo 中某个内部包错误把 peer 当 dep，自动装导致版本不一致</li>
+          <li>静默自动装让用户失去对依赖图的控制</li>
+        </ul>
+
+        <p><strong>pnpm 7+ 妥协</strong>：开启 <code>auto-install-peers</code> 但保持<strong>严格的 peer 不匹配警告</strong>——peer 满足时不打扰，不满足时显式 warn。这平衡了"易用性"和"严格性"。</p>
+
+        <p><strong>strict-peer-dependencies 选项</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">.npmrc</span>
+          <pre class="code"><code class="lang-text"># 默认（pnpm 8+）
+auto-install-peers=true               # 自动装
+strict-peer-dependencies=false        # peer 不匹配只 warn
+
+# 严格模式（CI 推荐）
+auto-install-peers=true
+strict-peer-dependencies=true         # peer 不匹配直接报错，install 失败</code></pre>
+        </div>
+
+        <h3>resolution-mode · 防"刚发布烂包"</h3>
+        <p>2024 年 pnpm 8 引入新选项 <code>resolution-mode</code>，解决一类痛点：</p>
+
+        <p><strong>背景</strong>：你 <code>pnpm install</code> 时 npm 上某包刚发布有 bug 的 X.Y.0，pnpm 默认按 <code>highest</code> 模式解析 → 装上烂包。等到几小时后包作者发布 X.Y.1 修复，但你已经踩坑。</p>
+
+        <p><strong>三种 mode</strong>：</p>
+
+        <p><strong><code>highest</code>（传统）</strong>：</p>
+        <ul>
+          <li>每次 install 取范围内最新已发布版本</li>
+          <li>风险：刚发布的烂包立刻进入</li>
+          <li>这是 npm/Yarn 的传统行为</li>
+        </ul>
+
+        <p><strong><code>time-based</code></strong>（pnpm 9+ 默认）：</p>
+        <ul>
+          <li>第一次装某包时记录"<strong>cutoff time</strong>"——之后只考虑 cutoff time 之前发布的版本</li>
+          <li>新项目自动取最新，但<strong>已存在的 lockfile 不会被刚发布的版本污染</strong></li>
+          <li>显式 <code>pnpm update</code> 才升级（提供主动控制）</li>
+          <li>降低踩刚发布烂包的概率</li>
+        </ul>
+
+        <p><strong><code>lowest-direct</code></strong>：</p>
+        <ul>
+          <li>取范围内<strong>最低</strong>满足版本（保守）</li>
+          <li>用于"我要测试低版本兼容性"的场景</li>
+          <li>不是日常推荐</li>
+        </ul>
+
+        <p><strong>实测效果</strong>：time-based 让"昨天还跑得好的项目今天 install 后崩了"几乎消失。这是 2024 年 pnpm 最受好评的改进之一。</p>
+
+        <h3><code>.pnpmfile.cjs</code> hooks · monorepo 的"metadata patch 中心"</h3>
+
+        <p><code>.pnpmfile.cjs</code> 放在 monorepo 根目录，pnpm install 时自动加载。提供两个 hooks：</p>
+
+        <div class="code-block">
+          <span class="code-label">.pnpmfile.cjs</span>
+          <pre class="code"><code class="lang-js">module.exports = {
+  hooks: {
+    // 每解析到一个包的 package.json 都调用
+    readPackage(pkg, context) {
+      // pkg 是这个包的 package.json 内容
+      // 可以修改后返回，影响后续解析
+
+      // 例 1: fix 上游错误的 peer range
+      if (pkg.name === 'some-old-pkg' && pkg.peerDependencies?.react) {
+        pkg.peerDependencies.react = '^17 || ^18 || ^19';
+      }
+
+      // 例 2: 强制把某个 dep 改成 peer
+      if (pkg.name === 'wrong-pkg') {
+        if (pkg.dependencies?.react) {
+          pkg.peerDependencies = pkg.peerDependencies || {};
+          pkg.peerDependencies.react = pkg.dependencies.react;
+          delete pkg.dependencies.react;
+        }
+      }
+
+      // 例 3: 删除 monorepo 中不需要的 optionalDependencies
+      if (pkg.name === 'fsevents-using-pkg') {
+        delete pkg.optionalDependencies;
+      }
+
+      return pkg;
+    },
+
+    // lockfile 完成解析后调用
+    afterAllResolved(lockfile, context) {
+      // 可以做最后的整理
+      // 例如：log 出当前所有 react 版本
+      const reactVersions = new Set();
+      for (const pkg of Object.keys(lockfile.packages || {})) {
+        if (pkg.startsWith('react@')) {
+          reactVersions.add(pkg);
+        }
+      }
+      if (reactVersions.size &gt; 1) {
+        console.warn('Multiple React versions detected:', [...reactVersions]);
+      }
+      return lockfile;
+    }
+  }
+};</code></pre>
+        </div>
+
+        <p><strong>实战场景</strong>：</p>
+
+        <p><strong>场景 A · 修上游错误的 peer 范围</strong>：</p>
+        <p>some-old-pkg 声明 <code>peerDependencies: { react: "^17" }</code>，但实际兼容 react@18。每次装 react@18 都报 peer 不匹配 warn。在 .pnpmfile.cjs 里 readPackage 改写 some-old-pkg 的 peer 到 <code>^17 || ^18</code>。</p>
+
+        <p><strong>场景 B · 把 monorepo 内部某个版本统一</strong>：</p>
+        <p>monorepo 中 50 个包用 typescript，但写了不同的范围（4.x, 5.0, 5.6）。在 .pnpmfile.cjs 里检测到 typescript 时统一改写到 5.6。当然 catalog 是更现代的解（详见 P4.1），但 .pnpmfile.cjs 给老 monorepo 一个迁移路径。</p>
+
+        <p><strong>场景 C · 移除不需要的 optionalDependencies</strong>：</p>
+        <p>某些包有 fsevents（macOS 文件监听）作为 optional。在 Linux CI 上每次 fail-but-continue 浪费时间。.pnpmfile.cjs 里删除可避免。</p>
+
+        <p><strong>差异于 patch-package</strong>：.pnpmfile.cjs 改的是<strong>解析阶段的 package.json metadata</strong>，不改实际代码文件。要改源码用 <code>pnpm patch</code>（下面）。</p>
+
+        <h3><code>pnpm patch</code> · 代码级修改持久化</h3>
+
+        <p>2022 年 pnpm 7 引入官方 patch 子系统，替代社区的 <code>patch-package</code>。</p>
+
+        <div class="code-block">
+          <span class="code-label">完整工作流</span>
+          <pre class="code"><code class="lang-bash"># Step 1: 把包 checkout 到临时目录
+pnpm patch some-pkg@1.2.3
+# &gt; You can now edit the following folder:
+# &gt; /private/var/folders/.../node_modules/.tmp/some-pkg-1.2.3-X
+
+# Step 2: 在那个目录里改代码
+cd /private/var/folders/.../some-pkg-1.2.3-X
+vim lib/index.js   # 修 bug
+
+# Step 3: 提交 patch
+pnpm patch-commit /private/var/folders/.../some-pkg-1.2.3-X
+# 自动：
+# - 生成 patches/some-pkg@1.2.3.patch 文件
+# - 写入 package.json 的 pnpm.patchedDependencies 字段
+# - 更新 pnpm-lock.yaml
+
+# Step 4: commit patches/ 到 git
+git add patches/ package.json pnpm-lock.yaml
+git commit -m "fix: patch some-pkg buggy behavior"
+
+# 之后任何人 / CI install 都自动应用 patch</code></pre>
+        </div>
+
+        <p><strong>package.json 中的存储</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">{
+  "name": "my-monorepo",
+  "pnpm": {
+    "patchedDependencies": {
+      "some-pkg@1.2.3": "patches/some-pkg@1.2.3.patch",
+      "another@5.0.0": "patches/another@5.0.0.patch"
+    }
+  }
+}</code></pre>
+        </div>
+
+        <p><strong>与 patch-package 对比</strong>：</p>
+        <ul>
+          <li>pnpm patch <strong>原生集成 lockfile</strong>，不用额外 npm install patch-package</li>
+          <li>patch 文件路径在 package.json，直观</li>
+          <li>支持 monorepo（patch 应用到所有 workspace package 的依赖）</li>
+          <li>side-effects-cache 与 patch 配合（patch 后不重跑 postinstall）</li>
+        </ul>
+
+        <p><strong>使用建议</strong>：</p>
+        <ul>
+          <li>patch 是<strong>临时方案</strong>——目标始终是把修复推到上游</li>
+          <li>每个 patch 在 PR 中说明"为什么 + 上游 issue 链接 + 临时性"</li>
+          <li>定期审查 patches/ 目录，删除已被上游修复的 patch</li>
+          <li>不要把 patch 当作"分叉私有版本"——版本升级时 patch 可能失效</li>
+        </ul>
+
+        <h3>frozen-lockfile · CI 的安全开关</h3>
+
+        <p>CI 场景下 <code>pnpm install --frozen-lockfile</code> 是必需的：</p>
+        <ul>
+          <li><strong>不修改 pnpm-lock.yaml</strong>——任何让 lockfile 需要更新的情况都报错</li>
+          <li>等价于 npm 的 <code>npm ci</code>、Yarn 的 <code>yarn install --immutable</code></li>
+          <li>防止 CI 静默升级依赖</li>
+          <li>验证 lockfile 与 package.json 一致</li>
+        </ul>
+
+        <p><strong>什么时候会 fail</strong>：</p>
+        <ul>
+          <li>有人改了 package.json 但没跑 <code>pnpm install</code> 重新生成 lockfile</li>
+          <li>lockfile 与 package.json 范围不匹配</li>
+          <li>workspace 包 add/remove 但 lockfile 未更新</li>
+        </ul>
+
+        <p>这时候 dev 应该本地 <code>pnpm install</code> + commit 新 lockfile，而不是在 CI 跳过此检查。</p>
+
+        <div class="callout warn">
+          <div class="callout-title">⚠️ 常见误用：在 CI 用 pnpm install 而非 --frozen-lockfile</div>
+          <p>不带 <code>--frozen-lockfile</code> 的 install 在 CI 上会自动更新 lockfile，但<strong>更新不会被 commit 回去</strong>——下次 CI 还会"重新更新"。这造成"lockfile 漂移"——每次 CI 装的依赖版本可能不一样，构建不可重现。<strong>CI 永远用 --frozen-lockfile</strong>。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 修上游包错误的 peer 范围</h3>
+          <p><strong>背景</strong>：用 react@19，但某个老包 <code>some-chart-lib</code> peer 写 <code>react: "^18"</code>。每次 install 报 peer 不匹配。已经向上游提 PR 但还没 merge。</p>
+          <p><strong>方案</strong>：在 <code>.pnpmfile.cjs</code> 里改写：</p>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">module.exports = {
+  hooks: {
+    readPackage(pkg) {
+      if (pkg.name === 'some-chart-lib') {
+        pkg.peerDependencies = {
+          ...pkg.peerDependencies,
+          react: '^18 || ^19'   // 扩展到 19
+        };
+      }
+      return pkg;
+    }
+  }
+};</code></pre>
+          </div>
+          <p>commit .pnpmfile.cjs。所有团队成员 install 时自动 apply。上游 PR merge 后删除这段 hook。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · 修包的代码 bug</h3>
+          <p><strong>背景</strong>：<code>some-pkg@1.2.3</code> 有 bug 导致 SSR 崩溃。已经报 issue 但作者还没修。</p>
+          <p><strong>方案</strong>：</p>
+          <div class="code-block">
+            <span class="code-label">bash</span>
+            <pre class="code"><code class="lang-bash">pnpm patch some-pkg@1.2.3
+# 终端会输出临时目录路径，例如：
+# /private/var/folders/.../some-pkg-1.2.3-XXX
+
+# 在编辑器打开那个目录
+code /private/var/folders/.../some-pkg-1.2.3-XXX
+
+# 修 lib/server.js 中的 bug
+# 修完后保存
+
+pnpm patch-commit /private/var/folders/.../some-pkg-1.2.3-XXX
+# 生成 patches/some-pkg@1.2.3.patch
+# 写入 package.json 的 pnpm.patchedDependencies
+
+git add patches/ package.json pnpm-lock.yaml
+git commit -m "fix: patch some-pkg SSR crash (upstream issue #123)"</code></pre>
+          </div>
+          <p>所有团队成员 + CI install 时自动 apply patch。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · CI 报"lockfile out of sync"</h3>
+          <p><strong>背景</strong>：开发提了一个 PR 改了 package.json，CI 报 <code>--frozen-lockfile failed: package.json is not in sync with lockfile</code>。</p>
+          <p><strong>诊断 + 修复</strong>：</p>
+          <ul>
+            <li>本地 <code>pnpm install</code>（不带 --frozen-lockfile）</li>
+            <li>看 git diff pnpm-lock.yaml——pnpm 会更新 lockfile</li>
+            <li>确认更新合理（没有意外引入大版本变化）</li>
+            <li><code>git add pnpm-lock.yaml &amp;&amp; git commit -m "chore: update lockfile"</code></li>
+            <li>push 到 PR 分支，CI 应该过</li>
+          </ul>
+          <p><strong>预防</strong>：让团队所有人 git pre-commit hook 强制：改 package.json 必须 commit 对应的 lockfile 变化。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">读 lockfile 找单个包的所有版本</span>
+          <pre class="code"><code class="lang-bash"># 看 react 装了几个版本
+grep -E '^  react@' pnpm-lock.yaml | head -10
+
+# 用 pnpm 命令更准确
+pnpm why react
+
+# 看哪些包依赖某个版本
+pnpm why react --depth Infinity</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">.pnpmfile.cjs 实战 · monorepo 版本统一</span>
+          <pre class="code"><code class="lang-js">// .pnpmfile.cjs
+const REQUIRED_REACT = '^18.3.0';
+
+module.exports = {
+  hooks: {
+    readPackage(pkg, context) {
+      // 1. 任何 peer react 都接受 18.3+
+      if (pkg.peerDependencies?.react) {
+        pkg.peerDependencies.react = REQUIRED_REACT;
+      }
+      // 2. 任何 dep react 也用 18.3+（强制升级）
+      if (pkg.dependencies?.react) {
+        pkg.dependencies.react = REQUIRED_REACT;
+      }
+      return pkg;
+    },
+
+    afterAllResolved(lockfile, context) {
+      // 验证：lockfile 中应只有一个 react 版本
+      const reactVersions = Object.keys(lockfile.packages || {})
+        .filter(k =&gt; k.startsWith('react@'))
+        .filter(k =&gt; !k.startsWith('react-'));   // 排除 react-dom 等
+      if (reactVersions.length &gt; 1) {
+        throw new Error(
+          `Multiple React versions detected: ${reactVersions.join(', ')}`
+        );
+      }
+      return lockfile;
+    }
+  }
+};</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">CI workflow 完整模板</span>
+          <pre class="code"><code class="lang-yaml"># .github/workflows/ci.yml
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">查看 patch 当前状态</span>
+          <pre class="code"><code class="lang-bash"># 列出所有 patch
+ls patches/
+
+# 看 patch 内容
+cat patches/some-pkg@1.2.3.patch
+
+# 删除某个 patch（包升级后不再需要）
+pnpm patch-remove some-pkg@1.2.3
+# 自动删 patches/some-pkg@1.2.3.patch + 更新 package.json + lockfile</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">strict-peer-dependencies CI 严格化</span>
+          <pre class="code"><code class="lang-text"># .npmrc（项目根）
+auto-install-peers=true
+strict-peer-dependencies=true       # CI 上 peer 不匹配直接 fail
+
+# 本地开发时如果想 warn 不 fail：
+# 用环境变量临时覆盖
+PNPM_STRICT_PEER_DEPENDENCIES=false pnpm install</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 手动编辑 pnpm-lock.yaml</div>
+          <p>"我把 lockfile 里某个版本改一下吧" —— <strong>不要直接编辑 lockfile</strong>。手动改容易让 importers / packages / snapshots 三段不一致，pnpm install 时会报错或静默重生成（覆盖你的修改）。<strong>正确做法</strong>：改 package.json + 跑 <code>pnpm install</code>，让 pnpm 重新解析。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · CI 不用 --frozen-lockfile</div>
+          <p>很多团队 CI workflow 写 <code>pnpm install</code>（不带 frozen），导致 CI 静默改 lockfile 但不 commit。下次 CI 又"重新改"——构建不可重现。<strong>修复</strong>：CI 永远 <code>--frozen-lockfile</code>，让 lockfile 与代码同步严格化。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 把 .pnpmfile.cjs 当万能补丁</div>
+          <p>有人在 .pnpmfile.cjs 里改写几十个包的 metadata，最后这个文件成"项目隐性配置中心"。新加入团队的人完全看不懂为什么"装出来就这样"。<strong>建议</strong>：每个 hook 加注释说明"为什么 + 上游 issue 链接"；定期清理已不需要的 hook；优先用 catalog / overrides / peer 自然机制。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 用 pnpm patch 修代码不更新 patch 当版本变化</div>
+          <p>patch 是针对<strong>具体版本</strong>的。包从 1.2.3 升到 1.2.4 后原 patch 可能 fail。<strong>建议</strong>：每次包升级前看 patches/ 目录，重新评估每个 patch 是否需要 / 是否要 rebase。CI 里 install 报 patch fail 时立即处理。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 关掉 strict-peer-dependencies 然后忽略所有 warn</div>
+          <p><code>strict-peer-dependencies=false</code> 是 dev 友好的默认，但有人就此忽略所有 peer warning。这些 warning 反映的<strong>真实依赖图问题</strong>不会因为你不看就消失。<strong>建议</strong>：dev 用 false（不打断流程），CI 用 true（强制修），定期跑一次 strict 模式检查。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://pnpm.io/pnpmfile" target="_blank" rel="noopener">pnpm Docs · .pnpmfile.cjs hooks</a></li>
+          <li><a href="https://pnpm.io/cli/patch" target="_blank" rel="noopener">pnpm Docs · pnpm patch</a></li>
+          <li><a href="https://pnpm.io/npmrc#resolution-mode" target="_blank" rel="noopener">pnpm Docs · resolution-mode</a></li>
+          <li><a href="https://pnpm.io/feature-comparison" target="_blank" rel="noopener">pnpm Feature Comparison（vs npm/Yarn）</a></li>
+          <li><a href="https://pnpm.io/cli/install#--frozen-lockfile" target="_blank" rel="noopener">pnpm install --frozen-lockfile</a></li>
+          <li><a href="https://docs.npmjs.com/cli/v10/configuring-npm/package-json#peerdependencies" target="_blank" rel="noopener">npm Docs · peerDependencies</a></li>
+          <li><a href="https://github.com/ds300/patch-package" target="_blank" rel="noopener">patch-package（社区方案，pnpm patch 的灵感来源）</a></li>
+          <li><a href="01-cas-storage.html">P3.1 · CAS + symlink 拓扑（前一章）</a></li>
+          <li><a href="../04-workspaces/01-workspace-protocol.html">P4.1 · Workspace 协议 + catalog（下一章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-cas-storage.html">
+            <span class="label">← 上一章</span>
+            <span class="title">01 · CAS + symlink 拓扑</span>
+          </a>
+          <a class="next" href="../04-workspaces/index.html">
+            <span class="label">下一阶段 →</span>
+            <span class="title">P4 · Workspace 协议</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
