@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>决策树 + 下一代趋势 · P7.1 · pnpm & monorepo 深度学习</title>
+    <meta name="description" content="2026 monorepo 选型决策树（4 档：个人 / 中型 / 大型 / 超大规模）+ Bazel/Rush/Pants 超大规模适用边界 + catalog 标准化 / JSR / Bun 一体化 / 远程 cache 等下一代趋势 + 历史教训（Lerna 退场 / 全家桶 vs 组合工具）+ 5 年展望。中立 trade-off，不当任何家广告。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23f69220'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EP%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>pnpm & monorepo 深度学习</span><span class="site-title-badge" style="background: oklch(0.7 0.18 60); color: #fff">pnpm</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P7 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · 选型与下一代</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-decision-tree.html" class="active">01 · 决策树 + 下一代趋势</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">pnpm & monorepo</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · 选型与下一代</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 决策树 + 下一代</span>
+        </nav>
+        <h1>决策树 + 下一代趋势</h1>
+        <p class="lead">
+          P1-P6 把 monorepo 的所有维度（包管理 / node_modules / pnpm 内部 / workspace / 编排 / 发布）讲透了。本章把它收敛成<strong>一张 4 档决策树</strong>，并展望 5 年后的格局。<strong>核心立场：中立</strong>——每条决策都给 trade-off，不当任何家广告。读完本章你能对"这个项目该用什么"有可论证的答案。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P1-P6 全部</span>
+          <span><strong>主要来源</strong> 各家官方公告 + 行业 trends + JSR 设计文档 + Bazel/Rush 大厂实践</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>4 档决策树</strong> —— (1) 个人 / 单包小项目 → npm 或 Bun，不必上 monorepo；(2) 中型 5-30 包 → <strong>pnpm + Turborepo</strong>（最低门槛 monorepo）；(3) 大型 30-100 包 → pnpm 或 Bun + <strong>Turborepo / Nx 二选一</strong>（按"组合 vs 全家桶"哲学）；(4) 超大规模 100+ 包 + 多语言 → <strong>Bazel / Rush / Pants</strong>（JS 工具链不够用）。</li>
+          <li><strong>2026 主流方案 = pnpm + Turborepo + Changesets</strong> —— Vite / Vitest / Astro / typescript-eslint / shadcn/ui / Cloudflare Workers / Remix 等多数旗舰 OSS 项目用这套。它在简洁性 / 严格性 / 灵活性 / 生态成熟度上接近最佳平衡。</li>
+          <li><strong>Bun 是中型新项目的另一个明显选项</strong> —— Bun + Turborepo + Changesets 同样能跑，速度优势明显。<strong>2026 年 Bun runtime 在 SaaS / 工具型应用份额快速增长</strong>，包管理紧随。</li>
+          <li><strong>Yarn 4 PnP 路线复盘</strong> —— 5 年来在生态接受度上失败。技术先进 ≠ 市场胜利。它的"<strong>取消 node_modules</strong>"思想被 Bun / Deno 部分吸收，但作为独立产品的影响力衰减。</li>
+          <li><strong>JSR（Deno 主导）能否撼动 npm</strong> —— 短期不能（npm 200 万包基数 + 14 年生态）。<strong>但 JSR 的方向（原生 ESM + TS + 强签名 + cross-runtime）很可能成为 npm v2 的设计参考</strong>。5-10 年视野不可忽视。</li>
+          <li><strong>catalog 标准化是 2025-2026 最重要的 monorepo 进化</strong> —— pnpm / Bun 兼容、Yarn 在跟进、npm 仍未支持。<strong>这是 npm 11 落后一代的具体表现</strong>，也是 monorepo 选 pnpm/Bun 的具体理由。</li>
+          <li><strong>2026 反模式集锦</strong> —— pnpm + Turborepo + Nx + Lerna 同时存在的"积弊型"项目；用 path mapping 替代 workspace；CI 不用 --frozen-lockfile；publish 不开 provenance；"先全家桶后悔过"——选哲学时摇摆。</li>
+          <li><strong>5 年展望</strong> —— (1) catalog 跨工具完全兼容；(2) JSR 在 OSS 库领域获明显份额；(3) 远程 cache 成 CI 标配（不再是付费高级功能）；(4) Bun runtime + Bun install + Bun build 一体化挤压 Node + pnpm + Vite 组合；(5) workspace 协议进 ECMA spec？（推测）</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>4 档决策树详解</h3>
+
+        <h4>档 1 · 个人 / 单包小项目（&lt; 5 包）</h4>
+
+        <p><strong>典型场景</strong>：</p>
+        <ul>
+          <li>个人 Side project</li>
+          <li>单包 npm 库（一个 SDK，不需要拆 monorepo）</li>
+          <li>学习项目 / demo</li>
+          <li>小工具脚本</li>
+        </ul>
+
+        <p><strong>建议</strong>：</p>
+        <ul>
+          <li><strong>npm 11</strong> 或 <strong>Bun install</strong>（看个人偏好）</li>
+          <li>不要用 monorepo（增加复杂度无收益）</li>
+          <li>不需要 Turborepo / Nx</li>
+          <li>不需要 Changesets（直接 <code>npm publish</code> 够用）</li>
+        </ul>
+
+        <p><strong>为什么不推 pnpm</strong>：单包项目下 pnpm 的严格性 / 磁盘节省价值不显著。npm 11 / Bun 装上即用，零学习成本。pnpm 留给真正需要的中大型场景。</p>
+
+        <h4>档 2 · 中型项目（5-30 包）</h4>
+
+        <p><strong>典型场景</strong>：</p>
+        <ul>
+          <li>2-3 个 web app + 共享 UI 库 + utils</li>
+          <li>开源库的核心 + plugins</li>
+          <li>中等 SaaS 公司的前端栈</li>
+          <li>10 人以下小团队</li>
+        </ul>
+
+        <p><strong>建议</strong>：</p>
+        <ul>
+          <li><strong>pnpm 10</strong>（包管理 + workspace + catalog）</li>
+          <li><strong>Turborepo 2</strong>（task runner + cache）</li>
+          <li><strong>Changesets</strong>（如有 lib 需要 publish；纯应用项目不用）</li>
+          <li><strong>Vercel Remote Cache</strong>（免费层够用）</li>
+        </ul>
+
+        <p><strong>为什么这套</strong>：</p>
+        <ul>
+          <li>pnpm 比 npm 多了 catalog + 严格性，少了幻影依赖风险——长期生产力收益显著</li>
+          <li>Turborepo 比手写 npm-run-all + concurrent 强（task graph + cache + dev server 协调）</li>
+          <li>Changesets 让发版自动化，不用每次手动 npm publish 多个包</li>
+          <li>整套学习曲线 1-2 天，对中型团队 ROI 极佳</li>
+        </ul>
+
+        <p><strong>替代</strong>：</p>
+        <ul>
+          <li>Bun + Turborepo + Changesets：如果团队偏好 Bun（速度 / 一体化）</li>
+          <li>npm + Turborepo：如果不愿换包管理器（但放弃 catalog 收益）</li>
+          <li>Yarn 4 nodeLinker + Turborepo：Yarn 用户老顾客（少见）</li>
+        </ul>
+
+        <h4>档 3 · 大型项目（30-100 包）</h4>
+
+        <p><strong>典型场景</strong>：</p>
+        <ul>
+          <li>大型 SaaS 公司前端栈</li>
+          <li>开源 monorepo 旗舰项目（Vite / Astro / Vitest）</li>
+          <li>公司内部多产品线共用 monorepo</li>
+          <li>20-100 人团队</li>
+        </ul>
+
+        <p><strong>建议</strong>：</p>
+        <ul>
+          <li><strong>pnpm 10</strong>（更稳成熟，大型 monorepo 仍是首选）</li>
+          <li><strong>Turborepo 2 或 Nx 20</strong>（按团队哲学选）</li>
+          <li><strong>Changesets</strong>（必须）</li>
+          <li><strong>provenance</strong>（必须，对抗供应链）</li>
+          <li>付费 Remote Cache（Vercel 付费层 / Nx Cloud）</li>
+        </ul>
+
+        <p><strong>Turborepo vs Nx 决策</strong>（详见 <a href="../05-orchestration/02-nx.html">P5.2</a>）：</p>
+        <ul>
+          <li>Turborepo 优势：低侵入、可逆、与已有工具组合自由、OSS 生态主流</li>
+          <li>Nx 优势：generator + migration 让长期一致性强、affected 更精确、DTE 分布式执行</li>
+          <li>团队大 + 强需求一致性 → Nx</li>
+          <li>团队偏好组合自由 → Turborepo</li>
+        </ul>
+
+        <p><strong>不建议 Bun install 在大型 monorepo</strong>：</p>
+        <ul>
+          <li>Bun install 速度优势在装包阶段；大型 monorepo 的瓶颈是 CI build / test 时间，那靠 Turborepo cache 解决</li>
+          <li>大型 monorepo 经常有"复杂依赖"（patch / 复杂 hooks / 老依赖），pnpm 的成熟度更稳</li>
+          <li>2026 年 Bun install 在大型 monorepo 仍偶有边界 case 需要 fallback</li>
+          <li>除非项目从一开始就用 Bun runtime，否则单独切 Bun install 价值不高</li>
+        </ul>
+
+        <h4>档 4 · 超大规模（100+ 包，多语言）</h4>
+
+        <p><strong>典型场景</strong>：</p>
+        <ul>
+          <li>Google / Meta / Microsoft 大厂级 monorepo</li>
+          <li>多语言混合（JS + Java + Go + Python + Scala）</li>
+          <li>500+ 人团队</li>
+          <li>Office / Azure / Spotify / Uber 等量级</li>
+        </ul>
+
+        <p><strong>建议</strong>：</p>
+        <ul>
+          <li><strong>Bazel</strong>（Google 出品，工业级）</li>
+          <li>或 <strong>Rush</strong>（Microsoft 自家方案，JS 专精）</li>
+          <li>或 <strong>Pants</strong>（Twitter 现 OSS，Python + JS + 多语言）</li>
+        </ul>
+
+        <p><strong>为什么 Turborepo / Nx 不够</strong>：</p>
+        <ul>
+          <li>它们设计针对 JS 生态，多语言支持弱</li>
+          <li>500+ 包时 cache 算法 + IO 性能成为瓶颈，需要更工业的实现</li>
+          <li>大厂场景需要 SLO 级别保证：可重现 build / 严格 sandbox / 任意机器结果一致</li>
+          <li>Bazel 的 BUILD 文件描述 + sandbox 机制是 Google 内部 Blaze 的开源版本</li>
+        </ul>
+
+        <p><strong>2026 现状</strong>：99% 的项目永远不会到这个规模。这一档主要给"<strong>知道自己在做什么</strong>"的大厂用——错选 Bazel 给中型项目意味着 6 个月学习曲线 + 极度复杂配置 + 可能没收益。</p>
+
+        <p><strong>常见误区</strong>：看到 Google 用 Bazel 就想自己上 Bazel。<strong>不要</strong>。Bazel 解决的是"<strong>10000 包 + 多语言 + 强可重现</strong>"问题，中型项目不是这个 profile。</p>
+
+        <h3>2026 生态趋势观察</h3>
+
+        <h4>趋势 1 · catalog 协议跨工具兼容</h4>
+        <p>2024-2025 关键变化。pnpm 9.5 引入 → Bun 1.1.42 跟进 → Yarn 4 RFC。<strong>子包写 <code>"react": "catalog:"</code> 在 pnpm / Bun 都能跑</strong>。</p>
+        <p>下一步：</p>
+        <ul>
+          <li>Yarn 4 GA 支持（2026 中下半年）</li>
+          <li>npm 11 / 12 跟进（推测 2027）</li>
+          <li>workspace 协议（<code>workspace:*</code>）走类似路径——npm 在 v9+ 已支持，跨工具兼容已实现</li>
+        </ul>
+
+        <h4>趋势 2 · 二进制 vs 文本 lockfile 之争</h4>
+        <p>Bun 早期用二进制 <code>bun.lockb</code>，2024-2025 改回 JSON <code>bun.lock</code>（diff 友好）。pnpm-lock.yaml 仍是 YAML（diff 友好）。<strong>2026 年趋势是文本 lockfile 主流</strong>——二进制的速度优势没有想象中大，diff / merge / review 友好性是更重要的工程特性。</p>
+
+        <h4>趋势 3 · 远程 cache 之争</h4>
+        <p>Vercel Remote Cache（Turborepo） vs Nx Cloud vs 自建（S3 / Cloudflare R2）。<strong>2026 趋势</strong>：</p>
+        <ul>
+          <li>Vercel + Nx Cloud 免费层在变厚（吸引开源 + 小团队）</li>
+          <li>大型团队倾向自建（控制 + 成本）</li>
+          <li>Cloudflare Workers + R2 成为热门自建栈</li>
+          <li><strong>5 年内远程 cache 成 CI 标配</strong>，从付费高级功能变基础设施</li>
+        </ul>
+
+        <h4>趋势 4 · Bun 一体化的挤压</h4>
+        <p>Bun runtime + Bun install + Bun build + Bun test 是<strong>同一个产品的 4 个面</strong>（详见 <a href="../../bun/index.html">Bun 主题</a>）。这种一体化对"Node + pnpm + Vite + Vitest"组合栈的挤压在 2025-2026 年显著加速。</p>
+        <p><strong>组合栈的反应</strong>：</p>
+        <ul>
+          <li>pnpm 不会被 Bun install 替代（短期）——大型 monorepo 仍偏好 pnpm 的严格性 + 成熟</li>
+          <li>但中型 + 新项目份额会被 Bun 抢去</li>
+          <li>Vite 通过 Rolldown（Rust bundler）追速度；Vitest 改进 watch 模式</li>
+          <li>结果：<strong>2026 是组合栈与 Bun 一体化两条路线的并行期</strong>，5 年后看哪个赢更多</li>
+        </ul>
+
+        <h4>趋势 5 · JSR 能否撼动 npm</h4>
+        <p>Deno 主导的 JSR（jsr.io）2024 发布。设计先进——原生 ESM + TS + 强签名 + cross-runtime。但<strong>npm 200 万包 + 14 年生态</strong>是巨大壁垒。</p>
+        <p><strong>5 年视角</strong>：</p>
+        <ul>
+          <li>JSR 在 OSS 库（特别是新发布的）获 5-10% 份额</li>
+          <li>npm 仍是<strong>历史包 + 业务代码</strong>主流</li>
+          <li>JSR 的方向（强签名 / 原生 TS）<strong>很可能成为 npm 自身演进参考</strong></li>
+          <li>"杀死 npm"是错的目标——更可能是<strong>npm v2 = npm + JSR 设计精华</strong></li>
+        </ul>
+
+        <h3>Yarn Berry / PnP 路线复盘</h3>
+
+        <p>Yarn Berry 是 5 年前最激进的 monorepo 方案。技术上几乎完美——无 node_modules / 极速 / 严格 / zero-installs。<strong>为什么没赢？</strong></p>
+
+        <p><strong>结构性原因</strong>：</p>
+        <ul>
+          <li>JS 生态有几十万个包，<strong>大多数假设 node_modules 存在</strong>。一个新方案再好，让 80% 的包要 patch 才能跑，市场不接受</li>
+          <li>调试体验降级（栈跟踪指向 zip）</li>
+          <li>编辑器 / TS / webpack 都要适配，每家 plugin 维护</li>
+          <li>Yarn classic → Berry 升级路径不无痛（事实上 Yarn classic 1.x 仍在用，Berry 没大量替代）</li>
+        </ul>
+
+        <p><strong>对 pnpm 的胜利</strong>：</p>
+        <ul>
+          <li>pnpm 走"<strong>保留 node_modules 形式 + 改写其拓扑</strong>"——兼顾严格性和生态兼容</li>
+          <li>幻影依赖被消除（与 PnP 等效），但 Node resolution 仍走标准路径</li>
+          <li>这是"<strong>渐进改良比革命更易胜利</strong>"的工程经典案例</li>
+        </ul>
+
+        <p><strong>PnP 思想的延续</strong>：</p>
+        <ul>
+          <li>Bun install 的"binary lockfile + cache 复用"是 PnP 思想的轻量版</li>
+          <li>Deno 的"全局 cache + URL imports"在概念上接近 PnP</li>
+          <li>"zero-installs"（commit cache 到 git）思路仍偶被使用</li>
+        </ul>
+
+        <p><strong>2026 现状</strong>：Yarn Berry 仍有忠实用户（特别是已经投入 PnP 适配的项目）。但<strong>"新项目选 Yarn 4 PnP"在 2026 年罕见</strong>。</p>
+
+        <h3>历史教训</h3>
+
+        <h4>教训 1 · Lerna 退场不是 monorepo 死</h4>
+        <p>2020-2022 看到 Lerna "deprecated" 标记，有人得出"<strong>monorepo 是错的</strong>"结论。事实正相反——Lerna 退场是因为<strong>monorepo 工具市场升级了</strong>（Turborepo / Nx 提供 cache + 项目图）。2026 年 monorepo 比 Lerna 时代更主流。</p>
+
+        <h4>教训 2 · 不要在生产挂 4 套工具</h4>
+        <p>"积弊型"项目状态：原本 Lerna，加了 pnpm，加了 Turborepo，又加了 Nx。结果四套配置都有，团队搞不清哪个生效。<strong>2 个工具就够</strong>——pnpm + Turborepo（组合）或 Nx + 内置包管理（全家桶）。</p>
+
+        <h4>教训 3 · "全家桶" vs "组合工具"哲学路线无对错</h4>
+        <p>Nx 和 Turborepo 都有大型成功项目背书。<strong>不要把它们当对立竞争</strong>——本质是两种 monorepo 哲学。选时按团队文化匹配，<strong>但选定后不要中途切</strong>（迁移成本高 + 团队心智成本）。</p>
+
+        <h4>教训 4 · 技术先进 ≠ 市场胜利</h4>
+        <p>Yarn Berry / PnP 是经典案例。技术上几乎完美，但生态成本被低估。<strong>"渐进改良"通常比"彻底革命"更易胜利</strong>——pnpm 接受 node_modules 形式但改其拓扑、catalog 沿用 SemVer 但加版本字典。</p>
+
+        <h4>教训 5 · 不要选"最新的"，选"匹配的"</h4>
+        <p>Bun 是 2024 年 hot tech，但<strong>大型 monorepo 切 Bun 时机未到</strong>（兼容性边界仍在补）。中型新项目或 SaaS 工具型应用 Bun 是好选择。<strong>选型应基于项目特征 + 团队能力，不是技术 hype</strong>。</p>
+
+        <h3>5 年展望（2026-2031）</h3>
+
+        <p>预测有风险，但根据 2024-2026 的趋势可以给出方向性判断：</p>
+
+        <p><strong>(1) catalog + workspace 协议跨工具完全兼容</strong>：pnpm / Bun / Yarn / npm 都支持同一套语法。"切包管理器只改 packageManager 字段"成为现实。</p>
+
+        <p><strong>(2) 远程 cache 成 CI 标配</strong>：从 Vercel / Nx 付费产品变成 GitHub Actions / GitLab CI 内置功能。每个 CI 运行都自动复用 cache。</p>
+
+        <p><strong>(3) Bun runtime 在中型 SaaS / 工具应用主流化</strong>：Bun + Bun install + Bun build + Bun test 一体化对中型项目的吸引力增加。Bun 5 年内份额可能从 12% 升到 25-30%。</p>
+
+        <p><strong>(4) 大型 monorepo 仍以 pnpm + Turborepo/Nx 为主</strong>：成熟度 + 严格性是大型场景的硬要求，Bun 在这一档暂不挑战 pnpm。</p>
+
+        <p><strong>(5) JSR 在 OSS 库领域获明显份额</strong>：新 OSS 库优先发 JSR + npm 双重发布。npm 在 5 年后仍是主流但 JSR 不再"小众"。</p>
+
+        <p><strong>(6) provenance 成为 npm 包默认</strong>：发包不开 provenance 在 5 年后被视为"不专业"。供应链安全成为生态共识。</p>
+
+        <p><strong>(7) Vite + Rolldown 完全 GA</strong>：Vite 6/7 把 Rollup 替换成 Rolldown（Rust），dev / build 双模架构性能跨越。组合栈 vs Bun 之争更激烈。</p>
+
+        <p><strong>(8) workspace / catalog 协议进 ECMA 或 npm spec</strong>（推测）：当前 workspace 是包管理器层约定，不是 npm spec 的一部分。5 年内可能正式化。</p>
+
+        <p><strong>不确定性</strong>：</p>
+        <ul>
+          <li>Yarn 5 是否会推出？路线不明</li>
+          <li>Bun 在大型 monorepo 能否突破？取决于复杂依赖兼容</li>
+          <li>JSR 是否会被 npm 收购或合并？商业可能性</li>
+          <li>新 entrant？2026 年看不到（前一代已经成熟，破坏性创新需要新 paradigm）</li>
+        </ul>
+
+        <div class="callout info">
+          <div class="callout-title">💡 终极原则：选你能维护的，不是最炫的</div>
+          <p>monorepo 工具栈的最大成本不是"装上"，是"<strong>5 年后还能 happy 升级</strong>"。Nx migrate / Changesets 成熟 / pnpm 稳定迭代等"长期可维护性"特性比"最新最快"重要得多。<strong>选型时优先考虑团队能持续维护的方案</strong>，避免"<strong>装上后维护人离开 → 团队不敢动 → 6 年后还在跑 deprecated 工具</strong>"的常见结局。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 新创业公司选 monorepo 栈</h3>
+          <p><strong>背景</strong>：5 人创业团队，要开发 SaaS。前端 React + Next.js，后端 Hono on Bun。共享 schema / utils。预计 1 年内 10-20 包。</p>
+          <p><strong>建议（档 2）</strong>：</p>
+          <ul>
+            <li>包管理：<strong>Bun install</strong>（已用 Bun runtime + 速度收益）</li>
+            <li>编排：<strong>Turborepo 2</strong>（与 Bun 自然兼容）</li>
+            <li>发布：暂不需要（应用项目，不发 npm）；以后某 lib 要发再加 Changesets</li>
+            <li>cache：<strong>Vercel Remote Cache</strong>（免费层够）</li>
+          </ul>
+          <p><strong>理由</strong>：项目用 Bun runtime，包管理同栈一体化最大化；中型规模 Turborepo 比 Nx 简单；早期不需要 Changesets。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · 大型 SaaS 公司从 npm 老 monorepo 升级</h3>
+          <p><strong>背景</strong>：5 年的 npm + Lerna monorepo，60 包，30 人前端团队。CI 时间 25 分钟，幻影依赖偶尔翻车。</p>
+          <p><strong>建议（档 3）</strong>：</p>
+          <ul>
+            <li>第 1 阶段（1 周）：迁移到 <strong>pnpm</strong> + 修幻影依赖（暴露 + 修复 5-30 处）</li>
+            <li>第 2 阶段（1 周）：装 <strong>Turborepo</strong> + 配 turbo.json + Vercel Remote Cache → CI 时间应降到 5 分钟</li>
+            <li>第 3 阶段（1 周）：用 <strong>catalog</strong> 统一核心依赖版本（react / typescript / 内部 utils）</li>
+            <li>第 4 阶段（1 周）：装 <strong>Changesets</strong> 替代 Lerna 的 publish 流程；启用 <strong>provenance</strong></li>
+            <li>第 5 阶段（持续）：评估 Nx（如果团队希望更多 framework consistency）— 通常不切</li>
+          </ul>
+          <p><strong>预期 ROI</strong>：CI 时间从 25 分钟到 5 分钟（CI 账单省 80%），幻影依赖根除，发版流程自动化。1 个月投入，长期收益。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · 评估"切 Nx 还是 Turborepo"</h3>
+          <p><strong>背景</strong>：100 人团队，3 个产品线共用大型前端 monorepo（80 包）。已经用 pnpm + Turborepo 1 年，平稳。最近讨论是否切 Nx 拿 generator + migration 收益。</p>
+          <p><strong>分析</strong>：</p>
+          <ul>
+            <li><strong>切 Nx 的潜在收益</strong>：generator 让新人建包遵循模板；nx migrate 让大型 monorepo 升级成本低；DTE 分布式执行提速 CI</li>
+            <li><strong>切 Nx 的成本</strong>：迁移 80 包到 Nx 配置（每个包需 project.json / nx.json 适配）；团队学习新工具；团队文化"组合 vs 全家桶"切换</li>
+          </ul>
+          <p><strong>建议</strong>：</p>
+          <ul>
+            <li>如果团队感受 Turborepo 在<strong>具体痛点上不够用</strong>（升级成本高、新人建包不一致、CI 仍慢）→ 切 Nx 值得</li>
+            <li>如果团队反馈"<strong>Turborepo 用着挺好</strong>" → 不要切。"<strong>It ain't broke, don't fix it</strong>"。投入精力到业务而不是工具迁移</li>
+            <li>中间方案：保持 Turborepo + 自建少量 generator script（解决一致性问题）</li>
+          </ul>
+          <p>关键：<strong>不要为切而切</strong>。哲学路线选定后稳定下来，长期收益最大。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">2026 中型 monorepo 完整初始化（pnpm + Turborepo + Changesets）</span>
+          <pre class="code"><code class="lang-bash"># Step 1: 创建 monorepo 基础
+mkdir my-monorepo && cd my-monorepo
+pnpm init
+echo "node_modules\ndist\n.turbo" &gt; .gitignore
+git init
+
+# Step 2: 配 pnpm workspace + catalog
+cat &gt; pnpm-workspace.yaml &lt;&lt;EOF
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+catalog:
+  typescript: ^5.6.0
+  '@types/node': ^22.0.0
+  vitest: ^1.6.0
+
+catalogs:
+  react18:
+    react: ^18.3.1
+    react-dom: ^18.3.1
+EOF
+
+# Step 3: 配 root package.json
+cat &gt; package.json &lt;&lt;EOF
+{
+  "name": "my-monorepo",
+  "private": true,
+  "packageManager": "pnpm@10.12.0",
+  "engines": { "node": "&gt;=22.0.0" },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "ci": "pnpm install --frozen-lockfile && pnpm build && pnpm test && pnpm lint"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0",
+    "typescript": "catalog:"
+  }
+}
+EOF
+
+# Step 4: 配 turbo.json
+cat &gt; turbo.json &lt;&lt;EOF
+{
+  "\$schema": "https://turbo.build/schema.json",
+  "globalDependencies": ["**/.env.*local", "tsconfig.base.json"],
+  "globalEnv": ["NODE_ENV", "CI"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"],
+      "env": ["NEXT_PUBLIC_*"]
+    },
+    "test": { "dependsOn": ["build"] },
+    "lint": { "outputs": [] },
+    "typecheck": { "dependsOn": ["^build"], "outputs": [] },
+    "dev": { "cache": false, "persistent": true, "dependsOn": ["^build"] }
+  }
+}
+EOF
+
+# Step 5: 配 .npmrc
+cat &gt; .npmrc &lt;&lt;EOF
+auto-install-peers=true
+strict-peer-dependencies=false
+side-effects-cache=true
+node-linker=isolated
+EOF
+
+# Step 6: 装 Changesets
+pnpm add -D -w @changesets/cli @changesets/changelog-github
+pnpm changeset init
+# 编辑 .changeset/config.json 加 changelog: ["@changesets/changelog-github", { "repo": "..." }]
+
+# Step 7: 创建第一个 lib
+mkdir -p packages/utils/src
+cat &gt; packages/utils/package.json &lt;&lt;EOF
+{
+  "name": "@my-org/utils",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "exports": { ".": "./dist/index.js" },
+    "access": "public",
+    "provenance": true
+  }
+}
+EOF
+
+# Step 8: 装依赖 + 第一次 commit
+pnpm install
+git add . && git commit -m "chore: init monorepo with pnpm + turbo + changesets"</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">完整 GitHub Actions release workflow</span>
+          <pre class="code"><code class="lang-yaml"># .github/workflows/release.yml
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write          # provenance
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build typecheck lint test
+        env:
+          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+          TURBO_TEAM: 'my-team'
+
+      - name: Create Release Pull Request or Publish to npm
+        uses: changesets/action@v1
+        with:
+          publish: pnpm changeset publish
+          version: pnpm changeset version
+          commit: 'chore: version packages'
+          title: 'Version Packages'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 选型用"hype 强弱"作依据</div>
+          <p>看到 Bun 火就全员切 Bun，看到 Nx 在 conference 频繁就上 Nx。<strong>选型应基于项目特征 + 团队能力</strong>。Bun 适合中型新项目；Nx 适合大型企业 + 全家桶哲学；不要逆向把工具适配项目。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 在中型项目上 Bazel</div>
+          <p>看到 Google 用 Bazel 觉得"<strong>大公司方案肯定好</strong>"。<strong>不要</strong>。Bazel 解决 10000+ 包 + 多语言 + 强可重现的问题，中型项目装 Bazel 等于"<strong>用核武打苍蝇</strong>"——6 个月学习曲线，复杂配置，最终没收益。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 频繁切工具栈</div>
+          <p>每年看到新东西就切：今年 Yarn → 明年 pnpm → 后年 Bun → 然后 Nx。每次切意味着 2 周迁移 + 团队学习成本 + 可能引入新 bug。<strong>选定后稳定 2-3 年</strong>，把精力投入业务。除非有具体痛点驱动，否则不切。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · "all in 全家桶" 或 "all in 组合工具"</div>
+          <p>"<strong>必须 Nx</strong>" 或 "<strong>必须 Turborepo</strong>"——没有"必须"。两条哲学路线都有大型成功项目背书。看团队文化匹配，不要意识形态化。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 不考虑 5 年维护</div>
+          <p>选最新最快的工具，但 1 年后"<strong>维护人离职</strong>" → 团队搞不懂复杂配置 → 不敢动 → 6 年后还在跑 deprecated 工具。<strong>选型时考虑可维护性</strong>：文档质量、社区大小、迁移工具（如 nx migrate）。"<strong>能 happy 升级 5 年</strong>" 比 "<strong>装上时最快</strong>" 重要得多。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://2024.stateofjs.com/" target="_blank" rel="noopener">State of JS 2024（包管理器份额数据）</a></li>
+          <li><a href="https://pnpm.io/" target="_blank" rel="noopener">pnpm 官方</a></li>
+          <li><a href="https://bun.com/docs/install" target="_blank" rel="noopener">Bun install 官方</a></li>
+          <li><a href="https://turbo.build/repo/docs" target="_blank" rel="noopener">Turborepo 官方</a></li>
+          <li><a href="https://nx.dev/" target="_blank" rel="noopener">Nx 官方</a></li>
+          <li><a href="https://jsr.io/" target="_blank" rel="noopener">JSR · 下一代 registry</a></li>
+          <li><a href="https://bazel.build/" target="_blank" rel="noopener">Bazel · 超大规模</a></li>
+          <li><a href="../01-overview/01-history.html">P1.1 · 包管理器项目史（本主题首章）</a></li>
+          <li><a href="../01-overview/02-landscape.html">P1.2 · 同代人横评</a></li>
+          <li><a href="../03-pnpm-internals/01-cas-storage.html">P3.1 · pnpm CAS 设计</a></li>
+          <li><a href="../05-orchestration/02-nx.html">P5.2 · Nx vs Turborepo 决策矩阵（前一阶段最后章）</a></li>
+          <li><a href="../06-versioning-publishing/01-changesets-publish.html">P6.1 · Changesets + provenance（前一章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../06-versioning-publishing/01-changesets-publish.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P6.1 · Changesets + provenance</span>
+          </a>
+          <a class="next" href="../index.html">
+            <span class="label">主题完成 →</span>
+            <span class="title">回到主题首页</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
