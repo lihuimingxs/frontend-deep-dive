@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>元框架同代人横评 · P1.2 · Next.js 深度学习</title>
+    <meta name="description" content="2026 React 元框架格局横评：Next.js vs React Router v7 vs TanStack Start vs Astro vs Qwik City + Nuxt/SvelteKit 对照。从路由模型/数据获取/表单/默认渲染/部署/缓存六个维度对比。Next.js 4 个核心设计赌注：Server-first、约定优于配置、框架管缓存、Vercel 部署优先。回答「我们项目应该选哪个」。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23000000'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EN%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Next.js 深度学习</span><span class="site-title-badge" style="background: oklch(0.22 0.02 250); color: #fff">Next</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P1 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · Next.js 是谁</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html">01 · Next.js 项目史</a></li>
+          <li><a href="02-frameworks-landscape.html" class="active">02 · 元框架同代人横评</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Next.js</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · Next.js 是谁</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 元框架同代人横评</span>
+        </nav>
+        <h1>元框架同代人横评</h1>
+        <p class="lead">
+          2026 年的 React 元框架格局比 2022 年丰富得多 —— Next.js / React Router v7 / TanStack Start / Astro / Qwik City 各自占住一片场景。这一章把六个核心维度（路由模型 / 数据获取 / 表单 / 默认渲染 / 部署 / 缓存）摊开做对比，再讲清 Next.js 的 4 个设计赌注。读完能回答"我们项目应该选哪个"，也能理解后面所有"为什么 Next.js 这么设计"的根因。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P1.1 项目史（理解 Next.js 演化）</span>
+          <span><strong>主要来源</strong> 各家官方 docs + 2025-2026 主要框架团队公开文章</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>2026 年 React 元框架不再是"Next.js vs Remix 二选一"。新格局是 <strong>Next.js 主流 / RR v7 稳定 / TanStack Start 增长 / Astro 内容站垄断 / Qwik 实验</strong>，外加 Vue 阵营 Nuxt + Svelte 阵营 SvelteKit 作为对照。</li>
+          <li>Next.js 在新项目里占 60-70% 份额（含 Vercel 部署生态），是事实标准但不是唯一选择。"用 Next.js"成为 React 生产项目的默认假设，但 15% 以上团队会选其他。</li>
+          <li><b>React Router v7</b>（formerly Remix）2024 年完成 Remix → RR v7 合并；保留 loaders/actions 心智；不押 RSC；偏向"贴近 Web 标准"的工程派；适合不想接受 RSC 心智 + 偏向 vendor-neutral 的团队。</li>
+          <li><b>TanStack Start</b> 2025 起 beta，2026 仍在迭代；与 TanStack Router/Query/Table 同生态；定位是"vendor-neutral 的下一代"；增长很快但仍属早期采用。</li>
+          <li><b>Astro</b> 在内容站点 / 文档站 / marketing site 场景几乎垄断；Islands 架构（默认 0 JS，按需 hydrate）+ <code>server:defer</code> + 2025 起加 Server Actions；不是 SaaS / dashboard 选择。</li>
+          <li><b>Qwik City</b> 主打 Resumability（不 hydrate 而是 resume）；理论先进、demo 性能数据漂亮；但生态小、Builder.io 公司商业化压力让长期前景不确定。</li>
+          <li>Next.js 的 4 个核心设计赌注：<b>Server-first</b>（默认 RSC、Client 是边界 opt-in）/ <b>约定优于配置</b>（文件夹路由 + 文件名约定）/ <b>框架管缓存</b>（v13 起把缓存做成框架职责）/ <b>Vercel 部署优先</b>（新特性先在 Vercel 验证）。这 4 条决定了它和其他元框架的所有结构性差异。</li>
+          <li>横评的关键不是"哪个最好"，是"在你的场景里哪个最合适"。SaaS dashboard / 个性化复杂应用 → Next.js；纯 SPA + 自管 backend → RR v7；vendor-neutral + 强类型路由 → TanStack Start；内容站 → Astro。</li>
+          <li>2026 年 RSC 协议被广泛接受 —— RR v7 路线图 2026 加 RSC 支持；TanStack Start 也在做。这意味着 RSC 不再是 Next.js 的护城河，差异化点在"约定 + 缓存 + 部署一体化"。</li>
+          <li>选型决策不是"今天选完一辈子"。Next.js 与 RR v7 之间迁移成本 30-40%（路由 + data fetching 改写）；与 Astro 之间迁移成本极高（架构差异大）。最重要的不是选对，是选完后理解所选框架的设计哲学不浪费它的优势。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>同代人 1 · React Router v7（formerly Remix）</h3>
+        <p>2024 年 Shopify 把 Remix 团队整合，宣布 Remix 与 React Router 合并，合并产物叫 React Router v7。这是 React 生态最重要的整合事件之一。</p>
+
+        <p>React Router v7 的设计立场清晰，三条核心：</p>
+        <ul>
+          <li><b>贴近 Web 标准</b> —— 路由用 nested routes（与浏览器 URL 模型对齐）；表单用原生 <code>&lt;form action&gt;</code>；数据用 <code>fetch</code> + <code>FormData</code>；不是"贴近 React"</li>
+          <li><b>loaders + actions 模型</b> —— 每个 route 配一对 loader（GET，给数据）和 action（POST/PUT/DELETE，处理变更）；与 Next.js Server Components / Server Actions 形似但实现路径不同</li>
+          <li><b>不押 RSC</b>（直到 2026 路线图）—— 长期立场是"传统 SSR + hydration 已经够好"；2026 起开始添加 RSC 支持但作为可选项</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// React Router v7 风格
+// app/routes/posts.$id.tsx
+export async function loader({ params }: LoaderArgs) {
+  return { post: await db.posts.findUnique({ where: { id: params.id } }) };
+}
+export async function action({ request, params }: ActionArgs) {
+  const form = await request.formData();
+  await db.posts.update({ where: { id: params.id }, data: { title: form.get('title') } });
+  return redirect(`/posts/${params.id}`);
+}
+export default function Post() {
+  const { post } = useLoaderData&lt;typeof loader&gt;();
+  return (
+    &lt;Form method="post"&gt;
+      &lt;input name="title" defaultValue={post.title} /&gt;
+      &lt;button&gt;Save&lt;/button&gt;
+    &lt;/Form&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>RR v7 的优势：</p>
+        <ul>
+          <li>不需要学 RSC 心智；老 React 工程师上手成本低</li>
+          <li>vendor-neutral —— 可部署到 Vercel / Netlify / Cloudflare / 自建 Node 任何地方</li>
+          <li>Web 标准向 —— FormData / Request / Response 都是浏览器原生 API</li>
+          <li>路由模型清晰 —— nested routes 直接映射 URL 层级</li>
+        </ul>
+
+        <p>RR v7 的劣势：</p>
+        <ul>
+          <li>不押 RSC，组件树整体走 hydration，bundle 体积更大</li>
+          <li>没有 Next.js 那套缓存层（Data Cache / Router Cache / 'use cache'），缓存全靠用户自己实现（HTTP Cache-Control / Redis / TanStack Query）</li>
+          <li>生态没有 Next.js 完整 —— next/image / next/font / next/metadata 都没有同等替代</li>
+          <li>2026 路线图加 RSC 时会引入断代变化，类似 Next.js 13 → App Router 的痛苦</li>
+        </ul>
+
+        <h3>同代人 2 · TanStack Start</h3>
+        <p>Tanner Linsley（TanStack 系列作者）2024 年启动 TanStack Start，2025 年进 beta，2026 仍在迭代。立场是"vendor-neutral 的下一代 React 元框架"。</p>
+
+        <p>核心特性：</p>
+        <ul>
+          <li><b>类型安全的代码定义路由</b> —— 与 TanStack Router 同源；不是 file-based 而是代码定义；类型全程推导</li>
+          <li><b>与 TanStack Query 一等公民集成</b> —— server-side prefetch + client-side cache 一体</li>
+          <li><b>支持 RSC</b>（实验）—— 2026 年加；与 TanStack Query 配合的方式与 Next.js 不同</li>
+          <li><b>vendor-neutral</b> —— 部署到任何地方，不绑 Vercel</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// TanStack Start 风格（代码定义路由）
+import { createFileRoute } from '@tanstack/react-router';
+
+export const Route = createFileRoute('/posts/$id')({
+  loader: async ({ params }) =&gt; {
+    return { post: await db.posts.findUnique({ where: { id: params.id } }) };
+  },
+  component: PostComponent,
+});
+
+function PostComponent() {
+  const { post } = Route.useLoaderData();
+  return &lt;article&gt;{post.title}&lt;/article&gt;;
+}</code></pre>
+        </div>
+
+        <p>TanStack Start 的优势：</p>
+        <ul>
+          <li>类型安全比 Next.js / RR v7 更彻底（路由参数、loader 返回值、search params 全程类型）</li>
+          <li>与 TanStack Query 集成无缝 —— TanStack Query 用户几乎零学习成本</li>
+          <li>vendor-neutral 立场清晰</li>
+        </ul>
+
+        <p>TanStack Start 的劣势：</p>
+        <ul>
+          <li>2026 仍属早期采用，生态小</li>
+          <li>缓存仍依赖 TanStack Query，没有 Next.js 那种"框架管"的层级</li>
+          <li>商业化路径不清晰（TanStack 是开源项目 + Tanner 个人 sponsor，没有 Vercel 那样的公司支撑）</li>
+        </ul>
+
+        <h3>同代人 3 · Astro</h3>
+        <p>Fred K. Schott 2021 年发布 Astro，2024-2026 在内容站点 / 文档站 / marketing site 几乎垄断。它不是 React 框架，是"框架无关"——可以同时用 React / Vue / Svelte / Solid 组件。</p>
+
+        <p>核心特性：</p>
+        <ul>
+          <li><b>Islands 架构</b> —— 默认输出纯 HTML（0 JS），需要交互的"岛"才 hydrate</li>
+          <li><b><code>client:load</code> / <code>client:idle</code> / <code>client:visible</code> / <code>client:only</code></b> —— 控制每个 island 的 hydration 时机</li>
+          <li><b><code>server:defer</code></b>（2025+）—— 类似 Suspense + fallback，server 流式</li>
+          <li><b>Server Actions</b>（2025+）—— Astro 也加了，类似 Next.js Server Actions</li>
+          <li><b>Content Collections</b> —— Markdown / MDX 内容管理 + 类型化 frontmatter</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">astro</span>
+          <pre class="code"><code class="lang-astro">---
+// src/pages/blog/[slug].astro
+import { getCollection } from 'astro:content';
+import ReactComment from '../../components/ReactComment.tsx';
+
+const { slug } = Astro.params;
+const post = await getCollection('blog').then(p =&gt; p.find(x =&gt; x.slug === slug));
+---
+&lt;article&gt;
+  &lt;h1&gt;{post.data.title}&lt;/h1&gt;
+  &lt;Content /&gt;
+  &lt;!-- 只这一段 hydrate React，其他全静态 --&gt;
+  &lt;ReactComment client:visible postId={slug} /&gt;
+&lt;/article&gt;</code></pre>
+        </div>
+
+        <p>Astro 的最佳场景：</p>
+        <ul>
+          <li>文档站点（Astro Starlight 是 React 生态 docs site 主流）</li>
+          <li>marketing site / 落地页（性能 + SEO 极致）</li>
+          <li>blog / 内容站（Markdown 一等公民）</li>
+          <li>不是：dashboard / SaaS / 高度交互应用（这些用 Next.js / RR v7）</li>
+        </ul>
+
+        <h3>同代人 4 · Qwik City</h3>
+        <p>Misko Hevery（Angular 原作者）2021 年发布 Qwik，押注 Resumability —— 不在客户端 hydrate（重新执行组件代码），而是"resume"（恢复服务端已经执行的状态）。</p>
+
+        <p>原理简化：</p>
+        <ul>
+          <li>server 渲染时把"需要客户端继续的状态"序列化到 HTML 属性里</li>
+          <li>client 加载时不重跑组件代码；只在用户交互时 fetch 对应 handler 代码</li>
+          <li>结果：首屏 0 JS、按交互按需加载、TTI 极小</li>
+        </ul>
+
+        <p>Qwik 理论先进，benchmark 性能漂亮，但 2026 年实际采用率仍低。原因：</p>
+        <ul>
+          <li>生态小 —— Qwik UI 库 / 组件库远不如 React 生态</li>
+          <li>心智迁移成本高 —— 不能直接复用 React 知识</li>
+          <li>商业化压力 —— Builder.io（Qwik 主要赞助方）2024 年裁员，长期投入不确定</li>
+        </ul>
+
+        <p>Qwik 的位置类似 Solid 之于 React —— 理论上更优，但生态决定了它仍是小众选择。</p>
+
+        <h3>同代人 5 · Nuxt 3 / SvelteKit（非 React 阵营对照）</h3>
+        <p>Vue 阵营 Nuxt 3 / Svelte 阵营 SvelteKit 不直接竞争 Next.js（语言不同），但作为对照能看清楚不同框架文化的取舍。</p>
+
+        <p><b>Nuxt 3</b>（Vue 3）：</p>
+        <ul>
+          <li>file-based 路由（与 Next.js 相似）</li>
+          <li><code>useFetch</code> / <code>useAsyncData</code> 数据获取（component 内调用）</li>
+          <li>Nitro server engine（vendor-neutral，部署到任何地方）</li>
+          <li>有 Vue 风格的 SSR + SSG + ISR 模型</li>
+          <li>不押 RSC（Vue 没有 RSC）</li>
+        </ul>
+
+        <p><b>SvelteKit</b>（Svelte 5）：</p>
+        <ul>
+          <li>file-based 路由 + load 函数模型</li>
+          <li>编译成原生 JS 而非 hydrate（部分类似 Qwik 的 resumability 思想）</li>
+          <li>vendor-neutral，adapter 接 Vercel / Cloudflare / Node</li>
+          <li>极小的 bundle 体积是核心卖点</li>
+        </ul>
+
+        <p>这两个生态的共同点：<b>不押 RSC</b>。它们的"同等概念"是 SSR + 结构化数据获取（loaders / load 函数）+ 流式渲染。这反过来印证了 RSC 是"React 生态特定"的赌注，不是普世解决方案。</p>
+
+        <h3>横评矩阵 · 6 个核心维度</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>Next.js 16</th>
+              <th>RR v7</th>
+              <th>TanStack Start</th>
+              <th>Astro 5</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>路由模型</td>
+              <td>文件夹 = 段（约定）</td>
+              <td>nested routes（约定）</td>
+              <td>代码定义（类型安全）</td>
+              <td>file-based + Markdown</td>
+            </tr>
+            <tr>
+              <td>数据获取</td>
+              <td>RSC + fetch / 'use cache'</td>
+              <td>loader 函数</td>
+              <td>loader + TanStack Query</td>
+              <td>component frontmatter / server:defer</td>
+            </tr>
+            <tr>
+              <td>表单 / 变更</td>
+              <td>Server Actions（'use server'）</td>
+              <td>action 函数 + Form</td>
+              <td>Server Functions（实验）</td>
+              <td>Astro Actions（2025+）</td>
+            </tr>
+            <tr>
+              <td>默认渲染</td>
+              <td>RSC + PPR（v16）</td>
+              <td>SSR + hydration</td>
+              <td>SSR + RSC（实验）</td>
+              <td>纯 HTML + Islands</td>
+            </tr>
+            <tr>
+              <td>部署</td>
+              <td>Vercel 一等 / self-host 滞后</td>
+              <td>vendor-neutral</td>
+              <td>vendor-neutral</td>
+              <td>vendor-neutral</td>
+            </tr>
+            <tr>
+              <td>缓存</td>
+              <td>框架管（5 层 → Cache Components）</td>
+              <td>用户管（HTTP / Redis / TanStack Query）</td>
+              <td>用户管 + TanStack Query</td>
+              <td>主要 build-time 静态</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Next.js 的 4 个核心设计赌注</h3>
+
+        <p>把 Next.js 与同代人对比，能看清它的 4 个根本立场：</p>
+
+        <p><b>1. Server-first</b> —— App Router 默认所有组件是 RSC，<code>'use client'</code> 是边界 opt-in。这与 RR v7 的"传统 hydration"哲学相反。Server-first 意味着默认 0 client JS（除非显式 client）；意味着可以在组件里直接 await 数据库；意味着 client bundle 不含 server 代码。代价：必须接受 RSC 心智 + 序列化限制。</p>
+
+        <p><b>2. 约定优于配置</b> —— 文件夹 = 路由段；page.tsx / layout.tsx / loading.tsx 全是约定。与 TanStack Router 的"代码定义路由"对立。约定的好处：新人 1 小时上手；项目结构一致；少写样板。代价：约定是黑盒，不容易跳出（比如想要"两个并存的 layout 系统"得用 multiple root layouts 这种特殊机制）。</p>
+
+        <p><b>3. 框架管缓存</b> —— 从 v13 起把缓存层做成框架职责（Data Cache / Router Cache / unstable_cache → 'use cache'）。与 RR v7 / TanStack Start "用户管"明显不同。框架管的好处：开发者写 fetch 不用想 cache；缓存策略和路由 + 渲染统一管理。代价：v13-14 默认 cache-by-default 引爆了生产事故，v15 反转，v16 重写——这条路修了 4 年。</p>
+
+        <p><b>4. Vercel 部署优先</b> —— 所有新特性都先在 Vercel 验证（Edge Functions / Image Optimization / KV / Postgres / AI SDK）。self-host 总是滞后（特别是 ISR + edge middleware）。优势：Vercel 部署用 Next.js 是无敌组合，开箱即用。代价：self-host 团队需要承担"二等公民"成本，要自己接 Redis cache handler、自己部署 sharp、自己处理 ISR 多实例协调。</p>
+
+        <h3>2026 实际市场分布</h3>
+
+        <p>基于 2025-2026 年公开调研（Vercel / Netlify 注册项目、State of JS / npm 下载、Stack Overflow 调查）的大致格局：</p>
+
+        <ul>
+          <li><b>Next.js</b> · 60-70% 新 React 项目（含 Vercel 默认 + Pages Router 存量），SaaS / dashboard / 电商绝对主流</li>
+          <li><b>React Router v7</b> · 15-20%，重 Web 标准 / 不接受 RSC / 已有 Remix 项目继续用</li>
+          <li><b>TanStack Start</b> · 5-8% 但增长最快，重类型 / vendor-neutral 团队优先</li>
+          <li><b>Astro</b> · 内容站点几乎垄断（Starlight docs / blog / marketing 大头），但不与 Next.js 直接竞争 SaaS 场景</li>
+          <li><b>Qwik / Solid Start</b> · 加起来 3-5%，实验性 / 极致性能场景</li>
+          <li><b>纯 SPA + Vite + React Router</b>（不算元框架）· 仍占 15-20%，dashboard / admin 后台不需要 SSR</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 一个新 SaaS 项目（dashboard 多 + 用户登录 + 订阅）</h3>
+        <p>选 <b>Next.js 16</b>。理由：</p>
+        <ul>
+          <li>SaaS 是 dashboard 多 + 个性化（每用户不同）+ 表单密集（CRUD）— 这正是 Next.js 设计目标</li>
+          <li>App Router 的嵌套布局原生支持（dashboard layout 包多个 page，state 保留）</li>
+          <li>Server Actions 让表单全栈一体，不用单独搭 API</li>
+          <li>NextAuth + middleware 处理 auth 极简</li>
+          <li>Vercel 部署一键，初创团队零运维</li>
+        </ul>
+
+        <h3>场景 2 · 公司官网 + 文档站 + 博客</h3>
+        <p>选 <b>Astro</b>。理由：</p>
+        <ul>
+          <li>内容为主，0 JS 默认 = 极致性能 + SEO</li>
+          <li>Markdown / MDX 一等公民，作者写起来快</li>
+          <li>需要 React 组件的地方（订阅表单 / 评论）作为 Islands hydrate</li>
+          <li>不用承担 Next.js 的 RSC 心智 + 缓存复杂度</li>
+        </ul>
+
+        <h3>场景 3 · 已有 Remix 项目，想继续投入</h3>
+        <p>升级到 <b>React Router v7</b>。理由：</p>
+        <ul>
+          <li>Remix 团队整合到 RR v7，老 Remix API 大部分平滑迁移</li>
+          <li>不用学 RSC 心智，老团队继续用 loaders/actions</li>
+          <li>2026 RR v7 加 RSC 是可选项，不强制迁移</li>
+          <li>vendor-neutral 立场让你随时可以从 Vercel 跳走</li>
+        </ul>
+
+        <h3>场景 4 · 内部管理后台（admin dashboard）</h3>
+        <p>选 <b>Vite + React + TanStack Router/Query</b>（纯 SPA，不需要元框架）。理由：</p>
+        <ul>
+          <li>内部用，没有 SEO 需求</li>
+          <li>主要在登录后用，首屏白屏几秒可接受</li>
+          <li>SPA 模型最简单，不需要 SSR / RSC / 缓存层</li>
+          <li>团队会 React + 不想学 Next.js 时这是合理选择</li>
+        </ul>
+
+        <h3>场景 5 · 强类型 / vendor-neutral 偏好的中型团队</h3>
+        <p>评估 <b>TanStack Start</b>。理由：</p>
+        <ul>
+          <li>类型安全比 Next.js 更彻底，重 TypeScript 团队会喜欢</li>
+          <li>与 TanStack Query 集成无缝</li>
+          <li>vendor-neutral，可部署任何地方</li>
+          <li>但 2026 仍属早期采用，要接受生态相对小 + 文档不如 Next.js 完善</li>
+        </ul>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · "添加评论"功能在 4 个框架的写法对比</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// Next.js 16 (Server Action + revalidate)
+// app/posts/[id]/page.tsx
+import { revalidatePath } from 'next/cache';
+
+async function addComment(postId: string, formData: FormData) {
+  'use server';
+  await db.comments.create({ data: { postId, body: formData.get('body') as string } });
+  revalidatePath(`/posts/${postId}`);
+}
+
+export default async function Post({ params }: { params: Promise&lt;{ id: string }&gt; }) {
+  const { id } = await params;
+  const post = await db.posts.findUnique({ where: { id } });
+  return (
+    &lt;article&gt;
+      &lt;h1&gt;{post.title}&lt;/h1&gt;
+      &lt;form action={addComment.bind(null, id)}&gt;
+        &lt;input name="body" /&gt;
+        &lt;button&gt;Add&lt;/button&gt;
+      &lt;/form&gt;
+    &lt;/article&gt;
+  );
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// React Router v7 (loader + action)
+// app/routes/posts.$id.tsx
+export async function loader({ params }: LoaderArgs) {
+  return { post: await db.posts.findUnique({ where: { id: params.id } }) };
+}
+
+export async function action({ request, params }: ActionArgs) {
+  const form = await request.formData();
+  await db.comments.create({ data: { postId: params.id, body: form.get('body') as string } });
+  return null;  // 触发 loader 重跑
+}
+
+export default function Post() {
+  const { post } = useLoaderData&lt;typeof loader&gt;();
+  return (
+    &lt;article&gt;
+      &lt;h1&gt;{post.title}&lt;/h1&gt;
+      &lt;Form method="post"&gt;
+        &lt;input name="body" /&gt;
+        &lt;button&gt;Add&lt;/button&gt;
+      &lt;/Form&gt;
+    &lt;/article&gt;
+  );
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// TanStack Start (类型安全代码定义)
+// src/routes/posts.$id.tsx
+import { createFileRoute, Form } from '@tanstack/react-router';
+
+const addComment = createServerFn({ method: 'POST' })
+  .input(z.object({ postId: z.string(), body: z.string() }))
+  .handler(async ({ input }) =&gt; {
+    await db.comments.create({ data: input });
+  });
+
+export const Route = createFileRoute('/posts/$id')({
+  loader: async ({ params }) =&gt; ({
+    post: await db.posts.findUnique({ where: { id: params.id } })
+  }),
+  component: PostComponent,
+});
+
+function PostComponent() {
+  const { post } = Route.useLoaderData();
+  return (/* 类似上面 */);
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">astro</span>
+          <pre class="code"><code class="lang-astro">---
+// Astro (Astro Actions, 2025+)
+// src/pages/posts/[id].astro
+import { actions } from 'astro:actions';
+
+const { id } = Astro.params;
+const post = await db.posts.findUnique({ where: { id } });
+const result = Astro.getActionResult(actions.addComment);
+---
+&lt;article&gt;
+  &lt;h1&gt;{post.title}&lt;/h1&gt;
+  &lt;form method="POST" action={actions.addComment}&gt;
+    &lt;input name="postId" type="hidden" value={id} /&gt;
+    &lt;input name="body" /&gt;
+    &lt;button&gt;Add&lt;/button&gt;
+  &lt;/form&gt;
+&lt;/article&gt;</code></pre>
+        </div>
+
+        <p>四种写法都能完成相同功能。差异在心智模型：Next.js 把 server function 和 component 写在一起；RR v7 严格分离 loader / action / component；TanStack Start 用类型安全的 server functions；Astro 用专门的 actions module。选哪个反映团队偏好。</p>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>"Next.js 一定比 Remix/RR v7 好"</b> —— 不一定。SaaS dashboard 场景 Next.js 优势大；但纯 SPA / 不接受 RSC 的团队 RR v7 简单清晰。判断要看场景</li>
+          <li><b>用 Astro 做 dashboard</b> —— Astro 是内容站点优化的，dashboard 高度交互场景 Islands 架构反而是负担（你大部分组件都要 client:load）。这种场景应该 Next.js / RR v7</li>
+          <li><b>用 Next.js 做纯文档站</b> —— overkill。Next.js 的 RSC + 缓存 + Server Actions 在 docs site 用不到；Astro Starlight 是 0 JS + Markdown 直接出 HTML，性能更优 + 维护更简单</li>
+          <li><b>看 2022-2023 年 Remix vs Next.js 的对比文章</b> —— 那时候 RR v7 还没合并、Next.js App Router 还在 beta、缓存反转还没发生。结论几乎全过时了</li>
+          <li><b>"vendor-neutral 一定比 vendor-locked 好"</b> —— 不一定。如果你已决定部署到 Vercel，"vendor-locked"的成本是 0、收益是新特性首发。只有当你真有跳走计划时 vendor-neutral 才有价值</li>
+          <li><b>"TanStack Start 早期采用没问题"</b> —— 早期采用要承担文档不全 + bug + 路线图变更。如果团队不接受这种风险，等 2027 再看</li>
+          <li><b>"Qwik 的性能数字这么好，应该选它"</b> —— Demo 数据漂亮 ≠ 生产场景优势明显。生态小 + 团队学习成本 + 商业化不确定性是真实风险</li>
+          <li><b>纠结半年选不出来</b> —— 选型决策不是不可逆，但拖延代价更大。根据本章场景指引选一个，开始写代码 2-3 周后会比纠结半年理解得更深</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://nextjs.org/docs" target="_blank" rel="noopener">Next.js docs</a> · 本主题主要参考</li>
+          <li><a href="https://reactrouter.com/" target="_blank" rel="noopener">React Router docs</a> · v7 完整文档（含 Remix 迁移指南）</li>
+          <li><a href="https://tanstack.com/start" target="_blank" rel="noopener">TanStack Start docs</a></li>
+          <li><a href="https://docs.astro.build/" target="_blank" rel="noopener">Astro docs</a></li>
+          <li><a href="https://qwik.dev/" target="_blank" rel="noopener">Qwik docs</a></li>
+          <li><a href="https://nuxt.com/" target="_blank" rel="noopener">Nuxt 3 docs</a>（Vue 阵营对照）</li>
+          <li><a href="https://svelte.dev/docs/kit" target="_blank" rel="noopener">SvelteKit docs</a>（Svelte 阵营对照）</li>
+          <li><a href="https://remix.run/blog/merging-remix-and-react-router" target="_blank" rel="noopener">Remix → RR v7 合并公告</a></li>
+          <li><a href="https://leerob.com/" target="_blank" rel="noopener">Lee Robinson blog</a> · Vercel DX 主管，Next.js 设计动机最清晰的解读</li>
+          <li><a href="https://overreacted.io/" target="_blank" rel="noopener">overreacted.io</a> · Dan Abramov（前 React 团队，现 Bluesky），RSC / Server Actions 哲学层面的解读</li>
+          <li><a href="../../react/01-overview/02-design-philosophy.html">React 主题 P1.2 · React 设计哲学</a> · Next.js 是 React 哲学的延伸，先理解 React 再理解 Next.js</li>
+          <li><a href="../07-deploy-ecosystem/02-ecosystem-decision.html">本主题 P7.2 · 生态决策树收束</a> · 详细的"何时不用 Next.js"决策</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

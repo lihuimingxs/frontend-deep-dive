@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Next.js 深度学习 · App Router / RSC / Server Actions / Cache Components / Turbopack</title>
+    <meta
+      name="description"
+      content="Next.js 深度学习。7 阶段、12 章：项目史 2016-2026 + 元框架同代人横评（Remix/RR v7、TanStack Start、Astro、SvelteKit）→ App Router 文件约定与 Server/Client 边界 → RSC payload 协议与流式渲染 → Server Actions 全谱 → 五层缓存模型到 Cache Components + PPR → Turbopack 内部与 bundler 横评 → Edge/Node runtime + 部署矩阵 + 生态决策树。回答「v15 默认缓存为什么反转」「PPR 与 use cache 怎么决策」「Server Actions vs Route Handlers 怎么选」「self-host Next.js 缓存层怎么搭」等具体问题。锁定 Next.js 16 主线（Turbopack stable / PPR GA / use cache）。"
+    />
+    <link rel="stylesheet" href="../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23000000'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EN%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="index.html">
+          <span>Next.js 深度学习</span>
+          <span class="site-title-badge" style="background: oklch(0.22 0.02 250); color: #fff">Next</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">← 深度学习</a>
+          <a href="https://nextjs.org/docs" target="_blank" rel="noopener">Next.js Docs</a>
+          <a href="https://nextjs.org/blog" target="_blank" rel="noopener">Release Notes</a>
+          <a href="#phases">章节</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <main id="main" class="home">
+      <section class="hero">
+        <h1>Next.js 深度学习</h1>
+        <p>
+          基于
+          <a href="https://nextjs.org/docs" target="_blank" rel="noopener">nextjs.org/docs</a> +
+          <a href="https://nextjs.org/blog" target="_blank" rel="noopener">官方 release notes</a> +
+          <a href="https://vercel.com/blog" target="_blank" rel="noopener">Vercel 工程 blog</a> +
+          Lee Robinson / Tim Neutkens / Sebastian Markbåge / Andrew Clark 公开演讲与 React RFC 整理。回答三个问题：Next.js 怎么从 2016 年的 SSR 工具走到 2026 年押注 RSC 的全栈元框架、App Router + RSC + Server Actions 这套约定背后的设计赌注、五层缓存到 Cache Components 的反复修正最终落到哪。是 <a href="../react/index.html">React</a> 主题在生产侧的延伸。
+        </p>
+        <div class="hero-meta">
+          <span>受众 <code>写过 Next.js 但被缓存/RSC 边界搞迷糊的工程师</code></span>
+          <span>来源 <code>nextjs.org / vercel.com/blog / React RFC</code></span>
+          <span>章节 <code>12 章 / 7 阶段</code></span>
+          <span>主线 <code>Next.js 16 · React 19 · Turbopack stable · PPR GA</code></span>
+          <span>状态 <code>✅ 12/12 章完成</code></span>
+        </div>
+      </section>
+
+      <h2 id="phases" style="margin-top: 0">分阶段目录</h2>
+      <p style="color: var(--text-muted); max-width: 720px">
+        共 7 个阶段、12 章，按"<strong>从写一个 page 到上线</strong>"的链路展开：是谁 → App Router 心智 → RSC 与流式 → Server Actions → 缓存系统 → Turbopack → 部署 + 生态。建议顺序阅读；从 Pages Router 迁 App Router 看 P1.1 + P2 + P5；想搞懂 RSC 工作原理看 P3；缓存反复修正看 P5（核心难章）；选型 / self-host 看 P7。
+      </p>
+
+      <div class="phase-grid">
+        <a class="phase-card" href="01-overview/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P1 · Next.js 是谁</h3>
+            <span class="phase-card-badge">✅ 2 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            Next.js 项目史 2016-2026（1.0 getInitialProps → 9 TS+API Routes → 9.3 getStatic/SSR → 9.5 ISR → 13 App Router+RSC+Turbopack alpha → 14 Server Actions+PPR 预览 → 15 React 19+缓存反转 → 16 Turbopack/PPR GA + Cache Components）+ 元框架同代人横评（Remix/RR v7、TanStack Start、Astro、SvelteKit、Nuxt）+ 4 个核心设计赌注。
+          </p>
+          <div class="phase-card-topics">
+            <span>10 年项目史</span>
+            <span>缓存反转</span>
+            <span>vs RR v7 / TanStack Start</span>
+            <span>Server-first 押注</span>
+            <span>设计哲学</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="02-app-router/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P2 · App Router 心智</h3>
+            <span class="phase-card-badge">✅ 2 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            <strong>文件系统路由约定</strong>（page / layout / loading / error / not-found / template / 动态段 / 路由分组 / parallel routes / intercepting routes）+ <strong>Server / Client 边界</strong>（<code>'use client'</code> 模块边界 vs <code>'use server'</code> 函数边界 / 序列化规则 / "Server 包 Client 包 Server"混合模式）。这是 App Router 心智最难建立的一节。
+          </p>
+          <div class="phase-card-topics">
+            <span>文件约定</span>
+            <span>parallel/intercepting</span>
+            <span>Server/Client 边界</span>
+            <span>序列化规则</span>
+            <span>vs Pages Router</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="03-rsc-streaming/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P3 · RSC 与流式</h3>
+            <span class="phase-card-badge">✅ 2 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            <strong>RSC payload 协议</strong>（wire format / SSR HTML + RSC 双流 / Suspense flush 机制 / Client Component 引用与 hydration）—— 这是 RSC 神话祛魅章。+ <strong>流式渲染 + Selective Hydration</strong>（loading.tsx ≡ Suspense / 嵌套 boundary / 分段 reveal / 避免 waterfall / error.tsx 错误恢复）。
+          </p>
+          <div class="phase-card-topics">
+            <span>RSC payload</span>
+            <span>双流（HTML + RSC）</span>
+            <span>Selective Hydration</span>
+            <span>嵌套 Suspense</span>
+            <span>waterfall 反例</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="04-server-actions/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P4 · Server Actions</h3>
+            <span class="phase-card-badge">✅ 1 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            <strong>Server Actions 全谱</strong>：<code>'use server'</code> 三种声明位置 / form action / 与 React 19 hooks（useActionState / useFormStatus / useOptimistic）协作 / revalidatePath + revalidateTag + <code>updateTag</code>（v16 新）三件套 / progressive enhancement / 安全边界（CSRF + 加密 ID + auth 重校验）/ 何时用 Server Actions 何时用 Route Handlers。
+          </p>
+          <div class="phase-card-topics">
+            <span>'use server'</span>
+            <span>useActionState 配合</span>
+            <span>revalidate 三件套</span>
+            <span>updateTag</span>
+            <span>vs Route Handlers</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="05-caching/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P5 · 缓存系统真相 ⭐</h3>
+            <span class="phase-card-badge">✅ 2 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            <strong>v13-15 五层缓存模型</strong>（Request Memoization / Data Cache / Full Route Cache / Router Cache / CDN）+ 为什么 v15 把默认缓存反转 + <strong>v16 Cache Components 重构</strong>（<code>'use cache'</code> 指令 / cacheComponents 配置 / PPR 默认开 / 静态壳 + 动态洞模型）+ revalidatePath / revalidateTag / updateTag 决策树。Next.js 最被骂、最难懂的部分。
+          </p>
+          <div class="phase-card-topics">
+            <span>五层缓存</span>
+            <span>v15 缓存反转</span>
+            <span>'use cache'</span>
+            <span>PPR GA</span>
+            <span>updateTag</span>
+            <span>决策树</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="06-turbopack/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P6 · Turbopack</h3>
+            <span class="phase-card-badge">✅ 1 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            <strong>Turbopack 内部</strong>（Rust + turbo-tasks 增量计算引擎 + SWC 编译 + Webpack loader 兼容）+ <strong>bundler 横评</strong>（vs Vite-Rolldown / esbuild / Rspack / Bun build）+ 为什么 Vercel 押 Rust 不用 Vite。bundler 历史短重述，详见 <a href="../vite/index.html">Vite 主题</a>。
+          </p>
+          <div class="phase-card-topics">
+            <span>Turbopack 内部</span>
+            <span>turbo-tasks</span>
+            <span>vs Vite/Rolldown</span>
+            <span>vs Bun build</span>
+            <span>vendor-locked</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="07-deploy-ecosystem/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P7 · 部署 + 生态</h3>
+            <span class="phase-card-badge">✅ 2 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            <strong>Edge / Node runtime + 部署矩阵</strong>（middleware Edge 强制 / output: standalone / static export / Vercel vs self-host / Cloudflare Workers 适配 / 自定义 cache handler 接 Redis）+ <strong>生态决策树收束</strong>（next/image · next/font · metadata API · NextAuth · 状态 / 数据 / 测试 / monorepo）+ 何时不用 Next.js + 2027 展望。
+          </p>
+          <div class="phase-card-topics">
+            <span>Edge runtime</span>
+            <span>self-host 痛点</span>
+            <span>cache handler</span>
+            <span>next/image · font</span>
+            <span>vs RR v7 / TanStack Start</span>
+          </div>
+        </a>
+      </div>
+
+      <h2 style="margin-top: 48px">编写约定</h2>
+      <p style="color: var(--text-muted); max-width: 720px">
+        每章遵循统一的 6 段结构：<strong>速览 → 底层逻辑 → 应用场景 → 典型代码 → 常见陷阱 → 延伸阅读</strong>。本主题相比其他主题有以下额外约定：
+      </p>
+      <ul style="color: var(--text-muted); line-height: 1.8">
+        <li>
+          <strong>主线锁定 Next.js 16</strong> —— 所有"现在怎么用"的代码示例基于 v16；老 API（getInitialProps / Pages Router / unstable_cache 等）只在 P1.1 历史 + P5.1 缓存演进段中出现
+        </li>
+        <li>
+          <strong>「短重述 + 链回」</strong> —— React 19 hooks / Suspense / Concurrent / Fiber 都在 <a href="../react/index.html">React 主题</a>；bundler 历史在 <a href="../vite/index.html">Vite 主题</a>；测试栈在 <a href="../testing/index.html">测试主题</a>。本主题用 1-3 句话点到本质，紧跟一句"详细的 X 请参考 Y"
+        </li>
+        <li>
+          <strong>设计动机以 release notes / Vercel blog / RFC 为准</strong> —— Next.js 版本演进激进，文档随版本快速变化；写"为什么这么设计"必须回到一手出处，避开二手解读
+        </li>
+        <li>
+          <strong>缓存 / 性能数字必标条件</strong> —— "PPR 比 SSG 快 N 倍"必须标场景（数据来源 + 流式与否 + Vercel 还是 self-host），否则不写
+        </li>
+      </ul>
+
+      <h2 style="margin-top: 48px">与既有主题的关系</h2>
+      <p style="color: var(--text-muted); max-width: 720px">
+        Next.js 是 React 的生产承载，所以与多个已写主题大量交叉。本主题<strong>不重复</strong>已经讲透的底层机制，但会在每个交叉点提供"短重述 + 链接"。常见对应：
+      </p>
+      <ul style="color: var(--text-muted); line-height: 1.8">
+        <li>
+          P3.1 RSC 心智模型 → <a href="../react/06-modern/01-server-components.html">React P6.1 Server Components</a>（RSC 是 React 概念，本主题讲 Next.js 怎么实现协议）
+        </li>
+        <li>
+          P3.2 流式渲染 / Suspense / Selective Hydration → <a href="../react/05-concurrent/02-suspense.html">React P5.2 Suspense</a> + <a href="../react/05-concurrent/04-error-boundary.html">P5.4 Error Boundary</a>
+        </li>
+        <li>
+          P4.1 Server Actions 与 React 19 hooks → <a href="../react/06-modern/02-actions.html">React P6.2 Actions</a>（useActionState / useFormStatus / useOptimistic）
+        </li>
+        <li>
+          P6.1 Turbopack vs Vite/Rolldown/esbuild → <a href="../vite/01-overview/01-build-tool-history.html">Vite P1.1 构建工具史</a> + <a href="../vite/02-vite-architecture/01-dev-mode.html">Vite P2.1 双模架构</a>
+        </li>
+        <li>
+          P6.1 Turbopack vs Bun build → <a href="../bun/04-toolchain/02-bun-build.html">Bun P4.2 bun build</a>
+        </li>
+        <li>
+          P7.1 V8 isolate / Edge runtime → <a href="../v8/index.html">V8 主题</a>；Node runtime / streams → <a href="../node/index.html">Node 主题</a>
+        </li>
+        <li>
+          P7.2 Next.js 测试栈（Vitest + Playwright）→ <a href="../testing/index.html">测试工具主题</a>
+        </li>
+        <li>
+          P7.2 monorepo + Turborepo cache → <a href="../pnpm-monorepo/05-orchestration/01-turborepo.html">pnpm P5.1 Turborepo</a>
+        </li>
+      </ul>
+    </main>
+
+    <script src="../assets/app.js"></script>
+  </body>
+</html>

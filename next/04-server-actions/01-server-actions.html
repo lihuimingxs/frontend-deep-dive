@@ -1,0 +1,740 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Server Actions 全谱 · P4.1 · Next.js 深度学习</title>
+    <meta name="description" content="Server Actions 把表单 + 数据变更全栈一体化。这一章讲清 'use server' 三种声明位置、跨边界传递机制（client 实际触发 POST + 加密 action ID）、与 React 19 hooks（useActionState / useFormStatus / useOptimistic）协作、revalidatePath/revalidateTag/updateTag 三件套、progressive enhancement、安全边界（CSRF + auth 重校验）、Server Actions vs Route Handlers 决策。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23000000'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EN%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Next.js 深度学习</span><span class="site-title-badge" style="background: oklch(0.22 0.02 250); color: #fff">Next</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · Server Actions</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-server-actions.html" class="active">01 · Server Actions 全谱</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Next.js</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · Server Actions</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Server Actions 全谱</span>
+        </nav>
+        <h1>Server Actions 全谱</h1>
+        <p class="lead">
+          Server Actions 把"表单 + 数据变更"重新整合 —— 一个 <code>'use server'</code> 函数同时是 server function 和 client 调用句柄，与 React 19 的 useActionState / useFormStatus / useOptimistic 联动让表单成为全栈一等公民。这一章讲清 3 种声明位置、底层是怎么变成 POST 请求的、与 React 19 hooks 怎么配合、revalidate 三件套（path / tag / updateTag）的决策、progressive enhancement、安全边界，以及最常见的判断 —— Server Actions vs Route Handlers 怎么选。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P2.2 Server/Client 边界 + React 19 Actions 基础</span>
+          <span><strong>主要来源</strong> nextjs.org/docs Server Actions + React RFC #229 + Lee Robinson "Forms in Next.js" 演讲</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Server Actions 是 React 19 的 Actions 概念在 Next.js App Router 的全栈实现 —— <code>'use server'</code> 标记的函数从 server 直接<strong>导出为可调用句柄</strong>，client 调用时实际是一次 POST 请求到当前路由 + 加密 action ID。</li>
+          <li>3 种声明位置：<b>文件顶部</b>（整个文件的 export 都是 actions）/ <b>函数内部</b>（仅这个函数）/ <b>Server Component 内 inline 定义</b>。每种位置语义相同，差异在组织代码方式。</li>
+          <li>跨边界传递：Server Action 是<strong>函数 prop 的唯一例外</strong> —— 普通函数不能从 server 传给 client，但 Server Action 可以（被替换成调用句柄）。这是构建交互组件的关键能力。</li>
+          <li>底层调用：client 端"调用" Server Action 触发一次 <code>POST /current-path</code> + 表单 / multipart body + Next-Action 头携带加密 ID；server 路由匹配后查找对应函数执行。整个机制对开发者透明。</li>
+          <li>与 React 19 hooks 配合：<b>useActionState</b>（包装 action 让它有 state：data / error / pending）/ <b>useFormStatus</b>（表单子组件读 pending）/ <b>useOptimistic</b>（乐观更新）。这三个 hook 是 Server Actions 在 client 侧的 UX 工具。</li>
+          <li>revalidate 三件套：<b>revalidatePath('/foo')</b>（路径粒度，让某 URL 下次访问重新生成）/ <b>revalidateTag('user-123')</b>（标签精准，让带这个 tag 的 fetch 全部失效）/ <b>updateTag('user-123')</b>（v16 新，失效 + <strong>当前请求内立即重算</strong>，"提交后立刻看到新数据"）。</li>
+          <li>Progressive enhancement：<code>&lt;form action={serverAction}&gt;</code> 在<strong>关 JS 的浏览器</strong>也能 submit —— 浏览器原生 form POST 到当前路径，server 通过 Next-Action 头识别并执行。这是 Server Actions 与 useEffect-fetch 模式的本质差异。</li>
+          <li>安全边界：Next.js 自带 CSRF 防护（origin check）+ 加密 action ID（v15+，防止 unused action 被反向调用）。但<strong>auth 必须在 action 内重新校验</strong> —— "client 能调用 = 已登录"是错觉，攻击者可以构造任意 action 调用。</li>
+          <li>Server Actions vs Route Handlers 判断：<b>表单 + 数据变更 + 与 React hooks 配合 + progressive enhancement</b> → Server Actions；<b>REST API + webhook + 第三方客户端 + 返回非 React 友好格式（image/PDF/CSV）</b> → Route Handlers。</li>
+          <li>2026 实战中 Server Actions 已经稳定，是大多数表单的首选。但要注意<strong>不要把所有 server 调用都套成 Server Action</strong> —— 复杂查询 / 第三方集成 / 文件上传到 S3 仍然是 Route Handlers 更合适。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>三种声明位置</h3>
+
+        <p><b>位置 1 · 文件顶部 'use server'</b> —— 整个文件 export 都是 actions：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/_actions/posts.ts
+'use server';
+
+export async function createPost(formData: FormData) {
+  const title = formData.get('title') as string;
+  await db.posts.create({ data: { title } });
+}
+
+export async function deletePost(id: string) {
+  await db.posts.delete({ where: { id } });
+}
+
+// 在任何 Server Component 或 Client Component 里都可以 import
+// import { createPost, deletePost } from '@/app/_actions/posts';</code></pre>
+        </div>
+
+        <p><b>位置 2 · 函数内部 'use server'</b> —— 仅这个函数是 action：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/posts/page.tsx (RSC)
+export default async function Posts() {
+  async function createPost(formData: FormData) {
+    'use server';
+    const title = formData.get('title') as string;
+    await db.posts.create({ data: { title } });
+  }
+  return &lt;form action={createPost}&gt;...&lt;/form&gt;;
+}</code></pre>
+        </div>
+
+        <p><b>位置 3 · 在 Server Component 里 inline + 闭包</b> —— 可以闭包当前 component 的变量：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/posts/[id]/page.tsx (RSC)
+export default async function PostPage({ params }) {
+  const { id } = await params;
+  async function updatePost(formData: FormData) {
+    'use server';
+    // 闭包 id（来自 params）
+    await db.posts.update({ where: { id }, data: { title: formData.get('title') } });
+  }
+  return &lt;form action={updatePost}&gt;...&lt;/form&gt;;
+}</code></pre>
+        </div>
+
+        <p>位置 3 的 inline 写法非常常用 —— 不需要把 id 通过 hidden input 或 bind 传，直接闭包。</p>
+
+        <h3>跨边界传递机制</h3>
+
+        <p>Server Action 是函数 prop 的<strong>唯一例外</strong>。看怎么从 RSC 传给 Client Component：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/posts/page.tsx (RSC)
+async function deletePost(id: string) {
+  'use server';
+  await db.posts.delete({ where: { id } });
+}
+
+export default async function Posts() {
+  const posts = await db.posts.findMany();
+  return &lt;PostList posts={posts} onDelete={deletePost} /&gt;;
+}
+
+// app/_components/PostList.tsx
+'use client';
+export default function PostList({
+  posts,
+  onDelete,
+}: {
+  posts: Post[];
+  onDelete: (id: string) =&gt; Promise&lt;void&gt;;
+}) {
+  return posts.map(p =&gt; (
+    &lt;button onClick={() =&gt; onDelete(p.id)}&gt;Delete {p.title}&lt;/button&gt;
+  ));
+}</code></pre>
+        </div>
+
+        <p>底层 deletePost 不是真函数，是 Next.js 替换的"调用句柄"。看 Network 面板，点击 Delete 后实际请求：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">POST /posts                                    ← 当前路径
+Content-Type: multipart/form-data; boundary=...
+Next-Action: 6789abc...                         ← 加密的 action ID
+Body: id=123&amp;...                                ← action 参数</code></pre>
+        </div>
+
+        <p>server 端路由系统看到 Next-Action 头，从 manifest 找到对应函数（deletePost），执行，返回结果（含可能的 revalidate 触发的新 RSC payload）。</p>
+
+        <h3>表单 action 模式</h3>
+
+        <p>最常见用法：直接把 Server Action 作为 <code>&lt;form action={...}&gt;</code>：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/todo/page.tsx (RSC)
+async function addTodo(formData: FormData) {
+  'use server';
+  const text = formData.get('text') as string;
+  await db.todos.create({ data: { text } });
+  revalidatePath('/todo');
+}
+
+export default async function TodoPage() {
+  const todos = await db.todos.findMany();
+  return (
+    &lt;&gt;
+      &lt;form action={addTodo}&gt;
+        &lt;input name="text" /&gt;
+        &lt;button type="submit"&gt;Add&lt;/button&gt;
+      &lt;/form&gt;
+      &lt;ul&gt;{todos.map(t =&gt; &lt;li key={t.id}&gt;{t.text}&lt;/li&gt;)}&lt;/ul&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>提交时浏览器发 POST 到当前路径，server 执行 addTodo，触发 revalidatePath，整个 page 重新渲染并返回新 RSC payload，客户端自动更新。</p>
+
+        <p><b>progressive enhancement</b>：上面这段代码在<strong>关 JavaScript 的浏览器也能 submit</strong>。原因：</p>
+        <ul>
+          <li><code>&lt;form action="..."&gt;</code> 是 HTML 原生属性，浏览器会原生 POST</li>
+          <li>Next.js 知道 form 的 action 是 Server Action，server 收到 POST 后正常执行</li>
+          <li>响应会是新的 HTML（不是 RSC payload），浏览器整页加载</li>
+        </ul>
+
+        <p>这是 Server Actions 比 useEffect-fetch 模式的根本优势 —— useEffect 必须 JS 执行才工作，关 JS 即彻底坏。</p>
+
+        <h3>useActionState · 把 action 包成有 state 的 form</h3>
+
+        <p>React 19 引入 useActionState（之前叫 useFormState）。它包装一个 action，返回 [state, dispatchAction, isPending]：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/_actions/auth.ts
+'use server';
+
+export type LoginState = { error?: string; success?: boolean };
+
+export async function login(prev: LoginState, formData: FormData): Promise&lt;LoginState&gt; {
+  const email = formData.get('email') as string;
+  const password = formData.get('password') as string;
+  const user = await authenticate(email, password);
+  if (!user) return { error: 'Invalid credentials' };
+  await createSession(user.id);
+  return { success: true };
+}
+
+// app/login/page.tsx
+'use client';
+import { useActionState } from 'react';
+import { login } from '@/app/_actions/auth';
+
+export default function LoginForm() {
+  const [state, action, pending] = useActionState(login, {});
+  return (
+    &lt;form action={action}&gt;
+      &lt;input name="email" /&gt;
+      &lt;input name="password" type="password" /&gt;
+      &lt;button disabled={pending}&gt;{pending ? 'Logging in...' : 'Log in'}&lt;/button&gt;
+      {state.error &amp;&amp; &lt;p className="error"&gt;{state.error}&lt;/p&gt;}
+      {state.success &amp;&amp; &lt;p&gt;Logged in!&lt;/p&gt;}
+    &lt;/form&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>关键点：</p>
+        <ul>
+          <li>action 函数签名是 <code>(prev, formData) =&gt; nextState</code></li>
+          <li>pending 状态由 React 自动管理</li>
+          <li>错误消息通过返回值流回 client，不需要 try/catch + setState</li>
+          <li>整个表单仍然是 progressive enhancement —— 关 JS 时退化为传统 form POST</li>
+        </ul>
+
+        <h3>useFormStatus · 子组件读 pending</h3>
+
+        <p>useFormStatus 让 form 内的子组件读到表单的 pending 状态，不用 prop drilling：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/_components/SubmitButton.tsx
+'use client';
+import { useFormStatus } from 'react-dom';
+
+export default function SubmitButton({ children }: { children: React.ReactNode }) {
+  const { pending } = useFormStatus();
+  return &lt;button type="submit" disabled={pending}&gt;
+    {pending ? 'Submitting...' : children}
+  &lt;/button&gt;;
+}
+
+// 用法：直接放在 &lt;form&gt; 里
+&lt;form action={addTodo}&gt;
+  &lt;input name="text" /&gt;
+  &lt;SubmitButton&gt;Add&lt;/SubmitButton&gt;
+&lt;/form&gt;</code></pre>
+        </div>
+
+        <p>useFormStatus 必须在 form 子组件里调用（不能在 form 自己内部）。</p>
+
+        <h3>useOptimistic · 乐观更新</h3>
+
+        <p>表单提交立即在 UI 上显示"似乎成功"，等 server 实际响应后再更新真实状态：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/_components/Likes.tsx
+'use client';
+import { useOptimistic } from 'react';
+import { addLike } from '@/app/_actions/likes';
+
+export default function Likes({ initialCount }: { initialCount: number }) {
+  const [optimisticCount, addOptimisticLike] = useOptimistic(
+    initialCount,
+    (current, _add: number) =&gt; current + 1
+  );
+
+  async function action() {
+    addOptimisticLike(1);  // 立即 +1
+    await addLike();        // server 真实操作
+  }
+
+  return &lt;button formAction={action}&gt;❤️ {optimisticCount}&lt;/button&gt;;
+}</code></pre>
+        </div>
+
+        <p>用户点 → UI 立即 +1（感知 0 延迟）→ server 真实写入 → 如果失败，optimistic state 自动 revert。这是高响应感 UX 的标准模式。</p>
+
+        <h3>revalidate 三件套</h3>
+
+        <p>Server Action 完成后通常要"刷新"相关数据。三种方式：</p>
+
+        <p><b>revalidatePath('/foo')</b> —— 让某 URL 下次访问重新生成。粒度最粗，简单。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use server';
+export async function addTodo(formData: FormData) {
+  await db.todos.create({ data: { text: formData.get('text') } });
+  revalidatePath('/todo');           // /todo 路径下次重新生成
+  // revalidatePath('/(app)/dashboard', 'page');  // 第二参数指定 'page' 或 'layout'
+}</code></pre>
+        </div>
+
+        <p><b>revalidateTag('todos')</b> —— 让所有带这个 tag 的 fetch 失效。粒度更精准，但要在 fetch 时声明 tag：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 数据获取时声明 tag
+async function getTodos() {
+  return fetch('/api/todos', { next: { tags: ['todos'] } }).then(r =&gt; r.json());
+}
+
+// action 里用 tag 失效
+'use server';
+export async function addTodo(text: string) {
+  await db.todos.create({ data: { text } });
+  revalidateTag('todos');  // 所有用这个 tag 的 fetch 失效
+}</code></pre>
+        </div>
+
+        <p><b>updateTag('todos')</b>（Next.js 16 新）—— 失效 + <strong>当前请求内立即重算</strong>。解决"提交表单后立刻看到新数据"的体验问题：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use server';
+import { updateTag } from 'next/cache';
+
+export async function addTodo(text: string) {
+  await db.todos.create({ data: { text } });
+  updateTag('todos');  // 当前请求里 todos cache 立即重算
+  // 用户在 form submit 完成后立刻看到新 todo，不需要刷新
+}</code></pre>
+        </div>
+
+        <p>三件套的判断：</p>
+        <ul>
+          <li>知道哪个 URL 受影响 → revalidatePath</li>
+          <li>知道哪个数据 ID 受影响 → revalidateTag</li>
+          <li>本次请求就要看到新数据 → updateTag</li>
+        </ul>
+
+        <h3>安全边界</h3>
+
+        <p>Server Actions 内置一些防御，但不替代手动 auth 校验。</p>
+
+        <p><b>1. CSRF 防护</b>：Next.js 自动检查 Origin 头是否匹配站点 host。跨站请求伪造（攻击者从 evil.com 触发你站点的 action）会被拒绝。</p>
+
+        <p><b>2. 加密 action ID</b>（v15+）：每个 Server Action 在 build 时生成加密 ID，client 通过这个 ID 调用。攻击者无法构造任意 action 调用（不知道未导出 action 的 ID）。</p>
+
+        <p><b>3. 但 auth 必须重新校验</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ 错：假设 client 能调用 = 已登录
+'use server';
+export async function deletePost(id: string) {
+  await db.posts.delete({ where: { id } });
+}
+
+// ✅ 正：每次 action 都校验
+'use server';
+import { auth } from '@/lib/auth';
+
+export async function deletePost(id: string) {
+  const session = await auth();  // 从 cookies 读 session
+  if (!session) throw new Error('Unauthorized');
+  const post = await db.posts.findUnique({ where: { id } });
+  if (post.authorId !== session.userId) throw new Error('Forbidden');
+  await db.posts.delete({ where: { id } });
+}</code></pre>
+        </div>
+
+        <p>原因：攻击者可以从浏览器 console / fetch 直接调用 Server Action（已登录会话）。如果 action 没校验权限，攻击者能删别人的 post。</p>
+
+        <p><b>4. 不要在 action 名 / 文件位置藏秘密</b>：action 名可能出现在 client（虽然 ID 加密），文件位置在 stack trace 出现。</p>
+
+        <p><b>5. 输入验证</b>：用 zod / valibot 严格校验 formData，防止 NoSQL injection / 类型不一致：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use server';
+import { z } from 'zod';
+
+const schema = z.object({
+  title: z.string().min(1).max(100),
+  content: z.string().max(10000),
+});
+
+export async function createPost(formData: FormData) {
+  const session = await auth();
+  if (!session) throw new Error('Unauthorized');
+  const result = schema.safeParse({
+    title: formData.get('title'),
+    content: formData.get('content'),
+  });
+  if (!result.success) return { error: result.error.flatten() };
+  await db.posts.create({ data: { ...result.data, authorId: session.userId } });
+}</code></pre>
+        </div>
+
+        <h3>Server Actions vs Route Handlers · 怎么选</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>场景</th>
+              <th>推荐</th>
+              <th>原因</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>登录 / 注册表单</td>
+              <td>Server Actions</td>
+              <td>表单 + progressive enhancement + 与 useActionState 配合</td>
+            </tr>
+            <tr>
+              <td>添加 / 编辑 / 删除 todo / post</td>
+              <td>Server Actions</td>
+              <td>典型 mutation；与 revalidate 配合自然</td>
+            </tr>
+            <tr>
+              <td>Stripe / GitHub webhook</td>
+              <td>Route Handlers</td>
+              <td>第三方 POST，需要原生 Request / Response</td>
+            </tr>
+            <tr>
+              <td>给 mobile app / native client 用的 API</td>
+              <td>Route Handlers</td>
+              <td>非 React 客户端，不能用 Server Actions ID 协议</td>
+            </tr>
+            <tr>
+              <td>导出 CSV / PDF / image</td>
+              <td>Route Handlers</td>
+              <td>返回非 JSON 格式，Server Actions 不便</td>
+            </tr>
+            <tr>
+              <td>OAuth callback</td>
+              <td>Route Handlers</td>
+              <td>需要返回 redirect + 设置 cookie 的精细 HTTP 控制</td>
+            </tr>
+            <tr>
+              <td>文件上传到 S3（小文件）</td>
+              <td>Server Actions</td>
+              <td>FormData multipart 直接支持</td>
+            </tr>
+            <tr>
+              <td>文件上传到 S3（大文件）</td>
+              <td>Route Handlers + 直传</td>
+              <td>大文件不应过 Next.js server，签 presigned URL 让 client 直传 S3</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 完整 Todo CRUD</h3>
+
+        <p>把 useActionState + useOptimistic + revalidateTag 整合的标杆例子。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/_actions/todos.ts
+'use server';
+import { z } from 'zod';
+import { auth } from '@/lib/auth';
+import { revalidateTag, updateTag } from 'next/cache';
+
+const todoSchema = z.object({ text: z.string().min(1).max(200) });
+
+export async function addTodo(prev: any, formData: FormData) {
+  const session = await auth();
+  if (!session) return { error: 'Unauthorized' };
+  const result = todoSchema.safeParse({ text: formData.get('text') });
+  if (!result.success) return { error: result.error.flatten().fieldErrors.text?.[0] };
+
+  await db.todos.create({ data: { text: result.data.text, userId: session.userId } });
+  updateTag(`todos-${session.userId}`);
+  return { success: true };
+}
+
+export async function toggleTodo(id: string) {
+  const session = await auth();
+  if (!session) throw new Error('Unauthorized');
+  const todo = await db.todos.findUnique({ where: { id } });
+  if (todo.userId !== session.userId) throw new Error('Forbidden');
+  await db.todos.update({ where: { id }, data: { done: !todo.done } });
+  updateTag(`todos-${session.userId}`);
+}
+
+export async function deleteTodo(id: string) {
+  const session = await auth();
+  if (!session) throw new Error('Unauthorized');
+  await db.todos.delete({ where: { id, userId: session.userId } });
+  updateTag(`todos-${session.userId}`);
+}
+
+// app/todo/page.tsx (RSC)
+import { auth } from '@/lib/auth';
+
+async function getTodos(userId: string) {
+  return fetch(`/api/todos?userId=${userId}`, {
+    next: { tags: [`todos-${userId}`] }
+  }).then(r =&gt; r.json());
+}
+
+export default async function TodoPage() {
+  const session = await auth();
+  const todos = await getTodos(session.userId);
+  return &lt;TodoList todos={todos} /&gt;;
+}
+
+// app/_components/TodoList.tsx
+'use client';
+import { useActionState, useOptimistic } from 'react';
+import { addTodo, toggleTodo, deleteTodo } from '@/app/_actions/todos';
+
+export default function TodoList({ todos }: { todos: Todo[] }) {
+  const [state, addAction, pending] = useActionState(addTodo, {});
+  const [optimisticTodos, addOptimisticTodo] = useOptimistic(
+    todos,
+    (current, newTodo: Todo) =&gt; [...current, newTodo]
+  );
+
+  return (
+    &lt;&gt;
+      &lt;form action={async (formData) =&gt; {
+        const text = formData.get('text') as string;
+        addOptimisticTodo({ id: 'temp', text, done: false } as Todo);
+        await addAction(formData);
+      }}&gt;
+        &lt;input name="text" required /&gt;
+        &lt;button disabled={pending}&gt;Add&lt;/button&gt;
+        {state.error &amp;&amp; &lt;p className="error"&gt;{state.error}&lt;/p&gt;}
+      &lt;/form&gt;
+      &lt;ul&gt;
+        {optimisticTodos.map(t =&gt; (
+          &lt;li key={t.id}&gt;
+            &lt;input type="checkbox" checked={t.done} onChange={() =&gt; toggleTodo(t.id)} /&gt;
+            &lt;span&gt;{t.text}&lt;/span&gt;
+            &lt;button onClick={() =&gt; deleteTodo(t.id)}&gt;✕&lt;/button&gt;
+          &lt;/li&gt;
+        ))}
+      &lt;/ul&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>场景 2 · Form 配 zod 校验 + server-side 错误流回</h3>
+
+        <p>已经在场景 1 演示。要点：错误通过 return 值流回 client，不抛异常（异常会触发 error.tsx）。</p>
+
+        <h3>场景 3 · 文件上传到 S3</h3>
+
+        <p>小文件直接走 Server Action（multipart）；大文件用 Route Handler 签 URL，client 直传：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 小文件：Server Action
+'use server';
+import { put } from '@vercel/blob';
+
+export async function uploadAvatar(formData: FormData) {
+  const session = await auth();
+  if (!session) throw new Error('Unauthorized');
+  const file = formData.get('avatar') as File;
+  if (file.size &gt; 1_000_000) return { error: 'File too large' };  // 1MB
+  const blob = await put(`avatars/${session.userId}`, file, { access: 'public' });
+  await db.users.update({ where: { id: session.userId }, data: { avatarUrl: blob.url } });
+  return { success: true, url: blob.url };
+}
+
+// 大文件：Route Handler 签 URL，client 直传
+// app/api/upload-url/route.ts
+export async function POST(req: Request) {
+  const session = await auth(/* ... */);
+  if (!session) return new Response('Unauthorized', { status: 401 });
+  const url = await s3.getSignedUrl(/* params */);
+  return Response.json({ url });
+}</code></pre>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 与 zod 配合的强类型 Action</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/_actions/posts.ts
+'use server';
+import { z } from 'zod';
+import { auth } from '@/lib/auth';
+import { revalidatePath } from 'next/cache';
+
+const createPostSchema = z.object({
+  title: z.string().min(1).max(100),
+  content: z.string().max(10000),
+});
+
+type State = { errors?: Record&lt;string, string[]&gt;; success?: boolean };
+
+export async function createPost(prev: State, formData: FormData): Promise&lt;State&gt; {
+  const session = await auth();
+  if (!session) return { errors: { _: ['Unauthorized'] } };
+
+  const parsed = createPostSchema.safeParse({
+    title: formData.get('title'),
+    content: formData.get('content'),
+  });
+  if (!parsed.success) return { errors: parsed.error.flatten().fieldErrors };
+
+  await db.posts.create({ data: { ...parsed.data, authorId: session.userId } });
+  revalidatePath('/posts');
+  return { success: true };
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · redirect 在 action 内</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use server';
+import { redirect } from 'next/navigation';
+
+export async function login(prev: any, formData: FormData) {
+  const user = await authenticate(formData.get('email'), formData.get('password'));
+  if (!user) return { error: 'Invalid credentials' };
+  await createSession(user.id);
+  redirect('/dashboard');  // 注意：redirect 不能在 try/catch 内捕获
+}</code></pre>
+        </div>
+
+        <p>注意 <code>redirect</code> 内部用 throw 实现，不要套在 try/catch 里（会被吃掉）。</p>
+
+        <h3>代码 3 · cookies / headers 在 action 内</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use server';
+import { cookies, headers } from 'next/headers';
+
+export async function logout() {
+  const cookieStore = await cookies();
+  cookieStore.delete('session');
+  redirect('/login');
+}
+
+export async function logActivity() {
+  const userAgent = (await headers()).get('user-agent');
+  await db.activities.create({ data: { userAgent } });
+}</code></pre>
+        </div>
+
+        <h3>代码 4 · Server Action 失败时的 error.tsx 联动</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use server';
+export async function dangerousAction() {
+  // 如果这里 throw，会触发最近的 error.tsx
+  // 比通过 return { error } 更适合"系统错误"（数据库挂了、超时）
+  await db.something();  // 假设数据库挂
+}
+
+// app/admin/error.tsx
+'use client';
+export default function AdminError({ error, reset }: any) {
+  return &lt;&gt;
+    &lt;p&gt;Admin operation failed: {error.digest}&lt;/p&gt;
+    &lt;button onClick={reset}&gt;Retry&lt;/button&gt;
+  &lt;/&gt;;
+}</code></pre>
+        </div>
+
+        <p>判断：业务错误（"密码错"）用 return state；系统错误（"db 挂了"）用 throw。</p>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>Server Action 没 'use server' 标记</b> —— 最常见错误。函数只是普通函数，不会变 Server Action。检查文件首行或函数首行</li>
+          <li><b>把 useActionState 当 useState 用</b> —— useActionState 包装的是 Server Action，不是普通 setState。它的 dispatchAction 必须是 form action 或显式调用</li>
+          <li><b>action 内 auth 没校验</b> —— 攻击者从 console 直接 fetch 调用 action 能绕过 client 端 auth check。每个 action 都要 server 端重新校验权限</li>
+          <li><b>throw 替代 return error</b> —— 业务错误 throw 会触发 error.tsx 整段失败，UX 差。业务错误用 return state（含 error 字段）让 form 局部显示</li>
+          <li><b>redirect 在 try/catch 里</b> —— redirect 用 throw 实现，try 会吃掉。把 redirect 放在 try 之外</li>
+          <li><b>没 revalidate 导致提交后看到旧数据</b> —— action 修改了数据但忘了 revalidate，UI 仍显示旧。看场景选 path / tag / updateTag</li>
+          <li><b>fetch 没声明 tag 但用 revalidateTag</b> —— 静默无效。fetch 必须 <code>{ next: { tags: [...] } }</code> 才能被 revalidateTag 命中</li>
+          <li><b>useOptimistic 不在 form context 用</b> —— useOptimistic 必须配合 Server Action 提交（form action 或 startTransition），单独用不会自动 revert</li>
+          <li><b>大文件直接走 Server Action multipart</b> —— Server Action 默认 body limit 1MB（可配）。超大文件应走 presigned URL 直传 S3</li>
+          <li><b>useFormStatus 在 form 自身组件里调用</b> —— 必须在 form 子组件里。<code>&lt;form action={...}&gt;{useFormStatus()}&lt;/form&gt;</code> 不工作</li>
+          <li><b>把 Server Action 当 RPC 滥用</b> —— Server Actions 是为表单 + 数据变更设计。复杂 GraphQL 查询 / 实时 sync 不应该用 Server Actions</li>
+          <li><b>prod 环境 Server Action 失败 silent</b> —— prod 错误 message 被替换成通用消息（防 secret 泄露）。用 error.digest 在 server log 找对应详情</li>
+          <li><b>updateTag 在 v15 用</b> —— 仅 v16+ 有。v15 只有 revalidateTag（下次访问失效）</li>
+          <li><b>"我不知道为什么 action 不工作"</b> —— 检查 1. 'use server' 标记位置；2. action 是否被 export；3. Network 看 POST 请求是否真的到 server；4. server log 是否有错误</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://nextjs.org/docs/app/getting-started/updating-data" target="_blank" rel="noopener">Next.js Docs · Server Actions and Mutations</a></li>
+          <li><a href="https://nextjs.org/docs/app/api-reference/functions/revalidatePath" target="_blank" rel="noopener">revalidatePath API</a> · <a href="https://nextjs.org/docs/app/api-reference/functions/revalidateTag" target="_blank" rel="noopener">revalidateTag API</a></li>
+          <li><a href="https://nextjs.org/docs/app/api-reference/functions/updateTag" target="_blank" rel="noopener">updateTag API（v16）</a></li>
+          <li><a href="https://github.com/reactjs/rfcs/pull/229" target="_blank" rel="noopener">React RFC #229 · Actions 设计原始 RFC</a></li>
+          <li><a href="https://react.dev/reference/react/useActionState" target="_blank" rel="noopener">React Docs · useActionState</a></li>
+          <li><a href="https://react.dev/reference/react-dom/hooks/useFormStatus" target="_blank" rel="noopener">React Docs · useFormStatus</a></li>
+          <li><a href="https://react.dev/reference/react/useOptimistic" target="_blank" rel="noopener">React Docs · useOptimistic</a></li>
+          <li><a href="../../react/06-modern/02-actions.html">React 主题 P6.2 · Actions</a> · React 侧 hooks 心智</li>
+          <li><a href="../05-caching/02-cache-components-ppr.html">本主题 P5.2 · revalidate 决策</a> · 三件套的完整决策树</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

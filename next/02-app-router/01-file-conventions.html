@@ -1,0 +1,664 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>文件系统路由与约定 · P2.1 · Next.js 深度学习</title>
+    <meta name="description" content="App Router 文件约定深度解析。page/layout/loading/error/not-found/template/default 七件套 + 动态段 [slug]/[...slug]/[[...slug]] + 路由分组 (group) + 私有文件夹 _foo + Parallel Routes @slot + Intercepting Routes (.) + Multiple Root Layouts。配 dashboard 路由结构 + modal 实现两个真实案例。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23000000'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EN%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Next.js 深度学习</span><span class="site-title-badge" style="background: oklch(0.22 0.02 250); color: #fff">Next</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · App Router 心智</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-file-conventions.html" class="active">01 · 文件系统路由与约定</a></li>
+          <li><a href="02-server-client-boundary.html">02 · Server / Client 边界</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Next.js</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · App Router 心智</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 文件系统路由与约定</span>
+        </nav>
+        <h1>文件系统路由与约定</h1>
+        <p class="lead">
+          App Router 用文件夹定义路由段，用文件名约定层级行为。这一章把 7 个核心约定（page / layout / loading / error / not-found / template / default）+ 动态段 + 路由分组 + Parallel/Intercepting Routes + Multiple Root Layouts 全部讲透。最后用一个真实 dashboard 路由结构 + Twitter 风格 modal 两个案例把所有约定串起来。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P1.1 项目史 + 写过 Next.js（Pages Router 即可）</span>
+          <span><strong>主要来源</strong> nextjs.org/docs/app/building-your-application/routing 全套</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>App Router 的核心规则：<strong>文件夹 = 路由段</strong>，<strong>文件名 = 该段的角色</strong>。<code>app/dashboard/settings/page.tsx</code> 即 URL <code>/dashboard/settings</code>，page.tsx 表示这个段是叶子页面。</li>
+          <li>7 个核心文件约定：<code>page</code>（页面，叶子节点）/ <code>layout</code>（包裹子段，state 保留）/ <code>loading</code>（Suspense 边界）/ <code>error</code>（错误边界，必须 client component）/ <code>not-found</code>（404 边界）/ <code>template</code>（每次导航重新挂载）/ <code>default</code>（parallel routes 的 fallback）。</li>
+          <li>动态段三种形态：<code>[slug]</code>（单段动态）/ <code>[...slug]</code>（catch-all，必须有内容）/ <code>[[...slug]]</code>（optional catch-all，可空）。配 <code>generateStaticParams</code> 决定 build 时预生成哪些。</li>
+          <li>路由分组 <code>(group)</code> 不影响 URL，只影响代码组织 —— <code>app/(marketing)/about/page.tsx</code> 仍然是 <code>/about</code>，但分组让"marketing 站套独立 layout、app 套另一个 layout"成为可能。</li>
+          <li>私有文件夹 <code>_foo</code> 不被路由系统识别，用来放 helper / component / hook 等不构成路由的代码。</li>
+          <li>Parallel Routes（<code>@slot</code>）让一个 layout 同时渲染多个独立子路由 —— dashboard 多面板 / modal 与主内容并存的场景必备。每个 slot 独立 loading / error 边界。</li>
+          <li>Intercepting Routes（<code>(.)</code> / <code>(..)</code> / <code>(...)</code>）让"点击列表项弹出详情 modal"这种交互成为可能 —— 客户端导航时拦截到 modal 里渲染，刷新时退回完整页面。</li>
+          <li>Multiple Root Layouts —— 在同一个 app 里有"两套完全不同的根布局"（marketing site + 应用）。通过把 <code>app/layout.tsx</code> 删掉、放进各路由分组的 layout.tsx 实现。</li>
+          <li>Route Handlers（<code>route.ts</code>）—— 用于 REST API / webhook / 非 React-friendly 返回（image / PDF / CSV）。注意 <code>route.ts</code> 与 <code>page.tsx</code> 在同一段不能共存。</li>
+          <li>这套约定的设计目标：让"路由结构 + 渲染层级 + 错误边界 + Suspense 边界"全部在文件结构里直接看到，不再散落在 <code>_app.tsx</code> + <code>getServerSideProps</code> + 自定义 ErrorBoundary 等多个地方。代价：约定是黑盒，跳出约定时（比如想要某个 layout 不嵌套）要用 multiple root layouts / parallel routes 这种特殊机制。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>核心规则：文件夹 = 路由段，文件名 = 角色</h3>
+
+        <p>App Router 把"什么 URL 渲染什么组件"完全交给文件结构。看这个例子：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">app/
+├── layout.tsx            // root layout（必需），所有 page 的最外层 wrapper
+├── page.tsx              // 对应 URL: /
+├── about/
+│   └── page.tsx          // 对应 URL: /about
+├── posts/
+│   ├── page.tsx          // 对应 URL: /posts
+│   └── [id]/
+│       └── page.tsx      // 对应 URL: /posts/123 （[id] = 动态段）
+└── dashboard/
+    ├── layout.tsx        // 包裹 dashboard/* 所有 page
+    ├── page.tsx          // 对应 URL: /dashboard
+    ├── loading.tsx       // dashboard/* 加载时的 fallback
+    └── settings/
+        └── page.tsx      // 对应 URL: /dashboard/settings</code></pre>
+        </div>
+
+        <p>渲染时层级是：root layout → dashboard layout → dashboard/settings page。每一级都是一个 React 组件，layout 用 <code>children</code> prop 包子级。</p>
+
+        <h3>7 个核心文件约定</h3>
+
+        <p><b>page.tsx</b> · 叶子节点。一个段必须有 page.tsx 才能被访问。<code>export default</code> 一个 React 组件。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/posts/[id]/page.tsx
+export default async function Post({ params }: { params: Promise&lt;{ id: string }&gt; }) {
+  const { id } = await params;
+  const post = await fetchPost(id);
+  return &lt;article&gt;{post.title}&lt;/article&gt;;
+}</code></pre>
+        </div>
+
+        <p><b>layout.tsx</b> · 包裹子段，<strong>导航时不重新挂载</strong>（state 保留）。这是 App Router 比 Pages Router 强的地方 —— Pages Router 的 <code>_app.tsx</code> 是全局的，而 layout 可以分段嵌套。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/dashboard/layout.tsx
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+  return (
+    &lt;div className="dashboard-grid"&gt;
+      &lt;Sidebar /&gt;          {/* 路由切换时不重挂载 */}
+      &lt;main&gt;{children}&lt;/main&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>每个段最多一个 layout。如果根需要 <code>&lt;html&gt;</code> + <code>&lt;body&gt;</code>，必须放在 <code>app/layout.tsx</code>（root layout）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/layout.tsx · root layout
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    &lt;html lang="zh-CN"&gt;
+      &lt;body&gt;{children}&lt;/body&gt;
+    &lt;/html&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p><b>loading.tsx</b> · 等价于在 page 外包一层 <code>&lt;Suspense fallback={&lt;Loading /&gt;}&gt;</code>。子段加载时显示。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/dashboard/loading.tsx
+export default function DashboardLoading() {
+  return &lt;Skeleton /&gt;;
+}</code></pre>
+        </div>
+
+        <p><b>error.tsx</b> · 错误边界。<strong>必须是 client component</strong>（用 <code>'use client'</code>）—— 因为 ErrorBoundary 需要 catch 渲染错误，是 client 概念。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/dashboard/error.tsx
+'use client';
+export default function DashboardError({ error, reset }: { error: Error; reset: () =&gt; void }) {
+  return (
+    &lt;div&gt;
+      &lt;p&gt;Something went wrong: {error.message}&lt;/p&gt;
+      &lt;button onClick={reset}&gt;Try again&lt;/button&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p><b>not-found.tsx</b> · 404 边界。当 page 内 <code>notFound()</code> 函数被调用时渲染。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/posts/[id]/page.tsx
+import { notFound } from 'next/navigation';
+
+export default async function Post({ params }) {
+  const { id } = await params;
+  const post = await fetchPost(id);
+  if (!post) notFound();  // 触发最近的 not-found.tsx
+  return &lt;article&gt;{post.title}&lt;/article&gt;;
+}
+
+// app/posts/[id]/not-found.tsx
+export default function PostNotFound() {
+  return &lt;p&gt;Post not found.&lt;/p&gt;;
+}</code></pre>
+        </div>
+
+        <p><b>template.tsx</b> · 与 layout 相反 —— <strong>每次导航都重新挂载</strong>。常用于"页面切换 transition / animation 重新触发"或"reset 某个 state"的场景。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/dashboard/template.tsx
+'use client';
+import { motion } from 'framer-motion';
+
+export default function Template({ children }: { children: React.ReactNode }) {
+  // 路由切换时整个 motion.div 重新挂载，触发 enter animation
+  return (
+    &lt;motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}&gt;
+      {children}
+    &lt;/motion.div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p><b>default.tsx</b> · 仅在 Parallel Routes 用 —— 当某个 slot 在当前 URL 没有匹配时，渲染 default。后面 Parallel Routes 段会展开。</p>
+
+        <h3>动态段：[slug] / [...slug] / [[...slug]]</h3>
+
+        <p>三种动态段对应不同语义：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>形式</th>
+              <th>匹配</th>
+              <th>params 类型</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>app/posts/[id]/page.tsx</code></td>
+              <td><code>/posts/123</code> / <code>/posts/abc</code>（必须有一段）</td>
+              <td><code>{ id: string }</code></td>
+            </tr>
+            <tr>
+              <td><code>app/docs/[...slug]/page.tsx</code></td>
+              <td><code>/docs/a</code> / <code>/docs/a/b/c</code>（一段或多段，必须有内容）</td>
+              <td><code>{ slug: string[] }</code></td>
+            </tr>
+            <tr>
+              <td><code>app/docs/[[...slug]]/page.tsx</code></td>
+              <td><code>/docs</code> / <code>/docs/a</code> / <code>/docs/a/b</code>（包括空）</td>
+              <td><code>{ slug: string[] | undefined }</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>动态段配 <code>generateStaticParams</code> 在 build 时预生成（类似 v9.3 的 getStaticPaths）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/posts/[id]/page.tsx
+export async function generateStaticParams() {
+  const posts = await db.posts.findMany({ select: { id: true } });
+  return posts.map(p =&gt; ({ id: p.id }));
+}
+
+export default async function Post({ params }: { params: Promise&lt;{ id: string }&gt; }) {
+  const { id } = await params;
+  const post = await db.posts.findUnique({ where: { id } });
+  return &lt;article&gt;{post.title}&lt;/article&gt;;
+}</code></pre>
+        </div>
+
+        <h3>路由分组 (group) · 不影响 URL，只组织代码</h3>
+
+        <p>用括号包裹的文件夹不出现在 URL 里，只用来组织代码：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">app/
+├── (marketing)/
+│   ├── layout.tsx        // 仅包裹 marketing 段
+│   ├── page.tsx          // URL: /
+│   ├── about/page.tsx    // URL: /about
+│   └── pricing/page.tsx  // URL: /pricing
+└── (app)/
+    ├── layout.tsx        // 仅包裹 app 段（不同 layout）
+    ├── dashboard/page.tsx // URL: /dashboard
+    └── settings/page.tsx  // URL: /settings</code></pre>
+        </div>
+
+        <p>这种结构让"marketing 部分用一套头部 / 底部、app 部分用另一套"自然实现。两套 page 分组归类，URL 仍是平级。</p>
+
+        <h3>私有文件夹 _foo · 不被路由识别</h3>
+
+        <p>下划线开头的文件夹不参与路由。用来放 helper / component / hook：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">app/
+├── posts/
+│   ├── _components/      // 不是路由，纯组件
+│   │   ├── PostCard.tsx
+│   │   └── PostList.tsx
+│   ├── _lib/             // 不是路由，工具函数
+│   │   └── fetch-posts.ts
+│   └── page.tsx</code></pre>
+        </div>
+
+        <p>这是 App Router 的"反约定"逃生口 —— 你想把组件放路由旁边但不让它成为路由，加个下划线就行。</p>
+
+        <h3>Parallel Routes · @slot 同时渲染多个独立子路由</h3>
+
+        <p>核心场景：dashboard 同时有 sidebar + main + analytics 三块独立内容，每块有自己的加载状态 / 错误边界 / 缓存。Parallel Routes 用 <code>@name</code> 命名 slot：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">app/dashboard/
+├── layout.tsx            // 接收多个 slot 作为 props
+├── @analytics/
+│   ├── page.tsx          // analytics slot
+│   ├── loading.tsx       // analytics 独立加载状态
+│   └── error.tsx         // analytics 独立错误边界
+├── @notifications/
+│   ├── page.tsx
+│   └── loading.tsx
+└── page.tsx              // 主 children</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/dashboard/layout.tsx
+export default function DashboardLayout({
+  children,
+  analytics,
+  notifications,
+}: {
+  children: React.ReactNode;
+  analytics: React.ReactNode;
+  notifications: React.ReactNode;
+}) {
+  return (
+    &lt;div className="grid grid-cols-3"&gt;
+      &lt;main&gt;{children}&lt;/main&gt;
+      &lt;aside&gt;{analytics}&lt;/aside&gt;
+      &lt;aside&gt;{notifications}&lt;/aside&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>每个 slot 独立加载、独立失败。用户看到的是三块各自 reveal，而不是"必须等所有数据齐全"。</p>
+
+        <p><b>default.tsx</b> 在这里出场：当用户从某个 URL 跳到另一个 URL，新 URL 没有匹配某个 slot 时，渲染该 slot 的 default.tsx：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/dashboard/@analytics/default.tsx
+export default function AnalyticsDefault() {
+  return null;  // 或者一个占位
+}</code></pre>
+        </div>
+
+        <h3>Intercepting Routes · 不离开当前页面的"插队"渲染</h3>
+
+        <p>典型场景：Twitter / Instagram 的"点击图片弹出详情 modal、刷新页面退回完整图片页"模式。Intercepting Routes 用 <code>(.)</code> / <code>(..)</code> / <code>(...)</code> 表示"拦截某个路由到当前位置渲染"：</p>
+
+        <ul>
+          <li><code>(.)</code> · 同级</li>
+          <li><code>(..)</code> · 上一级</li>
+          <li><code>(..)(..)</code> · 上两级</li>
+          <li><code>(...)</code> · 从 app 根</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">app/
+├── feed/
+│   ├── page.tsx                       // /feed 列表
+│   └── @modal/
+│       ├── default.tsx                // 默认 null（不显示 modal）
+│       └── (.)photo/[id]/page.tsx     // 拦截 /photo/[id]
+├── photo/
+│   └── [id]/
+│       └── page.tsx                   // /photo/[id] 完整页（刷新时显示）
+└── layout.tsx                         // 接收 children + modal 两个 slot</code></pre>
+        </div>
+
+        <p>用户在 feed 页点 photo 链接 → URL 变为 <code>/photo/123</code>，但 <code>(.)photo/[id]</code> 拦截把它渲染到 <code>@modal</code> slot；刷新 <code>/photo/123</code> → 拦截不命中，走到 <code>/photo/[id]/page.tsx</code> 完整页。</p>
+
+        <h3>Multiple Root Layouts · 两套根布局</h3>
+
+        <p>当你有"完全独立的两套 app"（marketing + dashboard，有不同的 fonts / global styles / SEO 策略），可以删 <code>app/layout.tsx</code>，把 root layout 放进各分组：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">app/
+├── (marketing)/
+│   ├── layout.tsx        // 含 &lt;html&gt; &lt;body&gt; ── 这是 root layout
+│   └── page.tsx
+└── (app)/
+    ├── layout.tsx        // 含 &lt;html&gt; &lt;body&gt; ── 这也是 root layout
+    └── dashboard/page.tsx</code></pre>
+        </div>
+
+        <p>限制：跨 root layout 切换路由时，整页重新加载（不是 client navigation）。所以这种结构只在"两套 app 真的独立"时用。</p>
+
+        <h3>Route Handlers · route.ts</h3>
+
+        <p>App Router 里 REST API / webhook 用 <code>route.ts</code>（不是 page.tsx）。同一段 route.ts 与 page.tsx 不能共存：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/api/users/route.ts
+export async function GET() {
+  const users = await db.users.findMany();
+  return Response.json(users);
+}
+
+export async function POST(request: Request) {
+  const body = await request.json();
+  const user = await db.users.create({ data: body });
+  return Response.json(user, { status: 201 });
+}</code></pre>
+        </div>
+
+        <p>Route Handlers 适合 webhook / 第三方集成 / 返回非 JSON（image / PDF）/ 给非 React 客户端用。日常表单 / 数据变更应该用 Server Actions（详见 P4）。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 真实 SaaS dashboard 路由结构</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">app/
+├── (marketing)/                         // 营销站点（公开）
+│   ├── layout.tsx                       // 营销头部 / 底部
+│   ├── page.tsx                         // 首页
+│   ├── pricing/page.tsx
+│   └── docs/[[...slug]]/page.tsx        // 嵌套文档
+├── (auth)/                              // 登录登出
+│   ├── layout.tsx                       // 极简 layout
+│   ├── login/page.tsx
+│   └── signup/page.tsx
+├── (app)/                               // 应用主体（登录后）
+│   ├── layout.tsx                       // app 头部
+│   ├── dashboard/
+│   │   ├── layout.tsx                   // dashboard 侧栏 + 主区
+│   │   ├── @analytics/                  // parallel slot
+│   │   │   ├── default.tsx
+│   │   │   └── page.tsx
+│   │   ├── loading.tsx
+│   │   ├── page.tsx
+│   │   └── [orgId]/
+│   │       ├── page.tsx
+│   │       └── projects/
+│   │           ├── page.tsx
+│   │           └── [projectId]/
+│   │               ├── layout.tsx       // 项目级 layout（tabs）
+│   │               ├── page.tsx         // overview tab
+│   │               ├── settings/page.tsx
+│   │               └── members/page.tsx
+│   └── settings/page.tsx
+├── api/
+│   └── webhooks/
+│       └── stripe/route.ts              // webhook
+└── layout.tsx                           // 全局 root layout</code></pre>
+        </div>
+
+        <p>这个结构包含的元素：</p>
+        <ul>
+          <li>路由分组 <code>(marketing)</code> / <code>(auth)</code> / <code>(app)</code> 区分功能区域</li>
+          <li>嵌套 layout（dashboard layout 包多个子段，state 保留）</li>
+          <li>动态段 <code>[orgId]</code> / <code>[projectId]</code></li>
+          <li>Optional catch-all <code>[[...slug]]</code> 给 docs 用</li>
+          <li>Parallel route <code>@analytics</code> 给 dashboard 多面板</li>
+          <li>Route handler <code>route.ts</code> 给 webhook</li>
+        </ul>
+
+        <h3>场景 2 · Twitter 风格 modal 实现</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">app/
+├── layout.tsx                           // 接收 children + modal slot
+├── feed/
+│   ├── page.tsx                         // /feed 列表
+│   └── @modal/                          // parallel slot
+│       ├── default.tsx                  // null
+│       └── (.)photo/[id]/page.tsx       // 拦截 /photo/[id] 到 modal
+└── photo/
+    └── [id]/
+        └── page.tsx                     // /photo/[id] 完整页</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/layout.tsx
+export default function RootLayout({
+  children,
+  modal,
+}: {
+  children: React.ReactNode;
+  modal: React.ReactNode;
+}) {
+  return (
+    &lt;html&gt;&lt;body&gt;
+      {children}
+      {modal}
+    &lt;/body&gt;&lt;/html&gt;
+  );
+}
+
+// app/feed/@modal/(.)photo/[id]/page.tsx
+import { Modal } from '@/components/Modal';
+export default async function PhotoModal({ params }) {
+  const { id } = await params;
+  const photo = await fetchPhoto(id);
+  return &lt;Modal&gt;&lt;img src={photo.url} /&gt;&lt;/Modal&gt;;
+}
+
+// app/photo/[id]/page.tsx
+export default async function PhotoFull({ params }) {
+  const { id } = await params;
+  const photo = await fetchPhoto(id);
+  return &lt;main&gt;&lt;img src={photo.url} /&gt;&lt;/main&gt;;
+}</code></pre>
+        </div>
+
+        <p>用户在 feed 点图片 → modal 弹出（URL 变 <code>/photo/123</code>，但拦截渲染到 modal slot）；刷新或直接打开 <code>/photo/123</code> → 走完整页面。这种"客户端柔性 + URL 持久化"的 UX 是 Intercepting Routes 的标杆场景。</p>
+
+        <h3>场景 3 · 国际化 + Pages Router 共存</h3>
+
+        <p>大型项目从 Pages Router 迁移过程中常需要 App + Pages 共存。Next.js 16 仍完全支持：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">// 项目根
+app/
+├── layout.tsx
+└── (new)/                       // 新写的功能放 App Router
+    └── dashboard/page.tsx
+pages/
+├── _app.tsx                     // 老的 _app
+├── index.tsx                    // 老的 / 仍走 Pages Router
+└── api/
+    └── legacy.ts                // 老的 API Routes 仍可用</code></pre>
+        </div>
+
+        <p>同一个 URL 不能两边都有。冲突时 App Router 优先。这种共存让"逐步迁移"成为可能，不必一次性重写。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 嵌套 layout + state 保留</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/dashboard/layout.tsx
+'use client';
+import { useState } from 'react';
+
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // 这个 state 在 /dashboard → /dashboard/settings → /dashboard/users
+  // 路由切换时不会丢失（layout 不重新挂载）
+  return (
+    &lt;div className={sidebarCollapsed ? 'collapsed' : ''}&gt;
+      &lt;Sidebar onToggle={() =&gt; setSidebarCollapsed(c =&gt; !c)} /&gt;
+      &lt;main&gt;{children}&lt;/main&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · loading.tsx + Suspense 嵌套</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/dashboard/page.tsx
+import { Suspense } from 'react';
+import Stats from './_components/Stats';
+import Chart from './_components/Chart';
+
+export default function Dashboard() {
+  return (
+    &lt;&gt;
+      &lt;h1&gt;Dashboard&lt;/h1&gt;
+      {/* 整个 page 加载时显示 dashboard/loading.tsx */}
+      {/* 内部还可以再用 Suspense 让 stats / chart 各自独立流式 */}
+      &lt;Suspense fallback={&lt;StatsSkeleton /&gt;}&gt;&lt;Stats /&gt;&lt;/Suspense&gt;
+      &lt;Suspense fallback={&lt;ChartSkeleton /&gt;}&gt;&lt;Chart /&gt;&lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 3 · error.tsx 错误恢复</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/posts/[id]/error.tsx
+'use client';
+import { useEffect } from 'react';
+
+export default function PostError({
+  error,
+  reset,
+}: {
+  error: Error &amp; { digest?: string };
+  reset: () =&gt; void;
+}) {
+  useEffect(() =&gt; {
+    // 上报错误监控（Sentry / Datadog）
+    console.error('Post error:', error);
+  }, [error]);
+
+  return (
+    &lt;div&gt;
+      &lt;h2&gt;无法加载这篇文章&lt;/h2&gt;
+      &lt;p&gt;digest: {error.digest}&lt;/p&gt;
+      &lt;button onClick={reset}&gt;重试&lt;/button&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 4 · catch-all 段处理 docs 嵌套</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/docs/[[...slug]]/page.tsx
+import { notFound } from 'next/navigation';
+import { renderMDX } from '@/lib/mdx';
+
+export async function generateStaticParams() {
+  const allDocs = await getAllDocPaths();  // 例如 [['intro'], ['guide','setup'], ...]
+  return allDocs.map(slug =&gt; ({ slug }));
+}
+
+export default async function Docs({ params }: { params: Promise&lt;{ slug?: string[] }&gt; }) {
+  const { slug = [] } = await params;
+  const path = slug.join('/') || 'index';
+  const doc = await loadDoc(path);
+  if (!doc) notFound();
+  return &lt;article&gt;{renderMDX(doc.content)}&lt;/article&gt;;
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>把 page.tsx 和 route.ts 放同一段</b> —— 报错。一个段只能是 page 或 route 二选一。如果想要"既渲染页面也提供 API"，把 API 放到子段（<code>page.tsx</code> 同级 <code>api/route.ts</code> 子文件夹）</li>
+          <li><b>error.tsx 忘了 'use client'</b> —— 报错"error must be a client component"。错误边界必须是 client component，因为 ErrorBoundary 是 client API</li>
+          <li><b>error.tsx 不能 catch root layout 错误</b> —— root layout 出错只能用 <code>app/global-error.tsx</code> catch（不是普通 error.tsx）</li>
+          <li><b>layout.tsx 写 <code>'use client'</code> 然后 fetch 数据</b> —— Client component 不能 await server fetch；要么把 layout 改回 RSC（默认），要么把 fetch 移到子组件</li>
+          <li><b>动态段类型忘了 Promise（v15+）</b> —— v15 起 params 是 Promise，必须 <code>await params</code> 拿值。老代码直接 <code>params.id</code> 会拿到 Promise 对象</li>
+          <li><b>generateStaticParams 返回类型错</b> —— 必须返回 <code>Array&lt;{paramName: string}&gt;</code>，<code>{paramName: number}</code> 会运行时崩</li>
+          <li><b>Parallel Routes 没写 default.tsx</b> —— 跨 URL 切换时若 slot 在新 URL 没匹配，没有 default 会报错。建议每个 @slot 都配 default.tsx（最简单返回 null）</li>
+          <li><b>Multiple Root Layouts 跨分组导航整页刷新</b> —— 这是设计行为不是 bug。所以 multiple root layouts 只在"两套 app 真的独立"时用，不要为"两个不同 header"过度使用</li>
+          <li><b>Intercepting routes 路径写错</b> —— <code>(.)</code> 是同级，<code>(..)</code> 是上一级，路径计算的是<strong>路由层级</strong>不是文件夹层级。<code>app/feed/@modal/(..)photo/...</code> 的 <code>(..)</code> 表示从 feed 路由段往上一级（即 root），所以拦截 <code>/photo/[id]</code></li>
+          <li><b>private folder 也写 layout / page</b> —— <code>_components/page.tsx</code> 不会成为路由。下划线开头整段被路由系统忽略</li>
+          <li><b>用 layout 而不是 template 然后 animation 不触发</b> —— layout 不重新挂载，所以 enter animation 不会触发。需要 template.tsx 才行</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://nextjs.org/docs/app/building-your-application/routing" target="_blank" rel="noopener">Next.js Docs · Routing 全套</a></li>
+          <li><a href="https://nextjs.org/docs/app/building-your-application/routing/parallel-routes" target="_blank" rel="noopener">Parallel Routes 文档</a></li>
+          <li><a href="https://nextjs.org/docs/app/building-your-application/routing/intercepting-routes" target="_blank" rel="noopener">Intercepting Routes 文档</a></li>
+          <li><a href="https://nextjs.org/docs/app/building-your-application/routing/route-groups" target="_blank" rel="noopener">Route Groups 文档</a></li>
+          <li><a href="../02-server-client-boundary.html">本主题 P2.2 · Server / Client 边界</a> · 有了路由结构后下一步是渲染边界</li>
+          <li><a href="../../react/05-concurrent/02-suspense.html">React 主题 P5.2 · Suspense</a> · loading.tsx 底层是 Suspense</li>
+          <li><a href="../../react/05-concurrent/04-error-boundary.html">React 主题 P5.4 · Error Boundary</a> · error.tsx 底层是 ErrorBoundary</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Turbopack 内部 + bundler 横评 · P6.1 · Next.js 深度学习</title>
+    <meta name="description" content="Turbopack 是 Vercel 用 Rust 重写的 bundler，2026 年 Next.js 16 同时拿下 dev + prod 双 stable。这一章讲清 turbo-tasks 增量计算引擎、SWC 编译、Webpack loader 兼容、与 Vite-Rolldown / esbuild / Rspack / Bun build 横评、为什么 Vercel 押 Rust 不押 Vite。Bundler 历史短重述，详见 Vite 主题。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23000000'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EN%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Next.js 深度学习</span><span class="site-title-badge" style="background: oklch(0.22 0.02 250); color: #fff">Next</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · Turbopack</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-turbopack-bundlers.html" class="active">01 · Turbopack 内部 + bundler 横评</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Next.js</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · Turbopack</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Turbopack 内部 + bundler 横评</span>
+        </nav>
+        <h1>Turbopack 内部 + bundler 横评</h1>
+        <p class="lead">
+          Turbopack 是 Tobias Koppers（Webpack 原作者）2022 年加入 Vercel 后用 Rust 重写的 bundler，2026 年 Next.js 16 让它在 dev + prod 双 stable，正式取代 Webpack。这一章讲清它的核心引擎 turbo-tasks（细粒度增量计算）、为什么用 Rust 而不是 Go/Zig、与 Vite-Rolldown / esbuild / Rspack / Bun build 的路线分叉，以及为什么 Vercel 不直接用 Vite。Bundler 历史短重述，详细演化看 Vite 主题。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> Vite 主题 P1（bundler 历史）+ P2（Vite 双模架构）</span>
+          <span><strong>主要来源</strong> turbo.build/pack docs + Tobias Koppers 公开演讲 + vercel.com/blog Turbopack 系列 + v15/v16 release notes</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Turbopack 是 Vercel 自主开发的 bundler，目标是<strong>取代 Webpack 在 Next.js 中的角色</strong>。2022 年首发 alpha（Next.js 13），2024 年 dev stable（Next.js 15），2026 年 prod stable（Next.js 16）。</li>
+          <li>核心引擎是 <strong>turbo-tasks</strong> —— 一套用 Rust 写的细粒度增量计算系统。每个编译单元是一个 task，task 之间靠 macro 自动建立依赖关系；改了一个文件只重算受影响的 task，其他全部缓存命中。</li>
+          <li>编译用 <strong>SWC</strong>（Rust 写的 Babel 替代）—— 比 Babel 快 10-20×，比 esbuild（Go 写）速度接近，但增量计算能力更强。</li>
+          <li>与 Webpack 数据兼容部分 loader / plugin 接口 —— 让从 Webpack 迁移有渐进路径，但不是 100% 兼容（特别是底层 plugin hooks）。</li>
+          <li>2026 bundler 格局：Rust 是赢家，路径剩两条 —— <b>Turbopack</b>（vendor-locked 给 Next.js）/ <b>Vite + Rolldown</b>（通用，给 RR v7、TanStack Start、Astro、SvelteKit 等）。Webpack / esbuild 进入存量维护。</li>
+          <li>Turbopack vs Vite-Rolldown 的根本差异：<b>Turbopack 是单 pipeline</b>（dev 和 prod 用同一套机制），<b>Vite 是双模</b>（dev 用 esbuild + native ESM、prod 用 Rolldown 打包）。两种路线都能工作，但工程哲学不同。</li>
+          <li>为什么 Vercel 不直接用 Vite —— 1) 全栈控制（dev server + prod bundle + RSC + cache 一体）；2) Vite 双模架构在 RSC 流式场景需要专门适配；3) 长期赌 Rust 增量计算比 Go/Zig 更适合大型 monorepo。这些是工程判断而非技术优劣。</li>
+          <li>Turbopack 的成本是 vendor-locked —— 它仅服务 Next.js（短期内不会被其他框架采用）。生态外（Storybook / Docusaurus / 自家 monorepo build）仍要用 Webpack 或 Vite 系。</li>
+          <li>性能数字（v16 官方）：dev 启动比 Webpack 快 ~45%，HMR 更快，prod build 与 Webpack 接近（早期 prod 不如 Webpack，v16 GA 后追平）。具体数字取决于项目规模。</li>
+          <li>这一章不重写 bundler 史（已在 Vite 主题 P1 讲过）。重点是 Turbopack 自己 + 横评其他选项。如果你想深入 Webpack / Rollup / esbuild 内部，先看 <a href="../../vite/01-overview/01-build-tool-history.html">Vite 主题</a>。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>turbo-tasks · 增量计算引擎</h3>
+
+        <p>Turbopack 的核心不是"打包"，是"<strong>知道改了什么，只重算受影响的部分</strong>"。turbo-tasks 是这套增量计算系统的实现。</p>
+
+        <p>核心思想：</p>
+
+        <ul>
+          <li><b>每个编译步骤是一个 task</b> —— 解析模块 / 编译 JS / 打包 chunk 都是 task</li>
+          <li><b>task 自动建立依赖关系</b> —— task A 调用 task B，A 自动依赖 B 的结果</li>
+          <li><b>结果可缓存</b> —— task 输入相同，结果相同；缓存命中跳过执行</li>
+          <li><b>修改触发失效</b> —— 改一个文件，从 file → parse → transform → bundle 这条 task 链上的所有 task 重算；其他不相关的 task 全部缓存命中</li>
+        </ul>
+
+        <p>用 Rust macro 简化 task 定义：</p>
+
+        <div class="code-block">
+          <span class="code-label">rust</span>
+          <pre class="code"><code class="lang-rust">// 简化的 turbo-tasks 风格代码（实际更复杂）
+#[turbo_tasks::function]
+async fn parse_module(file: PathRef) -&gt; Result&lt;ModuleAst&gt; {
+  let source = read_file(file).await?;  // 自动依赖 file 内容
+  parse_javascript(source).await
+}
+
+#[turbo_tasks::function]
+async fn build_chunk(modules: Vec&lt;ModuleAst&gt;) -&gt; Result&lt;Chunk&gt; {
+  // 这个 task 依赖所有传入的 modules
+  // 任一 module 变化，这个 chunk 重算；其他 chunk 不受影响
+}</code></pre>
+        </div>
+
+        <p>对比 Webpack：Webpack 是"全图重建"模式 —— 改一个文件触发 incremental rebuild，但内部图算法是 JS 写的，且粒度粗。Turbopack 把这套搬到 Rust + 细粒度 task。</p>
+
+        <h3>SWC · Rust 写的编译器</h3>
+
+        <p>SWC（Speedy Web Compiler）是 Donny（강동윤）2018 年起独立开发的 Rust 编译器，2022 年起被 Vercel 雇用专职。它的角色相当于 Babel：</p>
+
+        <ul>
+          <li>解析 JS / TS / JSX / TSX → AST</li>
+          <li>跑 transformation（JSX → React.createElement、TS 类型擦除、装饰器、Polyfill 注入）</li>
+          <li>输出最终 JS</li>
+        </ul>
+
+        <p>性能：比 Babel 快 10-20×（单核），比 esbuild 略慢但增量计算更强。</p>
+
+        <p>SWC 也是 Next.js 不依赖 Babel 的核心 —— 自从 Next.js 12 起，TypeScript / JSX / SSR 编译全走 SWC，Babel 仅作为 fallback。</p>
+
+        <h3>Webpack loader / plugin 兼容</h3>
+
+        <p>Turbopack 部分兼容 Webpack 接口，让迁移有路径：</p>
+
+        <ul>
+          <li><b>loader 兼容</b>：Webpack loader（JS 函数）大多可用，特别是 markdown-loader / yaml-loader / svg-loader</li>
+          <li><b>plugin 兼容</b>：部分 Webpack plugin 可用，但底层 hooks（compilation / optimization）大多不兼容 —— Turbopack 的内部模型与 Webpack 不同</li>
+          <li><b>resolve 配置</b>：alias / extensions 等基础配置兼容</li>
+          <li><b>不兼容</b>：Webpack 5 的 Module Federation、复杂 splitChunks 配置、custom hooks</li>
+        </ul>
+
+        <p>实战中：用 Webpack 标准 loader（80% 项目）的迁移大多无痛；用复杂 Webpack plugin / 自定义编译流程的项目（20%）需要重写或暂时留 Webpack。</p>
+
+        <h3>dev + prod 单 pipeline</h3>
+
+        <p>这是 Turbopack 与 Vite 路线最大的差异。看对比：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>Vite（双模）</th>
+              <th>Turbopack（单 pipeline）</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>dev server 模块系统</td>
+              <td>原生 ESM（浏览器直接 import）</td>
+              <td>打包成 chunks（与 prod 一致）</td>
+            </tr>
+            <tr>
+              <td>dev 编译</td>
+              <td>esbuild（按需，单文件转换）</td>
+              <td>SWC + turbo-tasks（增量打包）</td>
+            </tr>
+            <tr>
+              <td>prod 编译</td>
+              <td>Rolldown（独立 bundler）</td>
+              <td>SWC + turbo-tasks（同一套）</td>
+            </tr>
+            <tr>
+              <td>dev / prod 行为差异</td>
+              <td>明显（ESM vs CJS / chunk 边界 / tree-shaking）</td>
+              <td>几乎相同（同一引擎）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>Vite 双模的优势：dev 启动极快（不打包，浏览器直接 ESM 加载）。Turbopack 单 pipeline 的优势：dev 与 prod 行为一致（避免"dev 工作 prod 坏"事故）。</p>
+
+        <p>对 Next.js 来说，单 pipeline 重要，因为 RSC 流式渲染需要 server 端的精确 chunk 边界（详见 P3.1）。Vite 在 RSC 场景下需要专门适配（这就是为什么 RR v7 / TanStack Start 加 RSC 支持要花时间）。</p>
+
+        <h3>横评 · 2026 bundler 格局</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Bundler</th>
+              <th>语言</th>
+              <th>定位</th>
+              <th>主要场景</th>
+              <th>2026 状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Webpack</td>
+              <td>JS</td>
+              <td>万能但慢</td>
+              <td>存量项目 / 复杂配置</td>
+              <td>存量维护</td>
+            </tr>
+            <tr>
+              <td>Rollup</td>
+              <td>JS</td>
+              <td>library bundler</td>
+              <td>npm 包发布</td>
+              <td>仍主流（library 场景）</td>
+            </tr>
+            <tr>
+              <td>esbuild</td>
+              <td>Go</td>
+              <td>极快但功能有限</td>
+              <td>Vite dev / 单文件转换</td>
+              <td>Vite dev 仍用</td>
+            </tr>
+            <tr>
+              <td>Rolldown</td>
+              <td>Rust</td>
+              <td>Rollup-compat 重写</td>
+              <td>Vite 7 默认 prod bundler</td>
+              <td>2026 GA</td>
+            </tr>
+            <tr>
+              <td>Rspack</td>
+              <td>Rust</td>
+              <td>Webpack-compat</td>
+              <td>字节跳动主推 / 老 Webpack 项目迁移</td>
+              <td>稳定，生态扩张</td>
+            </tr>
+            <tr>
+              <td>Bun build</td>
+              <td>Zig</td>
+              <td>与 Bun runtime 同源</td>
+              <td>Bun 项目首选</td>
+              <td>稳定，生态较小</td>
+            </tr>
+            <tr>
+              <td><b>Turbopack</b></td>
+              <td>Rust</td>
+              <td>vendor-locked 给 Next.js</td>
+              <td>Next.js 16+ 默认</td>
+              <td>2026 prod GA</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>关键观察：</p>
+        <ul>
+          <li>Rust 是赢家（除 esbuild Go 和 Bun build Zig 外，新 bundler 几乎全 Rust）</li>
+          <li>Vite-Rolldown 与 Turbopack 是两条主路 —— 通用 vs Next.js 专用</li>
+          <li>Webpack 不会消失（生态太大），但新项目几乎不选</li>
+          <li>esbuild 找到了"Vite dev 的 dependency optimizer"这个稳定生态位，不再追求成为完整 bundler</li>
+        </ul>
+
+        <h3>为什么 Vercel 押 Turbopack 而不直接用 Vite</h3>
+
+        <p>这是社区争议最多的话题之一。理由：</p>
+
+        <p><b>1. 全栈控制</b> —— Next.js 不只是"应用层框架"，它要管 dev server、SSR pipeline、RSC payload、缓存层、Edge / Node runtime 切换、Image Optimization 等。Vite 是通用 bundler，不专门为这些场景优化；Vercel 想完全控制每一层。</p>
+
+        <p><b>2. 增量计算优先</b> —— Vercel 大量项目是 monorepo + 多 page。Vite 的双模架构在 dev 阶段每次改文件需要让浏览器重新 import；prod build 还要再来一遍 Rolldown。Turbopack 的 turbo-tasks 在 dev / prod 复用增量计算，monorepo 场景理论上更快。</p>
+
+        <p><b>3. RSC 流式适配</b> —— RSC payload 流式 + Suspense flush 需要 bundler 配合（生成 manifest、控制 chunk 边界）。Webpack 已实现 react-server-dom-webpack；Turbopack 自家实现；Vite 等其他 bundler 需要从头实现 RSC plugin。</p>
+
+        <p><b>4. 长期 Rust 押注</b> —— Vercel 把 Tobias Koppers（Webpack 作者）和 Donny（SWC 作者）招进来，目标是让 Rust 成为 web 工具链长期主流。Vite 也用 Rust（Rolldown），但 Vite 团队（Evan You）独立运作，Vercel 不能控制方向。</p>
+
+        <p>但这不是说 Vite 路线错了。Vite-Rolldown 在通用场景（不押 RSC 的项目 / 多框架支持）有优势。两条路线长期共存，不是零和。</p>
+
+        <h3>Turbopack 性能数字（2026 v16 官方）</h3>
+
+        <p>Vercel 公开数字（基于自家大型项目实测）：</p>
+
+        <ul>
+          <li><b>dev 启动</b>：比 Webpack 快 45.8%</li>
+          <li><b>HMR</b>：单文件改动到浏览器更新 &lt; 100ms（Webpack 通常 200-500ms）</li>
+          <li><b>prod build</b>：v15 时仍慢于 Webpack；v16 GA 时基本追平</li>
+          <li><b>cold cache build（CI 第一次）</b>：与 Webpack 相当（增量优势在二次 build 才体现）</li>
+        </ul>
+
+        <p>注意：性能数字高度依赖项目规模 + 配置。小项目（&lt; 100 模块）差距不明显；中大型项目（1000+ 模块）+ monorepo 场景 Turbopack 优势明显。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 从 Webpack 迁 Turbopack</h3>
+
+        <p>Next.js 16 默认 Turbopack。从 v14 / v15 项目升级时：</p>
+
+        <ol>
+          <li><b>跑 next dev --turbo</b> 看是否成功启动（v15+ 默认 Turbopack）</li>
+          <li><b>检查报错</b> —— 大多与 Webpack 自定义 plugin / loader 有关；标准 loader 通常无痛</li>
+          <li><b>常见需要替换的</b>：next-bundle-analyzer 旧版本、自定义 webpack 配置中的 plugin</li>
+          <li><b>跑 next build --turbo</b> 验证 prod build</li>
+          <li><b>对比性能</b> —— dev 启动 / HMR / build 时间</li>
+          <li><b>v16 起</b>：next.config 里的 webpack() 配置仍可用，但只在 fallback 时生效</li>
+        </ol>
+
+        <h3>场景 2 · 评估"我们项目能用 Turbopack 吗"</h3>
+
+        <p>判断：</p>
+        <ul>
+          <li>用标准 Next.js 配置 → 直接 Turbopack（无问题）</li>
+          <li>用 next.config 里的 webpack() 自定义 plugin → 检查这些 plugin 是否兼容</li>
+          <li>用 Module Federation → 仍需 Webpack（Turbopack v16 还不支持）</li>
+          <li>用复杂 splitChunks 配置 → 测试一下，可能行为不一致</li>
+          <li>monorepo 场景 → Turbopack 优势大，强烈推荐</li>
+        </ul>
+
+        <h3>场景 3 · 调试"Turbopack 比 Webpack 慢"</h3>
+
+        <p>少数情况 Turbopack 反而慢。排查：</p>
+        <ul>
+          <li>是否启用了 source map（dev 默认开，prod 看配置）</li>
+          <li>是否有大量自定义 loader 强制走 Webpack 兼容层</li>
+          <li>是否在 monorepo 中没正确设置 transpilePackages</li>
+          <li>是否第一次 build（cold cache 时增量优势不体现）</li>
+          <li>v16 之前 prod build 通常比 Webpack 慢，v16+ GA 后追平 —— 升级版本</li>
+        </ul>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · next.config.ts 启用 Turbopack（v16 默认）</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">// next.config.ts (v16+)
+import type { NextConfig } from 'next';
+
+const config: NextConfig = {
+  // v16 起 Turbopack 默认开启，无需 --turbo flag
+  // experimental.turbo 已稳定为顶层 turbopack 配置
+
+  turbopack: {
+    // SVG → React component
+    rules: {
+      '*.svg': {
+        loaders: ['@svgr/webpack'],
+        as: '*.js',
+      },
+    },
+    // alias
+    resolveAlias: {
+      '@/': './src/',
+    },
+  },
+
+  // Webpack fallback（仅在 turbopack 不工作时用）
+  webpack(config) {
+    // ...
+    return config;
+  },
+};
+
+export default config;</code></pre>
+        </div>
+
+        <h3>代码 2 · 与 Webpack 共存（迁移期）</h3>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// package.json
+{
+  "scripts": {
+    "dev": "next dev --turbo",
+    "dev:webpack": "next dev",
+    "build": "next build --turbo",
+    "build:webpack": "next build"
+  }
+}
+// 团队迁移期可以两套共存对比</code></pre>
+        </div>
+
+        <h3>代码 3 · 用 @next/bundle-analyzer 看 chunk</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-javascript">// next.config.ts
+import bundleAnalyzer from '@next/bundle-analyzer';
+
+const withBundleAnalyzer = bundleAnalyzer({
+  enabled: process.env.ANALYZE === 'true',
+});
+
+export default withBundleAnalyzer({
+  // ...
+});
+
+// ANALYZE=true npm run build
+// 浏览器打开 chunk 依赖图，看 client bundle 包含什么</code></pre>
+        </div>
+
+        <h3>代码 4 · monorepo + transpilePackages</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">// apps/web/next.config.ts
+export default {
+  // 让 Turbopack 也编译这些 monorepo 内的 package
+  transpilePackages: ['@myorg/ui', '@myorg/utils'],
+};</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>用旧版本 next-bundle-analyzer 不兼容 Turbopack</b> —— 升级到最新版本（含 Turbopack 适配）</li>
+          <li><b>自定义 Webpack plugin 在 Turbopack 不工作</b> —— 确认 plugin 是否在 Turbopack 兼容列表（turbo.build 文档）；不兼容则只能继续 Webpack 或重写</li>
+          <li><b>Module Federation 项目升 Turbopack</b> —— v16 仍不支持 MF，必须留 Webpack。等 v17 / v18 看 Turbopack 是否实现</li>
+          <li><b>monorepo 内 import 不工作</b> —— 加 transpilePackages 列表，告诉 Turbopack 编译 workspace 内的 package</li>
+          <li><b>"为什么 dev 启动很慢"</b> —— 可能 cold cache（第一次启动）；可能用了大量 webpack-only 配置走兼容层；可能项目结构不利于增量计算</li>
+          <li><b>"为什么 HMR 慢"</b> —— 检查是否改了 layout / providers 等顶层组件（会触发更大范围的重算）；考虑把 'use client' 推到下层</li>
+          <li><b>跑 next build --turbo 失败但 next build 成功</b> —— prod build 路径与 dev 不同，prod 兼容性可能稍差。升 v16 后大多解决；如仍失败提交 issue</li>
+          <li><b>对比 Vite 项目跑得更快然后纠结</b> —— 不同项目类型不可直接对比。Vite 在 dev 启动有先天优势（双模 + ESM）；Turbopack 在 monorepo 增量构建有优势。看你项目特点</li>
+          <li><b>"Turbopack 文档不完整"</b> —— 真实情况，2026 仍在补。复杂配置看 turbo.build/pack docs + Next.js GitHub discussions + 实际代码</li>
+          <li><b>认为 Turbopack 在所有场景都比 Webpack 快</b> —— 不一定。v15 prod build 还慢；v16 后追平。dev / HMR 是 Turbopack 优势区</li>
+          <li><b>"Webpack 还没死，Turbopack 是过度承诺"</b> —— Webpack 短期不会死（生态太大），但 Next.js 内部 v17 起 Webpack 会进 deprecation 路径。Next.js 项目最终都会走 Turbopack</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://turbo.build/pack" target="_blank" rel="noopener">turbo.build/pack 官方</a></li>
+          <li><a href="https://nextjs.org/docs/app/api-reference/turbopack" target="_blank" rel="noopener">Next.js Turbopack 配置</a></li>
+          <li><a href="https://swc.rs/" target="_blank" rel="noopener">SWC 官方</a></li>
+          <li><a href="https://vercel.com/blog/turbopack" target="_blank" rel="noopener">Vercel · Turbopack 介绍博客</a></li>
+          <li><a href="https://nextjs.org/blog/turbopack-for-development-stable" target="_blank" rel="noopener">Turbopack for Dev Stable 公告</a></li>
+          <li><a href="../../vite/01-overview/01-build-tool-history.html">Vite 主题 P1.1 · 构建工具史</a> · Webpack/Rollup/esbuild 详细演化</li>
+          <li><a href="../../vite/02-vite-architecture/01-dev-mode.html">Vite 主题 P2.1 · 双模架构</a> · Vite dev/prod 双模详解</li>
+          <li><a href="../../bun/04-toolchain/02-bun-build.html">Bun 主题 P4.2 · Bun build</a> · Zig bundler 路线</li>
+          <li><a href="../07-deploy-ecosystem/01-runtime-deploy.html">本主题 P7.1 · 部署矩阵</a> · build 产物部署</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

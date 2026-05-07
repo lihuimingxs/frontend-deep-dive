@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Next.js 项目史（2016-2026）· P1.1 · Next.js 深度学习</title>
+    <meta name="description" content="Next.js 10 年史。2016 1.0 getInitialProps → 2019 9 TS+API Routes → 2020 9.3 getStaticProps → 2020 9.5 ISR → 2022 13 App Router+RSC+Turbopack alpha → 2023 14 Server Actions+PPR 预览 → 2024 15 React 19+缓存反转 → 2026 16 Turbopack/PPR GA + Cache Components。回答「为什么 Next.js 这么爱重构」的根因——每代都是回应上代某个具体痛点的产物。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23000000'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EN%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Next.js 深度学习</span><span class="site-title-badge" style="background: oklch(0.22 0.02 250); color: #fff">Next</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P1 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · Next.js 是谁</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html" class="active">01 · Next.js 项目史</a></li>
+          <li><a href="02-frameworks-landscape.html">02 · 元框架同代人横评</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Next.js</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · Next.js 是谁</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Next.js 项目史</span>
+        </nav>
+        <h1>Next.js 项目史（2016-2026）</h1>
+        <p class="lead">
+          Next.js 10 年的演化主线，不是按版本号背，而是按"<strong>每次范式转移及其根因</strong>"。从 2016 年 Vercel（当时叫 Zeit）开源 1.0 那天起，每一次断代式重写都是对前一版具体痛点的回应——getInitialProps 被 getStaticProps 取代是因为"运行时 SSR 太慢"，App Router 取代 Pages Router 是因为 RSC 需要不同的渲染心智，v15 缓存反转是因为 v13-14 的 cache-by-default 在生产引爆 stale 数据事故。把这条线拉直，后面每一章的"为什么这么设计"都不再是天书。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> 写过 React + 用过 Next.js（任意版本）</span>
+          <span><strong>主要来源</strong> nextjs.org/blog 各版本 release notes + Vercel 工程 blog + Lee Robinson / Tim Neutkens 公开演讲</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Next.js 10 年由 6 次断代式重写组成 —— 1.0 getInitialProps（2016）→ 9 TS + API Routes（2019）→ 9.3 getStaticProps + 9.5 ISR（2020）→ 13 App Router + RSC + Turbopack alpha（2022）→ 15 React 19 + 缓存反转（2024）→ 16 Turbopack/PPR GA + Cache Components（2026）。每次都是回应上一版的具体生产痛点。</li>
+          <li>2016 年 Next.js 1.0 解决"<strong>React + SSR 配置地狱</strong>" —— 当时单页 React 应用上线要自己拼 webpack + babel + express + react-dom/server，配置上千行；Next.js 把这套打包成一个二进制命令 + 一组约定（pages 目录 = 路由），走红的根因是"开箱即用"。</li>
+          <li>2019 年 Next.js 9 把它扩展为<strong>全栈框架</strong> —— TypeScript 一等支持 / API Routes（pages/api/* 直接是 HTTP handler）/ 自动静态优化。从这一版起 Next.js 不再只是"SSR 工具"。</li>
+          <li>2020 年 Next.js 9.3 + 9.5 引入 SSG + ISR —— getStaticProps（build-time 渲染）/ getServerSideProps（每请求渲染）/ Incremental Static Regeneration（按需后台再生）。"一个项目里混合三种渲染模式"成为现实，jamstack 风潮被推上顶峰。</li>
+          <li>2022 年 Next.js 13 是最大的断代式重写 —— App Router beta + RSC（React Server Components）+ Turbopack alpha + 新 image/font。Vercel 在 RSC 还是 RFC 阶段就押宝并把整个路由系统围着它建，这是 Next.js 与 Remix 路线分叉的根本点。</li>
+          <li>2023 年 Next.js 14 把 Server Actions 推到 stable —— <code>'use server'</code> 函数 + 表单一体化；同时 Partial Prerendering（PPR）以 experimental 出现，预告了 v16 的 Cache Components 方向。</li>
+          <li>2024 年 Next.js 15 完成两件大事：React 19 + async request APIs（cookies/headers/params 全 Promise），以及<strong>缓存默认值反转</strong>——fetch 不写选项从 cache-by-default 改回 explicit-opt-in。这次反转是迟到的修正，也是 Next.js 历史上承认设计错误最公开的一次。</li>
+          <li>2026 年 Next.js 16 让 Turbopack 在 dev + prod 双 stable，PPR 正式 GA，Cache Components 用 <code>'use cache'</code> 指令重做整个缓存心智。Webpack 被完全取代；五层缓存模型被简化为"静态壳 + 动态洞"两层概念。</li>
+          <li>纵观 10 年，<strong>Next.js 重构频率高于绝大多数同代框架</strong> —— 这不是工程混乱，是 Vercel 一贯的"每隔 2-3 年押注下一代 React 特性"策略：永远是 React RFC 的首发实现者，享受先发红利但承担生产试错成本。</li>
+          <li>2026 的稳态：新项目里 Next.js 占比 60-70%（含 Vercel 部署生态），15-20% 走 React Router v7，其余分给 TanStack Start / Astro / 纯 SPA。Next.js 未来的差异化点不再是渲染模式（PPR 已 GA），而是 AI SDK 集成 + Cache Components 心智成熟。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>前史 · 2013-2016 · React 时代的 SSR 配置地狱</h3>
+        <p>2013 年 Facebook 开源 React，SPA（Single Page App）成为主流。但 SPA 有几个固有问题：首屏白屏、SEO 不友好、慢网络下感知差。解决方案是 SSR（Server-Side Rendering）—— React 0.14（2015）发布 <code>react-dom/server</code> 让组件能在 Node 里渲染成 HTML。</p>
+
+        <p>但要把 SSR 跑起来，2015-2016 年的开发者要自己组装：</p>
+        <ul>
+          <li>Webpack 配置：双份（client bundle + server bundle）+ code splitting + dynamic import + CSS extraction</li>
+          <li>Babel 配置：JSX + ESM + Stage-X 提案 + browser target</li>
+          <li>路由：自己定义 server-side route → React 组件映射</li>
+          <li>data fetching：自己设计 server 端 fetch + serialize 到 client + hydration 时不重复请求</li>
+          <li>express / koa server：handle SSR + static asset + API</li>
+          <li>HMR / dev server：自己装 webpack-dev-middleware + react-hot-loader</li>
+        </ul>
+
+        <p>结果是每个团队都重复造轮子，配置文件动辄上千行。社区涌现各种 boilerplate（react-starter-kit / react-server / NextAlbum 等），但都不是"框架"，更像"模板"。</p>
+
+        <h3>2016-10 · Next.js 1.0 · "约定优于配置"打破 SSR 地狱</h3>
+        <p>Vercel（当时叫 Zeit）的 Tim Neutkens、Naoyuki Kanezawa、Guillermo Rauch 在 2016 年 10 月发布 Next.js 1.0。设计立场清晰：</p>
+        <ul>
+          <li><code>pages/foo.js</code> = URL <code>/foo</code>，文件系统即路由</li>
+          <li>每个 page 是一个 React 组件，组件 export 一个静态方法 <code>getInitialProps</code> 来 fetch 数据</li>
+          <li>同一份组件代码在 server 和 client 都跑（universal rendering）</li>
+          <li>开箱即用：<code>next dev</code> / <code>next build</code> / <code>next start</code>，配置文件 <code>next.config.js</code> 可选</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// pages/posts/[id].js (Next.js 1-8 风格)
+import React from 'react';
+
+export default class Post extends React.Component {
+  static async getInitialProps({ query }) {
+    const res = await fetch(`https://api.example.com/posts/${query.id}`);
+    return { post: await res.json() };
+  }
+  render() {
+    return &lt;article&gt;{this.props.post.title}&lt;/article&gt;;
+  }
+}</code></pre>
+        </div>
+
+        <p>1.0 走红的根因不是技术先进，是"<strong>取消选择负担</strong>"。开发者不再需要决定用 webpack 还是 rollup、用 express 还是 koa、用什么路由库、怎么处理 SSR + hydration。Next.js 全替你定了。</p>
+
+        <p>但 1.x-8.x 时代也埋下了几个长期痛点：</p>
+        <ul>
+          <li>getInitialProps 的运行时 SSR 模式 —— 每次请求都跑一次 fetch，CPU + 延迟成本高，scale 上限低</li>
+          <li>getInitialProps 同时跑在 server 和 client（hydration 时复用），错误模型复杂</li>
+          <li>没有 build-time 渲染（SSG），完全做不了 jamstack 那种"build 时生成全部 HTML 上 CDN"</li>
+          <li>API route 概念不存在，需要自己搭 express server</li>
+        </ul>
+
+        <h3>2019-07 · Next.js 9 · 全栈化与自动静态优化</h3>
+        <p>2019 年 7 月发布的 Next.js 9 是第一次大规模能力扩展。三个关键特性：</p>
+
+        <p><b>TypeScript 一等支持</b> —— 之前要装 <code>@zeit/next-typescript</code> 插件，9 起开箱可用。这一步把 Next.js 推向"企业级默认"。</p>
+
+        <p><b>API Routes</b> —— <code>pages/api/foo.js</code> 直接是 HTTP handler，省掉自建 express server：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// pages/api/users.js (Next.js 9 风格)
+export default function handler(req, res) {
+  if (req.method !== 'POST') return res.status(405).end();
+  res.json({ id: 123, name: req.body.name });
+}</code></pre>
+        </div>
+
+        <p><b>Automatic Static Optimization</b> —— 没有 getInitialProps 的页面会在 build 时被预渲染成静态 HTML，运行时直接从磁盘 / CDN 返回，不走 Node SSR。这是 Next.js 第一次有"build-time 渲染"概念。</p>
+
+        <p>从 9 起 Next.js 不再只是"SSR 工具"，而是"全栈 React 框架"。竞品 Gatsby 在内容站点领域强势（jamstack），Next.js 9 的扩展直接对标，开始侵蚀 Gatsby 的地盘。</p>
+
+        <h3>2020-03 · Next.js 9.3 · getStaticProps + getServerSideProps 分家</h3>
+        <p>2020 年 3 月的 9.3 版本是渲染模式的分水岭。getInitialProps 被两个新 API 取代：</p>
+
+        <ul>
+          <li><code>getStaticProps</code> —— build 时跑一次，生成静态 HTML + 数据 JSON；运行时从 CDN 返回</li>
+          <li><code>getServerSideProps</code> —— 每次请求跑一次，server 渲染（与 getInitialProps 类似但只在 server 执行）</li>
+        </ul>
+
+        <p>这次拆分的根本动机：<strong>同一个项目里，不同 page 适合不同渲染模式</strong>。一个电商站，首页 + 商品详情应该 SSG（CDN 秒返）、个人订单页应该 SSR（每请求新数据）、博客页应该 SSG + 后台再生。9.3 让开发者按 page 选择，不再是"全站 SSR"或"全站 SSG"。</p>
+
+        <p>同年 7 月 Next.js 9.5 引入 ISR（Incremental Static Regeneration）：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// pages/products/[id].js (Next.js 9.5+)
+export async function getStaticProps({ params }) {
+  const product = await fetchProduct(params.id);
+  return {
+    props: { product },
+    revalidate: 60, // 每 60 秒后台再生一次
+  };
+}
+
+export async function getStaticPaths() {
+  return { paths: [], fallback: 'blocking' };
+}</code></pre>
+        </div>
+
+        <p>ISR 解决了 SSG 最大问题——"build 时生成几万个 page 太慢"。开发者只 build 头部几百个，剩下的"按访问触发再生"。这是 Vercel 推 jamstack 的最后一块拼图。2020-2022 年 ISR 成为内容站点 / 电商站的事实标准方案。</p>
+
+        <h3>2022-10 · Next.js 13 · App Router + RSC + 断代式重写</h3>
+        <p>2022 年 10 月的 Next.js Conf 上 Vercel 发布 Next.js 13。这是 10 年里最大的一次断代式重写，同步推出三个新东西：</p>
+
+        <ul>
+          <li><b>App Router</b>（beta） —— 全新的路由系统，基于 <code>app/</code> 目录而非 <code>pages/</code></li>
+          <li><b>React Server Components</b>（beta）—— 服务器组件作为 App Router 默认渲染模式</li>
+          <li><b>Turbopack</b>（alpha）—— Rust 重写的 bundler，目标是取代 Webpack</li>
+        </ul>
+
+        <p>App Router 与 Pages Router 的本质差异：</p>
+        <ul>
+          <li>Pages Router 每个 page 是独立渲染树；layout 用 <code>_app.tsx</code> 全局包裹</li>
+          <li>App Router 嵌套布局原生，<code>app/dashboard/layout.tsx</code> 包裹 <code>app/dashboard/* page</code>，路由切换时不重新挂载（state 保留）</li>
+          <li>Pages Router 数据获取在 page 层（getStaticProps / getServerSideProps）</li>
+          <li>App Router 每个 Server Component 都可以独立 fetch，数据获取分散到组件层</li>
+        </ul>
+
+        <p>RSC 的引入更激进。Vercel 在 React 团队还在 RFC 阶段就押宝并把 App Router 围绕它建。当时 Remix（现在的 React Router v7）走相反路线——继续用传统 SSR + loaders，不押 RSC。这次分叉至今未弥合。</p>
+
+        <p>13 发布时 App Router 标 beta，原因诚实：</p>
+        <ul>
+          <li>大量 API 还在变（Server Actions 还没 stable）</li>
+          <li>缓存模型还在迭代（详见 P5）</li>
+          <li>RSC payload 格式还在调整</li>
+          <li>Turbopack alpha 远没有 production-ready</li>
+        </ul>
+
+        <p>开发者社区分两派：早期采用者（Vercel 自家、Shopify、TikTok 部分团队）赌 App Router 是未来；保守派（大量企业项目）继续 Pages Router 等成熟。这种分裂持续了 13 / 14 两个大版本。</p>
+
+        <h3>2023-10 · Next.js 14 · Server Actions stable + PPR 预览</h3>
+        <p>14 主要做两件事：把 Server Actions 推到 stable、把 Partial Prerendering 推出 experimental。</p>
+
+        <p>Server Actions 是 React 19 Actions 的全栈实现：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// app/todo/page.tsx (Next.js 14)
+import { revalidatePath } from 'next/cache';
+
+async function addTodo(formData: FormData) {
+  'use server';
+  await db.todos.create({ text: formData.get('text') });
+  revalidatePath('/todo');
+}
+
+export default function TodoPage() {
+  return (
+    &lt;form action={addTodo}&gt;
+      &lt;input name="text" /&gt;
+      &lt;button&gt;Add&lt;/button&gt;
+    &lt;/form&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>这一版让"表单 + 数据变更"变成全栈一等公民——无需自己写 fetch、无需自己管 loading、无需手动 revalidate 缓存。详见 P4。</p>
+
+        <p>Partial Prerendering 是新概念：一个 page 同时是静态 + 动态。静态壳从 CDN 秒返，动态部分流式补齐。当时还在 experimental，但已经预告了 v16 的方向。</p>
+
+        <p>同年 React 19 进入 RC，Next.js 14 要求 React 18 + 同时兼容 19 RC。这又是一次"Next.js 跟着 React 节奏走"的典型例子。</p>
+
+        <h3>2024-10 · Next.js 15 · 缓存反转 + React 19 + Turbopack dev GA</h3>
+        <p>15 是 Next.js 历史上承认设计错误最公开的一次。三个关键变化：</p>
+
+        <p><b>缓存默认值反转</b> —— v13-14 默认 fetch 缓存"激进"踩了大量生产 stale 数据事故。v15 把默认改回：<code>fetch()</code> 不写选项就是 dynamic（每次请求）；要 cache 必须显式 <code>{ cache: 'force-cache' }</code> 或 <code>{ next: { revalidate } }</code>。</p>
+
+        <div class="code-block">
+          <span class="code-label">diff</span>
+          <pre class="code"><code class="lang-diff">// v13-14 默认行为（已废弃）
+- await fetch('/api/data');  // 默认 cache，永久不重新拿
++ await fetch('/api/data', { cache: 'force-cache' });  // v15+ 必须显式
+
+// v15+ 默认行为
+await fetch('/api/data');  // 默认 dynamic，每次重新拿
+await fetch('/api/data', { next: { revalidate: 60 } });  // 想 cache 显式标</code></pre>
+        </div>
+
+        <p>这次反转的根因：v13-14 上线后，大量团队反馈"我没标 cache，怎么数据是 1 小时前的"。问题出在 Next.js 隐式把整个 Data Cache 默认开了，开发者无感知。v15 撤回默认，承认是设计错误。</p>
+
+        <p><b>async request APIs</b> —— <code>cookies()</code> / <code>headers()</code> / <code>params</code> / <code>searchParams</code> 全部变成 Promise：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// v14
+import { cookies } from 'next/headers';
+const cookieStore = cookies();
+const token = cookieStore.get('token');
+
+// v15+
+import { cookies } from 'next/headers';
+const cookieStore = await cookies();  // ← await
+const token = cookieStore.get('token');
+
+// page params
+export default async function Page({ params }: { params: Promise&lt;{ id: string }&gt; }) {
+  const { id } = await params;  // ← await
+}</code></pre>
+        </div>
+
+        <p>这次改动看起来像一次烦人的迁移，但根本目的是为 PPR 铺路——让"读 cookies"变成显式 await，PPR 才能在静态壳渲染时跳过。</p>
+
+        <p><b>Turbopack dev 进入 stable</b> —— next dev 默认走 Turbopack；Webpack 仍可作为 fallback。45.8% 编译速度提升的官方数字基于 Vercel 自家大型项目实测。</p>
+
+        <h3>2026-01 · Next.js 16 · Turbopack/PPR GA + Cache Components 重做</h3>
+        <p>2026 年初的 Next.js 16 把 Turbopack prod 也推到 stable，PPR 正式 GA，缓存系统用 Cache Components 重做。这一版是 v15 反转的延续，也是缓存心智的最终形态（至少在 2027 之前）。</p>
+
+        <p><b>Cache Components</b> —— 用 <code>'use cache'</code> 指令显式标记可缓存单元，替代 v13-15 那套五层缓存模型：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// next.config.ts
+export default { cacheComponents: true };
+
+// app/blog/[slug]/page.tsx
+async function PostContent({ slug }: { slug: string }) {
+  'use cache';  // ← 这个 component 是 cacheable 单元
+  const post = await db.posts.findUnique({ where: { slug } });
+  return &lt;article&gt;{post.content}&lt;/article&gt;;
+}
+
+async function Comments({ postId }: { postId: string }) {
+  // 不带 'use cache' = 动态，每请求重新计算
+  const comments = await db.comments.findMany({ where: { postId } });
+  return &lt;ul&gt;{comments.map(c =&gt; &lt;li&gt;{c.body}&lt;/li&gt;)}&lt;/ul&gt;;
+}
+
+export default function Post({ params }: { params: { slug: string } }) {
+  return (
+    &lt;&gt;
+      &lt;PostContent slug={params.slug} /&gt;
+      &lt;Suspense fallback={&lt;p&gt;loading...&lt;/p&gt;}&gt;
+        &lt;Comments postId={params.slug} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p><b>PPR 默认开</b> —— 启用 cacheComponents 后，page 自动按"静态壳 + 动态洞"渲染。静态壳从 CDN 秒返；动态洞通过 stream 在请求里补齐。</p>
+
+        <p><b>updateTag 新增</b> —— 在当前请求内立即失效 + 重算，解决"提交后立刻看到新数据"的体验问题：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">'use server';
+import { updateTag } from 'next/cache';
+
+export async function addComment(postId: string, body: string) {
+  await db.comments.create({ data: { postId, body } });
+  updateTag(`post-${postId}-comments`);  // 当前请求就重算，不等下次访问
+}</code></pre>
+        </div>
+
+        <p><b>Turbopack 完全替代 Webpack</b> —— next dev / next build 默认 Turbopack；Webpack 作为 deprecation 路径在 v17 删除。详见 P6。</p>
+
+        <h3>纵观 10 年 · Next.js 为什么爱重构</h3>
+        <p>Next.js 在同代框架里重构频率最高，原因不是工程混乱，而是 Vercel 的明确策略：</p>
+
+        <ul>
+          <li><b>永远是 React RFC 的首发实现者</b> —— Hooks（2018）/ Concurrent（2022）/ RSC（2022）/ Actions（2023）全是 Next.js 抢先 GA。这给 Vercel 先发红利（吸引早期采用者），也承担生产试错成本（v13-14 缓存事故、App Router 反复迭代）</li>
+          <li><b>每 2-3 年押注下一代渲染模式</b> —— 1.0 SSR / 9.3 SSG+SSR / 9.5 ISR / 13 RSC / 16 PPR+Cache Components。每一代都是对前一代瓶颈的回应</li>
+          <li><b>vendor-coupled 生态</b> —— 新特性优先在 Vercel 平台验证（Edge Functions / Image Optimization / KV / Postgres），self-host 总是滞后</li>
+          <li><b>对话式 release notes</b> —— Vercel 工程 blog + Lee Robinson 视频深度解释每个变更动机；这种透明度让早期采用者愿意承担风险</li>
+        </ul>
+
+        <p>这条路线的代价显著：v13-14 的生产事故让相当一部分团队对 Next.js 失去信任，转向 Remix 或 Astro。v15 的反转 + v16 的简化是修复信任的努力。但只要 Vercel 继续押注下一代 React 特性，这种"激进 → 反转"循环就会持续。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 从 Pages Router 项目迁 App Router</h3>
+        <p>2024-2026 年最常见的迁移场景。理解历史的实战价值在这里：</p>
+        <ul>
+          <li>Pages Router 不会被立即废弃 —— v16 仍完全支持，可以两套并存（<code>pages/</code> + <code>app/</code> 同时存在）</li>
+          <li>迁移路径：先把新功能放 <code>app/</code>，旧 page 留 <code>pages/</code>；逐步迁移</li>
+          <li>getServerSideProps 直接对应 Server Component（在 RSC 里 <code>await</code>）</li>
+          <li>getStaticProps + revalidate 对应 <code>'use cache'</code> + revalidateTag</li>
+          <li>API Routes（<code>pages/api/*</code>）对应 Route Handlers（<code>app/api/*/route.ts</code>）+ 一部分变成 Server Actions</li>
+          <li>不要尝试一次性迁移整个项目，会卡在缓存 + RSC 心智上</li>
+        </ul>
+
+        <h3>场景 2 · 评估"我们要不要现在升 v16"</h3>
+        <p>2026-Q2 的典型决策。理解 v15 → v16 的变化才能做：</p>
+        <ul>
+          <li><b>已经在 v15 + 用 fetch cache 的项目</b> —— 升 v16 风险低，主要是 Turbopack prod build 验证</li>
+          <li><b>v14 + 大量 unstable_cache 的项目</b> —— 升级两步：先升 v15（处理 async request APIs + 缓存反转），再升 v16（迁 unstable_cache → 'use cache'）</li>
+          <li><b>使用 dynamicIO 实验配置的项目</b> —— v16 直接重命名为 cacheComponents，迁移路径官方文档清晰</li>
+          <li><b>self-host 的项目</b> —— v16 自定义 cache handler 接口稳定了，但要重写 cache handler 接 Redis</li>
+        </ul>
+
+        <h3>场景 3 · 给团队选 Next.js 主线版本</h3>
+        <p>新项目起步：</p>
+        <ul>
+          <li>2026 主流：直接 Next.js 16 + App Router + Cache Components</li>
+          <li>不接受 v16 试错的保守团队：Next.js 15.4 LTS 风格使用</li>
+          <li>不要起 Pages Router 新项目（v17 不一定保留 Webpack 兼容路径）</li>
+        </ul>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 同一功能在四个时代的写法对比</h3>
+        <p>以"产品详情页"为例，看 Next.js 4 个时代怎么写：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 时代 1 · Next.js 1-8 (2016-2019) · getInitialProps
+// pages/products/[id].js
+export default class Product extends React.Component {
+  static async getInitialProps({ query }) {
+    const res = await fetch(`/api/products/${query.id}`);
+    return { product: await res.json() };
+  }
+  render() { return &lt;Detail product={this.props.product} /&gt;; }
+}
+// 痛点：每请求都跑 SSR，CPU 高；server / client 双跑，错误模型复杂</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 时代 2 · Next.js 9.3-12 (2020-2022) · getStaticProps + ISR
+// pages/products/[id].js
+export async function getStaticProps({ params }) {
+  const product = await fetchProduct(params.id);
+  return { props: { product }, revalidate: 60 };
+}
+export async function getStaticPaths() {
+  return { paths: [], fallback: 'blocking' };
+}
+export default function Product({ product }) { return &lt;Detail product={product} /&gt;; }
+// 痛点：page 层 fetch，组件无法独立请求；client 还是 hydration 整棵树</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 时代 3 · Next.js 13-14 (2022-2024) · App Router + RSC
+// app/products/[id]/page.tsx
+export default async function Product({ params }: { params: { id: string } }) {
+  const product = await fetchProduct(params.id);  // 直接 await，server 渲染
+  return &lt;Detail product={product} /&gt;;
+}
+// 优势：组件直接 fetch；client bundle 不含 server 代码
+// 痛点：v13-14 默认 cache-by-default，stale 数据事故</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 时代 4 · Next.js 16 (2026+) · Cache Components + PPR
+// app/products/[id]/page.tsx
+async function ProductDetail({ id }: { id: string }) {
+  'use cache';  // 显式 cacheable
+  const product = await fetchProduct(id);
+  return &lt;Detail product={product} /&gt;;
+}
+async function StockStatus({ id }: { id: string }) {
+  // 无 'use cache' = 动态，每请求新算
+  const stock = await getRealtimeStock(id);
+  return &lt;StockBadge level={stock} /&gt;;
+}
+export default async function Product({ params }: { params: Promise&lt;{ id: string }&gt; }) {
+  const { id } = await params;
+  return (
+    &lt;&gt;
+      &lt;ProductDetail id={id} /&gt;
+      &lt;Suspense fallback={&lt;Skeleton /&gt;}&gt;&lt;StockStatus id={id} /&gt;&lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}
+// 优势：静态 + 动态混合，PPR 自动；缓存显式可读</code></pre>
+        </div>
+
+        <h3>代码 2 · v14 → v15 缓存反转的迁移示例</h3>
+        <div class="code-block">
+          <span class="code-label">diff</span>
+          <pre class="code"><code class="lang-diff">// app/dashboard/page.tsx
+export default async function Dashboard() {
+- // v14 默认 cache，"为什么数据这么旧"
+- const stats = await fetch('/api/stats').then(r =&gt; r.json());
++ // v15+ 必须显式选缓存策略
++ const stats = await fetch('/api/stats', {
++   next: { revalidate: 60 }
++ }).then(r =&gt; r.json());
+
+  return &lt;Stats data={stats} /&gt;;
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>把 Pages Router 心智带进 App Router</b> —— "我之前用 getServerSideProps 都没问题，App Router 怎么这么复杂"。App Router 不是 Pages Router 的语法糖，是不同的渲染模型。先读 P2 + P3 建立心智，再写代码</li>
+          <li><b>看老博客文章学 Next.js</b> —— 2022-2023 年的 RSC 教程很多是错的（fetch 默认行为已变 / unstable_cache 已废弃 / Server Actions 早期 API 已变）。<strong>只看 nextjs.org 当前文档 + Vercel blog 同期文章</strong></li>
+          <li><b>v13-14 + 生产 stale 数据反复出现</b> —— 升级到 v15+，并审查所有 fetch 调用，把"想 cache 的"显式标 <code>{ next: { revalidate } }</code></li>
+          <li><b>v15 升级时忘了 await cookies/headers/params</b> —— async request APIs 是同步 → Promise 的破坏式变更，TypeScript 会报错；老代码没类型的话会运行时崩</li>
+          <li><b>把 v13-15 五层缓存模型背熟然后用 v16</b> —— v16 的 Cache Components 是新心智，不是五层叠加。详见 P5</li>
+          <li><b>"Next.js 太爱重构，我们不用它"</b> —— 有道理，但要看团队规模。Vercel 重构频率高，但 LTS 流程相对稳定（每个 major 维护到下下个 major 出来）。中大型团队可以滞后一个 major</li>
+          <li><b>把 Server Actions 当万能 API</b> —— Server Actions 是给"表单 + 数据变更"，不是给所有 RPC 调用。复杂查询 / 第三方 webhook 仍然要 Route Handlers</li>
+          <li><b>误解 PPR = SSG + SSR 的简单合并</b> —— PPR 是同一个 route 里"静态壳 + 动态洞"的混合，不是"有的 page 静态有的 page 动态"。v14 → v16 PPR 模型一直在演化，看 v16 文档</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://nextjs.org/blog" target="_blank" rel="noopener">nextjs.org/blog</a> · 每个版本的 release notes，是设计动机最权威来源</li>
+          <li><a href="https://nextjs.org/blog/next-16" target="_blank" rel="noopener">Next.js 16 release notes</a> · 2026 主线，含 Cache Components / PPR GA / Turbopack stable 完整说明</li>
+          <li><a href="https://nextjs.org/blog/next-15" target="_blank" rel="noopener">Next.js 15 release notes</a> · 缓存反转 + async APIs + Turbopack dev GA</li>
+          <li><a href="https://nextjs.org/blog/next-13" target="_blank" rel="noopener">Next.js 13 release notes</a> · App Router + RSC + Turbopack alpha 首发</li>
+          <li><a href="https://nextjs.org/docs/app/guides/upgrading/version-16" target="_blank" rel="noopener">Upgrading to v16</a> · 官方升级指南</li>
+          <li><a href="https://vercel.com/blog/partial-prerendering-with-next-js-creating-a-new-default-rendering-model" target="_blank" rel="noopener">Vercel: Partial Prerendering 设计博客</a> · PPR 设计原文</li>
+          <li><a href="https://github.com/reactjs/rfcs/pull/188" target="_blank" rel="noopener">React RFC #188 · Server Components</a> · RSC 设计原始 RFC</li>
+          <li><a href="https://github.com/reactjs/rfcs/pull/229" target="_blank" rel="noopener">React RFC #229 · Server Actions</a> · Actions 设计原始 RFC</li>
+          <li><a href="../02-frameworks-landscape.html">本主题 P1.2 · 元框架同代人横评</a> · 配 Next.js 历史看格局</li>
+          <li><a href="../../react/01-overview/01-history.html">React 主题 P1.1 · React 项目史</a> · 理解 Next.js 必先理解 React 演化</li>
+          <li><a href="../05-caching/01-five-layer-cache.html">本主题 P5.1 · 五层缓存模型 → Cache Components</a> · 缓存反转的完整技术解释</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

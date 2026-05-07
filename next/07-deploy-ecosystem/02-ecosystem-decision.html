@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>生态决策树 + Next.js vs 同代人收束 · P7.2 · Next.js 深度学习</title>
+    <meta name="description" content="Next.js 主题收束章。生态全谱（next/image · next/font · next/metadata · NextAuth · 状态/数据/测试/monorepo）+ 何时用 Next.js / 何时不用 + Next.js vs RR v7 vs TanStack Start 最终决策矩阵 + 2027 展望（Cache Components 心智成熟 / RSC 协议被其他框架采用 / AI SDK 差异化）。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23000000'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EN%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Next.js 深度学习</span><span class="site-title-badge" style="background: oklch(0.22 0.02 250); color: #fff">Next</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P7 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · 部署 + 生态决策</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-runtime-deploy.html">01 · Edge / Node Runtime + 部署矩阵</a></li>
+          <li><a href="02-ecosystem-decision.html" class="active">02 · 生态决策树</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Next.js</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · 部署 + 生态决策</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 生态决策树 + Next.js vs 同代人收束</span>
+        </nav>
+        <h1>生态决策树 + Next.js vs 同代人收束</h1>
+        <p class="lead">
+          这是 Next.js 主题的<strong>收束章</strong>。把 P1-P6 学到的所有东西串起来，给一份能直接用到生产的决策框架：用 Next.js 的时候 image / font / metadata / auth / 状态 / 数据 / 测试 选什么；什么时候应该<strong>不</strong>选 Next.js（Astro / RR v7 / TanStack Start 何时更合适）；2027 展望（Cache Components 心智成熟、RSC 协议被其他框架采用、AI SDK 差异化）。读完这一章你应该能独立判断"我们项目该用什么"。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P1-P7.1 全部</span>
+          <span><strong>主要来源</strong> nextjs.org/docs 完整 + 各生态库官方 + 2026 公开调研数据</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Next.js 生态在 2026 已经成熟到"<strong>不需要花太多时间选型</strong>" —— 大多数场景有事实标准（image: next/image / font: next/font / auth: NextAuth / 测试: Vitest+Playwright / 数据: TanStack Query 或 RSC + Server Actions）。</li>
+          <li>next/image 在 Vercel 部署时几乎完美（自动 sharp + LQIP + responsive + lazy）；self-host 时要权衡（自跑 sharp / 用 Cloudflare Images / 直接 unoptimized）。是 LCP / CLS 优化的标准方案。</li>
+          <li>next/font 把 Google Fonts 在 build 时下载并自托管，消除 FOIT/FOUT + 第三方请求。这是 next/* 系列里 ROI 最高的工具，不用就是浪费。</li>
+          <li>next/metadata API 把 SEO + OG image + sitemap 用声明式 export 描述，比传统 React Helmet 简洁得多。<code>generateMetadata</code> 还能基于路由参数动态生成。</li>
+          <li>NextAuth（Auth.js）是 Next.js 一等公民 auth 方案 —— OAuth + email link + 自托管 + 与 Server Actions 配合好。生产中如有强自定义 auth 需求，用 better-auth 或自己写更灵活。</li>
+          <li>状态管理：客户端用 <b>Zustand</b>（小项目）或 <b>Jotai</b>（atomic 模型）；server-side state 走 RSC + Server Actions（不需要全局 store）。Redux Toolkit 仍稳定但新项目少选。</li>
+          <li>数据获取：<b>RSC + fetch + 'use cache'</b>（推荐）/ <b>TanStack Query</b>（client-side 复杂场景，特别是无限滚动 / 实时同步）。两者可以共存。</li>
+          <li>测试：<b>Vitest</b>（单元 + 集成）+ <b>Playwright</b>（E2E）是 Next.js 项目标准栈。详见 <a href="../../testing/index.html">测试主题</a>。</li>
+          <li>monorepo：<b>pnpm + Turborepo</b> 是 Next.js + pnpm-monorepo + Vercel 三方协同的事实标准；详见 <a href="../../pnpm-monorepo/index.html">pnpm-monorepo 主题</a>。</li>
+          <li>"何时不用 Next.js" 的回答比"何时用"更重要 —— 内容站点用 Astro 性能更好、纯 SPA + 自管 backend 用 RR v7 / TanStack Router 简单清晰、不接受 RSC 心智的团队选 RR v7、强 vendor-neutral 偏好选 TanStack Start。这些场景 Next.js 是 overkill 而不是优势。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>next/image · 图片优化全栈</h3>
+
+        <p>Next.js 给 <code>&lt;img&gt;</code> 的最佳替代。核心特性：</p>
+
+        <ul>
+          <li><b>自动 lazy loading</b>（loading="lazy" 默认，首屏可加 priority）</li>
+          <li><b>响应式 srcset</b>（自动生成多尺寸 srcset）</li>
+          <li><b>format negotiation</b>（浏览器支持 AVIF / WebP 时自动选）</li>
+          <li><b>LQIP</b>（low-quality image placeholder，用 placeholder="blur"）</li>
+          <li><b>CLS 防御</b>（要求 width/height 或 fill，自动占位）</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import Image from 'next/image';
+import heroImg from './hero.jpg';
+
+export default function Hero() {
+  return (
+    &lt;Image
+      src={heroImg}                                {/* 或 string URL */}
+      alt="Hero"
+      placeholder="blur"                           {/* LQIP，自动从 import 提取 */}
+      priority                                     {/* 首屏不 lazy */}
+      sizes="(max-width: 768px) 100vw, 50vw"      {/* 响应式 srcset */}
+    /&gt;
+  );
+}
+
+// 远程图片：next.config.ts 加 remotePatterns
+export default {
+  images: {
+    remotePatterns: [
+      { protocol: 'https', hostname: 'cdn.example.com' },
+    ],
+  },
+};</code></pre>
+        </div>
+
+        <h3>next/font · 字体优化</h3>
+
+        <p>Google Fonts / 本地字体在 build 时下载 + 自托管 + 子集化 + 预加载。零运行时第三方请求。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/layout.tsx
+import { Inter, Noto_Sans_SC } from 'next/font/google';
+import localFont from 'next/font/local';
+
+const inter = Inter({ subsets: ['latin'] });
+const noto = Noto_Sans_SC({ subsets: ['chinese-simplified'], display: 'swap' });
+const customFont = localFont({ src: './fonts/MyFont.woff2', variable: '--font-custom' });
+
+export default function RootLayout({ children }) {
+  return (
+    &lt;html lang="zh-CN" className={`${inter.className} ${noto.className} ${customFont.variable}`}&gt;
+      &lt;body&gt;{children}&lt;/body&gt;
+    &lt;/html&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>结果：build 时下载字体到 .next/，运行时无第三方请求 + 字体预加载 link。FOIT/FOUT 消除（display:swap 避免空白闪烁）。</p>
+
+        <h3>next/metadata API · 声明式 SEO</h3>
+
+        <p>静态 metadata 直接 export：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/layout.tsx
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = {
+  title: { default: 'My Site', template: '%s | My Site' },
+  description: 'Site description',
+  openGraph: {
+    type: 'website',
+    locale: 'zh_CN',
+    url: 'https://example.com',
+    siteName: 'My Site',
+  },
+  twitter: { card: 'summary_large_image', creator: '@me' },
+};</code></pre>
+        </div>
+
+        <p>动态 metadata（基于路由）用 generateMetadata：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/blog/[slug]/page.tsx
+import type { Metadata } from 'next';
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise&lt;{ slug: string }&gt;;
+}): Promise&lt;Metadata&gt; {
+  const { slug } = await params;
+  const post = await getPost(slug);
+  return {
+    title: post.title,
+    description: post.excerpt,
+    openGraph: {
+      images: [{ url: post.coverImage, width: 1200, height: 630 }],
+    },
+  };
+}</code></pre>
+        </div>
+
+        <p>OG image 还可以 <strong>动态生成</strong>（用 ImageResponse）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/blog/[slug]/opengraph-image.tsx
+import { ImageResponse } from 'next/og';
+
+export const size = { width: 1200, height: 630 };
+export const contentType = 'image/png';
+
+export default async function Image({ params }) {
+  const post = await getPost(params.slug);
+  return new ImageResponse(
+    (
+      &lt;div style={{ display: 'flex', fontSize: 60, background: 'white' }}&gt;
+        {post.title}
+      &lt;/div&gt;
+    ),
+    { ...size }
+  );
+}</code></pre>
+        </div>
+
+        <p>build / runtime 自动生成 OG image，不需要 design 团队提供静态图。</p>
+
+        <h3>NextAuth (Auth.js) · 认证一等公民</h3>
+
+        <p>2024 年 NextAuth 改名 Auth.js（支持其他框架）。设计立场：OAuth + email link + 自托管 session。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// auth.ts
+import NextAuth from 'next-auth';
+import GitHub from 'next-auth/providers/github';
+
+export const { handlers, auth, signIn, signOut } = NextAuth({
+  providers: [GitHub],
+  callbacks: {
+    authorized({ request: { nextUrl }, auth }) {
+      const isLoggedIn = !!auth?.user;
+      const isOnDashboard = nextUrl.pathname.startsWith('/dashboard');
+      if (isOnDashboard) return isLoggedIn;
+      return true;
+    },
+  },
+});
+
+// app/api/auth/[...nextauth]/route.ts
+export { handlers as GET, handlers as POST } from '@/auth';
+
+// middleware.ts
+export { auth as middleware } from '@/auth';
+
+// 在 RSC / Server Action 里
+import { auth } from '@/auth';
+const session = await auth();</code></pre>
+        </div>
+
+        <p>2026 备选：<b>better-auth</b>（更灵活的 self-hosted 方案）/ <b>Clerk</b>（managed service）/ <b>Lucia</b>（轻量自管）。NextAuth 仍是开源默认，但有自定义需求时其他选项可能更合适。</p>
+
+        <h3>状态管理 · Zustand / Jotai / Redux Toolkit</h3>
+
+        <p>App Router 时代状态管理的核心心智：<strong>能用 RSC + URL state 解决的不要用 client state</strong>。client state 库的角色比以前小。</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>需求</th>
+              <th>推荐</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>UI 状态（modal 开关 / theme）</td>
+              <td>useState / useReducer（不需要库）</td>
+            </tr>
+            <tr>
+              <td>跨组件共享 + 不复杂</td>
+              <td><b>Zustand</b>（小、简洁、SSR 友好）</td>
+            </tr>
+            <tr>
+              <td>原子化粒度 / 复杂派生</td>
+              <td><b>Jotai</b></td>
+            </tr>
+            <tr>
+              <td>已有大型 Redux 项目</td>
+              <td>Redux Toolkit（不要新引入）</td>
+            </tr>
+            <tr>
+              <td>Server state（fetch / cache / mutation）</td>
+              <td>RSC + Server Actions（默认）/ TanStack Query（client 复杂场景）</td>
+            </tr>
+            <tr>
+              <td>URL 状态（filter / pagination）</td>
+              <td>nuqs / 直接 useSearchParams</td>
+            </tr>
+            <tr>
+              <td>表单状态</td>
+              <td>useActionState（详见 P4）/ react-hook-form（client 复杂表单）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>数据获取 · RSC + Server Actions vs TanStack Query</h3>
+
+        <p>App Router 的数据心智：</p>
+
+        <ul>
+          <li><b>读 server 数据</b> → 在 Server Component 里 await（不需要库）</li>
+          <li><b>写 server 数据</b> → Server Actions（不需要 fetch + setState 组合）</li>
+          <li><b>缓存</b> → 'use cache' / fetch options</li>
+          <li><b>失效</b> → revalidatePath / revalidateTag / updateTag</li>
+        </ul>
+
+        <p>什么时候仍用 TanStack Query：</p>
+
+        <ul>
+          <li>无限滚动（上拉加载更多）</li>
+          <li>实时同步（轮询 / WebSocket）</li>
+          <li>乐观更新跨多个组件</li>
+          <li>复杂 mutation 队列管理</li>
+          <li>已有大量 TanStack Query 代码不愿迁移</li>
+        </ul>
+
+        <p>RSC + Server Actions 解决 80% 场景；剩 20% 复杂 client-side 数据用 TanStack Query。两者可以在同一项目共存。</p>
+
+        <h3>测试栈 · Vitest + Playwright</h3>
+
+        <p>详见 <a href="../../testing/index.html">测试主题</a>。Next.js 项目的标准栈：</p>
+
+        <ul>
+          <li><b>Vitest</b> 跑单元测试 + 集成测试（utility / Server Action 内部逻辑 / 部分组件）</li>
+          <li><b>Playwright</b> 跑 E2E（完整页面行为 / 跨页面流程 / 缓存行为验证）</li>
+          <li><b>不推荐</b>：Jest（v15+ 用 Vitest 更顺）/ Cypress（Playwright 后来居上）</li>
+        </ul>
+
+        <h3>monorepo · pnpm + Turborepo</h3>
+
+        <p>详见 <a href="../../pnpm-monorepo/index.html">pnpm-monorepo 主题</a>。三方协同：</p>
+
+        <ul>
+          <li>pnpm workspace 管 package + 高效 install</li>
+          <li>Turborepo 管 task 调度 + cache + remote cache</li>
+          <li>Vercel 自动检测 Turborepo + 仅 build 受影响 app（remote cache 共享）</li>
+        </ul>
+
+        <h3>何时<strong>不</strong>用 Next.js</h3>
+
+        <p>这是本主题最重要的反向决策。Next.js 不是万能的。</p>
+
+        <p><b>1. 内容站点 / 文档站 / blog</b> → 用 <b>Astro</b></p>
+
+        <ul>
+          <li>Astro 默认 0 JS，性能极致</li>
+          <li>Markdown / MDX 一等公民</li>
+          <li>不需要 RSC 心智 + 缓存复杂度</li>
+          <li>Astro Starlight 是 React 生态 docs site 主流</li>
+        </ul>
+
+        <p><b>2. 纯 SPA + 自管 backend</b> → 用 <b>Vite + React Router</b></p>
+
+        <ul>
+          <li>内部 dashboard / admin 后台 / 桌面级应用</li>
+          <li>不需要 SEO，登录后才用</li>
+          <li>SPA 模型最简单，不需要 SSR / RSC / 缓存层</li>
+        </ul>
+
+        <p><b>3. 不接受 RSC 心智 + 偏 Web 标准</b> → 用 <b>React Router v7</b></p>
+
+        <ul>
+          <li>Remix 老团队继续投入</li>
+          <li>loaders + actions 模型清晰</li>
+          <li>vendor-neutral，自由部署</li>
+        </ul>
+
+        <p><b>4. 强类型 / vendor-neutral 偏好</b> → 用 <b>TanStack Start</b></p>
+
+        <ul>
+          <li>类型安全比 Next.js 更彻底</li>
+          <li>与 TanStack Query 集成无缝</li>
+          <li>2026 仍属早期采用</li>
+        </ul>
+
+        <p><b>5. 已经在 Cloudflare 生态</b> → 选 <b>Next.js + OpenNext.js</b> 或 <b>SvelteKit / Astro</b>（Cloudflare 一等支持）</p>
+
+        <h3>2027 展望</h3>
+
+        <p>基于 2026 主线状态推测：</p>
+
+        <ul>
+          <li><b>Cache Components 心智成熟</b> —— v16 是过渡，v17 / v18 把 'use cache' / PPR 打磨完善；缓存事故大幅减少</li>
+          <li><b>RSC 协议被其他框架采用</b> —— RR v7、TanStack Start 都在路线图加 RSC；2027 RSC 不再是 Next.js 独有护城河</li>
+          <li><b>Turbopack 取代 Webpack</b> —— v17 / v18 Webpack 进入 deprecation；Next.js 项目最终全 Turbopack</li>
+          <li><b>AI SDK 差异化</b> —— Vercel AI SDK 与 Next.js 深度集成（streaming / tool use / agent 模式），成为 Next.js 新一代差异化点（详见待写 AI 主题）</li>
+          <li><b>Component Testing 模糊单元/集成边界</b> —— Vitest browser mode + Playwright Component Testing 让"测试组件 in real browser"普及</li>
+          <li><b>Edge runtime 能力扩展</b> —— Vercel 持续扩 Edge 能力（Durable Objects-like / WebSocket server / 更多 npm 包兼容）</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 起一个新 SaaS（dashboard + 订阅）</h3>
+
+        <p>推荐栈：</p>
+        <ul>
+          <li><b>Framework</b>：Next.js 16 + App Router + cacheComponents</li>
+          <li><b>UI</b>：Tailwind + shadcn/ui + Radix</li>
+          <li><b>状态</b>：Zustand（少量 client state）+ RSC + Server Actions（server state）</li>
+          <li><b>数据库</b>：PostgreSQL + Drizzle / Prisma</li>
+          <li><b>Auth</b>：NextAuth / better-auth（按需求）</li>
+          <li><b>支付</b>：Stripe + Server Actions（webhook 用 Route Handler）</li>
+          <li><b>邮件</b>：Resend + React Email</li>
+          <li><b>测试</b>：Vitest + Playwright</li>
+          <li><b>部署</b>：Vercel（首选）/ standalone + Redis（self-host）</li>
+          <li><b>monorepo</b>：pnpm + Turborepo（如果多 app）</li>
+          <li><b>错误监控</b>：Sentry</li>
+          <li><b>分析</b>：PostHog / Vercel Analytics</li>
+        </ul>
+
+        <h3>场景 2 · 公司官网 + 文档</h3>
+
+        <p>推荐栈：</p>
+        <ul>
+          <li><b>Framework</b>：Astro（不是 Next.js）</li>
+          <li><b>文档</b>：Astro Starlight</li>
+          <li><b>blog</b>：Astro Content Collections + MDX</li>
+          <li><b>交互组件</b>（订阅表单 / 评论）：React + Astro Islands</li>
+          <li><b>部署</b>：Vercel / Cloudflare Pages / Netlify</li>
+          <li>说明：用 Next.js 是 overkill，Astro 性能 + 维护更优</li>
+        </ul>
+
+        <h3>场景 3 · 内部管理后台</h3>
+
+        <p>推荐栈：</p>
+        <ul>
+          <li><b>Framework</b>：Vite + React + React Router v7（pure SPA 模式）</li>
+          <li><b>UI</b>：shadcn/ui + Tanstack Table + Tanstack Form</li>
+          <li><b>数据</b>：TanStack Query + 自己后端 API</li>
+          <li><b>状态</b>：Zustand（如需要）</li>
+          <li><b>部署</b>：S3 + CloudFront / Cloudflare Pages（纯静态）</li>
+          <li>说明：内部用，无 SEO，SPA 简单清晰</li>
+        </ul>
+
+        <h3>场景 4 · 已有 Remix 项目继续投入</h3>
+
+        <p>推荐：</p>
+        <ul>
+          <li>升级到 React Router v7（自动迁移）</li>
+          <li>继续 loader + action 模型</li>
+          <li>2026-2027 评估是否引入 RSC（v7 路线图加 RSC 是可选）</li>
+          <li>不要为了"跟随主流"迁 Next.js（迁移成本 30-40%，业务价值不高）</li>
+        </ul>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 完整 SaaS 起点 stack（pseudo-code）</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">my-saas/
+├── apps/
+│   └── web/                                # Next.js 16 app
+│       ├── app/
+│       │   ├── (marketing)/               # 营销站
+│       │   ├── (auth)/                    # 登录注册
+│       │   ├── (app)/dashboard/           # 应用主体
+│       │   └── api/webhooks/stripe/       # webhook
+│       ├── auth.ts                        # NextAuth
+│       ├── lib/db.ts                      # Drizzle client
+│       └── next.config.ts                 # cacheComponents: true
+├── packages/
+│   ├── ui/                                # shadcn 组件
+│   ├── db/                                # 共享 schema
+│   └── emails/                            # React Email
+├── package.json                           # workspaces
+├── pnpm-workspace.yaml
+└── turbo.json                             # Turborepo</code></pre>
+        </div>
+
+        <h3>代码 2 · OG image 动态生成</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/blog/[slug]/opengraph-image.tsx
+import { ImageResponse } from 'next/og';
+import { getPost } from '@/lib/posts';
+
+export const alt = 'Blog post';
+export const size = { width: 1200, height: 630 };
+export const contentType = 'image/png';
+
+export default async function Image({ params }: { params: { slug: string } }) {
+  const post = await getPost(params.slug);
+  return new ImageResponse(
+    (
+      &lt;div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        background: 'linear-gradient(135deg, #667eea, #764ba2)',
+        width: '100%',
+        height: '100%',
+        padding: 60,
+        color: 'white',
+      }}&gt;
+        &lt;h1 style={{ fontSize: 72, lineHeight: 1.1 }}&gt;{post.title}&lt;/h1&gt;
+        &lt;p style={{ fontSize: 32, marginTop: 'auto' }}&gt;by {post.author}&lt;/p&gt;
+      &lt;/div&gt;
+    ),
+    { ...size }
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 3 · 完整 Auth + middleware + Server Action 集成</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// auth.ts
+import NextAuth from 'next-auth';
+import GitHub from 'next-auth/providers/github';
+
+export const { handlers, auth, signIn, signOut } = NextAuth({
+  providers: [GitHub],
+});
+
+// middleware.ts
+export { auth as middleware } from '@/auth';
+export const config = {
+  matcher: ['/dashboard/:path*'],
+};
+
+// app/_actions/profile.ts
+'use server';
+import { auth } from '@/auth';
+import { revalidatePath } from 'next/cache';
+
+export async function updateProfile(formData: FormData) {
+  const session = await auth();
+  if (!session) throw new Error('Unauthorized');
+  await db.users.update({
+    where: { id: session.user.id },
+    data: { name: formData.get('name') as string },
+  });
+  revalidatePath('/dashboard/profile');
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>用 Next.js 做内容站</b> —— overkill。Astro 性能 + 维护更优；Next.js 的 RSC + 缓存优势在内容站点用不到</li>
+          <li><b>用 Next.js 做内部管理后台</b> —— 也是 overkill。SSR + RSC 不需要；Vite + React Router 简单得多</li>
+          <li><b>"先把 Next.js 全部学完再写代码"</b> —— Next.js 太大学不完。读完 P1 + P2 + P3 + P4，然后写一个真实项目，遇到问题查 P5-P7。先动手</li>
+          <li><b>用 React Helmet / next-seo 而不是 next/metadata</b> —— v13+ 用 metadata API。next-seo 等老库可能仍在但已被官方 API 取代</li>
+          <li><b>"我项目用 Next.js 但不用 next/image"</b> —— LCP / CLS 损失大。除非有强理由（用 Cloudflare Images），都应该用 next/image</li>
+          <li><b>用 useEffect 做数据获取（在 App Router 里）</b> —— 可以但不是最佳。Server Component await 更简洁；流式 + 缓存自动支持</li>
+          <li><b>所有 client state 用 Redux Toolkit</b> —— 新项目 overkill。绝大多数场景 useState + Zustand 已够</li>
+          <li><b>"Auth.js 不够灵活"然后自己写 auth</b> —— 自己写 auth 是 known security risk。Auth.js + 自定义 callback 通常够；真不行用 better-auth / Clerk</li>
+          <li><b>用 Next.js 但部署到 Cloudflare Workers 没用 OpenNext.js</b> —— 直接部署不工作。OpenNext.js 是 Cloudflare 适配标准</li>
+          <li><b>"vendor-locked Vercel 是问题"</b> —— 大多数团队不会真的迁出。但如果你真有跳走计划，从一开始用 vendor-neutral 工具（Upstash / Neon / Cloudflare）</li>
+          <li><b>同时用 RSC + TanStack Query</b> —— 不是错，但要清晰职责。RSC 拉取的初始数据传给 TanStack Query 作为 initialData 才能两全其美</li>
+          <li><b>不用 monorepo 但项目复杂度上来了</b> —— 中等规模项目（多端 + 共享 UI）应该早 monorepo。pnpm + Turborepo 学习成本不高</li>
+          <li><b>"我担心 Next.js 又重构"</b> —— 合理。但 v15 v16 已经把缓存反转 + Cache Components 的"修正"做完，2027-2028 大概率稳定。可以 v15 LTS 风格使用，等 v17 LTS 再升</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://nextjs.org/docs" target="_blank" rel="noopener">Next.js Docs 完整</a></li>
+          <li><a href="https://nextjs.org/docs/app/api-reference/components/image" target="_blank" rel="noopener">next/image API</a></li>
+          <li><a href="https://nextjs.org/docs/app/api-reference/components/font" target="_blank" rel="noopener">next/font API</a></li>
+          <li><a href="https://nextjs.org/docs/app/api-reference/functions/generate-metadata" target="_blank" rel="noopener">generateMetadata API</a></li>
+          <li><a href="https://authjs.dev/" target="_blank" rel="noopener">Auth.js (NextAuth)</a></li>
+          <li><a href="https://www.better-auth.com/" target="_blank" rel="noopener">better-auth</a></li>
+          <li><a href="https://zustand.docs.pmnd.rs/" target="_blank" rel="noopener">Zustand</a></li>
+          <li><a href="https://tanstack.com/query/latest" target="_blank" rel="noopener">TanStack Query</a></li>
+          <li><a href="../../react/index.html">React 主题</a> · 上游基础</li>
+          <li><a href="../../testing/index.html">测试主题</a> · 测试栈选型</li>
+          <li><a href="../../pnpm-monorepo/index.html">pnpm-monorepo 主题</a> · monorepo 工具</li>
+          <li><a href="../../vite/index.html">Vite 主题</a> · 不是 Next.js 的场景用 Vite</li>
+          <li><a href="../../bun/index.html">Bun 主题</a> · 用 Bun 跑 Next.js（Bun 1.1+ 支持）</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

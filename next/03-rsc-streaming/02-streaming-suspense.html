@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>流式 + Selective Hydration + Loading UX · P3.2 · Next.js 深度学习</title>
+    <meta name="description" content="loading.tsx ≡ Suspense + 嵌套边界 + 分段 reveal + Selective Hydration + 避免 waterfall + error.tsx 错误恢复 + template.tsx vs layout.tsx。把流式渲染的用户体验讲透 —— 从 dashboard 三段慢接口的真实 timeline 到 React 18 的 selective hydration 让快段先可交互的工程价值。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23000000'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EN%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Next.js 深度学习</span><span class="site-title-badge" style="background: oklch(0.22 0.02 250); color: #fff">Next</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · RSC 与流式渲染</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-rsc-payload.html">01 · RSC payload 协议与 flush</a></li>
+          <li><a href="02-streaming-suspense.html" class="active">02 · 流式 + Selective Hydration</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Next.js</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · RSC 与流式渲染</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 流式 + Selective Hydration</span>
+        </nav>
+        <h1>流式 + Selective Hydration + Loading UX</h1>
+        <p class="lead">
+          流式渲染是 Next.js 用户能直接感知的最大特性 —— 一个 dashboard 不再等所有数据齐全才显示，而是慢段独立 reveal、快段先可交互。这一章把<strong>用户视角</strong>的流式讲透：loading.tsx 怎么映射 Suspense、嵌套边界怎么分段 reveal、Selective Hydration 让快段先可点、避免 waterfall 的提前 fetch 模式、error.tsx 错误恢复、template 与 layout 的语义差。配 Network timeline 截图说话，不停留在 API 罗列。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P3.1 RSC payload + React 18+ Suspense 基础</span>
+          <span><strong>主要来源</strong> nextjs.org/docs streaming + React 18 Concurrent Renderer 文档 + Andrew Clark "Why Selective Hydration matters"</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><code>loading.tsx</code> 是文件约定，等价于在 page 外包一层 <code>&lt;Suspense fallback={&lt;Loading /&gt;}&gt;</code>。每个段（layout / page）都可以独立配 loading.tsx。</li>
+          <li>显式 <code>&lt;Suspense&gt;</code> 比 loading.tsx 更细粒度 —— loading.tsx 是"整个段加载时显示一个 fallback"；显式 Suspense 可以包某个慢组件让"快组件已显示，慢组件继续等"。</li>
+          <li>Suspense 嵌套 = 流式分段 reveal。每个 Suspense 边界独立 flush，用户看到的是"逐段填充"而不是"全有或全无"。</li>
+          <li>React 18 的 Selective Hydration 让"快段先可交互" —— 假设页面有 3 段 client component，第 1 段 hydrate 完用户已可点击，不必等第 2/3 段。这与"一次性 hydrate 整棵树"的传统 SSR 完全不同。</li>
+          <li>避免 fetch waterfall 的关键：在<strong>父组件</strong>把 fetch 早早触发，子组件 await。或者用 <code>Promise.all</code> 并行多个 fetch。最忌讳"父等子开始 fetch"链式串行。</li>
+          <li><code>error.tsx</code> 是错误边界，必须 <code>'use client'</code>。它接 <code>error</code>（含 digest）和 <code>reset</code>（重新尝试渲染）两个 prop。<code>global-error.tsx</code> 仅用于 root layout 错误。</li>
+          <li><code>template.tsx</code> 与 <code>layout.tsx</code> 的关键区别：layout 路由切换不重新挂载（state 保留），template 每次都重新挂载（用于 enter animation / reset state）。</li>
+          <li>流式渲染的真实 UX 价值不是"快"（绝对时间不变），是"<strong>感知快</strong>"和"<strong>感知有进度</strong>"。骨架屏让用户知道"在加载"，独立 reveal 让用户感觉"已开始 work"。</li>
+          <li>设计 Suspense 边界的原则：<strong>把"快的"放外面、"慢的"包起来</strong>；每个独立慢段单独 Suspense；fallback 是有意义的骨架（不要空 div / 不要旋转图标）。</li>
+          <li>流式不是免费 —— 流式 HTTP response 不能 gzip 压缩到极致（chunk 边界打断），CDN 缓存策略也复杂（每个 chunk 单独 cache vs 整页 cache）。所以"是否启用流式"也是工程决策（详见 P5 + P7）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>loading.tsx · 文件约定背后的 Suspense</h3>
+
+        <p>App Router 看到 <code>app/dashboard/loading.tsx</code> 时，编译时把它转成：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 你写的：
+// app/dashboard/page.tsx
+export default function Dashboard() { return &lt;Stats /&gt;; }
+// app/dashboard/loading.tsx
+export default function Loading() { return &lt;Skeleton /&gt;; }
+
+// Next.js 编译后等价于：
+function DashboardSegment() {
+  return (
+    &lt;Suspense fallback={&lt;Loading /&gt;}&gt;
+      &lt;Dashboard /&gt;
+    &lt;/Suspense&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>这就是为什么 loading.tsx 自动生效 —— Suspense 在 React 层包好了，server 渲染时遇到 page 内部 await 不 ready 就显示 fallback。</p>
+
+        <p>每个段（每个文件夹）可以有自己的 loading.tsx。导航到 <code>/dashboard/settings</code> 时，路径上每个 loading.tsx 都可能触发：</p>
+
+        <ul>
+          <li><code>app/dashboard/loading.tsx</code> —— dashboard layout 加载时显示</li>
+          <li><code>app/dashboard/settings/loading.tsx</code> —— settings page 加载时显示</li>
+        </ul>
+
+        <p>嵌套时外层先 ready 才到内层。如果 dashboard layout 已 ready（之前导航过），切到 settings 只触发 settings 的 loading.tsx。</p>
+
+        <h3>显式 Suspense vs loading.tsx · 何时用哪个</h3>
+
+        <p>loading.tsx 是"段级"的 —— 整个 page 加载时显示一个 fallback。但很多场景需要"page 内部某个慢组件 fallback、其他立即显示"。这时用<strong>显式 Suspense</strong>：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/dashboard/page.tsx
+import { Suspense } from 'react';
+
+export default function Dashboard() {
+  return (
+    &lt;&gt;
+      {/* 标题立即显示，不等任何 fetch */}
+      &lt;h1&gt;Dashboard&lt;/h1&gt;
+
+      {/* Stats 内部 await fetch，慢就显示骨架；快就立即显示 */}
+      &lt;Suspense fallback={&lt;StatsSkeleton /&gt;}&gt;
+        &lt;Stats /&gt;
+      &lt;/Suspense&gt;
+
+      &lt;Suspense fallback={&lt;ChartSkeleton /&gt;}&gt;
+        &lt;Chart /&gt;
+      &lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}
+
+async function Stats() {
+  const data = await fetchStats();  // 800ms
+  return &lt;StatsCards data={data} /&gt;;
+}
+
+async function Chart() {
+  const data = await fetchChart();  // 3000ms
+  return &lt;LineChart data={data} /&gt;;
+}</code></pre>
+        </div>
+
+        <p>对比：</p>
+        <ul>
+          <li>用 loading.tsx：整个 page 不 ready 都显示骨架，3000ms 后突然全显示</li>
+          <li>用嵌套 Suspense：标题立即显示（0ms）→ Stats 800ms 显示 → Chart 3000ms 显示</li>
+        </ul>
+
+        <p>第二种 UX 远好。loading.tsx 适合"整段加载"的场景（比如刚导航过来时给一个全屏 skeleton），嵌套 Suspense 适合"段内细粒度流式"。</p>
+
+        <h3>Selective Hydration · 让快段先可交互</h3>
+
+        <p>React 18 引入 Selective Hydration，意思是"<strong>每个 Suspense 边界独立 hydrate</strong>"。这与 React 17 的"必须 hydrate 整棵树才能交互"完全不同。</p>
+
+        <p>看一个例子：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/dashboard/page.tsx
+&lt;&gt;
+  &lt;Header /&gt;                                  {/* RSC */}
+  &lt;Suspense&gt;
+    &lt;FastClientWidget /&gt;                       {/* client, ready 100ms */}
+  &lt;/Suspense&gt;
+  &lt;Suspense&gt;
+    &lt;SlowClientWidget /&gt;                       {/* client, ready 3000ms */}
+  &lt;/Suspense&gt;
+&lt;/&gt;</code></pre>
+        </div>
+
+        <p>React 18+ 行为：</p>
+        <ol>
+          <li>0ms：HTML 收到，浏览器显示首屏（含 Header markup + 两个 fallback）</li>
+          <li>100ms：FastClientWidget 数据 ready，server flush 它的 HTML + RSC chunk</li>
+          <li>稍后：浏览器加载 client bundle，开始 hydrate</li>
+          <li>FastClientWidget 先 hydrate 完成 —— <strong>用户立即可以与它交互</strong>，不等 SlowClientWidget</li>
+          <li>3000ms：SlowClientWidget ready，flush + hydrate</li>
+        </ol>
+
+        <p>这是 React 18 + Next.js App Router 的核心工程价值之一。React 17 时代：必须等整棵树 hydrate 完用户才能点任何东西，慢页面给人"看起来好了但点不动"的体验。React 18 让 hydration 也变成"分段进行"。</p>
+
+        <p>更进一步：如果用户点击了 SlowClientWidget 的位置（hydration 还没完成），React 会<strong>优先 hydrate</strong> 那个位置（基于用户交互的优先级提升）。这是 Concurrent Renderer 的内部能力。</p>
+
+        <h3>避免 waterfall · 在父组件提前触发 fetch</h3>
+
+        <p>RSC 让"组件层 fetch"成为可能，但带来的副作用是 fetch waterfall —— 父组件 await 完才轮到子组件 await，串行而非并行。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ Waterfall：串行 await
+async function Page() {
+  const user = await fetchUser();           // 200ms
+  const posts = await fetchPosts(user.id);  // 300ms（必须等 user 完成）
+  const comments = await fetchComments();   // 400ms（必须等 posts 完成）
+  // 总耗时：900ms
+  return &lt;&gt;...&lt;/&gt;;
+}</code></pre>
+        </div>
+
+        <p>修复方式 1 · Promise.all 并行（如果数据无依赖）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ✅ 并行
+async function Page() {
+  const [user, posts, comments] = await Promise.all([
+    fetchUser(),
+    fetchPosts(),
+    fetchComments(),
+  ]);
+  // 总耗时：max(200,300,400) = 400ms
+  return &lt;&gt;...&lt;/&gt;;
+}</code></pre>
+        </div>
+
+        <p>修复方式 2 · 早早触发 fetch（数据有依赖时）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ✅ 父早触发，子 await
+async function Page() {
+  const userPromise = fetchUser();           // 立即触发
+  const commentsPromise = fetchComments();   // 立即触发，不等 user
+  const user = await userPromise;
+  const postsPromise = fetchPosts(user.id);  // 现在才能开始
+  const [posts, comments] = await Promise.all([postsPromise, commentsPromise]);
+  return &lt;&gt;...&lt;/&gt;;
+}</code></pre>
+        </div>
+
+        <p>修复方式 3 · 把 promise 传给子组件，子组件 await（流式 reveal）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ✅ Suspense + 提前触发
+async function Page() {
+  const postsPromise = fetchPosts();     // 不 await
+  const commentsPromise = fetchComments(); // 不 await
+  return (
+    &lt;&gt;
+      &lt;Suspense fallback={&lt;Skeleton /&gt;}&gt;
+        &lt;PostsList promise={postsPromise} /&gt;
+      &lt;/Suspense&gt;
+      &lt;Suspense fallback={&lt;Skeleton /&gt;}&gt;
+        &lt;CommentsList promise={commentsPromise} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}
+
+async function PostsList({ promise }: { promise: Promise&lt;Post[]&gt; }) {
+  const posts = await promise;
+  return &lt;ul&gt;{posts.map(p =&gt; &lt;li key={p.id}&gt;{p.title}&lt;/li&gt;)}&lt;/ul&gt;;
+}</code></pre>
+        </div>
+
+        <h3>error.tsx · 错误边界与恢复</h3>
+
+        <p>error.tsx 是 React Error Boundary 在 App Router 的文件约定。每个段可以独立配，错误冒泡到最近的 error.tsx 处理。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/posts/[id]/error.tsx
+'use client';
+import { useEffect } from 'react';
+
+export default function PostError({
+  error,
+  reset,
+}: {
+  error: Error &amp; { digest?: string };
+  reset: () =&gt; void;  // 调用让 React 重新尝试渲染段
+}) {
+  useEffect(() =&gt; {
+    console.error('Post page error:', error);
+    // 上报 Sentry / Datadog
+  }, [error]);
+
+  return (
+    &lt;div&gt;
+      &lt;h2&gt;无法加载这篇文章&lt;/h2&gt;
+      {/* error.message 在 prod 被替换成通用消息（防 secret 泄露）；digest 是 server 错误 ID */}
+      &lt;p&gt;Error ID: {error.digest}&lt;/p&gt;
+      &lt;button onClick={reset}&gt;重试&lt;/button&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>关键点：</p>
+        <ul>
+          <li>必须 <code>'use client'</code>（React Error Boundary 是 client 概念）</li>
+          <li><code>error.digest</code> 是 server 错误 ID，可以与 server log 对应排查</li>
+          <li>prod 环境 <code>error.message</code> 被 Next.js 替换成通用消息（防止 secret 泄露到客户端）</li>
+          <li><code>reset()</code> 让 React 重新尝试渲染该段（适合"网络抖动后重试"）</li>
+        </ul>
+
+        <p><b>global-error.tsx</b> 仅用于 root layout 错误。普通 error.tsx catch 不到 root layout 内的错误（因为 error.tsx 包在 layout 内部，root layout 出错时 error.tsx 不存在）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/global-error.tsx
+'use client';
+export default function GlobalError({ error, reset }: any) {
+  return (
+    &lt;html&gt;&lt;body&gt;
+      &lt;h2&gt;Critical error&lt;/h2&gt;
+      &lt;button onClick={reset}&gt;Try again&lt;/button&gt;
+    &lt;/body&gt;&lt;/html&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>template.tsx vs layout.tsx · 重新挂载语义</h3>
+
+        <p>layout.tsx 在路由切换时<strong>不重新挂载</strong>（state 保留）。template.tsx 反之 —— <strong>每次都重新挂载</strong>。两者 file 位置可以重合（同一段同时有 layout 和 template）。</p>
+
+        <p>用 template 的典型场景：</p>
+
+        <ul>
+          <li>页面切换 enter animation 每次都触发（layout 不重新挂载，animation 不会重跑）</li>
+          <li>每次进入页面 reset 某个 state（比如表单数据 / 滚动位置）</li>
+          <li>每次进入页面 effect 重跑（埋点 / 上报）</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/dashboard/template.tsx
+'use client';
+import { motion } from 'framer-motion';
+
+export default function Template({ children }: { children: React.ReactNode }) {
+  return (
+    &lt;motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}&gt;
+      {children}
+    &lt;/motion.div&gt;
+  );
+}
+
+// app/dashboard/layout.tsx
+export default function Layout({ children }: { children: React.ReactNode }) {
+  return &lt;div className="dashboard-grid"&gt;{children}&lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <p>顺序：layout 包 template 包 page。Layout 始终挂载（提供 grid + sidebar 等持久化 UI）；Template 每次切换重新挂载（触发 fade-in 动画）。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · Dashboard 三段慢接口的 timeline 设计</h3>
+
+        <p>典型 SaaS dashboard 页面：</p>
+
+        <ul>
+          <li>导航条（用户信息）—— 100ms（缓存）</li>
+          <li>核心指标卡片（昨日数据）—— 800ms（数据库）</li>
+          <li>实时图表（过去 24 小时）—— 3000ms（复杂查询）</li>
+        </ul>
+
+        <p>设计目标：用户进入页面 100ms 内看到导航 + 骨架，3000ms 完整显示，期间逐段填充。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/dashboard/page.tsx
+import { Suspense } from 'react';
+
+export default function Dashboard() {
+  return (
+    &lt;div className="grid"&gt;
+      &lt;NavBar /&gt;                                    {/* 100ms，作为父级直接 await */}
+      &lt;Suspense fallback={&lt;StatsCardsSkeleton /&gt;}&gt;
+        &lt;StatsCards /&gt;
+      &lt;/Suspense&gt;
+      &lt;Suspense fallback={&lt;ChartSkeleton /&gt;}&gt;
+        &lt;RealtimeChart /&gt;
+      &lt;/Suspense&gt;
+    &lt;/div&gt;
+  );
+}
+
+async function NavBar() {
+  const user = await getCurrentUser();  // 100ms
+  return &lt;header&gt;{user.name}&lt;/header&gt;;
+}
+
+async function StatsCards() {
+  const stats = await fetchStats();  // 800ms
+  return &lt;Cards data={stats} /&gt;;
+}
+
+async function RealtimeChart() {
+  const data = await fetchChartData();  // 3000ms
+  return &lt;Chart data={data} /&gt;;
+}</code></pre>
+        </div>
+
+        <p>用户感知 timeline：</p>
+        <ul>
+          <li>0ms：HTML 到达，看到导航框架（无文字）+ 两个骨架</li>
+          <li>100ms：NavBar 文字填充，"已加载" 感觉</li>
+          <li>800ms：StatsCards 填充</li>
+          <li>3000ms：Chart 填充，整页完成</li>
+        </ul>
+
+        <h3>场景 2 · 修复"为什么看起来很慢"</h3>
+
+        <p>典型用户反馈："dashboard 加载要 3 秒，太慢"。但其实可以做到"用户 100ms 就感知到加载已开始 + 进度可见"。</p>
+
+        <p>排查步骤：</p>
+        <ol>
+          <li>开 DevTools Network → Slow 3G 模拟</li>
+          <li>看 timeline：HTML 何时第一字节、何时 LCP（最大内容绘制）、何时 TTI（可交互）</li>
+          <li>如果 HTML 几秒后才到 → 流式没启用 / Suspense 边界设错（包了所有内容）</li>
+          <li>如果 HTML 立即到但 LCP 慢 → 大组件应该独立 Suspense + 骨架</li>
+          <li>如果 TTI 慢 → client bundle 大，audit hydration（详见 P3.1）</li>
+        </ol>
+
+        <h3>场景 3 · 错误恢复 + Server Action 配合</h3>
+
+        <p>用户提交表单失败，error.tsx 触发，提供 retry 按钮：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/checkout/error.tsx
+'use client';
+export default function CheckoutError({ error, reset }: any) {
+  return (
+    &lt;div&gt;
+      &lt;h2&gt;支付失败&lt;/h2&gt;
+      &lt;p&gt;Error: {error.digest}&lt;/p&gt;
+      &lt;button onClick={reset}&gt;重新提交&lt;/button&gt;
+      &lt;a href="/cart"&gt;返回购物车&lt;/a&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>reset 让 React 重新尝试渲染该段。如果是临时网络问题，reset 可能成功；持久问题（卡号无效）则需要走"返回购物车"。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · waterfall 反例 → 修复</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ waterfall：800 + 600 + 400 = 1800ms
+async function ProductPage({ params }) {
+  const { id } = await params;
+  const product = await fetchProduct(id);          // 800ms
+  const reviews = await fetchReviews(product.id);  // 600ms（需要 product.id）
+  const seller = await fetchSeller(product.sellerId); // 400ms（需要 product.sellerId）
+  return &lt;Detail {...{product, reviews, seller}} /&gt;;
+}
+
+// ✅ 修复：800 + max(600, 400) = 1400ms
+async function ProductPage({ params }) {
+  const { id } = await params;
+  const product = await fetchProduct(id);          // 800ms
+  const [reviews, seller] = await Promise.all([    // 并行 600ms 和 400ms
+    fetchReviews(product.id),
+    fetchSeller(product.sellerId),
+  ]);
+  return &lt;Detail {...{product, reviews, seller}} /&gt;;
+}
+
+// ✅ 进一步：流式让用户先看到 product，reviews/seller 后面 reveal
+async function ProductPage({ params }) {
+  const { id } = await params;
+  const product = await fetchProduct(id);  // 800ms（必须，因为下面要用）
+  const reviewsPromise = fetchReviews(product.id);  // 触发不等
+  const sellerPromise = fetchSeller(product.sellerId);
+  return (
+    &lt;&gt;
+      &lt;ProductDetail product={product} /&gt;
+      &lt;Suspense fallback={&lt;ReviewsSkeleton /&gt;}&gt;
+        &lt;Reviews promise={reviewsPromise} /&gt;
+      &lt;/Suspense&gt;
+      &lt;Suspense fallback={&lt;SellerSkeleton /&gt;}&gt;
+        &lt;Seller promise={sellerPromise} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · 用 React 19 use API 让 client 读 Promise</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/page.tsx (RSC)
+import { Suspense } from 'react';
+import LikeButton from './_components/LikeButton';
+
+export default function Page() {
+  // server 触发 fetch，不 await
+  const initialLikesPromise = fetchLikes('post-1');
+  return (
+    &lt;&gt;
+      &lt;article&gt;...&lt;/article&gt;
+      &lt;Suspense fallback={&lt;p&gt;Loading likes...&lt;/p&gt;}&gt;
+        &lt;LikeButton initialLikesPromise={initialLikesPromise} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}
+
+// app/_components/LikeButton.tsx
+'use client';
+import { use, useState } from 'react';
+
+export default function LikeButton({
+  initialLikesPromise,
+}: {
+  initialLikesPromise: Promise&lt;number&gt;;
+}) {
+  // use() 在 Suspense 包裹下读 Promise
+  const initialLikes = use(initialLikesPromise);
+  const [likes, setLikes] = useState(initialLikes);
+  return &lt;button onClick={() =&gt; setLikes(l =&gt; l + 1)}&gt;❤️ {likes}&lt;/button&gt;;
+}</code></pre>
+        </div>
+
+        <h3>代码 3 · template.tsx 触发页面切换 animation</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/(app)/template.tsx
+'use client';
+import { motion } from 'framer-motion';
+import { usePathname } from 'next/navigation';
+
+export default function Template({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  return (
+    &lt;motion.div
+      key={pathname}        // 路径变化时 key 变，强制重新挂载
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+    &gt;
+      {children}
+    &lt;/motion.div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 4 · loading.tsx 的有意义骨架</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/posts/loading.tsx
+export default function PostsLoading() {
+  return (
+    &lt;ul className="space-y-4"&gt;
+      {Array.from({ length: 5 }).map((_, i) =&gt; (
+        &lt;li key={i} className="bg-gray-200 rounded h-24 animate-pulse" /&gt;
+      ))}
+    &lt;/ul&gt;
+  );
+}
+// 关键：骨架的视觉结构应该接近真实内容
+// ❌ 一个旋转图标 / 空 div
+// ✅ 5 个矩形条对应将出现的 5 个 post 项</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>整个 page 包在一个 Suspense / loading.tsx</b> —— 流式效果失效，用户必须等最慢的才看到。每个慢段独立 Suspense</li>
+          <li><b>"流式启用了但 Network 看 response 仍然一次性返回"</b> —— 检查 server / 反向代理 / CDN 是否禁用了 streaming（buffering）。Nginx / Cloudflare 默认行为可能 buffer chunked response，要显式配置</li>
+          <li><b>fetch waterfall</b> —— 串行 await 父子 fetch；用 Promise.all 并行 / 提前触发 / 流式 Suspense 三种方式之一修</li>
+          <li><b>error.tsx 不工作，错误冒到 global-error</b> —— 检查 error.tsx 是否标 'use client'；检查错误是否在 layout 而不是 page（layout 错误 error.tsx 不能 catch）</li>
+          <li><b>骨架屏视觉与真实内容差距大，造成 layout shift</b> —— 骨架要与真实内容尺寸匹配，否则用户看到"骨架 → 内容"突然挤压。CLS（Cumulative Layout Shift）会很差</li>
+          <li><b>用 layout 想做 enter animation 但不触发</b> —— layout 不重新挂载。要用 template + 动态 key（如 pathname）触发 animation</li>
+          <li><b>"Selective Hydration 听起来很神奇但我没感觉到"</b> —— 它在快网络下不易感知。慢网络（Slow 3G） + 大 bundle 才能看出"FastWidget 已可点而 SlowWidget 还在 hydrate"</li>
+          <li><b>给 Suspense fallback 一个会 fetch 的组件</b> —— fallback 必须立即可渲染，不能 await。否则 fallback 自己也触发 Suspense，死循环</li>
+          <li><b>stream 中间错误处理不当</b> —— 如果 server 在 flush 后某段抛错，已 flushed 的内容不能撤回。HTML 已经走到浏览器了。Next.js 用 inline JS 在出错位置替换为 error fallback，但这要求 error.tsx 存在</li>
+          <li><b>"我用了 Suspense 但没看到流式"</b> —— 检查内部组件是否真的 await。如果 Suspense 内部所有组件都是同步渲染（无 await fetch），Suspense 就不会触发流式 boundary</li>
+          <li><b>把 useEffect fetch 当流式</b> —— useEffect fetch 是 client-side fetch，在 hydrate 后才触发；不是 Suspense 流式。流式必须用 Server Component await 或 use() + Promise prop</li>
+          <li><b>error.digest 在 dev 显示完整 stack，prod 只显示 hash</b> —— 这是设计行为（防 secret 泄露）。用 digest 在 server log 里搜对应错误详情</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://nextjs.org/docs/app/getting-started/loading-state" target="_blank" rel="noopener">Next.js Docs · Loading and Streaming</a></li>
+          <li><a href="https://nextjs.org/docs/app/api-reference/file-conventions/error" target="_blank" rel="noopener">Next.js Docs · error.tsx</a></li>
+          <li><a href="https://nextjs.org/docs/app/api-reference/file-conventions/template" target="_blank" rel="noopener">Next.js Docs · template.tsx</a></li>
+          <li><a href="https://github.com/reactwg/react-18/discussions/37" target="_blank" rel="noopener">React 18 · Selective Hydration discussion</a></li>
+          <li><a href="https://github.com/reactwg/react-18/discussions/22" target="_blank" rel="noopener">React 18 · Streaming Server Rendering with Suspense</a></li>
+          <li><a href="../../react/05-concurrent/02-suspense.html">React 主题 P5.2 · Suspense</a> · React 侧 Suspense 心智</li>
+          <li><a href="../../react/05-concurrent/04-error-boundary.html">React 主题 P5.4 · Error Boundary</a> · error.tsx 底层</li>
+          <li><a href="../01-rsc-payload.html">本主题 P3.1 · RSC payload 协议</a> · 流式背后的 wire 协议</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Edge / Node Runtime + 部署矩阵 · P7.1 · Next.js 深度学习</title>
+    <meta name="description" content="Next.js 双 runtime（Node vs Edge）+ 4 种部署模式（Vercel / standalone / static export / Cloudflare Workers）+ self-host 痛点（cache 持久化 / ISR 协调 / Image Optimization）。配 Dockerfile + Redis cache handler + middleware Edge 实战代码 + 一份 self-host 风险清单。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23000000'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EN%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Next.js 深度学习</span><span class="site-title-badge" style="background: oklch(0.22 0.02 250); color: #fff">Next</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P7 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · 部署 + 生态决策</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-runtime-deploy.html" class="active">01 · Edge / Node Runtime + 部署矩阵</a></li>
+          <li><a href="02-ecosystem-decision.html">02 · 生态决策树</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Next.js</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · 部署 + 生态决策</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Edge / Node Runtime + 部署矩阵</span>
+        </nav>
+        <h1>Edge / Node Runtime + 部署矩阵</h1>
+        <p class="lead">
+          Next.js 代码可以跑在<strong>两种 runtime</strong>（Node.js / Edge V8 isolate）+ 部署到<strong>4 种模式</strong>（Vercel / standalone / static export / Cloudflare Workers）。每种组合的能力和限制不同。这一章讲清两个 runtime 的差异、Edge 的限制、4 种部署的取舍、self-host 的真实痛点（缓存持久化 / ISR 协调 / Image Optimization 自部署），以及一份能直接拿到生产用的 Dockerfile + Redis cache handler。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P5 缓存系统（self-host 必读）+ V8 主题 P5.1（V8 isolate）</span>
+          <span><strong>主要来源</strong> nextjs.org/docs deploying + Vercel infra blog + OpenNext.js（Cloudflare 适配）+ 真实生产案例</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Next.js 代码可以指定跑在 <b>Node.js runtime</b>（默认，完整 Node API）或 <b>Edge runtime</b>（V8 isolate，Web APIs 子集）。通过 <code>export const runtime = 'edge' | 'nodejs'</code> 在 page / layout / route handler 顶部指定。</li>
+          <li><strong>middleware.ts 永远在 Edge runtime</strong> —— 不能改。这意味着 middleware 不能用 Node API（fs / child_process / 部分 npm 包）。</li>
+          <li>Edge runtime 的限制：没有 fs / child_process；部分 npm 包（特别是 native bindings）不可用；Vercel 上有内存（128MB）+ CPU 时间（50ms-30s 不等）+ 包大小（1-5MB）限制；冷启动几乎为 0。</li>
+          <li>Node runtime 的特点：完整 Node API、适合 dashboard / dynamic page / 复杂 SDK；冷启动相对慢（100-500ms）；Vercel Functions 有更高时间和内存上限。</li>
+          <li>4 种部署模式：<b>Vercel</b>（一等支持，所有特性即开即用）/ <b>output: standalone</b>（Node.js 自部署，需自管 cache 持久化 + ISR 协调）/ <b>output: export</b>（纯静态，不支持 ISR / Server Actions / middleware）/ <b>Cloudflare Workers / Pages</b>（通过 OpenNext.js 适配，2026 已成熟）。</li>
+          <li>self-host 三大痛点：<b>1) 缓存持久化</b> —— 默认 fs cache 在容器重启会丢；要配置 cacheHandler 接 Redis；<b>2) ISR / revalidate 协调</b> —— 多实例间需同步失效；<b>3) Image Optimization</b> —— Vercel 自带，self-host 要自部署 sharp 或禁用。</li>
+          <li>v16 的好消息：自定义 cache handler 接口稳定了（v15 还是 unstable_）；多实例 ISR 协调有官方文档；OpenNext.js 在 Cloudflare 已 production-ready。</li>
+          <li>选哪个部署：<b>初创 / 小团队</b> → Vercel（一键 + 零运维）；<b>有 ops 能力 + 已有 K8s</b> → standalone + Redis；<b>纯营销站</b> → static export 上 CDN；<b>Cloudflare 生态</b> → Workers + OpenNext.js。</li>
+          <li>middleware 是 Edge 一等公民 —— 适合 a/b test / auth check / geo redirect / rate limit 等"路由前的轻量处理"。重逻辑不要塞 middleware（CPU 时间限制）。</li>
+          <li>不要为了 Edge 性能而把所有东西塞 Edge runtime —— Edge 限制多，业务逻辑常常需要 Node runtime。Edge 适合 middleware 和简单 route handler，Node 适合大部分 page。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>两个 runtime 的本质差异</h3>
+
+        <p><b>Node.js runtime</b>：标准 Node 进程，完整 Node API，npm 包大多可用。Vercel 上跑在 AWS Lambda（Functions）；self-host 跑在 Docker / Node server。</p>
+
+        <p><b>Edge runtime</b>：V8 isolate（不是完整 Node 进程）。只支持 Web APIs（fetch / Request / Response / Headers / URL 等），<strong>不支持 Node API</strong>。Vercel 上跑在 Cloudflare-like 边缘网络；冷启动 ~5ms（vs Lambda 100-500ms）。</p>
+
+        <p>Web APIs vs Node APIs 的差异：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>API</th>
+              <th>Node runtime</th>
+              <th>Edge runtime</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>fs / path</td>
+              <td>✅</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td>child_process</td>
+              <td>✅</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td>fetch / Request / Response</td>
+              <td>✅（v18+）</td>
+              <td>✅</td>
+            </tr>
+            <tr>
+              <td>crypto.subtle</td>
+              <td>✅</td>
+              <td>✅</td>
+            </tr>
+            <tr>
+              <td>Buffer</td>
+              <td>✅</td>
+              <td>❌（用 Uint8Array）</td>
+            </tr>
+            <tr>
+              <td>process.env</td>
+              <td>✅（完整）</td>
+              <td>✅（仅 build-time 嵌入）</td>
+            </tr>
+            <tr>
+              <td>WebSocket（client）</td>
+              <td>需库</td>
+              <td>✅（原生）</td>
+            </tr>
+            <tr>
+              <td>WebSocket（server）</td>
+              <td>需库</td>
+              <td>✅（v16+ Vercel）</td>
+            </tr>
+            <tr>
+              <td>Streams</td>
+              <td>Node Streams</td>
+              <td>Web Streams</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>选 runtime 的判断</h3>
+
+        <p>Edge 适合：</p>
+        <ul>
+          <li>middleware（强制 Edge）</li>
+          <li>简单 route handler（auth check / a/b test / redirect）</li>
+          <li>低延迟首响（用户在全球分布，Edge 近用户）</li>
+          <li>不依赖 Node-only npm 包</li>
+        </ul>
+
+        <p>Node 适合：</p>
+        <ul>
+          <li>大多数 page（用 ORM / 复杂 SDK / sharp 等 native lib）</li>
+          <li>复杂业务逻辑（CPU 时间长）</li>
+          <li>需要文件系统访问</li>
+          <li>使用 native bindings 的 npm 包</li>
+        </ul>
+
+        <p>2026 实战中：middleware Edge、大部分 page Node、热路由（如 health check / simple auth）可以挑出来 Edge。</p>
+
+        <h3>middleware · Edge 一等公民</h3>
+
+        <p>middleware.ts 是 Next.js 的"路由前"hook，永远在 Edge runtime。典型用例：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// middleware.ts
+import { NextRequest, NextResponse } from 'next/server';
+
+export async function middleware(req: NextRequest) {
+  // 1. Geo-based redirect
+  const country = req.geo?.country || 'US';
+  if (country === 'CN' &amp;&amp; !req.url.includes('/cn/')) {
+    return NextResponse.redirect(new URL('/cn' + req.nextUrl.pathname, req.url));
+  }
+
+  // 2. Auth check
+  const session = req.cookies.get('session')?.value;
+  if (!session &amp;&amp; req.nextUrl.pathname.startsWith('/dashboard')) {
+    return NextResponse.redirect(new URL('/login', req.url));
+  }
+
+  // 3. A/B test
+  const variant = req.cookies.get('ab-variant')?.value || (Math.random() &lt; 0.5 ? 'a' : 'b');
+  const res = NextResponse.next();
+  res.cookies.set('ab-variant', variant);
+  return res;
+}
+
+export const config = {
+  matcher: ['/((?!api|_next/static|favicon.ico).*)'],
+};</code></pre>
+        </div>
+
+        <p>注意事项：</p>
+        <ul>
+          <li>只能用 Web APIs（不能 fs / child_process）</li>
+          <li>不能用 ORM 直连数据库（用 fetch / 轻量 SDK 替代）</li>
+          <li>有 CPU 时间限制（Vercel 50ms 软上限）</li>
+          <li>matcher 配置严格 —— 排除 _next / api / static asset 防止重复执行</li>
+        </ul>
+
+        <h3>4 种部署模式详解</h3>
+
+        <p><b>1. Vercel</b>（一等公民）</p>
+
+        <p>所有特性即开即用：</p>
+        <ul>
+          <li>Edge Functions / Node Functions 自动调度</li>
+          <li>Cache Components / ISR / 'use cache' 自动持久化</li>
+          <li>Image Optimization 内置（自动 sharp）</li>
+          <li>Edge middleware 全球分布</li>
+          <li>git push 自动部署 + preview environment</li>
+        </ul>
+
+        <p>代价：vendor lock-in。但对中小团队几乎不是问题（迁移成本低）。</p>
+
+        <p><b>2. output: 'standalone'</b></p>
+
+        <p>把 Next.js 应用打包成自包含 Node server，可在 Docker / EC2 / Kubernetes 跑：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">// next.config.ts
+export default {
+  output: 'standalone',
+};
+
+// build 后产物在 .next/standalone/
+// node .next/standalone/server.js 即启动</code></pre>
+        </div>
+
+        <p>痛点：</p>
+        <ul>
+          <li>缓存默认 fs，容器重启全丢；必须配 cacheHandler 接 Redis</li>
+          <li>ISR / revalidate 在多实例间不自动同步；需要 Redis pub/sub 或 webhook</li>
+          <li>Image Optimization 需要自己跑 sharp 服务（或禁用，让 client 加载原图）</li>
+          <li>没有 Vercel KV / Postgres 这种 zero-config 服务，要自部署</li>
+        </ul>
+
+        <p><b>3. output: 'export'</b>（纯静态）</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">// next.config.ts
+export default {
+  output: 'export',
+};
+
+// build 后产物在 out/，全是静态 HTML + 资源
+// 直接上传 S3 / Netlify / GitHub Pages</code></pre>
+        </div>
+
+        <p>限制：</p>
+        <ul>
+          <li>不支持 Server Actions</li>
+          <li>不支持 Middleware</li>
+          <li>不支持 ISR / on-demand revalidation</li>
+          <li>不支持 next/image 默认（要 unoptimized: true 或自托管）</li>
+          <li>不支持 dynamic page（catch-all / generateStaticParams 必须穷举）</li>
+        </ul>
+
+        <p>适合：纯营销站 / 文档站 / blog（生成一次后不变 / 少量变化重新 build）。</p>
+
+        <p><b>4. Cloudflare Workers / Pages（通过 OpenNext.js）</b></p>
+
+        <p>OpenNext.js 是社区维护的适配器，把 Next.js 应用编译成可在 Cloudflare 跑的产物。2026 年已 production-ready。</p>
+
+        <ul>
+          <li>所有 server code 跑在 Cloudflare Workers（Edge）</li>
+          <li>cache 用 Cloudflare KV / R2</li>
+          <li>middleware / Server Actions / RSC 都支持</li>
+          <li>限制：Workers 是 Edge runtime（没 Node API），所以 ORM 选择有限（推荐 Drizzle + neon / planetscale + http）</li>
+        </ul>
+
+        <p>适合：已经在 Cloudflare 生态（用 R2 / KV / Durable Objects） + 想跳出 Vercel vendor lock。</p>
+
+        <h3>self-host 缓存持久化 · cache handler</h3>
+
+        <p>self-host 时配置 Redis cache handler 是必备步骤。看完整实现：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">// cache-handler.ts
+import { CacheHandler, CacheHandlerValue } from 'next/dist/server/lib/incremental-cache';
+import Redis from 'ioredis';
+
+export default class RedisCacheHandler implements CacheHandler {
+  private client: Redis;
+
+  constructor(options: any) {
+    this.client = new Redis(process.env.REDIS_URL!);
+  }
+
+  async get(key: string): Promise&lt;CacheHandlerValue | null&gt; {
+    const data = await this.client.get(`next:${key}`);
+    return data ? JSON.parse(data) : null;
+  }
+
+  async set(key: string, data: CacheHandlerValue, ctx: { tags?: string[] }): Promise&lt;void&gt; {
+    const serialized = JSON.stringify(data);
+    await this.client.set(`next:${key}`, serialized);
+    for (const tag of ctx.tags || []) {
+      await this.client.sadd(`tag:${tag}`, key);
+    }
+  }
+
+  async revalidateTag(tags: string | string[]): Promise&lt;void&gt; {
+    const tagList = Array.isArray(tags) ? tags : [tags];
+    for (const tag of tagList) {
+      const keys = await this.client.smembers(`tag:${tag}`);
+      if (keys.length &gt; 0) {
+        await this.client.del(...keys.map(k =&gt; `next:${k}`));
+        await this.client.del(`tag:${tag}`);
+      }
+    }
+  }
+}
+
+// next.config.ts
+export default {
+  cacheHandler: require.resolve('./cache-handler.ts'),
+  output: 'standalone',
+};</code></pre>
+        </div>
+
+        <p>关键点：</p>
+        <ul>
+          <li>所有 cache key 用 prefix（next:）避免与其他应用冲突</li>
+          <li>tag 用 SET 数据结构索引（O(1) 失效）</li>
+          <li>多实例共享 Redis = 自动 ISR 协调</li>
+          <li>生产用要加 monitoring + 自动 TTL 清理（防止无限增长）</li>
+        </ul>
+
+        <h3>Image Optimization · self-host 选择</h3>
+
+        <p>Vercel 部署时 next/image 自动优化（裁剪 / 压缩 / 格式转换）。self-host 时三个选项：</p>
+
+        <ol>
+          <li><b>禁用 Optimization</b>：<code>images: { unoptimized: true }</code> —— 简单但失去 next/image 优势</li>
+          <li><b>自托管 sharp</b>：在 server 安装 sharp，由 Next.js 在 runtime 处理。需要 server 有 CPU 余量</li>
+          <li><b>用第三方</b>：Cloudinary / imgix / Cloudflare Images。custom loader 接入</li>
+        </ol>
+
+        <p>2026 推荐：中型项目用 sharp 自托管（标准 Dockerfile 已含）；大型项目用 Cloudflare Images（成本可控 + 全球 CDN）。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 完整 Dockerfile（self-host + Redis cache）</h3>
+
+        <div class="code-block">
+          <span class="code-label">dockerfile</span>
+          <pre class="code"><code class="lang-dockerfile"># Dockerfile
+FROM node:22-alpine AS deps
+WORKDIR /app
+COPY package.json bun.lockb ./
+RUN apk add --no-cache libc6-compat &amp;&amp; npm i -g bun
+RUN bun install --frozen-lockfile
+
+FROM node:22-alpine AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+ENV NEXT_TELEMETRY_DISABLED 1
+RUN apk add --no-cache libc6-compat
+RUN npm run build
+
+FROM node:22-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV production
+ENV NEXT_TELEMETRY_DISABLED 1
+
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+
+# standalone 输出
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder /app/cache-handler.js ./cache-handler.js
+
+USER nextjs
+EXPOSE 3000
+ENV PORT 3000
+ENV HOSTNAME 0.0.0.0
+
+CMD ["node", "server.js"]</code></pre>
+        </div>
+
+        <h3>场景 2 · Kubernetes 多实例 + Redis pub/sub revalidate</h3>
+
+        <p>多实例部署时，Redis cache handler 让 cache 在实例间共享。但 ISR revalidate 触发时（比如 Server Action 调用 revalidateTag），需要让所有实例知道某个 tag 已失效。</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">// cache-handler.ts (多实例版本)
+export default class RedisCacheHandler implements CacheHandler {
+  private client: Redis;
+  private subscriber: Redis;
+
+  constructor() {
+    this.client = new Redis(process.env.REDIS_URL!);
+    this.subscriber = this.client.duplicate();
+    // 订阅 revalidate channel，其他实例触发的 revalidate 通知所有实例
+    this.subscriber.subscribe('revalidate-tag');
+    this.subscriber.on('message', (_channel, tag) =&gt; {
+      // 清理本实例的内存 cache（如果有）
+    });
+  }
+
+  async revalidateTag(tags: string | string[]): Promise&lt;void&gt; {
+    // ... 失效 Redis 中的 cache
+    // 然后 publish 给所有实例
+    const tagList = Array.isArray(tags) ? tags : [tags];
+    for (const tag of tagList) {
+      await this.client.publish('revalidate-tag', tag);
+    }
+  }
+}</code></pre>
+        </div>
+
+        <h3>场景 3 · middleware 实现 a/b test</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// middleware.ts
+import { NextRequest, NextResponse } from 'next/server';
+
+export function middleware(req: NextRequest) {
+  // 检查是否已分配 variant
+  let variant = req.cookies.get('ab-variant')?.value;
+  if (!variant) {
+    // 50/50 随机分配
+    variant = Math.random() &lt; 0.5 ? 'control' : 'experiment';
+  }
+
+  // rewrite 到对应 page（不改 URL）
+  const url = req.nextUrl.clone();
+  if (variant === 'experiment') {
+    url.pathname = '/_experiments' + url.pathname;
+  }
+  const res = NextResponse.rewrite(url);
+
+  // 设置 cookie，下次访问保持同 variant
+  res.cookies.set('ab-variant', variant, { maxAge: 60 * 60 * 24 * 30 });
+  return res;
+}
+
+export const config = {
+  matcher: ['/landing'],
+};</code></pre>
+        </div>
+
+        <h3>场景 4 · 选择 runtime 的实战判断</h3>
+
+        <p>API route 实例：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/api/health/route.ts (Edge - 健康检查)
+export const runtime = 'edge';
+export async function GET() {
+  return Response.json({ status: 'ok' });
+}
+
+// app/api/auth/route.ts (Edge - 简单 auth check)
+export const runtime = 'edge';
+export async function POST(req: Request) {
+  const { token } = await req.json();
+  // 用 jose（Edge 兼容）验证 JWT
+  const verified = await verifyJWT(token);
+  return Response.json({ valid: verified });
+}
+
+// app/api/upload/route.ts (Node - 需要 sharp)
+export const runtime = 'nodejs';
+import sharp from 'sharp';
+export async function POST(req: Request) {
+  const file = await req.arrayBuffer();
+  const optimized = await sharp(Buffer.from(file)).resize(800).toBuffer();
+  // 上传到 S3 ...
+}</code></pre>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · Vercel 部署 vercel.json</h3>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// vercel.json （大多数情况不需要，Vercel 会自动检测）
+{
+  "buildCommand": "next build",
+  "outputDirectory": ".next",
+  "framework": "nextjs",
+  "regions": ["iad1", "sfo1", "fra1"],  // multi-region
+  "functions": {
+    "app/api/heavy/route.ts": {
+      "maxDuration": 300,  // 5 分钟（默认 10 秒）
+      "memory": 3008       // 3GB
+    }
+  }
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · Cloudflare Workers 部署（OpenNext.js）</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 安装 OpenNext.js Cloudflare adapter
+npm install @opennextjs/cloudflare
+
+# next.config.ts 不变，但 build 时用 OpenNext
+npx opennextjs-cloudflare
+
+# wrangler.toml
+# main = ".open-next/worker.js"
+# compatibility_date = "2026-04-01"
+# compatibility_flags = ["nodejs_compat"]
+
+# 部署
+wrangler deploy</code></pre>
+        </div>
+
+        <h3>代码 3 · output: standalone 启动脚本</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 本地启动 standalone 产物（无需 npm install 在 prod）
+HOSTNAME=0.0.0.0 PORT=3000 node .next/standalone/server.js
+
+# 注意：standalone 不复制 .next/static 和 public，要手动 cp
+cp -r public .next/standalone/public
+cp -r .next/static .next/standalone/.next/static</code></pre>
+        </div>
+
+        <h3>代码 4 · 健康检查 endpoint（K8s readiness/liveness）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/api/health/route.ts
+export const runtime = 'nodejs';  // 也可以 edge
+
+export async function GET() {
+  // readiness：检查依赖（db / redis）
+  try {
+    await db.$queryRaw`SELECT 1`;
+    return Response.json({ status: 'ready', timestamp: Date.now() });
+  } catch {
+    return Response.json({ status: 'not ready' }, { status: 503 });
+  }
+}
+
+// k8s.yaml
+// readinessProbe:
+//   httpGet:
+//     path: /api/health
+//     port: 3000
+//   initialDelaySeconds: 10
+//   periodSeconds: 5</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>middleware 里调用 ORM 直连数据库</b> —— middleware 是 Edge runtime，没 Node API。用 fetch 调用 /api 端点 / 用 Edge 兼容 ORM（Drizzle + http）</li>
+          <li><b>给整个 page 标 runtime: 'edge' 然后崩</b> —— Edge 不支持 sharp / canvas / 部分 native bindings。先确认所有依赖兼容 Edge</li>
+          <li><b>self-host 容器重启后所有 cache 丢</b> —— 默认 fs cache 不持久。配置 cacheHandler 接 Redis</li>
+          <li><b>多实例 self-host 但 cache 不同步</b> —— Redis cache handler 解决数据共享，但 revalidateTag 触发要 publish/subscribe（看场景 2）</li>
+          <li><b>output: export 然后用 Server Actions</b> —— 编译报错。export 模式不支持 Server Actions</li>
+          <li><b>output: standalone 但 Image Optimization 不工作</b> —— sharp 没装。Dockerfile 加 <code>RUN apk add --no-cache libc6-compat</code> + 安装 sharp</li>
+          <li><b>middleware matcher 写错导致重复执行</b> —— matcher 应该排除 _next / api / 静态资源；否则 middleware 在静态资源请求上也跑（性能差 + bug 多）</li>
+          <li><b>middleware 跑得慢导致 Vercel CPU 超时</b> —— middleware 不是放任意逻辑的地方。只放路由前轻量处理（auth check / redirect / rewrite）</li>
+          <li><b>Cloudflare Workers + OpenNext.js 时用 Prisma</b> —— Prisma binary 大，超 Workers 包大小限制。用 Drizzle / Kysely + neon-http / planetscale 替代</li>
+          <li><b>"为什么我的 ISR 在 self-host 不工作"</b> —— 默认 fs cache + 多实例不同步。看 P5 + 本章 cache handler 部分</li>
+          <li><b>Vercel Preview environment 用 prod 数据库</b> —— 危险。每个 preview 都连 prod 会污染数据。用环境变量在 preview 切到 staging db</li>
+          <li><b>"Edge runtime 一定比 Node 快"</b> —— 冷启动是。但执行复杂逻辑 Edge CPU 限制反而更紧。具体看任务类型</li>
+          <li><b>用 Vercel KV / Postgres 然后想 self-host 时迁移痛苦</b> —— Vercel 服务 vendor-locked。如果可能跳走，从一开始用 vendor-neutral 替代（Upstash / Neon / Supabase）</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://nextjs.org/docs/app/getting-started/deploying" target="_blank" rel="noopener">Next.js Docs · Deploying</a></li>
+          <li><a href="https://nextjs.org/docs/app/api-reference/edge" target="_blank" rel="noopener">Edge Runtime API 参考</a></li>
+          <li><a href="https://nextjs.org/docs/app/building-your-application/routing/middleware" target="_blank" rel="noopener">middleware 文档</a></li>
+          <li><a href="https://opennext.js.org/" target="_blank" rel="noopener">OpenNext.js · Cloudflare adapter</a></li>
+          <li><a href="https://developers.cloudflare.com/workers/" target="_blank" rel="noopener">Cloudflare Workers 文档</a></li>
+          <li><a href="https://github.com/vercel/next.js/tree/canary/examples/with-docker" target="_blank" rel="noopener">Next.js Docker 官方 example</a></li>
+          <li><a href="../../v8/05-embedding/01-embedder-api.html">V8 主题 P5.1 · V8 embedder API</a> · Edge runtime 底层 isolate</li>
+          <li><a href="../../node/index.html">Node 主题</a> · Node runtime 底层</li>
+          <li><a href="../05-caching/01-five-layer-cache.html">本主题 P5.1 · 缓存历史</a> · self-host cache handler 上下文</li>
+          <li><a href="../02-ecosystem-decision.html">本主题 P7.2 · 生态决策树</a></li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

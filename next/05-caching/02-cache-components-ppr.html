@@ -1,0 +1,734 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PPR + 'use cache' + revalidate 决策 · P5.2 · Next.js 深度学习</title>
+    <meta name="description" content="拿到一个新页面，怎么决定每段是 static 还是 dynamic？revalidate 用 path / tag / updateTag 哪个？这一章给一份能用到生产的决策树 —— 看每段的新鲜度要求、是否依赖 cookies/headers、是否用户特定，配 Blog / Dashboard / Todo / 电商 / 实时数据 5 个真实场景，每个场景给完整代码 + 选择理由。最后讲常见陷阱。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23000000'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EN%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Next.js 深度学习</span><span class="site-title-badge" style="background: oklch(0.22 0.02 250); color: #fff">Next</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · 缓存系统真相 ⭐</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-five-layer-cache.html">01 · 五层缓存 → Cache Components</a></li>
+          <li><a href="02-cache-components-ppr.html" class="active">02 · PPR + 'use cache' + revalidate 决策</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Next.js</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · 缓存系统真相</a><span class="breadcrumb-sep">/</span>
+          <span>02 · PPR + 'use cache' + revalidate 决策</span>
+        </nav>
+        <h1>PPR + 'use cache' + revalidate 决策</h1>
+        <p class="lead">
+          P5.1 把缓存系统的演化拉直了；本章给"具体代码该怎么写"的决策框架。每个组件、每个 fetch、每个 Server Action 都需要决定：是 static（'use cache'）还是 dynamic？revalidate 用 path 还是 tag？还是要 updateTag 立即生效？这一章给一棵决策树，配 Blog / Dashboard / Todo / 电商 / 实时数据 5 个真实场景的完整代码，每个场景告诉你"为什么这样选"。本章也是 Next.js 主题最实战的一章。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P5.1 五层缓存历史 + P3 RSC + P4 Server Actions</span>
+          <span><strong>主要来源</strong> nextjs.org/docs caching + Vercel "Choosing the Right Rendering Strategy" 工程 blog + 真实生产案例</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>决策的<strong>第一问</strong>是"这段数据对所有用户结果相同吗？" —— 是 → 静态壳（'use cache'）；否 → 动态洞（在 Suspense 内、不写 'use cache'）。</li>
+          <li>决策的<strong>第二问</strong>是"这段数据多久变一次？" —— 永久不变（marketing 文案）→ 'use cache' + cacheLife('max')；几小时变（榜单）→ 'use cache' + cacheLife('hours')；每秒可能变（股价）→ dynamic。</li>
+          <li>决策的<strong>第三问</strong>是"用户写完要立即看到吗？" —— 要 → updateTag（v16）；可以 1-2 秒后看到 → revalidateTag；可以"下次访问看到" → revalidatePath。</li>
+          <li>PPR 的核心心智：一个 page = 静态壳（'use cache' 包的部分，CDN 秒返）+ 动态洞（Suspense 包、读 cookies/headers 的部分，每请求重算）。两类组件混合在一棵 React 树里。</li>
+          <li>静态壳可以缓存到任何位置（CDN edge / Vercel KV / Redis）；动态洞每请求重算但配合 stream 用户感知"边渲染边发"。最终 TTFB 极小（几十 ms）+ LCP 由最慢的洞决定。</li>
+          <li>revalidatePath 适合"知道哪个 URL 受影响"，例如发布博客文章后让 /blog 列表页失效。粒度粗但简单。</li>
+          <li>revalidateTag 适合"知道哪个数据 ID 受影响"，例如修改用户资料后让所有 user-123 相关 cache 失效。需要在 fetch 或 'use cache' 时声明 tag。</li>
+          <li>updateTag 是 v16 新工具，<strong>当前请求内立即重算</strong>。解决"用户在 form submit 后页面要立刻显示新数据"的体验问题。</li>
+          <li>"什么时候不要 cache"也是重要决策：用户敏感数据 / 实时性要求高 / 数据量大改频繁不值得 cache 的场景，直接 dynamic 更省心。</li>
+          <li>本章的 5 个场景覆盖 90% 实际需求 —— Blog（cache 主体 + dynamic 评论 + dynamic auth）/ Dashboard（cache 框架 + dynamic 数据）/ Todo（cache 列表 + updateTag 立即刷）/ 电商（cache 商品 + dynamic 库存）/ 实时数据（全 dynamic）。看完能把决策树用到自己的项目。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>决策树 · 6 个关键问题</h3>
+
+        <p>拿到任何一段数据，按顺序问这 6 个问题：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">问题 1：这段数据对所有用户结果相同吗？
+  ├─ 是 → 候选：'use cache' / static
+  └─ 否（用户特定 / cookies / personalization）→ dynamic（Suspense + 不 cache）
+
+问题 2：这段数据多久变一次？
+  ├─ 永久（文案 / 文档）→ cacheLife('max') 或 build-time 渲染
+  ├─ 几天（产品文档 / 博客）→ cacheLife('days') + revalidateTag
+  ├─ 几小时（榜单 / 热门）→ cacheLife('hours') + revalidateTag
+  ├─ 几分钟（实时近似）→ cacheLife('minutes')
+  └─ 几秒（股价 / 在线人数）→ dynamic（每请求新算）
+
+问题 3：依赖 cookies / headers / searchParams 吗？
+  ├─ 是 → 必须 dynamic（在 Suspense 内）
+  └─ 否 → 可以 cache
+
+问题 4：写完后用户要立即看到吗？
+  ├─ 是（form submit 后立刻刷）→ updateTag（v16）
+  ├─ 1-2 秒后可见可接受 → revalidateTag
+  └─ 下次访问可见即可 → revalidatePath
+
+问题 5：失效粒度需要多精准？
+  ├─ 路径级（一个 URL）→ revalidatePath
+  ├─ 数据 ID 级（某用户的所有 post）→ revalidateTag('user-123-posts')
+  └─ 单条数据 → revalidateTag('post-456')
+
+问题 6：是否需要 self-host + 持久化？
+  ├─ Vercel 部署 → 默认即可
+  └─ self-host → 配置 cacheHandler 接 Redis（详见 P7.1）</code></pre>
+        </div>
+
+        <h3>静态壳 vs 动态洞 · PPR 的本质</h3>
+
+        <p>启用 cacheComponents 后，每个 page 渲染流程：</p>
+
+        <ol>
+          <li><b>build 时</b>：扫描 page，识别所有 'use cache' 组件 + Suspense 边界</li>
+          <li>用 placeholder 替换所有 dynamic 部分，渲染剩余的"静态壳"</li>
+          <li>把静态壳的 HTML + RSC payload 存到缓存（CDN）</li>
+          <li><b>运行时（用户访问）</b>：CDN 立即返回静态壳 HTML（~10ms）</li>
+          <li>同时 server 开始计算动态洞，stream 进 response</li>
+          <li>用户首屏看到静态壳，几百 ms 后看到动态洞填充</li>
+        </ol>
+
+        <p>看一个完整例子的渲染时间线：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">用户访问 /blog/hello
+
+t=0ms     用户发请求
+t=10ms    CDN 返回静态壳：&lt;article&gt;Hello&lt;/article&gt; + &lt;Suspense fallback&gt;...
+t=10ms    浏览器开始渲染：用户看到 article 内容（首屏完成）
+          浏览器同时与 origin 保持 stream 连接
+t=300ms   server: comments 查询完成，flush 一段
+t=305ms   浏览器：评论填充到 Suspense 位置
+t=350ms   server: auth check 完成，flush 一段
+t=355ms   浏览器：用户问候填充
+t=360ms   stream close
+
+用户感知：
+  Time to First Byte (TTFB) ≈ 10ms
+  First Contentful Paint (FCP) ≈ 50ms
+  Largest Contentful Paint (LCP) ≈ 50ms (article 已渲染)
+  Time to Interactive (TTI) ≈ 400ms (动态洞 hydrate 完成)</code></pre>
+        </div>
+
+        <p>对比传统 SSR（v15 全 dynamic）：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">t=0ms     用户发请求
+t=350ms   server 完成 article + comments + auth 渲染
+t=350ms   返回完整 HTML
+t=400ms   浏览器渲染完成
+
+TTFB ≈ 350ms (慢)
+LCP ≈ 400ms (慢)</code></pre>
+        </div>
+
+        <p>PPR 的价值显而易见：TTFB / LCP 都从几百 ms 降到几十 ms。代价：你必须显式标 'use cache' 决定哪些是壳。</p>
+
+        <h3>cacheLife 与 cacheTag 详细</h3>
+
+        <p>cacheLife 控制 cache 有效期：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { unstable_cacheLife as cacheLife } from 'next/cache';
+
+async function getProduct(id: string) {
+  'use cache';
+  // 字符串 preset
+  cacheLife('hours');  // 等价于 { stale: 30min, revalidate: 1h, expire: 1d }
+
+  // 自定义对象
+  cacheLife({
+    stale: 60,        // 60 秒后认为 stale，下次请求 revalidate
+    revalidate: 300,  // 5 分钟主动 revalidate（即使没访问）
+    expire: 86400,    // 1 天后强制过期，删除
+  });
+
+  return db.products.findUnique({ where: { id } });
+}</code></pre>
+        </div>
+
+        <p>三个值的含义：</p>
+        <ul>
+          <li><b>stale</b>：在这之后，cache 仍可用但被标记为 stale；下次请求会触发后台 revalidate（用户仍看到 stale 数据）</li>
+          <li><b>revalidate</b>：自动后台重算的间隔（即使没人访问）</li>
+          <li><b>expire</b>：硬过期时间，超过后 cache 删除（下次访问完全重算）</li>
+        </ul>
+
+        <p>preset 字符串：'seconds' / 'minutes' / 'hours' / 'days' / 'weeks' / 'max'。</p>
+
+        <p>cacheTag 让 revalidate 精准：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { unstable_cacheTag as cacheTag } from 'next/cache';
+
+async function getUserPosts(userId: string) {
+  'use cache';
+  cacheTag(`user-${userId}-posts`);   // 单个 tag
+  cacheTag('all-posts');              // 多个 tag（OR 关系：任一失效即失效）
+  return db.posts.findMany({ where: { userId } });
+}
+
+// Server Action 触发失效
+'use server';
+import { revalidateTag } from 'next/cache';
+export async function createPost(userId: string, data: any) {
+  await db.posts.create({ data: { ...data, userId } });
+  revalidateTag(`user-${userId}-posts`);  // 仅这个用户的 posts cache 失效
+  // 其他用户的 cache 仍然有效
+}</code></pre>
+        </div>
+
+        <h3>revalidate 三件套的具体差异</h3>
+
+        <p><b>revalidatePath</b> · 路径粒度</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use server';
+import { revalidatePath } from 'next/cache';
+
+export async function publishPost(id: string) {
+  await db.posts.update({ where: { id }, data: { published: true } });
+  // 让这些路径下次访问重新生成
+  revalidatePath('/blog');                  // 列表页
+  revalidatePath(`/blog/${id}`);            // 详情页
+  revalidatePath('/blog/[slug]', 'page');   // 带 slug 的所有动态页（更精准）
+  revalidatePath('/(marketing)', 'layout'); // 整个 marketing 段
+}</code></pre>
+        </div>
+
+        <p>第二参数 'page' / 'layout' 控制粒度。'page' 仅那个具体 URL；'layout' 包括 layout 范围内所有 page。</p>
+
+        <p><b>revalidateTag</b> · 数据 ID 粒度</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use server';
+import { revalidateTag } from 'next/cache';
+
+export async function updateProduct(id: string, data: any) {
+  await db.products.update({ where: { id }, data });
+  // 失效这个 product 相关的所有 cache
+  revalidateTag(`product-${id}`);
+  // 也失效 product 列表（如果列表用了同 tag）
+  revalidateTag('product-list');
+}</code></pre>
+        </div>
+
+        <p>revalidateTag 比 revalidatePath 精准 —— 不需要知道"哪个 URL 受影响"，只需要知道"哪个数据 ID 改了"。前提是数据获取时声明了 tag。</p>
+
+        <p><b>updateTag</b>（v16 新）· 当前请求内立即生效</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use server';
+import { updateTag } from 'next/cache';
+
+export async function addComment(postSlug: string, body: string) {
+  const session = await auth();
+  await db.comments.create({ data: { postSlug, body, userId: session.userId } });
+  // 在当前 form submit 请求里立即重算 comments cache
+  updateTag(`comments-${postSlug}`);
+  // 用户在 form submit 完成后立刻看到自己的评论，不需要等下次访问
+}</code></pre>
+        </div>
+
+        <p>差异详细：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>API</th>
+              <th>失效行为</th>
+              <th>用户何时看到新数据</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>revalidatePath('/foo')</td>
+              <td>标记 /foo 路径为 stale</td>
+              <td>下次访问 /foo（任何用户）</td>
+            </tr>
+            <tr>
+              <td>revalidateTag('comments')</td>
+              <td>标记 comments tag 为 stale</td>
+              <td>下次访问相关页面（任何用户）</td>
+            </tr>
+            <tr>
+              <td>updateTag('comments')</td>
+              <td>立即在当前请求内重算 + 失效</td>
+              <td>当前请求里就看到（form submit 立刻刷新）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>"什么时候不要 cache"</h3>
+
+        <p>cache 是有成本的。决策的反面是"什么时候直接 dynamic 更好"：</p>
+
+        <ul>
+          <li><b>用户敏感数据</b>（个人 dashboard / 私信 / 订单）—— cache 风险 = 用户 A 看到用户 B 数据，事故代价高</li>
+          <li><b>实时性要求高</b>（股价 / 直播在线人数 / 拍卖剩余时间）—— cache 1 分钟意义不大，直接 dynamic</li>
+          <li><b>数据巨大改频繁</b>（每条都要 cache，但每条又频繁失效）—— cache 命中率低，纯粹增加复杂度</li>
+          <li><b>构建时间已经很长</b>（generateStaticParams 几万条）—— 不一定全 cache，部分用 fallback / on-demand</li>
+          <li><b>开发期</b>（开发调试时）—— Next.js dev mode 默认禁用大部分缓存，方便调试；不要在 dev 里测 cache 行为</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · Blog 详情页</h3>
+
+        <p>需求：博客文章详情，主体内容长期不变；评论实时；登录后显示用户问候。</p>
+
+        <p>决策：</p>
+        <ul>
+          <li>article 主体 → 'use cache' + cacheLife('days') + cacheTag('post-{slug}')</li>
+          <li>related posts → 'use cache' + cacheLife('hours')</li>
+          <li>评论 → dynamic（不 cache，每请求新查）</li>
+          <li>用户问候 → dynamic（读 cookies）</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/blog/[slug]/page.tsx
+import { Suspense } from 'react';
+import { unstable_cacheLife as cacheLife, unstable_cacheTag as cacheTag } from 'next/cache';
+import { auth } from '@/lib/auth';
+
+async function getPost(slug: string) {
+  'use cache';
+  cacheLife('days');
+  cacheTag(`post-${slug}`);
+  return db.posts.findUnique({ where: { slug }, include: { author: true } });
+}
+
+async function getRelated(slug: string) {
+  'use cache';
+  cacheLife('hours');
+  return db.posts.findMany({ where: { /* tag 相关 */ }, take: 5 });
+}
+
+export default async function PostPage({ params }: { params: Promise&lt;{ slug: string }&gt; }) {
+  const { slug } = await params;
+  const post = await getPost(slug);
+  if (!post) notFound();
+
+  return (
+    &lt;article&gt;
+      &lt;header&gt;
+        &lt;Suspense fallback={null}&gt;
+          &lt;UserGreeting /&gt;
+        &lt;/Suspense&gt;
+        &lt;h1&gt;{post.title}&lt;/h1&gt;
+        &lt;p&gt;by {post.author.name}&lt;/p&gt;
+      &lt;/header&gt;
+      &lt;div dangerouslySetInnerHTML={{ __html: post.content }} /&gt;
+
+      &lt;Suspense fallback={null}&gt;
+        &lt;Related slug={slug} /&gt;
+      &lt;/Suspense&gt;
+      &lt;Suspense fallback={&lt;p&gt;Loading comments...&lt;/p&gt;}&gt;
+        &lt;Comments slug={slug} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/article&gt;
+  );
+}
+
+async function UserGreeting() {
+  const session = await auth();  // 读 cookies → dynamic
+  return session ? &lt;p&gt;Hi, {session.name}&lt;/p&gt; : null;
+}
+
+async function Related({ slug }: { slug: string }) {
+  const related = await getRelated(slug);
+  return &lt;aside&gt;{related.map(p =&gt; &lt;a key={p.id} href={`/blog/${p.slug}`}&gt;{p.title}&lt;/a&gt;)}&lt;/aside&gt;;
+}
+
+async function Comments({ slug }: { slug: string }) {
+  const comments = await db.comments.findMany({ where: { postSlug: slug } });
+  return &lt;ul&gt;{comments.map(c =&gt; &lt;li key={c.id}&gt;{c.body}&lt;/li&gt;)}&lt;/ul&gt;;
+}</code></pre>
+        </div>
+
+        <h3>场景 2 · SaaS Dashboard</h3>
+
+        <p>需求：用户登录后的 dashboard，导航条 + 通知中心 + 数据卡片 + 实时图表。</p>
+
+        <p>决策：</p>
+        <ul>
+          <li>整个 page 是用户特定 → 默认全部 dynamic</li>
+          <li>但导航条壳（不含具体用户名）可以 'use cache'，提升骨架显示速度</li>
+          <li>用户问候 / 通知 / 数据卡片 / 图表都是 dynamic</li>
+          <li>每段独立 Suspense，流式 reveal</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/(app)/dashboard/page.tsx
+import { Suspense } from 'react';
+import { auth } from '@/lib/auth';
+
+export default async function Dashboard() {
+  const session = await auth();
+  if (!session) redirect('/login');
+
+  return (
+    &lt;div className="grid"&gt;
+      &lt;Suspense fallback={&lt;HeaderSkeleton /&gt;}&gt;
+        &lt;UserHeader userId={session.userId} /&gt;
+      &lt;/Suspense&gt;
+      &lt;Suspense fallback={&lt;NotificationsSkeleton /&gt;}&gt;
+        &lt;Notifications userId={session.userId} /&gt;
+      &lt;/Suspense&gt;
+      &lt;Suspense fallback={&lt;StatsSkeleton /&gt;}&gt;
+        &lt;Stats userId={session.userId} /&gt;
+      &lt;/Suspense&gt;
+      &lt;Suspense fallback={&lt;ChartSkeleton /&gt;}&gt;
+        &lt;RealtimeChart userId={session.userId} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/div&gt;
+  );
+}
+
+// 每个组件都是 dynamic，不 'use cache'
+async function UserHeader({ userId }: { userId: string }) {
+  const user = await db.users.findUnique({ where: { id: userId } });
+  return &lt;header&gt;Hi, {user.name}&lt;/header&gt;;
+}
+
+async function Stats({ userId }: { userId: string }) {
+  const stats = await db.stats.findMany({ where: { userId } });
+  return &lt;StatsCards data={stats} /&gt;;
+}
+
+// ... 类似</code></pre>
+        </div>
+
+        <h3>场景 3 · Todo 列表（updateTag 立即刷新）</h3>
+
+        <p>需求：用户的 todo 列表，添加 / 完成 / 删除后立刻看到。</p>
+
+        <p>决策：</p>
+        <ul>
+          <li>列表 → 'use cache' + cacheTag('todos-{userId}')（用户特定但可 cache，因为 tag 隔离）</li>
+          <li>Server Action 用 updateTag 立即生效</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/_actions/todos.ts
+'use server';
+import { updateTag } from 'next/cache';
+import { auth } from '@/lib/auth';
+
+export async function addTodo(formData: FormData) {
+  const session = await auth();
+  if (!session) throw new Error('Unauthorized');
+  await db.todos.create({
+    data: { text: formData.get('text') as string, userId: session.userId },
+  });
+  updateTag(`todos-${session.userId}`);  // 当前 request 立即重算
+}
+
+// app/todo/page.tsx
+import { unstable_cacheTag as cacheTag } from 'next/cache';
+import { auth } from '@/lib/auth';
+
+async function getTodos(userId: string) {
+  'use cache';
+  cacheTag(`todos-${userId}`);
+  return db.todos.findMany({ where: { userId } });
+}
+
+export default async function TodoPage() {
+  const session = await auth();
+  const todos = await getTodos(session.userId);
+  return &lt;TodoList todos={todos} /&gt;;
+}</code></pre>
+        </div>
+
+        <h3>场景 4 · 电商商品详情页</h3>
+
+        <p>需求：商品信息几乎不变 + 库存实时变 + 用户购物车数量。</p>
+
+        <p>决策：</p>
+        <ul>
+          <li>商品信息 → 'use cache' + cacheLife('hours') + cacheTag('product-{id}')</li>
+          <li>库存 → dynamic（实时性高）</li>
+          <li>购物车数量 → dynamic（用户特定 + 读 cookies）</li>
+          <li>相关商品 → 'use cache' + cacheLife('hours')</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/products/[id]/page.tsx
+import { Suspense } from 'react';
+import { unstable_cacheLife as cacheLife, unstable_cacheTag as cacheTag } from 'next/cache';
+
+async function getProduct(id: string) {
+  'use cache';
+  cacheLife('hours');
+  cacheTag(`product-${id}`);
+  return db.products.findUnique({ where: { id }, include: { images: true } });
+}
+
+async function getRelated(id: string) {
+  'use cache';
+  cacheLife('hours');
+  return db.products.findMany({ where: { /* same category */ }, take: 6 });
+}
+
+export default async function ProductPage({ params }: { params: Promise&lt;{ id: string }&gt; }) {
+  const { id } = await params;
+  const product = await getProduct(id);
+  if (!product) notFound();
+
+  return (
+    &lt;&gt;
+      &lt;ProductGallery images={product.images} /&gt;
+      &lt;ProductInfo product={product} /&gt;
+      &lt;Suspense fallback={&lt;StockSkeleton /&gt;}&gt;
+        &lt;Stock id={id} /&gt;            {/* dynamic：实时库存 */}
+      &lt;/Suspense&gt;
+      &lt;Suspense fallback={null}&gt;
+        &lt;CartButton id={id} /&gt;        {/* dynamic：读 cookies 看是否已加购 */}
+      &lt;/Suspense&gt;
+      &lt;Suspense fallback={null}&gt;
+        &lt;Related id={id} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}
+
+async function Stock({ id }: { id: string }) {
+  // 不 cache，每请求查实时库存
+  const stock = await db.stocks.findUnique({ where: { productId: id } });
+  return &lt;p&gt;{stock.available &gt; 0 ? `${stock.available} in stock` : 'Out of stock'}&lt;/p&gt;;
+}</code></pre>
+        </div>
+
+        <h3>场景 5 · 实时数据 / 全 dynamic</h3>
+
+        <p>需求：股价 dashboard，所有数据每秒变。</p>
+
+        <p>决策：全部 dynamic，不要 cache。配合 client-side WebSocket 真正实时。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/stocks/page.tsx
+export default async function Stocks() {
+  return (
+    &lt;&gt;
+      &lt;Suspense fallback={&lt;PricesSkeleton /&gt;}&gt;
+        &lt;CurrentPrices /&gt;
+      &lt;/Suspense&gt;
+      &lt;LiveTicker /&gt;  {/* client component, WebSocket */}
+    &lt;/&gt;
+  );
+}
+
+async function CurrentPrices() {
+  // dynamic，每次请求都拿最新
+  const prices = await fetchStockPrices();
+  return &lt;PricesGrid data={prices} /&gt;;
+}
+
+// app/_components/LiveTicker.tsx
+'use client';
+import { useEffect, useState } from 'react';
+
+export default function LiveTicker() {
+  const [prices, setPrices] = useState&lt;Record&lt;string, number&gt;&gt;({});
+  useEffect(() =&gt; {
+    const ws = new WebSocket('wss://stocks.example.com/feed');
+    ws.onmessage = (e) =&gt; setPrices(JSON.parse(e.data));
+    return () =&gt; ws.close();
+  }, []);
+  return &lt;Ticker data={prices} /&gt;;
+}</code></pre>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 决策树代码模板</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 模板 A：完全可缓存（marketing 页）
+async function MarketingPage() {
+  'use cache';
+  // cacheLife('max') 永久 cache，build 时生成
+  return &lt;Hero /&gt;;
+}
+
+// 模板 B：定期失效（榜单 / 推荐）
+async function getTrending() {
+  'use cache';
+  cacheLife('hours');
+  cacheTag('trending');
+  return db.trending.findMany();
+}
+
+// 模板 C：用户特定但可 cache（用 user-id 作为 tag）
+async function getUserData(userId: string) {
+  'use cache';
+  cacheTag(`user-${userId}`);
+  return db.users.findUnique({ where: { id: userId } });
+}
+
+// 模板 D：动态（在 Suspense 内）
+async function CurrentTime() {
+  // 不 'use cache'
+  return &lt;p&gt;{new Date().toISOString()}&lt;/p&gt;;
+}
+
+// 模板 E：写后立刻看（updateTag）
+'use server';
+export async function postComment(slug: string, body: string) {
+  await db.comments.create({ data: { postSlug: slug, body } });
+  updateTag(`comments-${slug}`);
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · 多 tag 组合</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">async function getUserPostsByCategory(userId: string, category: string) {
+  'use cache';
+  cacheTag(`user-${userId}`);          // 这个用户的任何修改失效
+  cacheTag(`category-${category}`);    // 这个分类的任何修改也失效
+  cacheTag(`user-${userId}-cat-${category}`);  // 精准失效
+  return db.posts.findMany({ where: { userId, category } });
+}
+
+// 失效场景
+'use server';
+async function archiveCategory(category: string) {
+  await db.categories.update({ where: { name: category }, data: { archived: true } });
+  revalidateTag(`category-${category}`);  // 这个分类下所有用户的相关 cache 失效
+}</code></pre>
+        </div>
+
+        <h3>代码 3 · build-time 预生成（generateStaticParams）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/blog/[slug]/page.tsx
+export async function generateStaticParams() {
+  const posts = await db.posts.findMany({
+    where: { published: true },
+    select: { slug: true },
+  });
+  return posts.map(p =&gt; ({ slug: p.slug }));
+}
+
+async function getPost(slug: string) {
+  'use cache';
+  cacheLife('days');
+  cacheTag(`post-${slug}`);
+  return db.posts.findUnique({ where: { slug } });
+}
+
+export default async function PostPage({ params }: { params: Promise&lt;{ slug: string }&gt; }) {
+  const { slug } = await params;
+  const post = await getPost(slug);
+  if (!post) notFound();
+  return &lt;article&gt;{post.content}&lt;/article&gt;;
+}
+
+// build 时遍历 generateStaticParams 返回的 slug，逐一生成 HTML</code></pre>
+        </div>
+
+        <h3>代码 4 · cacheTag 不依赖 generateStaticParams 的失效</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 即使没有 generateStaticParams，'use cache' 也能在运行时缓存
+async function getProductDynamic(id: string) {
+  'use cache';
+  cacheLife('hours');
+  cacheTag(`product-${id}`);
+  return db.products.findUnique({ where: { id } });
+}
+
+// 第一次访问 /products/123 → 计算 + cache
+// 后续访问 → CDN 命中
+// 调用 revalidateTag('product-123') → cache 失效，下次重算
+
+// 这种"按需缓存"模式适合"商品太多，build 全部太慢"的场景</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>'use cache' 函数读 cookies / headers / Date.now()</b> —— 编译报错。'use cache' 函数不能依赖 request-specific 数据</li>
+          <li><b>整个 page 都标 'use cache'，但内部有读 cookies 的组件</b> —— 编译报错。要把读 cookies 部分包 Suspense</li>
+          <li><b>cacheTag 没在 fetch / 'use cache' 时声明，但 revalidateTag</b> —— 静默无效。检查 cacheTag 的位置</li>
+          <li><b>用 revalidatePath('/blog/[slug]', 'page') 失效一个动态 page</b> —— 这是 v15+ 语法，第二参数指定类型；v14 不支持</li>
+          <li><b>updateTag 在 v15 用</b> —— 仅 v16+ 有。v15 项目用 revalidateTag（下次访问失效）</li>
+          <li><b>"为什么我的 page 在 production 是 dynamic 而不是 static"</b> —— 检查是否在某个组件读了 cookies/headers/searchParams 但没包 Suspense；这会让整段 dynamic（v13-15）或编译报错（v16）</li>
+          <li><b>cacheLife('seconds') 但实际 cache 几分钟</b> —— Vercel CDN 有自己的最低 TTL（约 1 分钟）。'seconds' preset 在 Vercel 实际是 ~1min</li>
+          <li><b>Self-host 没配置 cacheHandler，重启后所有 cache 丢</b> —— 默认 fs cache 在容器重启不持久。配置 Redis cache handler（详见 P5.1 + P7.1）</li>
+          <li><b>"我的 cache 命中率太低"</b> —— 检查 cacheTag 的粒度是否过细（每条数据一个 tag 但每条独立失效）；考虑合并 tag 或用 cacheLife 控制</li>
+          <li><b>用户敏感数据被错误 cache</b> —— 比如把 user-specific dashboard 标 'use cache' 但没用 user-id tag；不同用户看到同一份 cache。<strong>用户特定数据要么不 cache，要么用 user-id 作为 tag</strong></li>
+          <li><b>'use cache' 函数返回 class instance</b> —— 序列化失败（不能跨 cache 边界）。返回 plain object</li>
+          <li><b>多个 cacheTag 调用混淆</b> —— 多个 cacheTag 是 OR 关系（任一失效即整体失效），不是 AND。设计时注意</li>
+          <li><b>开发期看不到 cache 行为</b> —— next dev 默认禁用大部分缓存方便调试。要测 cache 必须 next build + next start</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://nextjs.org/docs/app/getting-started/caching" target="_blank" rel="noopener">Next.js Docs · Caching 完整参考</a></li>
+          <li><a href="https://nextjs.org/docs/app/api-reference/directives/use-cache" target="_blank" rel="noopener">'use cache' 指令</a></li>
+          <li><a href="https://nextjs.org/docs/app/api-reference/functions/unstable_cacheLife" target="_blank" rel="noopener">cacheLife API</a> · <a href="https://nextjs.org/docs/app/api-reference/functions/unstable_cacheTag" target="_blank" rel="noopener">cacheTag API</a></li>
+          <li><a href="https://nextjs.org/docs/app/api-reference/functions/revalidatePath" target="_blank" rel="noopener">revalidatePath</a> · <a href="https://nextjs.org/docs/app/api-reference/functions/revalidateTag" target="_blank" rel="noopener">revalidateTag</a> · <a href="https://nextjs.org/docs/app/api-reference/functions/updateTag" target="_blank" rel="noopener">updateTag</a></li>
+          <li><a href="https://vercel.com/blog/partial-prerendering-with-next-js-creating-a-new-default-rendering-model" target="_blank" rel="noopener">Vercel · Partial Prerendering 设计博客</a></li>
+          <li><a href="../01-five-layer-cache.html">本主题 P5.1 · 五层缓存历史</a> · 不读 P5.1 直接读 P5.2 容易迷糊</li>
+          <li><a href="../../testing/index.html">测试主题</a> · 测试 cache 行为需要 next build + 集成测试</li>
+          <li><a href="../07-deploy-ecosystem/01-runtime-deploy.html">本主题 P7.1 · 部署矩阵</a> · self-host cache handler</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

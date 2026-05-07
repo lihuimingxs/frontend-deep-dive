@@ -1,0 +1,628 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>五层缓存模型 → Cache Components 重构 · P5.1 · Next.js 深度学习</title>
+    <meta name="description" content="Next.js 缓存系统 4 年演化史：v13 引入五层缓存（Request Memoization / Data Cache / Full Route Cache / Router Cache / CDN）+ 默认 cache-by-default → v14 PPR experimental → v15 默认反转为 explicit-opt-in → v16 用 Cache Components ('use cache' 指令 + cacheComponents 配置) 整体重构。这一章把每层讲透 + 解释为什么默认值反转 + v16 心智转变。Next.js 最被骂、最难懂的一章。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23000000'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EN%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Next.js 深度学习</span><span class="site-title-badge" style="background: oklch(0.22 0.02 250); color: #fff">Next</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · 缓存系统真相 ⭐</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-five-layer-cache.html" class="active">01 · 五层缓存 → Cache Components</a></li>
+          <li><a href="02-cache-components-ppr.html">02 · PPR + 'use cache' + revalidate 决策</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Next.js</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · 缓存系统真相</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 五层缓存 → Cache Components</span>
+        </nav>
+        <h1>五层缓存模型 → Cache Components 重构</h1>
+        <p class="lead">
+          Next.js 缓存是社区最被骂的部分，没有之一。v13 引入<strong>五层缓存</strong>（Request Memoization / Data Cache / Full Route Cache / Router Cache / CDN）+ 默认 cache-by-default，结果在生产引爆大量 stale 数据事故；v14 PPR 实验出现；v15 把默认彻底反转为 explicit-opt-in，承认是设计错误；v16 用 Cache Components（<code>'use cache'</code> 指令 + cacheComponents 配置）把整个心智重做一遍，简化为"静态壳 + 动态洞"两层。这一章拉直 4 年演化、解释每层的真实作用、为什么默认值反转、为什么 v16 这么做。读完 P5.1 + P5.2，能在生产代码里独立判断"这段该不该 cache、用哪个 revalidate"。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~35 分钟（最难章）</span>
+          <span><strong>前置</strong> P3 RSC + P4 Server Actions</span>
+          <span><strong>主要来源</strong> nextjs.org/docs caching + Vercel "Partial Prerendering" / "Cache Components" 工程 blog + v15 / v16 release notes + Tim Neutkens 公开演讲</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Next.js v13-15 缓存模型有<strong>五层</strong>，由内向外：Request Memoization（请求内 fetch 去重）→ Data Cache（跨请求 fetch 持久缓存）→ Full Route Cache（整个 route 的渲染结果缓存）→ Router Cache（client RSC payload 缓存）→ CDN/浏览器（最外层）。</li>
+          <li>v13-14 默认 <strong>cache-by-default</strong>：<code>fetch()</code> 不写选项就被 Data Cache 永久缓存；用了 cookies/headers 自动 dynamic（整个 route 不缓存）。这套规则隐式且不直观，引爆大量"为什么数据是 1 小时前的"事故。</li>
+          <li>v15 把默认<strong>反转</strong>为 explicit-opt-in：fetch 不写选项 = dynamic（每请求）；要 cache 必须显式 <code>{ cache: 'force-cache' }</code> 或 <code>{ next: { revalidate: N } }</code>。这是承认 v13-14 是设计错误的迟到修正。</li>
+          <li>v15 同时引入 async request APIs（cookies/headers/params/searchParams 全 Promise）—— 这是为 PPR 铺路：让"读 cookies"成为显式 await，PPR 才能在静态壳渲染时跳过。</li>
+          <li>v16 引入 <strong>Cache Components</strong>，用 <code>'use cache'</code> 指令显式标记可缓存单元，替代 v13-15 的隐式五层叠加。<code>cacheComponents: true</code> 启用后整个 app 走"静态壳 + 动态洞"渲染（PPR 默认）。</li>
+          <li>新心智：每个组件要么是<strong>静态壳</strong>（用 'use cache' 包，CDN 秒返）要么是<strong>动态洞</strong>（在 Suspense 内、读 cookies/headers 等 runtime API，每请求重算）。两类组件混合在一棵树里，不是"全静态 vs 全动态"的二选一。</li>
+          <li>v16 同时新增 <code>updateTag()</code> —— 失效 + 当前请求内立即重算，解决"提交表单后立即看到新数据"的体验问题（详见 P4）。这是 revalidatePath / revalidateTag 之外的第三种工具。</li>
+          <li>从 v15 → v16 的迁移：把 <code>unstable_cache</code> 改 <code>'use cache'</code>；把 <code>dynamicIO: true</code> 改 <code>cacheComponents: true</code>；把 page 拆成"static 部分 + Suspense 包的 dynamic 部分"。官方文档有 codemod 帮忙。</li>
+          <li>新心智的优势：缓存策略<strong>显式可读</strong>（看到 'use cache' 就知道这段是 cacheable）；不再隐式触发 dynamic（不会因为某个组件读 cookies 整个 route 失效）；与 PPR 自然契合（静态壳就是 'use cache' 包的部分）。</li>
+          <li>v16 不是终点。Cache Components 还在迭代，<code>'use cache'</code> 的<strong>cache key 推断 / 失效粒度 / multi-tenant 隔离</strong>等问题仍在打磨。但相比 v13-14 的隐式五层叠加，v16 心智简化了一个数量级。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>v13-15 五层缓存模型（理解历史用）</h3>
+
+        <p>把每层独立讲清楚。即使在 v16 你也需要理解这个模型 —— 因为"为什么 v16 这么改"必须先看 v13-15 是怎么错的。</p>
+
+        <p><b>第 1 层 · Request Memoization</b></p>
+
+        <p>同一个 request 内，相同的 fetch URL + 选项被去重。基于 React <code>cache()</code> API：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 同一个 request 处理过程中，下面三次 fetch 实际只触发一次
+async function getUser(id: string) {
+  return fetch(`/api/users/${id}`).then(r =&gt; r.json());
+}
+
+// app/page.tsx
+async function Header() {
+  const user = await getUser('123');  // 触发真实 fetch
+}
+async function Sidebar() {
+  const user = await getUser('123');  // hits memoization，复用上次结果
+}
+async function Footer() {
+  const user = await getUser('123');  // hits memoization
+}</code></pre>
+        </div>
+
+        <p>这一层基本没有争议，所有版本都启用。它是 React 的能力，不是 Next.js 独有。范围：单个 request。请求结束就清空。</p>
+
+        <p><b>第 2 层 · Data Cache</b></p>
+
+        <p>跨请求持久化的 fetch 缓存。存储在文件系统（self-host）或 Vercel 的分布式 KV。这是<strong>引爆事故的层</strong>：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// v13-14 默认行为：被 Data Cache 永久缓存（没有失效）
+await fetch('/api/products');
+
+// 想缓存 60 秒：
+await fetch('/api/products', { next: { revalidate: 60 } });
+
+// 想强制每请求重新拿（dynamic）：
+await fetch('/api/products', { cache: 'no-store' });
+
+// v15+ 默认反转：上面第一个 = no-store，第二个仍然是 60 秒缓存
+await fetch('/api/products');  // 现在等价于 cache: 'no-store'</code></pre>
+        </div>
+
+        <p>v13-14 的设计错误：默认 = 'force-cache'（永久缓存）。开发者写 <code>fetch('/api/data')</code> 完全没意识到自己在缓存。常见事故场景：</p>
+        <ul>
+          <li>商品价格改了，用户看到的是 1 小时前的</li>
+          <li>用户提交表单后页面没刷新（其实已写入但 cache 命中旧数据）</li>
+          <li>不同环境（dev / preview / prod）行为不一致（dev 默认 no-cache，prod 启用）</li>
+        </ul>
+
+        <p>v15 反转后，默认 = 'no-store'。开发者要 cache 必须显式标。</p>
+
+        <p><b>第 3 层 · Full Route Cache</b></p>
+
+        <p>整个 route 渲染结果（HTML + RSC payload）的缓存。决定 page 是 static 还是 dynamic：</p>
+
+        <ul>
+          <li>所有 fetch 都是 cached → page 是 static，build 时预渲染，运行时从 CDN 返回</li>
+          <li>有任何 fetch 是 dynamic / 用了 cookies/headers/searchParams → page 是 dynamic，每请求渲染</li>
+        </ul>
+
+        <p>v13-14 的隐式触发规则：使用 <code>cookies()</code> / <code>headers()</code> / <code>searchParams</code> / <code>noStore()</code> 任何一个，整个 route 立即变成 dynamic。这导致：</p>
+
+        <ul>
+          <li>开发者在 layout 里读了 cookies 检查 auth → 整个 app 全部 dynamic（Full Route Cache 失效）</li>
+          <li>开发者后来才知道这事，但已经写了大量代码</li>
+          <li>没法做到"layout 静态、page 动态"或反过来</li>
+        </ul>
+
+        <p>v16 用 PPR + Cache Components 解决：每个组件独立标 'use cache'，整个 route 不再是"全 static 或全 dynamic"。</p>
+
+        <p><b>第 4 层 · Router Cache（client）</b></p>
+
+        <p>客户端 Router 缓存最近访问过的 RSC payload，让"前进/后退"导航瞬时返回：</p>
+
+        <ul>
+          <li>v13-14：默认 30 秒 client cache，dynamic page 也缓存（这导致用户看到旧数据）</li>
+          <li>v14.1 起把 dynamic page 客户端 cache 默认时间改为 0</li>
+          <li>v15 起 prefetched 但未访问的内容默认 cache 5 分钟、访问过的 dynamic page 默认 0、static page 默认 5 分钟</li>
+          <li>v16 仍保留这层但默认值更保守</li>
+        </ul>
+
+        <p>这层的争议：用户在 dashboard 修改了数据，按"返回"按钮看到旧版本（client cache 命中）。修复需要 <code>router.refresh()</code> 或 <code>revalidatePath</code>。</p>
+
+        <p><b>第 5 层 · CDN / 浏览器</b></p>
+
+        <p>HTTP 标准的 Cache-Control 头管控的最外层缓存。Next.js 自动给 static page 设置正确的 Cache-Control，dynamic page 设置 no-store。这层是 HTTP 标准，所有框架都有，不是 Next.js 独有的复杂度。</p>
+
+        <h3>v15 反转的具体内容</h3>
+
+        <p>v15 的"缓存反转" release notes 列出 4 个具体变化：</p>
+
+        <ol>
+          <li><b>fetch 默认</b>：force-cache → no-store。<code>fetch('/api/x')</code> 现在每请求重新拿</li>
+          <li><b>Route Handlers GET 默认</b>：cached → not cached。GET handler 不再默认缓存</li>
+          <li><b>Client Router Cache · dynamic page</b>：30s → 0s。dynamic page 不再 client cache</li>
+          <li><b>async request APIs</b>：cookies/headers/params/searchParams 全 Promise 化</li>
+        </ol>
+
+        <p>从 v14 升 v15 是<strong>破坏性变更</strong>，必须做的迁移：</p>
+
+        <div class="code-block">
+          <span class="code-label">diff</span>
+          <pre class="code"><code class="lang-diff">// 1. fetch 默认变化
+- await fetch('/api/data');                           // v14: cached forever
++ await fetch('/api/data', { cache: 'force-cache' }); // v15+ 必须显式
++ // 或 { next: { revalidate: 60 } }
+
+// 2. async params
+- export default function Page({ params }: { params: { id: string } }) {
+-   return &lt;div&gt;{params.id}&lt;/div&gt;;
+- }
++ export default async function Page({ params }: { params: Promise&lt;{ id: string }&gt; }) {
++   const { id } = await params;
++   return &lt;div&gt;{id}&lt;/div&gt;;
++ }
+
+// 3. async cookies / headers
+- import { cookies } from 'next/headers';
+- const c = cookies();
++ const c = await cookies();</code></pre>
+        </div>
+
+        <p>v15 提供 codemod 自动改大部分代码。但语义改变（特别是默认 cache）需要逐个 fetch 审查。</p>
+
+        <h3>v16 Cache Components · 整体重构</h3>
+
+        <p>v16 不是 v15 的小补丁，是把缓存模型重新设计。开启需要：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">// next.config.ts
+export default {
+  cacheComponents: true,  // 启用 Cache Components（替代 v15 的 dynamicIO: true 实验配置）
+};</code></pre>
+        </div>
+
+        <p>启用后：</p>
+
+        <ul>
+          <li><b>所有 page 默认走 PPR</b>（Partial Prerendering）—— "静态壳 + 动态洞"渲染</li>
+          <li><b><code>'use cache'</code> 指令</b>替代 unstable_cache</li>
+          <li><b>动态部分必须在 Suspense 内</b> —— 编译时报错提示你"这段在静态壳里读 cookies/headers，必须包 Suspense"</li>
+          <li><b>新增 <code>updateTag()</code></b>（详见 P4 + P5.2）</li>
+        </ul>
+
+        <p>核心心智转变：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>v13-15 五层心智</th>
+              <th>v16 Cache Components 心智</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>隐式：fetch 默认行为决定 cache</td>
+              <td>显式：'use cache' 标记 cacheable 单元</td>
+            </tr>
+            <tr>
+              <td>读 cookies → 整个 route dynamic</td>
+              <td>读 cookies → 仅当前 Suspense 内动态</td>
+            </tr>
+            <tr>
+              <td>"全 static 或全 dynamic"二选一</td>
+              <td>"静态壳 + 动态洞"混合</td>
+            </tr>
+            <tr>
+              <td>Data Cache 是 fetch 级别</td>
+              <td>'use cache' 是 component / function 级别</td>
+            </tr>
+            <tr>
+              <td>需要熟记 5 层各自规则</td>
+              <td>只需要决定每段是 cache 还是 dynamic</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>看一个完整 v16 例子：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/blog/[slug]/page.tsx (Next.js 16 + cacheComponents)
+import { Suspense } from 'react';
+
+async function PostContent({ slug }: { slug: string }) {
+  'use cache';  // ← 这段是静态壳，CDN 秒返
+  const post = await db.posts.findUnique({ where: { slug } });
+  return &lt;article&gt;{post.content}&lt;/article&gt;;
+}
+
+async function Comments({ slug }: { slug: string }) {
+  // 没有 'use cache' = 动态，每请求重算
+  const comments = await db.comments.findMany({ where: { postSlug: slug } });
+  return &lt;ul&gt;{comments.map(c =&gt; &lt;li key={c.id}&gt;{c.body}&lt;/li&gt;)}&lt;/ul&gt;;
+}
+
+async function CurrentUser() {
+  // 读 cookies = 必须动态
+  const session = await getSession();  // 内部读 cookies
+  return session ? &lt;p&gt;Hi, {session.name}&lt;/p&gt; : null;
+}
+
+export default async function PostPage({ params }: { params: Promise&lt;{ slug: string }&gt; }) {
+  const { slug } = await params;
+  return (
+    &lt;&gt;
+      &lt;Suspense fallback={&lt;p /&gt;}&gt;
+        &lt;CurrentUser /&gt;                                 {/* 动态洞 */}
+      &lt;/Suspense&gt;
+      &lt;PostContent slug={slug} /&gt;                       {/* 静态壳 */}
+      &lt;Suspense fallback={&lt;p&gt;Loading comments...&lt;/p&gt;}&gt;
+        &lt;Comments slug={slug} /&gt;                        {/* 动态洞 */}
+      &lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>渲染流程：</p>
+        <ol>
+          <li>build 时预生成 PostContent（'use cache' + slug 作为 key）的 HTML</li>
+          <li>用户访问 → CDN 立即返回 PostContent 的 HTML 壳 + Suspense 占位</li>
+          <li>server 流式 stream Comments + CurrentUser（每请求新计算）</li>
+          <li>用户先看到 article（CDN 返回，~10ms），评论 + 用户问候稍后填充（~500-1000ms）</li>
+        </ol>
+
+        <p>对比 v13-15：那时候要么整个 page 是 SSG（评论也被静态化，刷新看不到新评论），要么整个 page 是 SSR（每次重新查 article + 评论 + auth，慢）。v16 让两全其美成为可能。</p>
+
+        <h3>'use cache' 详细机制</h3>
+
+        <p><code>'use cache'</code> 可以放在不同级别：</p>
+
+        <p><b>函数级</b>（最常用）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">async function getProduct(id: string) {
+  'use cache';
+  return db.products.findUnique({ where: { id } });
+}
+// cache key 自动从参数推断（id）</code></pre>
+        </div>
+
+        <p><b>组件级</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">async function ProductCard({ id }: { id: string }) {
+  'use cache';
+  const product = await db.products.findUnique({ where: { id } });
+  return &lt;div&gt;{product.name}&lt;/div&gt;;
+}
+// 整个组件渲染结果按 props 缓存</code></pre>
+        </div>
+
+        <p><b>文件级</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// lib/products.ts
+'use cache';
+// 这个文件 export 的所有函数 / 组件都是 cacheable
+export async function getProduct(id: string) { /* ... */ }
+export async function getProductReviews(id: string) { /* ... */ }</code></pre>
+        </div>
+
+        <p>cache key 由参数自动推断（必须是可序列化的类型）。控制 cache 寿命用 <code>cacheLife</code>：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { unstable_cacheLife as cacheLife } from 'next/cache';
+
+async function getProduct(id: string) {
+  'use cache';
+  cacheLife('hours');  // 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'max'
+  return db.products.findUnique({ where: { id } });
+}</code></pre>
+        </div>
+
+        <p>用 tag 让 revalidate 精准失效：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { unstable_cacheTag as cacheTag } from 'next/cache';
+
+async function getProduct(id: string) {
+  'use cache';
+  cacheTag(`product-${id}`);
+  return db.products.findUnique({ where: { id } });
+}
+
+// 在 Server Action 里失效
+'use server';
+import { revalidateTag } from 'next/cache';
+export async function updateProduct(id: string, data: any) {
+  await db.products.update({ where: { id }, data });
+  revalidateTag(`product-${id}`);
+}</code></pre>
+        </div>
+
+        <h3>从 v15 unstable_cache 迁到 v16 'use cache'</h3>
+
+        <div class="code-block">
+          <span class="code-label">diff</span>
+          <pre class="code"><code class="lang-diff">// v15 写法
+-import { unstable_cache } from 'next/cache';
+-
+-const getProduct = unstable_cache(
+-  async (id: string) =&gt; db.products.findUnique({ where: { id } }),
+-  ['products'],
+-  { revalidate: 3600, tags: (id) =&gt; [`product-${id}`] }
+-);
+
+// v16 写法
++import { unstable_cacheLife as cacheLife, unstable_cacheTag as cacheTag } from 'next/cache';
++
++async function getProduct(id: string) {
++  'use cache';
++  cacheLife('hours');
++  cacheTag(`product-${id}`);
++  return db.products.findUnique({ where: { id } });
++}</code></pre>
+        </div>
+
+        <p>v16 写法的优势：</p>
+        <ul>
+          <li>不需要把函数包成 closure（unstable_cache 必须包）</li>
+          <li>cache key 自动从参数推断，不需要手动传 key 数组</li>
+          <li>更接近 React 19 'use server' / 'use client' 的指令风格，统一心智</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · v14 项目升 v16 的迁移路径</h3>
+
+        <p>不要一步到位。两步走：</p>
+
+        <ol>
+          <li><b>第一步：v14 → v15</b>
+            <ul>
+              <li>跑官方 codemod 自动改 async params / cookies / headers</li>
+              <li>逐个审查所有 <code>fetch()</code>，把"原本依赖默认 cache"的显式改为 <code>{ cache: 'force-cache' }</code> 或 <code>{ next: { revalidate } }</code></li>
+              <li>跑测试，特别是测"提交表单后看到新数据"这类</li>
+            </ul>
+          </li>
+          <li><b>第二步：v15 → v16</b>
+            <ul>
+              <li>把 <code>unstable_cache</code> 改 <code>'use cache'</code></li>
+              <li>逐个 page 添加 <code>cacheComponents: true</code> 后看哪些 Suspense boundary 缺失（编译会提示）</li>
+              <li>把读 cookies/headers 的部分 wrap 在 Suspense 内</li>
+            </ul>
+          </li>
+        </ol>
+
+        <h3>场景 2 · 排查"为什么数据是旧的"</h3>
+
+        <p>排查路径：</p>
+        <ol>
+          <li>检查这段数据怎么获取（fetch 还是 db / 其他）</li>
+          <li>fetch 的 cache 选项是什么？v14 默认 cache、v15+ 默认 no-store；如果不确定写显式</li>
+          <li>是否在 'use cache' 函数内？如果是，cacheLife 是多久？</li>
+          <li>是否有 <code>generateStaticParams</code> 在 build 时预生成？</li>
+          <li>CDN / 反向代理是否额外缓存？查 Cache-Control 头</li>
+          <li>Router Cache（client）是否命中？开 DevTools Network 看是否真的 fetch 了</li>
+          <li>是否在 Server Action 后调用 revalidate？</li>
+        </ol>
+
+        <h3>场景 3 · 决定一段代码是 'use cache' 还是 dynamic</h3>
+
+        <p>判断标准：</p>
+        <ul>
+          <li>对所有用户结果一样、可以提前生成 → 'use cache'（marketing 页 / 文档 / 商品详情）</li>
+          <li>每用户不同（个性化 / dashboard）→ dynamic（在 Suspense 内、读 cookies）</li>
+          <li>实时数据（股票 / 在线人数）→ dynamic</li>
+          <li>偶尔变（每小时 / 每天）→ 'use cache' + cacheLife('hours' / 'days')</li>
+          <li>用户写完立刻要看到 → dynamic 或 'use cache' + updateTag</li>
+        </ul>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · Blog 页面的标准 v16 实现</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/blog/[slug]/page.tsx
+import { Suspense } from 'react';
+import { unstable_cacheLife as cacheLife, unstable_cacheTag as cacheTag } from 'next/cache';
+
+async function getPost(slug: string) {
+  'use cache';
+  cacheLife('days');
+  cacheTag(`post-${slug}`);
+  return db.posts.findUnique({ where: { slug } });
+}
+
+async function getRelatedPosts(slug: string) {
+  'use cache';
+  cacheLife('hours');
+  return db.posts.findMany({ where: { tags: { hasSome: [/* ... */] } }, take: 5 });
+}
+
+async function getComments(slug: string) {
+  // 不 cache：每请求新评论
+  return db.comments.findMany({ where: { postSlug: slug }, orderBy: { createdAt: 'desc' } });
+}
+
+export default async function PostPage({ params }: { params: Promise&lt;{ slug: string }&gt; }) {
+  const { slug } = await params;
+  const post = await getPost(slug);
+  if (!post) notFound();
+
+  return (
+    &lt;article&gt;
+      &lt;h1&gt;{post.title}&lt;/h1&gt;
+      &lt;div dangerouslySetInnerHTML={{ __html: post.content }} /&gt;
+
+      &lt;Suspense fallback={null}&gt;
+        &lt;Related slug={slug} /&gt;
+      &lt;/Suspense&gt;
+
+      &lt;Suspense fallback={&lt;p&gt;Loading comments...&lt;/p&gt;}&gt;
+        &lt;CommentsList slug={slug} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/article&gt;
+  );
+}
+
+async function Related({ slug }: { slug: string }) {
+  const related = await getRelatedPosts(slug);
+  return &lt;aside&gt;{related.map(p =&gt; &lt;a key={p.id} href={`/blog/${p.slug}`}&gt;{p.title}&lt;/a&gt;)}&lt;/aside&gt;;
+}
+
+async function CommentsList({ slug }: { slug: string }) {
+  const comments = await getComments(slug);
+  return &lt;ul&gt;{comments.map(c =&gt; &lt;li key={c.id}&gt;{c.body}&lt;/li&gt;)}&lt;/ul&gt;;
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · v15 fetch 显式 cache</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/products/page.tsx (v15)
+
+// 静态：build 时预渲染，CDN 秒返
+const products = await fetch('/api/products', {
+  cache: 'force-cache',
+}).then(r =&gt; r.json());
+
+// 动态：每请求新拿
+const flashSale = await fetch('/api/flash-sale', {
+  cache: 'no-store',
+}).then(r =&gt; r.json());
+
+// ISR 风格：60 秒后台重新生成
+const featured = await fetch('/api/featured', {
+  next: { revalidate: 60 },
+}).then(r =&gt; r.json());
+
+// 带 tag：可被 revalidateTag 失效
+const userCart = await fetch('/api/cart', {
+  next: { tags: [`cart-${userId}`] },
+}).then(r =&gt; r.json());</code></pre>
+        </div>
+
+        <h3>代码 3 · 自定义 cache handler（self-host）</h3>
+
+        <p>self-host 时默认 fs cache 在容器重启会丢，需要接 Redis：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-javascript">// cache-handler.js (Next.js 16)
+const Redis = require('ioredis');
+
+class RedisCache {
+  constructor() {
+    this.client = new Redis(process.env.REDIS_URL);
+  }
+
+  async get(key) {
+    const data = await this.client.get(`next:${key}`);
+    return data ? JSON.parse(data) : null;
+  }
+
+  async set(key, data, { tags }) {
+    await this.client.set(`next:${key}`, JSON.stringify(data));
+    for (const tag of tags || []) {
+      await this.client.sadd(`tag:${tag}`, key);
+    }
+  }
+
+  async revalidateTag(tag) {
+    const keys = await this.client.smembers(`tag:${tag}`);
+    for (const key of keys) {
+      await this.client.del(`next:${key}`);
+    }
+    await this.client.del(`tag:${tag}`);
+  }
+}
+
+module.exports = RedisCache;
+
+// next.config.ts
+export default {
+  cacheComponents: true,
+  cacheHandler: require.resolve('./cache-handler.js'),
+};</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>不知道项目用 v14、v15 还是 v16</b> —— 查 package.json next 版本。三个版本的默认行为完全不同</li>
+          <li><b>v13-14 默认 cache 没察觉</b> —— 数据看起来"莫名其妙旧"。升 v15 + 显式标</li>
+          <li><b>升 v15 不跑测试</b> —— fetch 默认从 cache 改 no-store 是行为变更，可能导致新版本性能下降（每个 fetch 都打 db）。要重新审视哪些应该 cache</li>
+          <li><b>v15 cookies 没 await</b> —— TypeScript 报错明显，但 JS 项目运行时崩</li>
+          <li><b>v16 'use cache' 函数读 cookies</b> —— 编译报错。'use cache' 函数不能依赖 request-specific 数据</li>
+          <li><b>v16 Suspense fallback 报错"this dynamic component must be inside Suspense"</b> —— 把读 cookies/headers 的组件包 Suspense</li>
+          <li><b>cacheLife 写错单位</b> —— <code>cacheLife(60)</code> 不工作，要 <code>cacheLife({ stale: 60, revalidate: 60, expire: 60 })</code> 或字符串如 <code>'minutes'</code></li>
+          <li><b>用了 dynamicIO（v15 实验）但忘了改 cacheComponents（v16 正式）</b> —— v16 把配置名改了，老配置仍可用但 deprecated</li>
+          <li><b>Redis cache handler 内存爆掉</b> —— 没设置 TTL；tag 索引不清理。生产用要加监控 + 自动清理过期 key</li>
+          <li><b>"为什么我 revalidateTag 后页面没刷"</b> —— 检查 fetch / 'use cache' 是否真的声明了对应 tag；revalidate 是"下次访问失效"，不是"立即看到"。要立即看到用 updateTag（v16）</li>
+          <li><b>把所有东西 'use cache'</b> —— 个性化数据（user-specific）不能简单 cache，会让用户 A 看到用户 B 的数据。'use cache' 必须用于"对所有人结果相同"的数据</li>
+          <li><b>认为 v16 解决了所有缓存问题</b> —— v16 简化了心智但仍有边角情况（multi-tenant 隔离 / 大数据集失效粒度 / Redis HA）。Cache Components 在迭代</li>
+          <li><b>看老博客文章学缓存</b> —— Next.js 缓存 4 年改 4 次，2022-2023 年的文章几乎全过时。看 nextjs.org 当前版本的 docs</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://nextjs.org/docs/app/getting-started/caching" target="_blank" rel="noopener">Next.js Docs · Caching（v16 最新）</a></li>
+          <li><a href="https://nextjs.org/blog/next-16" target="_blank" rel="noopener">Next.js 16 release notes</a> · Cache Components 官方说明</li>
+          <li><a href="https://nextjs.org/blog/next-15" target="_blank" rel="noopener">Next.js 15 release notes</a> · 缓存反转的官方解释</li>
+          <li><a href="https://nextjs.org/docs/app/api-reference/directives/use-cache" target="_blank" rel="noopener">'use cache' API 参考</a></li>
+          <li><a href="https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheComponents" target="_blank" rel="noopener">cacheComponents 配置</a></li>
+          <li><a href="https://vercel.com/blog/partial-prerendering-with-next-js-creating-a-new-default-rendering-model" target="_blank" rel="noopener">Vercel · PPR 设计博客</a></li>
+          <li><a href="https://nextjs.org/docs/app/guides/upgrading/version-15" target="_blank" rel="noopener">v14 → v15 升级指南</a></li>
+          <li><a href="https://nextjs.org/docs/app/guides/upgrading/version-16" target="_blank" rel="noopener">v15 → v16 升级指南</a></li>
+          <li><a href="../02-cache-components-ppr.html">本主题 P5.2 · PPR + revalidate 决策</a> · 拿到具体场景该怎么写</li>
+          <li><a href="../../react/06-modern/01-server-components.html">React 主题 P6.1 · Server Components</a> · cache 是 RSC 推动的</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

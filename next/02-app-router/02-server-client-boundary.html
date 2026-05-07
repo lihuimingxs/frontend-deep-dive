@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Server / Client 边界与序列化 · P2.2 · Next.js 深度学习</title>
+    <meta name="description" content="App Router 默认 RSC，'use client' 是模块边界 opt-in。这一章讲清边界规则、序列化限制（plain object / Promise / Date / Map / Set 可，class instance / 函数不可）、'Server 包 Client 包 Server' 混合模式、'use server' 函数边界、import 'server-only' 防御。回答「为什么我的组件传 props 报 'Functions cannot be passed'」。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23000000'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EN%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Next.js 深度学习</span><span class="site-title-badge" style="background: oklch(0.22 0.02 250); color: #fff">Next</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · App Router 心智</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-file-conventions.html">01 · 文件系统路由与约定</a></li>
+          <li><a href="02-server-client-boundary.html" class="active">02 · Server / Client 边界</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Next.js</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · App Router 心智</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Server / Client 边界</span>
+        </nav>
+        <h1>Server / Client 边界与序列化</h1>
+        <p class="lead">
+          App Router 默认所有组件是 RSC（Server Component），<code>'use client'</code> 是<strong>模块边界</strong> opt-in，<code>'use server'</code> 是<strong>函数边界</strong> opt-in。这两个指令决定了哪段代码在 server 跑、哪段在 client 跑、哪段需要序列化过桥。这一章把规则、序列化限制、混合模式（Server 包 Client 包 Server）、防御性导入（<code>server-only</code> / <code>client-only</code>）讲清，回答 90% 新手在 App Router 里 props 报错的根因。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P2.1 文件约定 + 写过 React 19</span>
+          <span><strong>主要来源</strong> nextjs.org/docs/app rendering + React RFC #188 + Dan Abramov "The Two Reacts" / "RSC for two computers"</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>App Router 里所有组件<strong>默认是 Server Component</strong>。要让组件在 client 跑，必须显式写 <code>'use client'</code>。这与 Pages Router 完全相反 —— Pages Router 默认 client，SSR 是"附加效果"。</li>
+          <li><code>'use client'</code> 不是"组件级"标记，是"<strong>模块级</strong>"标记。文件首行写了 <code>'use client'</code>，整个文件 + 它 import 的所有东西都进 client bundle（除非进一步标记 server-only）。这个边界一旦跨过去就回不来。</li>
+          <li><code>'use server'</code> 是<strong>函数级</strong>标记，与 client 边界含义不同 —— 它把函数标为 Server Action，client 调用时变成一次 POST 请求。详见 P4。</li>
+          <li>跨 Server → Client 边界传 props 必须可<strong>序列化</strong>。可序列化的：plain object / 数组 / Promise（19+）/ Date / Map / Set / RegExp / BigInt / Uint8Array / null / undefined / primitives。<strong>不可序列化的</strong>：函数 / class instance（Symbol / Map iterator / 自定义类 etc）/ React element 实例（&lt;div&gt;）。</li>
+          <li>函数 prop 是个例外 —— 普通函数不能传，但 <code>'use server'</code> 标记的 Server Action 可以传（它会被替换成"调用句柄"）。</li>
+          <li>关键混合模式：<strong>Server 包 Client 包 Server</strong>。把 Server Component 作为 <code>children</code> prop 传给 Client Component —— children 是"已经渲染好的 React 树"，可以塞进 client component 不让 client 污染整棵子树。</li>
+          <li>防御性导入：<code>import 'server-only'</code> 让模块如果不小心被 client 导入立即报错；<code>import 'client-only'</code> 反之。这是大型项目防止边界泄露的关键工具。</li>
+          <li>常见错觉："<code>'use client'</code> = 渲染在 client" —— 错。<code>'use client'</code> 标记的组件<strong>仍然在 server 渲染一次</strong>（SSR 阶段，输出 HTML），然后在 client hydrate。它真正的语义是"这个组件可以用 useState / useEffect / 浏览器 API"，<strong>不是</strong>"只在 client 跑"。</li>
+          <li>如果组件不需要 hooks / event handler / 浏览器 API，就不要标 <code>'use client'</code>。RSC 的核心收益（client bundle 不含 server 代码、可以直接 await 数据库）只在不写 'use client' 时才生效。</li>
+          <li>Server / Client 边界是 App Router 心智里最难建立的部分。但只要把"<strong>模块级标记 + 序列化 + children 混合</strong>"三件事建对，90% 的报错都能避免。剩下 10% 是 RSC 协议本身的边角情况，留到 P3.1 讲。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>默认是什么 · App Router vs Pages Router 的反转</h3>
+
+        <p>Pages Router 时代的心智："React 组件默认在 client 跑，SSR 是 server 附加跑一遍生成首屏 HTML"。所有 hook / event handler / window 都直接能用，因为最终都是在 client 执行。</p>
+
+        <p>App Router 反转了这个默认：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/posts/page.tsx
+// 没有 'use client' 指令 → 默认 RSC
+export default async function Posts() {
+  // 可以直接 await 数据库（这段代码<strong>从不</strong>下发到 client）
+  const posts = await db.posts.findMany();
+  // ❌ 不能用 useState / useEffect
+  // ❌ 不能用 onClick / onChange
+  // ❌ 不能访问 window / localStorage
+  return &lt;ul&gt;{posts.map(p =&gt; &lt;li&gt;{p.title}&lt;/li&gt;)}&lt;/ul&gt;;
+}</code></pre>
+        </div>
+
+        <p>要让组件能用 hooks / event / 浏览器 API，加 <code>'use client'</code>：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/posts/_components/SearchBox.tsx
+'use client';
+import { useState } from 'react';
+
+export default function SearchBox() {
+  const [query, setQuery] = useState('');
+  return (
+    &lt;input value={query} onChange={e =&gt; setQuery(e.target.value)} /&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>'use client' 是模块边界，不是组件边界</h3>
+
+        <p>这是 App Router 最常见的误解。<code>'use client'</code> 写在文件首行，不是函数前。它意味着"<strong>从这个模块开始，整棵 import 子树都在 client 打包</strong>"：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// SearchBox.tsx
+'use client';
+import { someUtil } from './utils';      // utils 也进 client bundle
+import { Button } from '@/ui/Button';     // Button 也进 client bundle
+import OtherClientCmp from './Other';    // 不需要再写 'use client'，已在 client 区内</code></pre>
+        </div>
+
+        <p>反过来：从 client 模块 import 一个 RSC？<strong>不行</strong> —— RSC 不能被 client 导入：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// SearchBox.tsx
+'use client';
+import PostList from './PostList';  // 如果 PostList 是 RSC（含 await db）→ 报错
+                                     // 因为整个 client 子树都要打到 client bundle
+                                     // db 代码不能进 client</code></pre>
+        </div>
+
+        <p>这就是为什么 <code>'use client'</code> 一旦标了就<strong>回不来</strong> —— 它向下污染整棵子树。要想让一个 client 组件包含 server 渲染的内容，必须用 <code>children</code> prop（看下面"混合模式"）。</p>
+
+        <h3>序列化规则 · 哪些类型可以跨边界传</h3>
+
+        <p>Server → Client 传 props 必须可序列化（因为要走 RSC payload）。React 19 + Next.js 16 支持的类型：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>类型</th>
+              <th>可序列化？</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>string / number / boolean / null / undefined</td>
+              <td>✅</td>
+              <td>原始类型</td>
+            </tr>
+            <tr>
+              <td>plain object / 数组</td>
+              <td>✅</td>
+              <td>必须递归可序列化</td>
+            </tr>
+            <tr>
+              <td>Date</td>
+              <td>✅</td>
+              <td>不要先 toString，可以直接传</td>
+            </tr>
+            <tr>
+              <td>BigInt</td>
+              <td>✅</td>
+              <td></td>
+            </tr>
+            <tr>
+              <td>Map / Set</td>
+              <td>✅</td>
+              <td>但内部 entries 要递归可序列化</td>
+            </tr>
+            <tr>
+              <td>RegExp</td>
+              <td>✅</td>
+              <td></td>
+            </tr>
+            <tr>
+              <td>Uint8Array / ArrayBuffer</td>
+              <td>✅</td>
+              <td>二进制数据</td>
+            </tr>
+            <tr>
+              <td>Promise</td>
+              <td>✅（React 19+）</td>
+              <td>client 用 <code>use(promise)</code> 读</td>
+            </tr>
+            <tr>
+              <td>Symbol</td>
+              <td>❌</td>
+              <td>除了内置如 Symbol.iterator</td>
+            </tr>
+            <tr>
+              <td>函数</td>
+              <td>❌（除非 <code>'use server'</code>）</td>
+              <td>普通函数不可，Server Action 可</td>
+            </tr>
+            <tr>
+              <td>class instance</td>
+              <td>❌</td>
+              <td>需要先 toJSON / 转 plain object</td>
+            </tr>
+            <tr>
+              <td>React element 实例 (&lt;div&gt;)</td>
+              <td>✅（特殊处理）</td>
+              <td>作为 children prop 传可以</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>常见踩坑：从数据库 ORM 取出来的对象往往是 class instance（Prisma / TypeORM 等），传给 client 会报错。需要 <code>JSON.parse(JSON.stringify(obj))</code> 或显式 <code>toJSON</code>。</p>
+
+        <h3>函数 prop 例外 · Server Action 可以传</h3>
+
+        <p>Server Action 是个特殊情况。普通函数不可序列化，但 <code>'use server'</code> 标记的函数会被替换成"调用句柄"（一个 ID + 类型签名），可以作为 prop 跨边界传：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/posts/page.tsx (RSC)
+async function deletePost(id: string) {
+  'use server';
+  await db.posts.delete({ where: { id } });
+}
+
+export default async function Posts() {
+  const posts = await db.posts.findMany();
+  return (
+    &lt;PostList posts={posts} onDelete={deletePost} /&gt;
+    {/* ↑ deletePost 不是真函数，是个调用句柄；client 可以"调用"它 */}
+  );
+}
+
+// app/posts/_components/PostList.tsx
+'use client';
+export function PostList({
+  posts,
+  onDelete,
+}: {
+  posts: Post[];
+  onDelete: (id: string) =&gt; Promise&lt;void&gt;;
+}) {
+  return posts.map(p =&gt; (
+    &lt;button onClick={() =&gt; onDelete(p.id)}&gt;Delete {p.title}&lt;/button&gt;
+  ));
+}</code></pre>
+        </div>
+
+        <p>底层机制：客户端"调用" onDelete 时实际是 POST 请求到当前路由 + 加密的 action ID，server 路由匹配后执行 deletePost 函数。详见 P4。</p>
+
+        <h3>关键混合模式 · Server 包 Client 包 Server</h3>
+
+        <p>App Router 最强的能力之一：让 Client Component 包 Server Component 作为 children。这让"<strong>仅一小段需要 client，大部分仍然是 server</strong>"成为可能：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/_components/ThemeToggle.tsx
+'use client';
+import { useState } from 'react';
+
+export default function ThemeToggle({ children }: { children: React.ReactNode }) {
+  const [dark, setDark] = useState(false);
+  return (
+    &lt;div className={dark ? 'dark' : ''}&gt;
+      &lt;button onClick={() =&gt; setDark(d =&gt; !d)}&gt;Toggle&lt;/button&gt;
+      {children}
+    &lt;/div&gt;
+  );
+}
+
+// app/posts/page.tsx (RSC)
+import ThemeToggle from '@/components/ThemeToggle';
+import PostContent from './_components/PostContent';  // RSC
+
+export default async function Posts() {
+  const posts = await db.posts.findMany();
+  return (
+    &lt;ThemeToggle&gt;
+      {/* PostContent 是 RSC，正常 server 渲染 */}
+      {/* 它作为 children 传给 client component，但本身不进 client bundle */}
+      &lt;PostContent posts={posts} /&gt;
+    &lt;/ThemeToggle&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>这种模式让"我有一个全局 theme provider（client）但里面包的 page 内容仍然是 RSC"成立。如果不用 children 模式，会强迫整棵子树进 client bundle。</p>
+
+        <h3>防御性导入 · server-only / client-only</h3>
+
+        <p>大型项目里很容易不小心把 server 代码（含 secret / 数据库连接）import 到 client component。两个 npm 包专门防御：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// lib/db.ts
+import 'server-only';  // 这一行让模块如果被 client import 立即编译报错
+import { Pool } from 'pg';
+
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,  // secret 不会泄露到 client
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// lib/analytics.ts
+import 'client-only';  // 反向，这个模块只能 client 用
+import { track } from '@vercel/analytics';
+export { track };</code></pre>
+        </div>
+
+        <p>这两个包内部就是一个简单的 throw —— 但通过条件 export，让它在 server context 不报错、在 client context 报错（或反之）。建议<strong>所有访问 secret / 数据库 / server-only API 的模块都加 <code>import 'server-only'</code></strong>。</p>
+
+        <h3>'use client' 不等于"只在 client 跑"</h3>
+
+        <p>这是最容易误解的点。看一个标了 <code>'use client'</code> 的组件：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use client';
+import { useState } from 'react';
+
+export default function Counter() {
+  const [count, setCount] = useState(0);
+  console.log('Counter renders');  // 这行会在 server 和 client 各跑一次
+  return &lt;button onClick={() =&gt; setCount(c =&gt; c + 1)}&gt;{count}&lt;/button&gt;;
+}</code></pre>
+        </div>
+
+        <p>它的真实生命周期：</p>
+        <ol>
+          <li><b>SSR 阶段（server）</b>：组件 render，输出 HTML（用初始 state 0），同时输出 RSC payload 描述这个 client component 的位置 + props</li>
+          <li><b>Client 加载</b>：浏览器收到 HTML，先显示</li>
+          <li><b>Hydration（client）</b>：浏览器加载组件 JS bundle，重新 render 一次（recompute initial state），attach event handlers</li>
+          <li><b>交互</b>：用户点击，setState 触发 re-render，全在 client 跑</li>
+        </ol>
+
+        <p>所以 <code>'use client'</code> 的真实语义是"<strong>这个组件可以用 hooks / event / 浏览器 API，并且会 hydrate</strong>"，不是"只在 client 跑"。理解这点对调试 hydration mismatch 错误至关重要。</p>
+
+        <h3>什么时候应该不用 'use client'</h3>
+
+        <p>RSC 的好处只在不标 <code>'use client'</code> 时生效：</p>
+        <ul>
+          <li>组件代码不下发到 client bundle（包体积小）</li>
+          <li>可以直接 await 数据库 / 文件系统 / server-side API</li>
+          <li>可以用 server-only 的 secret（API key / DB 密码）</li>
+          <li>不参与 hydration，没有 hydration 成本</li>
+        </ul>
+
+        <p>判断一个组件该不该标 <code>'use client'</code>：</p>
+        <ul>
+          <li>需要 useState / useReducer / useContext？→ 'use client'</li>
+          <li>需要 useEffect？→ 'use client'</li>
+          <li>需要 onClick / onChange / 任何 event handler？→ 'use client'</li>
+          <li>需要 window / document / localStorage？→ 'use client'</li>
+          <li>仅渲染数据 + 静态 markup → 保持 RSC</li>
+          <li>需要 await fetch / await db → 必须 RSC</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 全局 ThemeProvider 不污染整棵 page</h3>
+
+        <p>典型需求：root layout 加 ThemeProvider（client），但内部 page 大部分仍然是 RSC。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/_components/Providers.tsx
+'use client';
+import { ThemeProvider } from 'next-themes';
+import { Toaster } from 'sonner';
+
+export default function Providers({ children }: { children: React.ReactNode }) {
+  return (
+    &lt;ThemeProvider attribute="class" defaultTheme="system"&gt;
+      {children}
+      &lt;Toaster /&gt;
+    &lt;/ThemeProvider&gt;
+  );
+}
+
+// app/layout.tsx (RSC)
+import Providers from './_components/Providers';
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    &lt;html&gt;&lt;body&gt;
+      &lt;Providers&gt;{children}&lt;/Providers&gt;
+    &lt;/body&gt;&lt;/html&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>关键点：children 作为 prop 传，不会被 ThemeProvider 的 client 边界污染。所有 page / layout 仍然是 RSC，可以 await fetch。</p>
+
+        <h3>场景 2 · 组件内部既要 server 数据又要 client 交互</h3>
+
+        <p>典型需求：搜索表单 —— 输入框是 client（受控），结果列表是 server（直接 fetch）。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/search/page.tsx (RSC)
+import SearchForm from './_components/SearchForm';
+import SearchResults from './_components/SearchResults';
+
+export default async function SearchPage({
+  searchParams,
+}: {
+  searchParams: Promise&lt;{ q?: string }&gt;;
+}) {
+  const { q } = await searchParams;
+  return (
+    &lt;&gt;
+      &lt;SearchForm initialQuery={q} /&gt;
+      {q &amp;&amp; &lt;SearchResults query={q} /&gt;}
+    &lt;/&gt;
+  );
+}
+
+// app/search/_components/SearchForm.tsx
+'use client';
+import { useRouter } from 'next/navigation';
+import { useState } from 'react';
+
+export default function SearchForm({ initialQuery }: { initialQuery?: string }) {
+  const [q, setQ] = useState(initialQuery || '');
+  const router = useRouter();
+  return (
+    &lt;form onSubmit={e =&gt; { e.preventDefault(); router.push(`/search?q=${q}`); }}&gt;
+      &lt;input value={q} onChange={e =&gt; setQ(e.target.value)} /&gt;
+    &lt;/form&gt;
+  );
+}
+
+// app/search/_components/SearchResults.tsx (RSC)
+export default async function SearchResults({ query }: { query: string }) {
+  const results = await db.posts.findMany({ where: { title: { contains: query } } });
+  return &lt;ul&gt;{results.map(r =&gt; &lt;li key={r.id}&gt;{r.title}&lt;/li&gt;)}&lt;/ul&gt;;
+}</code></pre>
+        </div>
+
+        <p>分工清晰：表单交互在 client（无法 server），结果获取在 server（不需要 client）。两者通过 URL（searchParams）通信，不需要 props 序列化。</p>
+
+        <h3>场景 3 · 把 server 数据预先 fetch，然后用 client 做交互</h3>
+
+        <p>典型需求：商品列表初始 SSR 显示，然后 client 端"加载更多"。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/products/page.tsx (RSC)
+import ProductList from './_components/ProductList';
+
+export default async function Products() {
+  const initialProducts = await db.products.findMany({ take: 20 });
+  // 把 server 数据传给 client 组件
+  return &lt;ProductList initialProducts={initialProducts} /&gt;;
+}
+
+// app/products/_components/ProductList.tsx
+'use client';
+import { useState } from 'react';
+
+export default function ProductList({ initialProducts }: { initialProducts: Product[] }) {
+  const [products, setProducts] = useState(initialProducts);
+
+  async function loadMore() {
+    const offset = products.length;
+    const more = await fetch(`/api/products?offset=${offset}`).then(r =&gt; r.json());
+    setProducts([...products, ...more]);
+  }
+
+  return (
+    &lt;&gt;
+      &lt;ul&gt;{products.map(p =&gt; &lt;li&gt;{p.name}&lt;/li&gt;)}&lt;/ul&gt;
+      &lt;button onClick={loadMore}&gt;Load more&lt;/button&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>注意：initialProducts 必须是 plain object（不是 Prisma class instance），否则序列化报错。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 序列化错误的修复</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ 错：传 Date 没问题，但传 class instance 报错
+import { Decimal } from '@prisma/client';
+async function Page() {
+  const product = await db.products.findUnique({ where: { id } });
+  return &lt;Detail product={product} /&gt;;  // product.price 是 Decimal class，报错
+}
+
+// ✅ 修复 1：转换成 plain object
+async function Page() {
+  const product = await db.products.findUnique({ where: { id } });
+  const safe = {
+    ...product,
+    price: product.price.toString(),  // Decimal → string
+    createdAt: product.createdAt,      // Date 可以直接传
+  };
+  return &lt;Detail product={safe} /&gt;;
+}
+
+// ✅ 修复 2：在 ORM 层就转换（更好）
+const PrismaSafe = Prisma.defineExtension({
+  result: {
+    product: {
+      price: { compute: (p) =&gt; p.price.toString() },
+    },
+  },
+});</code></pre>
+        </div>
+
+        <h3>代码 2 · server-only 防御 secret 泄露</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// lib/auth.ts
+import 'server-only';  // 关键
+import jwt from 'jsonwebtoken';
+
+const SECRET = process.env.JWT_SECRET!;  // 不会泄露到 client
+
+export function verifyToken(token: string) {
+  return jwt.verify(token, SECRET);
+}
+
+// ❌ 如果 client component 不小心 import 这个：
+// 'use client';
+// import { verifyToken } from '@/lib/auth';
+// → build 时报错："This module is server-only and cannot be imported from a client component"</code></pre>
+        </div>
+
+        <h3>代码 3 · Server 包 Client 包 Server 实战</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/dashboard/page.tsx (RSC)
+import Tabs from './_components/Tabs';
+import OverviewTab from './_components/OverviewTab';     // RSC
+import AnalyticsTab from './_components/AnalyticsTab';   // RSC
+
+export default async function Dashboard() {
+  return (
+    &lt;Tabs
+      tabs={[
+        { id: 'overview', label: 'Overview', content: &lt;OverviewTab /&gt; },
+        { id: 'analytics', label: 'Analytics', content: &lt;AnalyticsTab /&gt; },
+      ]}
+    /&gt;
+  );
+}
+
+// app/dashboard/_components/Tabs.tsx
+'use client';
+import { useState } from 'react';
+
+export default function Tabs({
+  tabs,
+}: {
+  tabs: Array&lt;{ id: string; label: string; content: React.ReactNode }&gt;;
+}) {
+  const [active, setActive] = useState(tabs[0].id);
+  const activeTab = tabs.find(t =&gt; t.id === active)!;
+  return (
+    &lt;&gt;
+      &lt;nav&gt;{tabs.map(t =&gt; (
+        &lt;button key={t.id} onClick={() =&gt; setActive(t.id)}&gt;{t.label}&lt;/button&gt;
+      ))}&lt;/nav&gt;
+      &lt;div&gt;{activeTab.content}&lt;/div&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>关键：Tabs 是 client（管 state），但每个 tab 的 content 是预先在 server 渲染好的 RSC 树作为 React.ReactNode 传进来。Tabs 不需要 import OverviewTab / AnalyticsTab 模块（这两个仍然是 server-only）。</p>
+
+        <h3>代码 4 · Promise 作为 prop（React 19+）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/page.tsx (RSC)
+import { Suspense } from 'react';
+import LikeCount from './_components/LikeCount';
+
+export default function Page() {
+  // 不 await！直接把 Promise 传给 client component
+  const likesPromise = fetch('/api/likes').then(r =&gt; r.json());
+  return (
+    &lt;Suspense fallback={&lt;p&gt;Loading...&lt;/p&gt;}&gt;
+      &lt;LikeCount promise={likesPromise} /&gt;
+    &lt;/Suspense&gt;
+  );
+}
+
+// app/_components/LikeCount.tsx
+'use client';
+import { use } from 'react';
+
+export default function LikeCount({ promise }: { promise: Promise&lt;{ count: number }&gt; }) {
+  const { count } = use(promise);  // React 19 use API
+  return &lt;p&gt;{count} likes&lt;/p&gt;;
+}</code></pre>
+        </div>
+
+        <p>这是 React 19 + Next.js 16 的新模式：让 server 触发 fetch、不等结果就把 Promise 传给 client，client 用 <code>use()</code> 在 Suspense 里读。比 server-side await 灵活，比 client-side useEffect fetch 高效。</p>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>"Functions cannot be passed directly to Client Components"</b> —— 90% 是给 client 传了普通函数。要么把函数改成 Server Action（'use server'），要么把整个组件改成 client（但要权衡）</li>
+          <li><b>"Only plain objects can be passed to Client Components"</b> —— 传了 Prisma / Mongoose / Sequelize 的 class instance。需要 toJSON 或在 ORM 层就转 plain object</li>
+          <li><b>在 RSC 里写 useState / useEffect / onClick 报错</b> —— 加 'use client' 在文件首行；或把这部分逻辑提取成单独 client component</li>
+          <li><b>"Cannot access Y on the server"</b> —— 在 RSC 里访问 window / document / localStorage。这些是 client-only API，必须在 'use client' 模块里</li>
+          <li><b>"Hydration mismatch" / 服务端渲染与客户端不一致</b> —— 'use client' 组件在 SSR 阶段也跑一次。如果 render 依赖 Date.now() / Math.random() / localStorage，server 和 client 结果会不同。要么 useEffect 里读、要么用 suppressHydrationWarning</li>
+          <li><b>给一个 client component 标 'use client' 然后还在里面 await db</b> —— 编译可能不报错（如果 db 没标 server-only），但运行时崩；如果 db 标了 server-only，编译就报"server-only imported by client"</li>
+          <li><b>整个项目都 'use client'，结果 SSR 失去意义</b> —— 团队迁移时常见。问题：bundle 体积没小、不能 await db、丢了 RSC 所有好处。逐步审查每个 'use client'，能去掉就去掉</li>
+          <li><b>把 Server Component 当 Client Component 用 props.callback</b> —— 普通函数不能传，但 Server Action 可以。如果只是 form action，用 Server Action；如果是事件 callback，把交互组件改 client 并用 children 模式</li>
+          <li><b>在 'use client' 里 import Prisma client</b> —— 编译可能不报错（取决于配置），但极容易让 DATABASE_URL 等 secret 泄露到 client bundle。所有 db 模块 <strong>必须</strong> 加 <code>import 'server-only'</code></li>
+          <li><b>认为 'use client' 组件不在 server 跑</b> —— 错。SSR 阶段也会跑一次（生成首屏 HTML）。所以 'use client' 组件代码必须能在 Node 跑，不能直接用 window（要包 useEffect 或 typeof window !== 'undefined' 检查）</li>
+          <li><b>把 'use client' 放在函数内部</b> —— 不生效。<strong>必须放在文件首行</strong>，作为模块级标记</li>
+          <li><b>层层 import 之后整棵子树进 client bundle</b> —— bundle 体积爆炸的常见根因。审查 'use client' 的位置 —— 把它推到尽可能下层（leaf 组件），上层保持 RSC</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://nextjs.org/docs/app/getting-started/server-and-client-components" target="_blank" rel="noopener">Next.js Docs · Server &amp; Client Components</a></li>
+          <li><a href="https://nextjs.org/docs/app/api-reference/directives/use-client" target="_blank" rel="noopener">Next.js Docs · 'use client' API</a></li>
+          <li><a href="https://overreacted.io/the-two-reacts/" target="_blank" rel="noopener">Dan Abramov · "The Two Reacts"</a> · RSC 哲学背景</li>
+          <li><a href="https://overreacted.io/jsx-over-the-wire/" target="_blank" rel="noopener">Dan Abramov · "JSX over the wire"</a> · RSC payload 设计哲学</li>
+          <li><a href="https://github.com/reactjs/rfcs/pull/188" target="_blank" rel="noopener">React RFC #188 · Server Components</a></li>
+          <li><a href="https://www.npmjs.com/package/server-only" target="_blank" rel="noopener">npm: server-only</a> / <a href="https://www.npmjs.com/package/client-only" target="_blank" rel="noopener">client-only</a></li>
+          <li><a href="../../react/06-modern/01-server-components.html">React 主题 P6.1 · Server Components</a> · RSC 心智模型（先看这个再看本章 Next.js 实现）</li>
+          <li><a href="../03-rsc-streaming/01-rsc-payload.html">本主题 P3.1 · RSC payload 协议</a> · 边界传值的底层格式</li>
+          <li><a href="../04-server-actions/01-server-actions.html">本主题 P4.1 · Server Actions 全谱</a> · 'use server' 函数边界</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
