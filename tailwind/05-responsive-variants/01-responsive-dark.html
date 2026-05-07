@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>响应式策略 + 暗色模式 · P5.1 · Tailwind CSS 深度学习</title>
+    <meta name="description" content="Tailwind 响应式 + 暗色深度解析。Mobile-first 哲学（默认最小尺寸、prefix 应用更大）/ 5 个 breakpoints (sm/md/lg/xl/2xl) / Container Queries 容器级响应（@sm: @md:） / 暗色 3 策略 (media/class/selector) / next-themes 集成 + localStorage 持久化 / 自动 light/dark 切换 + transition fade。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2306b6d4'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETW%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Tailwind CSS 深度学习</span><span class="site-title-badge" style="background: oklch(0.65 0.13 210); color: #fff">TW</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · 响应式 + 变体</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-responsive-dark.html" class="active">01 · 响应式策略 + 暗色模式</a></li>
+          <li><a href="02-variants-arbitrary.html">02 · 状态变体 + arbitrary values</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Tailwind CSS</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · 响应式 + 变体</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 响应式策略 + 暗色模式</span>
+        </nav>
+        <h1>响应式策略 + 暗色模式</h1>
+        <p class="lead">
+          Tailwind 的响应式遵循 mobile-first 哲学：默认是最小尺寸样式、breakpoint 前缀逐级覆盖。这一章把 5 个 breakpoint + container queries（组件级响应）+ 暗色 3 种策略（media/class/selector）+ next-themes 集成 + localStorage 持久化讲清，并给"为什么 mobile-first 反直觉但更好"的根因。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P4 现代 CSS 特性（container queries）</span>
+          <span><strong>主要来源</strong> tailwindcss.com/docs Responsive Design / Dark Mode + next-themes README</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Tailwind 用 <strong>mobile-first</strong> 响应式：<strong>默认无前缀的样式 = 移动端</strong>，<code>sm:</code> 等前缀<strong>覆盖到更大屏</strong>。这与传统 desktop-first 媒体查询相反，渐进增强默认。</li>
+          <li>5 个默认 breakpoint：<code>sm 640px</code> / <code>md 768px</code> / <code>lg 1024px</code> / <code>xl 1280px</code> / <code>2xl 1536px</code>。v4 默认值与 v3 略有微调。</li>
+          <li>Mobile-first 心智："写无前缀样式 = 移动端基础"，"加前缀 = 在更大屏幕上覆盖"。例如 <code>text-base md:text-lg</code> = 移动 16px、md+ 18px。</li>
+          <li>Container Queries（v4 first-class）：<code>@container</code> 标记容器、<code>@sm:</code> <code>@md:</code> 容器前缀响应。同一组件在窄容器（sidebar）和宽容器（主区）不同布局。</li>
+          <li>暗色模式 3 种策略：<b>media</b>（默认，跟随 prefers-color-scheme）/ <b>class</b>（在 root 加 .dark class，JS 控制）/ <b>selector</b>（v4 自定义，比如 [data-theme=dark]）。生产项目大多用 class 策略 + next-themes 持久化。</li>
+          <li>v4 默认 <code>dark:</code> 变体使用 .dark class 策略（在 root 加 .dark）。要 media 策略需用 @custom-variant 自定义。</li>
+          <li>next-themes 是 React 生态最流行的暗色 toggle 库 —— 处理 SSR FOUC（首屏闪烁）+ localStorage 持久化 + 系统切换跟随。</li>
+          <li>暗色切换 fade 动画在 v4 自动支持（@property 注册 theme variables 让 transition 可作用于 color），v3 需要 JS 处理。</li>
+          <li>响应式不是"在不同 breakpoint 写不同 utility"——是"<strong>建立一套设计 token，在 breakpoint 切换组合</strong>"。spacing scale / color palette 跨 breakpoint 一致，只有 layout 切换。</li>
+          <li>本章实战：dashboard layout 在 mobile / tablet / desktop 不同布局；container queries 实现"同 card 不同容器尺寸不同布局"；暗色切换不闪烁（next-themes）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Mobile-first 哲学的根因</h3>
+
+        <p>传统 desktop-first 媒体查询：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* desktop-first（不推荐） */
+.container {
+  display: flex;       /* 桌面默认 */
+  gap: 24px;
+}
+@media (max-width: 768px) {
+  .container {
+    display: block;    /* 小屏覆盖 */
+    gap: 0;
+  }
+}</code></pre>
+        </div>
+
+        <p>问题：</p>
+        <ul>
+          <li>需要为每个小屏 break 写 <code>max-width</code> media query</li>
+          <li>移动端是"被裁掉的桌面体验"，不是优先设计</li>
+          <li>慢网络下移动用户先加载桌面样式（不必要的字节）</li>
+        </ul>
+
+        <p>Mobile-first 反过来：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* mobile-first */
+.container {
+  display: block;      /* 移动默认 */
+}
+@media (min-width: 768px) {
+  .container {
+    display: flex;     /* 中屏+ 升级 */
+    gap: 24px;
+  }
+}</code></pre>
+        </div>
+
+        <p>优势：</p>
+        <ul>
+          <li>移动端是"基础设计"，桌面是"渐进增强"</li>
+          <li>移动用户不加载桌面样式</li>
+          <li>媒体查询用 <code>min-width</code>（更直观）</li>
+          <li>新设计的网站 70%+ 流量来自移动端，mobile-first 是默认</li>
+        </ul>
+
+        <p>Tailwind 的 <code>md:</code> 前缀就是 <code>@media (min-width: 768px)</code> 的语法糖。所以 <code>md:flex</code> = "中屏及以上 flex"，移动端默认无 flex。</p>
+
+        <h3>5 个默认 breakpoint</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Prefix</th>
+              <th>Min-width</th>
+              <th>设备</th>
+              <th>使用频率</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>（无）</td><td>0</td><td>mobile（默认）</td><td>所有 UI</td></tr>
+            <tr><td><code>sm:</code></td><td>640px</td><td>大屏手机 / 小平板</td><td>较少（移动设备多在 sm 以下）</td></tr>
+            <tr><td><code>md:</code></td><td>768px</td><td>iPad portrait</td><td>很常用（"开始平板布局"）</td></tr>
+            <tr><td><code>lg:</code></td><td>1024px</td><td>iPad landscape / 小笔记本</td><td>常用（"开始桌面布局"）</td></tr>
+            <tr><td><code>xl:</code></td><td>1280px</td><td>桌面</td><td>较少</td></tr>
+            <tr><td><code>2xl:</code></td><td>1536px</td><td>大显示器</td><td>少</td></tr>
+          </tbody>
+        </table>
+
+        <p>实战中常用模式：</p>
+        <ul>
+          <li><code>md:</code> 切换 mobile / tablet 布局（hero 展开、卡片改横向）</li>
+          <li><code>lg:</code> 切换 tablet / desktop 布局（侧栏出现、网格列数增加）</li>
+          <li>很少用 <code>sm:</code>（mobile 设备 5-6 寸屏多在 sm 以下）</li>
+          <li>很少用 <code>2xl:</code>（多数桌面 1080p / 1440p 在 lg / xl 之间）</li>
+        </ul>
+
+        <p>v4 自定义 breakpoint：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@theme {
+  --breakpoint-3xl: 1920px;  /* 自动生成 3xl: 前缀 */
+  --breakpoint-tablet: 900px; /* 自定义命名 */
+}
+
+/* 用法
+   &lt;div class="block 3xl:flex"&gt;
+   &lt;div class="block tablet:flex"&gt;
+*/</code></pre>
+        </div>
+
+        <h3>响应式样式的链式覆盖</h3>
+
+        <p>关键：每个 breakpoint 前缀是<strong>覆盖到那个尺寸及以上</strong>，不是"那个尺寸独有"。</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;p class="text-sm md:text-base lg:text-lg xl:text-xl"&gt;
+  &lt;!--
+    mobile (0-767px):    text-sm  (14px)
+    md (768-1023px):     text-base (16px)
+    lg (1024-1279px):    text-lg  (18px)
+    xl (1280px+):        text-xl  (20px)
+  --&gt;
+&lt;/p&gt;</code></pre>
+        </div>
+
+        <p>常见误解："md:text-base 只在 md 尺寸"。错。它表示"md 及以上 text-base，直到下一个覆盖（lg:text-lg）"。</p>
+
+        <p>要"只在 md 区间"用 max-width 配合（v4 支持）：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- max-md: 仅 md 以下应用（即 mobile） --&gt;
+&lt;div class="max-md:hidden"&gt;
+  在 md 以下隐藏，md 及以上显示
+&lt;/div&gt;
+
+&lt;!-- 组合 min + max 实现"区间" --&gt;
+&lt;div class="md:max-lg:bg-yellow"&gt;
+  仅 md (768-1024) 区间黄色
+&lt;/div&gt;</code></pre>
+        </div>
+
+        <h3>Container Queries 容器级响应（v4 first-class）</h3>
+
+        <p>详见 P4 现代 CSS。这里讲 Tailwind 用法。</p>
+
+        <p>步骤：</p>
+        <ol>
+          <li>父元素加 <code>@container</code> class 标记容器</li>
+          <li>子元素用 <code>@sm:</code> <code>@md:</code> 容器前缀（与 viewport 前缀同名 + @ 区分）</li>
+        </ol>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 父容器 --&gt;
+&lt;div class="@container"&gt;
+  &lt;!-- 子组件根据父容器尺寸响应 --&gt;
+  &lt;article class="block @md:flex @md:gap-4"&gt;
+    &lt;img class="w-full @md:w-24" /&gt;
+    &lt;div class="p-4"&gt;
+      &lt;h2 class="text-base @md:text-lg"&gt;Title&lt;/h2&gt;
+    &lt;/div&gt;
+  &lt;/article&gt;
+&lt;/div&gt;</code></pre>
+        </div>
+
+        <p>命名容器（解决嵌套歧义）：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 命名容器 --&gt;
+&lt;aside class="@container/sidebar w-64"&gt;
+  &lt;!-- 这个 nav 响应 sidebar 容器尺寸 --&gt;
+  &lt;nav class="@sm/sidebar:grid @sm/sidebar:grid-cols-2"&gt;
+    ...
+  &lt;/nav&gt;
+&lt;/aside&gt;</code></pre>
+        </div>
+
+        <p>什么时候用 container query 而不是 viewport：</p>
+        <ul>
+          <li>组件可能放在不同尺寸的容器里（sidebar / 主区 / modal）</li>
+          <li>设计系统组件库（不知道使用方上下文）</li>
+          <li>响应"容器变化"而不是"屏幕变化"（panel resize / sidebar collapse）</li>
+        </ul>
+
+        <h3>暗色模式 3 种策略</h3>
+
+        <p><b>1. media 策略（默认）</b> —— 跟随 OS 系统：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 用户系统设置 dark 时自动应用 dark: 样式 --&gt;
+&lt;div class="bg-white dark:bg-gray-900 text-black dark:text-white"&gt;
+  Hello
+&lt;/div&gt;</code></pre>
+        </div>
+
+        <p>v4 默认是 class 策略，要 media 策略用 @custom-variant：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@custom-variant dark (&amp;:where(@media (prefers-color-scheme: dark) *));</code></pre>
+        </div>
+
+        <p><b>2. class 策略（生产推荐）</b> —— 在 root 加 .dark class、JS 控制：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;html class="dark"&gt;
+  &lt;body&gt;
+    &lt;!-- dark: 样式生效 --&gt;
+    &lt;div class="bg-white dark:bg-gray-900"&gt;...&lt;/div&gt;
+  &lt;/body&gt;
+&lt;/html&gt;</code></pre>
+        </div>
+
+        <p>v4 默认就是 class 策略（在 root 找 .dark）。生产项目大多用这个 + next-themes 库管理。</p>
+
+        <p><b>3. selector 策略（v4 自定义）</b> —— 自定义选择器：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* 用 [data-theme=dark] 替代 .dark */
+@custom-variant dark (&amp;:where([data-theme=dark], [data-theme=dark] *));</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;html data-theme="dark"&gt;
+  ...
+&lt;/html&gt;</code></pre>
+        </div>
+
+        <p>data-theme 的优势：可扩展（不止 light/dark，可以有 sepia / high-contrast 等）。</p>
+
+        <h3>next-themes 集成</h3>
+
+        <p>2026 年 React 生态暗色切换标准库。处理：</p>
+        <ul>
+          <li>SSR FOUC 防止（首屏不闪烁）</li>
+          <li>localStorage 持久化</li>
+          <li>跟随系统切换</li>
+          <li>支持多主题</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/_components/Providers.tsx
+'use client';
+import { ThemeProvider } from 'next-themes';
+
+export default function Providers({ children }) {
+  return (
+    &lt;ThemeProvider attribute="class" defaultTheme="system" enableSystem&gt;
+      {children}
+    &lt;/ThemeProvider&gt;
+  );
+}
+
+// app/layout.tsx (RSC)
+import Providers from './_components/Providers';
+
+export default function RootLayout({ children }) {
+  return (
+    &lt;html suppressHydrationWarning&gt;
+      &lt;body&gt;
+        &lt;Providers&gt;{children}&lt;/Providers&gt;
+      &lt;/body&gt;
+    &lt;/html&gt;
+  );
+}
+
+// app/_components/ThemeToggle.tsx
+'use client';
+import { useTheme } from 'next-themes';
+
+export default function ThemeToggle() {
+  const { theme, setTheme } = useTheme();
+  return (
+    &lt;button onClick={() =&gt; setTheme(theme === 'dark' ? 'light' : 'dark')}&gt;
+      {theme === 'dark' ? '🌙' : '☀️'}
+    &lt;/button&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>关键点：</p>
+        <ul>
+          <li><code>attribute="class"</code> 让 next-themes 给 root 加 .dark class</li>
+          <li><code>defaultTheme="system"</code> 默认跟随系统</li>
+          <li><code>enableSystem</code> 让用户可以选 "system"（自动跟随）</li>
+          <li><code>suppressHydrationWarning</code> 在 html 标签防止 SSR / client mismatch warning（next-themes 在 client 改 class，server 不知道）</li>
+        </ul>
+
+        <h3>v4 暗色切换 fade 动画（自动支持）</h3>
+
+        <p>v4 用 @property 注册 theme variables，让 transition 可作用于 color 变化（v3 不行）：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@theme {
+  --color-bg: oklch(1 0 0);
+  --color-fg: oklch(0.15 0 0);
+}
+
+.dark {
+  --color-bg: oklch(0.15 0 0);
+  --color-fg: oklch(0.95 0 0);
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  transition: background 300ms ease, color 300ms ease;
+}
+
+/* class .dark toggle 时颜色平滑 fade，不再瞬间切换 */</code></pre>
+        </div>
+
+        <p>注意：太多元素都加 transition 可能性能差（每个元素都要 GPU 合成）。建议只在 body / 主要 layout 加 transition、其他组件不加。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · Dashboard 三栏布局响应式</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function Dashboard() {
+  return (
+    &lt;div className="flex flex-col lg:flex-row min-h-screen"&gt;
+      {/* mobile: 顶部 nav；desktop: 左侧栏 */}
+      &lt;aside className="w-full lg:w-64 border-b lg:border-b-0 lg:border-r"&gt;
+        &lt;Nav /&gt;
+      &lt;/aside&gt;
+
+      {/* mobile: 单列；md+: 主区 + 侧栏 */}
+      &lt;main className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4 p-4"&gt;
+        &lt;section className="md:col-span-2"&gt;
+          &lt;Stats /&gt;
+        &lt;/section&gt;
+        &lt;aside className="hidden md:block"&gt;
+          &lt;Activity /&gt;
+        &lt;/aside&gt;
+      &lt;/main&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>场景 2 · 卡片在不同容器响应（container queries）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function ProductCard({ product }) {
+  return (
+    &lt;article className="@container border rounded-lg overflow-hidden bg-white dark:bg-gray-900"&gt;
+      &lt;div className="block @md:flex @md:gap-4"&gt;
+        &lt;img className="w-full @md:w-32 h-48 @md:h-auto object-cover" src={product.image} /&gt;
+        &lt;div className="p-4"&gt;
+          &lt;h2 className="text-base @md:text-lg font-semibold"&gt;{product.name}&lt;/h2&gt;
+          &lt;p className="hidden @lg:block text-gray-500 mt-2"&gt;{product.description}&lt;/p&gt;
+          &lt;p className="text-brand-600 mt-2"&gt;${product.price}&lt;/p&gt;
+        &lt;/div&gt;
+      &lt;/div&gt;
+    &lt;/article&gt;
+  );
+}
+
+// 同一个 ProductCard：
+// - 在 sidebar (~280px wide)：纵向布局，无 description
+// - 在 grid (~400px wide)：横向布局，无 description
+// - 在 main area (~700px wide)：横向 + description</code></pre>
+        </div>
+
+        <h3>场景 3 · 完整 next-themes 集成（不闪烁）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 1. 安装：npm i next-themes
+
+// 2. app/layout.tsx (RSC)
+import Providers from './_components/Providers';
+
+export default function RootLayout({ children }) {
+  return (
+    &lt;html suppressHydrationWarning&gt;
+      &lt;body className="bg-white text-gray-900 dark:bg-gray-900 dark:text-white transition-colors"&gt;
+        &lt;Providers&gt;{children}&lt;/Providers&gt;
+      &lt;/body&gt;
+    &lt;/html&gt;
+  );
+}
+
+// 3. app/_components/Providers.tsx
+'use client';
+import { ThemeProvider } from 'next-themes';
+
+export default function Providers({ children }) {
+  return (
+    &lt;ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange&gt;
+      {children}
+    &lt;/ThemeProvider&gt;
+  );
+}
+
+// 4. ThemeToggle 组件
+'use client';
+import { useTheme } from 'next-themes';
+import { useEffect, useState } from 'react';
+
+export function ThemeToggle() {
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() =&gt; setMounted(true), []);
+  if (!mounted) return null;  // 防止 SSR mismatch
+
+  return (
+    &lt;button
+      onClick={() =&gt; setTheme(theme === 'dark' ? 'light' : 'dark')}
+      className="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800"
+      aria-label="Toggle theme"
+    &gt;
+      {theme === 'dark' ? '🌙' : '☀️'}
+    &lt;/button&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · Mobile-first 经典 layout</h3>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- Hero section --&gt;
+&lt;section class="py-12 md:py-16 lg:py-24 px-4 md:px-8 lg:px-16 text-center"&gt;
+  &lt;h1 class="text-4xl md:text-5xl lg:text-6xl font-bold"&gt;
+    Build amazing UIs
+  &lt;/h1&gt;
+  &lt;p class="text-base md:text-lg lg:text-xl mt-4"&gt;
+    With Tailwind CSS v4
+  &lt;/p&gt;
+  &lt;div class="flex flex-col sm:flex-row gap-3 justify-center mt-8"&gt;
+    &lt;a class="..." href="..."&gt;Get started&lt;/a&gt;
+    &lt;a class="..." href="..."&gt;Documentation&lt;/a&gt;
+  &lt;/div&gt;
+&lt;/section&gt;</code></pre>
+        </div>
+
+        <h3>代码 2 · Container query 实现 grid 自适应</h3>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 父容器 --&gt;
+&lt;div class="@container p-4"&gt;
+  &lt;!-- grid 列数根据父容器尺寸 --&gt;
+  &lt;div class="grid grid-cols-1 @sm:grid-cols-2 @md:grid-cols-3 @lg:grid-cols-4 gap-4"&gt;
+    &lt;Card /&gt;
+    &lt;Card /&gt;
+    &lt;Card /&gt;
+    ...
+  &lt;/div&gt;
+&lt;/div&gt;</code></pre>
+        </div>
+
+        <h3>代码 3 · 暗色模式 token 设计</h3>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@import "tailwindcss";
+
+@theme {
+  /* 语义色 - 默认（亮色） */
+  --color-bg: oklch(1 0 0);              /* white */
+  --color-bg-subtle: oklch(0.98 0 0);    /* near white */
+  --color-fg: oklch(0.15 0 0);           /* near black */
+  --color-fg-muted: oklch(0.45 0 0);     /* gray */
+  --color-border: oklch(0.92 0 0);
+  --color-card: oklch(1 0 0);
+}
+
+/* 暗色覆盖 */
+.dark {
+  --color-bg: oklch(0.13 0 0);
+  --color-bg-subtle: oklch(0.18 0 0);
+  --color-fg: oklch(0.95 0 0);
+  --color-fg-muted: oklch(0.65 0 0);
+  --color-border: oklch(0.30 0 0);
+  --color-card: oklch(0.18 0 0);
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 用语义色 utility，自动跟随主题 --&gt;
+&lt;div class="bg-bg text-fg"&gt;
+  &lt;article class="bg-card border border-border p-4 rounded-lg"&gt;
+    &lt;h2 class="text-fg"&gt;Title&lt;/h2&gt;
+    &lt;p class="text-fg-muted"&gt;Description&lt;/p&gt;
+  &lt;/article&gt;
+&lt;/div&gt;</code></pre>
+        </div>
+
+        <h3>代码 4 · Multi-theme（不止 light/dark）</h3>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@theme {
+  --color-bg: oklch(1 0 0);
+}
+
+.dark { --color-bg: oklch(0.13 0 0); }
+.theme-sepia { --color-bg: oklch(0.92 0.04 80); }
+.theme-high-contrast {
+  --color-bg: oklch(0 0 0);
+  --color-fg: oklch(1 0 0);
+}
+
+@custom-variant dark (&amp;:where(.dark *));
+@custom-variant sepia (&amp;:where(.theme-sepia *));</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>把 Tailwind 当 desktop-first 用</b> —— <code>md:hidden</code> 你以为是"md 隐藏"，其实是"md+ 隐藏"。<code>max-md:hidden</code> 才是"md 以下隐藏"</li>
+          <li><b>每个 breakpoint 都写完整样式</b> —— Mobile-first 是渐进覆盖，不要写 <code>text-sm sm:text-sm md:text-base lg:text-lg</code>，写 <code>text-sm md:text-base lg:text-lg</code> 就够（sm 没变可以不写）</li>
+          <li><b>用 viewport 媒体查询代替 container query</b> —— 组件库设计时不知道使用方容器尺寸，用 container query 更稳健</li>
+          <li><b>forgot @container on parent</b> —— Container query 必须父元素有 <code>@container</code>，否则 <code>@sm:</code> 不响应</li>
+          <li><b>暗色 SSR 闪烁（FOUC）</b> —— 不用 next-themes 自己实现暗色，server 不知道 client localStorage 主题，初始 render 是 light、JS 跑后切到 dark，闪烁。用 next-themes 解决</li>
+          <li><b>html 上没加 suppressHydrationWarning</b> —— next-themes 在 client 改 root class，与 SSR 输出不一致。需要 <code>&lt;html suppressHydrationWarning&gt;</code></li>
+          <li><b>每个组件加 transition-colors</b> —— 性能差。只在 body / 主要 layout 加 transition</li>
+          <li><b>v4 默认 dark 用 .dark class，但项目用 [data-theme]</b> —— 用 @custom-variant 改 dark 选择器</li>
+          <li><b>忘了响应式只能在父元素查 viewport</b> —— children 不能查父尺寸（要用 container query）</li>
+          <li><b>2xl: 用太频繁</b> —— 大屏 breakpoint 用户少，xl: 一般已够覆盖大部分桌面</li>
+          <li><b>"用户切换暗色后页面闪一下"</b> —— v3 是必然（CSS variables 不能 transition）；v4 用 @property 注册自动 fade</li>
+          <li><b>暗色模式样式全用 dark: 前缀（重复）</b> —— 用语义色 + token 切换更优。<code>bg-bg</code> 自动跟随主题，比 <code>bg-white dark:bg-gray-900</code> 简洁</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://tailwindcss.com/docs/responsive-design" target="_blank" rel="noopener">Tailwind Docs · Responsive Design</a></li>
+          <li><a href="https://tailwindcss.com/docs/dark-mode" target="_blank" rel="noopener">Tailwind Docs · Dark Mode</a></li>
+          <li><a href="https://github.com/pacocoursey/next-themes" target="_blank" rel="noopener">next-themes GitHub</a></li>
+          <li><a href="../04-modern-css/01-modern-css-features.html">本主题 P4.1 · 现代 CSS 特性</a> · container queries / @property 详细</li>
+          <li><a href="../02-variants-arbitrary.html">本主题 P5.2 · 状态变体</a> · 配响应式看变体</li>
+          <li><a href="../../next/07-deploy-ecosystem/02-ecosystem-decision.html">Next.js P7.2 · 生态决策</a> · next-themes 在 Next.js 项目里</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

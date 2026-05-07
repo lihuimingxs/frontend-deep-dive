@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Utility-first 哲学 + co-location · P2.1 · Tailwind CSS 深度学习</title>
+    <meta name="description" content="Tailwind utility-first 哲学深度解析。semantic CSS 悖论（class 与样式无 1:1 关系）+ 抽象层级错位（组件名跟不上产品迭代）+ co-location with markup（与 React/JSX 配合）+ @apply 反模式（为什么不该把 utility 合并成 .btn）+ 跨组件复用 = 组件复用而不是 class 复用。建立 Tailwind 心智的根基。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2306b6d4'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETW%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Tailwind CSS 深度学习</span><span class="site-title-badge" style="background: oklch(0.65 0.13 210); color: #fff">TW</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · Utility-first 心智</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-utility-first.html" class="active">01 · Utility-first 哲学 + co-location</a></li>
+          <li><a href="02-design-tokens.html">02 · 设计 token 与约束系统</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Tailwind CSS</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · Utility-first 心智</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Utility-first 哲学 + co-location</span>
+        </nav>
+        <h1>Utility-first 哲学 + co-location</h1>
+        <p class="lead">
+          Tailwind 反直觉的根基：<strong>class name 描述视觉效果不描述语义</strong>。这与 BEM / SMACSS 主流哲学完全相反。这一章讲清"为什么 semantic CSS 是错误抽象"，以及 co-location with markup 为什么与 React / JSX 时代天然契合。最重要的是讲清 <code>@apply</code> 反模式 —— 把 utility 合并成 <code>.btn</code> 就回到 BEM 世界、失去 Tailwind 全部价值。建立 Tailwind 心智的根基章。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P1.1 项目史 + 写过任何 CSS 方法论（BEM / 纯 CSS / CSS-in-JS）</span>
+          <span><strong>主要来源</strong> Adam Wathan 2017 blog + tailwindcss.com/docs Utility-First Fundamentals + "Refactoring UI" 书</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Utility-first 反直觉的核心论点：<strong>class name 不应该描述组件含义，而应该描述视觉效果</strong>。<code>.author-bio</code> 是 semantic class（描述含义）；<code>.flex .p-4 .bg-white .rounded-lg</code> 是 utility class（描述视觉）。</li>
+          <li>Semantic CSS 的悖论：<strong>不同组件常常样式相同</strong>。<code>.author-bio</code> 和 <code>.product-card</code> 可能视觉 95% 一样，但 BEM 强迫你写两份 CSS。class name 与样式没有 1:1 关系。</li>
+          <li>抽象层级错位：semantic naming 假设"组件含义稳定"，但产品迭代中含义总在变。今天的 author-bio 明天可能变 user-card 后天变 testimonial。class 名跟不上含义变化。</li>
+          <li>"分离关注点"是个误解：HTML 和 CSS 不是真正独立的关注点。改组件外观必然要同时改 HTML（class 名）和 CSS（样式）。所谓"分离"只是文件物理分离、不是逻辑分离。Adam Wathan 2017 blog 的核心论点。</li>
+          <li>Co-location with markup：CSS 与 HTML / JSX 写在一起（不在另一个文件）。与 React / JSX "组件 = 视觉 + 行为"哲学契合。改样式不需要在两个文件之间跳，所有上下文集中在一个组件。</li>
+          <li>跨组件复用 = <strong>组件复用</strong>，不是 class 复用。React 时代要复用样式，最自然的方式是抽 React component（<code>&lt;Card&gt;</code>），不是抽 CSS class（<code>.card</code>）。</li>
+          <li><code>@apply</code> 是 Tailwind 提供的"把 utility 合并成 semantic class"的逃生口（<code>.btn { @apply px-4 py-2 ... }</code>）。这是<strong>反模式</strong> —— 你回到 BEM 世界，失去 Tailwind 全部价值。</li>
+          <li>初学者常问"HTML 不会变得很臃肿吗" —— 短期答案：是会有点。长期答案：1) prettier-plugin-tailwindcss 自动排序、2) 抽 React component、3) 看习惯了反而比 BEM 信息密度高。</li>
+          <li>"那 utility 串重复怎么办"：抽 React component（最常用）/ CVA + cn 抽变体（详见 P6）。<strong>不要用 @apply</strong>。</li>
+          <li>建立 utility-first 心智需要 1-2 周。一旦建立后，看回去用 BEM 写代码反而觉得困难。这一章不读，后面所有 utility 知识都是表面。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Semantic CSS 的悖论</h3>
+
+        <p>看一段 BEM 风格代码：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;article class="author-bio"&gt;
+  &lt;img class="author-bio__avatar" src="..." /&gt;
+  &lt;div class="author-bio__content"&gt;
+    &lt;h2 class="author-bio__name"&gt;Alice&lt;/h2&gt;
+    &lt;p class="author-bio__description"&gt;CSS engineer&lt;/p&gt;
+  &lt;/div&gt;
+&lt;/article&gt;
+
+&lt;article class="user-card"&gt;
+  &lt;img class="user-card__avatar" src="..." /&gt;
+  &lt;div class="user-card__content"&gt;
+    &lt;h2 class="user-card__name"&gt;Bob&lt;/h2&gt;
+    &lt;p class="user-card__title"&gt;PM&lt;/p&gt;
+  &lt;/div&gt;
+&lt;/article&gt;</code></pre>
+        </div>
+
+        <p>这两个组件 class 名完全不同（<code>author-bio</code> vs <code>user-card</code>）。但视觉上几乎一样。CSS 写两份：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">.author-bio {
+  display: flex; gap: 16px; padding: 16px; background: #fff; border-radius: 8px;
+}
+.author-bio__avatar { width: 48px; height: 48px; border-radius: 50%; }
+.author-bio__name { font-size: 18px; font-weight: 600; }
+.author-bio__description { color: #6b7280; font-size: 14px; }
+
+.user-card {
+  display: flex; gap: 16px; padding: 16px; background: #fff; border-radius: 8px;
+}
+.user-card__avatar { width: 48px; height: 48px; border-radius: 50%; }
+.user-card__name { font-size: 18px; font-weight: 600; }
+.user-card__title { color: #6b7280; font-size: 14px; }</code></pre>
+        </div>
+
+        <p>问题：</p>
+        <ul>
+          <li>样式重复（DRY 失败）</li>
+          <li>未来要改样式（比如圆角从 8px 改 10px），要改两处</li>
+          <li>第三个类似组件（<code>.testimonial</code>）出现，又要重复一遍</li>
+        </ul>
+
+        <p>BEM 解决方案是"抽 mixin / 抽 base class"：</p>
+
+        <div class="code-block">
+          <span class="code-label">scss</span>
+          <pre class="code"><code class="lang-scss">// Sass mixin 风格
+@mixin card-base {
+  display: flex; gap: 16px; padding: 16px; background: #fff; border-radius: 8px;
+}
+
+.author-bio { @include card-base; }
+.user-card { @include card-base; }
+.testimonial { @include card-base; }</code></pre>
+        </div>
+
+        <p>看似解决了，但暴露问题：你需要给 mixin 起名（<code>card-base</code>）。这个名字也是 semantic（描述含义），同样面临"组件含义变化时怎么办"的问题。</p>
+
+        <p>Tailwind 的回答：<strong>不要纠结 class 命名</strong>。直接 utility：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;article class="flex gap-4 p-4 bg-white rounded-lg"&gt;
+  &lt;img class="w-12 h-12 rounded-full" src="..." /&gt;
+  &lt;div&gt;
+    &lt;h2 class="text-lg font-semibold"&gt;Alice&lt;/h2&gt;
+    &lt;p class="text-gray-500 text-sm"&gt;CSS engineer&lt;/p&gt;
+  &lt;/div&gt;
+&lt;/article&gt;</code></pre>
+        </div>
+
+        <p>你看到的 class 串就是这个组件的视觉效果。不需要查 CSS 文件验证。改样式就改 class。</p>
+
+        <p>"那如果有 10 个相似组件？" → 抽 React component（看下文）。</p>
+
+        <h3>抽象层级错位</h3>
+
+        <p>semantic naming 的另一个问题：<strong>组件名跟不上产品迭代</strong>。</p>
+
+        <p>看一个真实场景。你早期项目里有：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;div class="author-bio"&gt;...&lt;/div&gt;</code></pre>
+        </div>
+
+        <p>3 个月后，PM 要把这个组件改造为"通用用户卡片"，可以用于：</p>
+        <ul>
+          <li>作者简介（原来用例）</li>
+          <li>评论者头像 + 名字</li>
+          <li>团队成员列表</li>
+          <li>提及（@mention）popup</li>
+        </ul>
+
+        <p>这时候 <code>.author-bio</code> 类名变得反讽 —— 你在用一个名为"作者简介"的 class 显示团队成员。但改 class 名意味着：</p>
+        <ul>
+          <li>HTML 改</li>
+          <li>CSS 改</li>
+          <li>所有引用此组件的地方改</li>
+          <li>git history 变得难追</li>
+        </ul>
+
+        <p>实际项目中大家常常"将就"，留着错误命名。半年后接手项目的人对 <code>.author-bio</code> 出现在团队列表里完全困惑。</p>
+
+        <p>Tailwind 的回答：class 描述视觉、不描述含义。<code>.flex.gap-4.p-4</code> 在所有场景里都正确。组件名变化（React component 名 <code>&lt;AuthorBio&gt;</code> 改 <code>&lt;UserCard&gt;</code>）只影响 React，不影响 CSS。</p>
+
+        <h3>"分离关注点"是个误解</h3>
+
+        <p>反对 utility-first 的常见论点：<strong>"HTML 是结构、CSS 是样式，应该分离"</strong>。</p>
+
+        <p>Adam Wathan 2017 blog 反驳：HTML 和 CSS 不是真正独立的关注点。改组件外观（关注点 = "视觉"）必然要同时：</p>
+        <ul>
+          <li>改 HTML（添加 class、改结构）</li>
+          <li>改 CSS（定义样式）</li>
+        </ul>
+
+        <p>所谓"separation of concerns"只是<strong>文件物理分离</strong>（HTML 在 .html、CSS 在 .css），不是<strong>逻辑分离</strong>。逻辑层面"组件视觉"是一个完整的关注点。</p>
+
+        <p>同理 React 时代："JSX = HTML + JS 混合"被早期反对者批评违反 SoC。但实际证明：组件即"视觉 + 行为"的完整单元，文件物理分离反而妨碍开发。</p>
+
+        <p>Tailwind 是把这个思想推到 CSS：组件即"视觉 + 行为 + 样式"的完整单元，class 直接写在 markup 旁边。</p>
+
+        <h3>Co-location with markup · React/JSX 时代的天然契合</h3>
+
+        <p>Tailwind 在 2021-2024 年爆火的根本原因：与 React / JSX 哲学高度契合。</p>
+
+        <p>React 组件的本质：</p>
+        <ul>
+          <li>HTML 结构（JSX）</li>
+          <li>JS 行为（hooks / event handlers）</li>
+          <li>样式（className）</li>
+        </ul>
+
+        <p>这三件事在一个组件文件里完整描述。Tailwind 让"样式"也用 className 表达，不需要单独的 .css 文件。改样式 = 改 className 字符串。改组件 = 改这一个文件。</p>
+
+        <p>看实际差异。BEM + 单独 CSS 文件方式：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// AuthorBio.tsx
+import './AuthorBio.css';
+
+export function AuthorBio({ name, description }) {
+  return (
+    &lt;article className="author-bio"&gt;
+      &lt;img className="author-bio__avatar" src="..." /&gt;
+      &lt;div className="author-bio__content"&gt;
+        &lt;h2 className="author-bio__name"&gt;{name}&lt;/h2&gt;
+        &lt;p className="author-bio__description"&gt;{description}&lt;/p&gt;
+      &lt;/div&gt;
+    &lt;/article&gt;
+  );
+}
+
+// AuthorBio.css
+.author-bio { /* ... */ }
+.author-bio__avatar { /* ... */ }
+.author-bio__name { /* ... */ }
+.author-bio__description { /* ... */ }</code></pre>
+        </div>
+
+        <p>改头像尺寸要：</p>
+        <ol>
+          <li>打开 AuthorBio.tsx 看 class 名</li>
+          <li>切到 AuthorBio.css 找 .author-bio__avatar</li>
+          <li>改 width / height</li>
+          <li>切回 AuthorBio.tsx 看效果</li>
+        </ol>
+
+        <p>Tailwind co-location 方式：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// AuthorBio.tsx
+export function AuthorBio({ name, description }) {
+  return (
+    &lt;article className="flex gap-4 p-4 bg-white rounded-lg"&gt;
+      &lt;img className="w-12 h-12 rounded-full" src="..." /&gt;
+      &lt;div&gt;
+        &lt;h2 className="text-lg font-semibold"&gt;{name}&lt;/h2&gt;
+        &lt;p className="text-gray-500 text-sm"&gt;{description}&lt;/p&gt;
+      &lt;/div&gt;
+    &lt;/article&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>改头像尺寸：把 <code>w-12 h-12</code> 改成 <code>w-16 h-16</code>。一处。</p>
+
+        <p>这个生产力差异在大型项目（每天改十几次样式）累积成显著优势。</p>
+
+        <h3>跨组件复用 = 组件复用，不是 class 复用</h3>
+
+        <p>Utility-first 反对者最常问："那如果 5 个组件样式相同，每个都写一遍 utility 串吗？"</p>
+
+        <p>答案：不写 5 遍，但<strong>不是抽 class，是抽 React component</strong>。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 抽组件方式（推荐）
+function Card({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    &lt;article className={`flex gap-4 p-4 bg-white rounded-lg ${className || ''}`}&gt;
+      {children}
+    &lt;/article&gt;
+  );
+}
+
+// 5 个使用方
+function AuthorBio({ name }) {
+  return (
+    &lt;Card&gt;
+      &lt;img className="w-12 h-12 rounded-full" src="..." /&gt;
+      &lt;h2 className="text-lg font-semibold"&gt;{name}&lt;/h2&gt;
+    &lt;/Card&gt;
+  );
+}
+
+function UserCard({ user }) {
+  return (
+    &lt;Card&gt;
+      &lt;Avatar user={user} /&gt;
+      &lt;UserName user={user} /&gt;
+    &lt;/Card&gt;
+  );
+}
+// ... 其他 3 个</code></pre>
+        </div>
+
+        <p>关键：<strong>组件即样式复用单元</strong>。改 Card 样式只改一处（Card 组件内的 className），影响所有 5 个使用方。</p>
+
+        <p>对比 BEM 方式 "抽 .card class"：</p>
+        <ul>
+          <li>BEM：要起名 <code>.card</code>、定义 CSS、记得在 5 个 HTML 加 class</li>
+          <li>Tailwind：抽 <code>&lt;Card&gt;</code> 组件，5 个使用方自然 import</li>
+        </ul>
+
+        <p>组件复用比 class 复用更稳健 —— 组件可以传 props（变体）、可以包含 children、可以 useEffect。class 只能控制视觉。</p>
+
+        <h3>@apply 反模式（最重要的反模式）</h3>
+
+        <p>Tailwind 提供 <code>@apply</code> 指令，可以把 utility 合并成 semantic class：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* 反模式：用 @apply 把 utility 合并成 .btn */
+.btn {
+  @apply px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-md;
+}
+.btn-secondary {
+  @apply px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-900 rounded-md;
+}</code></pre>
+        </div>
+
+        <p>表面看起来更"干净"，但这是<strong>反模式</strong>。理由：</p>
+
+        <ol>
+          <li><b>你回到 BEM 世界</b>：又要给每个组件起 semantic 名（.btn / .btn-secondary / .btn-icon ...）。utility-first 全部价值被否定</li>
+          <li><b>JSX 与 CSS 重新分离</b>：改 .btn 样式要回 .css 文件、不再 co-location</li>
+          <li><b>失去 utility 的视觉直观性</b>：看 <code>className="btn"</code> 不知道这个 button 长啥样</li>
+          <li><b>跨组件复用反而麻烦</b>：你用 .btn 来 style Button 组件，但其他组件想要相同样式必须用 <code>className="btn"</code> —— class 名传染</li>
+          <li><b>浪费 Tailwind 引擎</b>：Tailwind 设计上是"扫源码、按需生成 utility"。@apply 让你又回到"自己写 CSS class"</li>
+        </ol>
+
+        <p>正确做法是抽 React component：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 正确：抽组件
+function Button({ children, variant = 'primary', ...props }: { ... }) {
+  const variantClasses = {
+    primary: 'bg-blue-500 hover:bg-blue-600 text-white',
+    secondary: 'bg-gray-200 hover:bg-gray-300 text-gray-900',
+  };
+  return (
+    &lt;button
+      className={`px-4 py-2 rounded-md ${variantClasses[variant]}`}
+      {...props}
+    &gt;
+      {children}
+    &lt;/button&gt;
+  );
+}
+
+// 使用方
+&lt;Button variant="primary"&gt;Save&lt;/Button&gt;
+&lt;Button variant="secondary"&gt;Cancel&lt;/Button&gt;</code></pre>
+        </div>
+
+        <p>更进阶用 CVA + cn（详见 P6）。</p>
+
+        <p>Adam Wathan 在多个公开演讲中明确说：<strong>@apply 是给"无法改 HTML"的场景用的逃生口</strong>（如 markdown 渲染输出 / WordPress 主题），日常项目<strong>不要用</strong>。但很多团队把它当成"让 HTML 看起来干净"的工具，就是反模式。</p>
+
+        <h3>初学者的"HTML 看起来很丑"问题</h3>
+
+        <p>这是最常见的初学者反对意见。承认：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">&lt;article className="flex flex-col md:flex-row gap-4 md:gap-6 p-4 md:p-6 bg-white dark:bg-gray-900 rounded-lg shadow-sm hover:shadow-md transition-shadow border border-gray-200 dark:border-gray-700"&gt;
+  ...
+&lt;/article&gt;</code></pre>
+        </div>
+
+        <p>这一行确实很长。但解决方法不是 @apply，是工具：</p>
+
+        <ol>
+          <li><b>prettier-plugin-tailwindcss</b>：自动按推荐顺序排序 class（layout → spacing → color → state），可读性提升一档</li>
+          <li><b>抽 React component</b>：把这堆 class 抽成 <code>&lt;Card&gt;</code>，使用方只看 <code>&lt;Card&gt;...&lt;/Card&gt;</code></li>
+          <li><b>CVA + cn</b>（详见 P6）：变体级别的抽取</li>
+          <li><b>编辑器配合</b>：VS Code 的 word wrap + Tailwind IntelliSense 让长行可阅读</li>
+          <li><b>团队习惯</b>：用 1-2 周适应；之后看 BEM 的多文件跳转反而觉得繁琐</li>
+        </ol>
+
+        <p>"丑"是表面观感，工程上 Tailwind 的优势远大于代价。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 从 BEM 项目迁 Tailwind 的心智转变</h3>
+
+        <p>常见心理障碍 + 应对：</p>
+        <ul>
+          <li>"我要给每个组件起 class 名" → 不需要，用 utility 串</li>
+          <li>"重复样式怎么办" → 抽 React component，不抽 class</li>
+          <li>"HTML 太长" → prettier-plugin 排序、抽组件、习惯</li>
+          <li>"找设计师 review CSS 怎么办" → 设计师可以读 utility（<code>p-4 = 16px padding</code>，bg-blue-500 = 蓝色）；其实比 BEM 更直观</li>
+          <li>"我团队反对" → 让团队读 Adam Wathan 2017 blog；用 1 个小项目验证；让结果说话</li>
+        </ul>
+
+        <h3>场景 2 · 团队评审看到 @apply 滥用</h3>
+
+        <p>Code review 时看到：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">.btn { @apply px-4 py-2 bg-blue-500 ...; }
+.card { @apply flex gap-4 p-4 ...; }
+.input { @apply px-3 py-2 border ...; }</code></pre>
+        </div>
+
+        <p>沟通：</p>
+        <ul>
+          <li>解释 @apply 是反模式（参考本节）</li>
+          <li>给出抽 React component 的例子</li>
+          <li>引用官方文档（Tailwind 团队公开建议）</li>
+          <li>渐进重构：新代码不用 @apply、老 @apply 逐步迁组件</li>
+        </ul>
+
+        <h3>场景 3 · "为什么我们不用 styled-components 写 BEM 风格"</h3>
+
+        <p>有人提出 styled-components 也能 co-location，且支持 props 变体。回答：</p>
+        <ul>
+          <li>styled-components runtime 模式与 RSC 不兼容（详见 P1.2）</li>
+          <li>styled-components 不解决"约束"问题（详见 P2.2）</li>
+          <li>styled-components 仍要给 styled component 起名（StyledCard / StyledButton），又是 semantic naming</li>
+          <li>Tailwind co-location + utility 是更彻底的方案</li>
+        </ul>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 同一个 card 用 BEM、CSS Modules、Tailwind 三种写法</h3>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 1. BEM --&gt;
+&lt;article class="card card--featured"&gt;
+  &lt;img class="card__avatar" /&gt;
+  &lt;div class="card__content"&gt;
+    &lt;h2 class="card__name"&gt;Alice&lt;/h2&gt;
+    &lt;p class="card__description"&gt;CSS engineer&lt;/p&gt;
+  &lt;/div&gt;
+&lt;/article&gt;
+&lt;style&gt;
+  .card { display: flex; gap: 16px; padding: 16px; ... }
+  .card--featured { border: 2px solid #3b82f6; }
+  .card__avatar { width: 48px; height: 48px; ... }
+  .card__name { font-size: 18px; ... }
+  .card__description { color: #6b7280; ... }
+&lt;/style&gt;</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 2. CSS Modules
+import styles from './Card.module.css';
+
+function Card({ featured, name, description }) {
+  return (
+    &lt;article className={`${styles.card} ${featured ? styles['card--featured'] : ''}`}&gt;
+      &lt;img className={styles.avatar} /&gt;
+      &lt;div&gt;
+        &lt;h2 className={styles.name}&gt;{name}&lt;/h2&gt;
+        &lt;p className={styles.description}&gt;{description}&lt;/p&gt;
+      &lt;/div&gt;
+    &lt;/article&gt;
+  );
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 3. Tailwind（推荐）
+import { cn } from '@/lib/utils';
+
+function Card({ featured, name, description }) {
+  return (
+    &lt;article className={cn(
+      'flex gap-4 p-4 bg-white rounded-lg',
+      featured &amp;&amp; 'border-2 border-blue-500',
+    )}&gt;
+      &lt;img className="w-12 h-12 rounded-full" /&gt;
+      &lt;div&gt;
+        &lt;h2 className="text-lg font-semibold"&gt;{name}&lt;/h2&gt;
+        &lt;p className="text-gray-500 text-sm"&gt;{description}&lt;/p&gt;
+      &lt;/div&gt;
+    &lt;/article&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · @apply 反模式 → 修复（抽组件）</h3>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* ❌ 反模式 */
+.btn-primary { @apply px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-md; }
+.btn-secondary { @apply px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-900 rounded-md; }
+.btn-ghost { @apply px-4 py-2 hover:bg-gray-100 text-gray-900 rounded-md; }</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ✅ 修复：抽 React component
+function Button({
+  variant = 'primary',
+  children,
+  ...props
+}: React.ButtonHTMLAttributes&lt;HTMLButtonElement&gt; &amp; { variant?: 'primary' | 'secondary' | 'ghost' }) {
+  const variantClasses = {
+    primary: 'bg-blue-500 hover:bg-blue-600 text-white',
+    secondary: 'bg-gray-200 hover:bg-gray-300 text-gray-900',
+    ghost: 'hover:bg-gray-100 text-gray-900',
+  };
+  return (
+    &lt;button
+      className={`px-4 py-2 rounded-md ${variantClasses[variant]}`}
+      {...props}
+    &gt;
+      {children}
+    &lt;/button&gt;
+  );
+}
+
+// 使用
+&lt;Button variant="primary"&gt;Save&lt;/Button&gt;
+&lt;Button variant="ghost"&gt;Cancel&lt;/Button&gt;</code></pre>
+        </div>
+
+        <h3>代码 3 · 跨组件复用（组件复用而非 class 复用）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 抽 Card 组件
+function Card({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    &lt;article className={cn(
+      'rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:bg-gray-900 dark:border-gray-700',
+      className,
+    )}&gt;
+      {children}
+    &lt;/article&gt;
+  );
+}
+
+// 多个使用场景
+function AuthorBio({ author }) {
+  return &lt;Card&gt;{/* author specific content */}&lt;/Card&gt;;
+}
+function ProductCard({ product }) {
+  return &lt;Card&gt;{/* product specific content */}&lt;/Card&gt;;
+}
+function NotificationCard({ notification }) {
+  return &lt;Card className="border-yellow-300"&gt;{/* notification content */}&lt;/Card&gt;;
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>用 @apply 让 HTML"干净"</b> —— 反模式（详见本章）。把 utility 串抽 React component，不抽 class</li>
+          <li><b>给 React component 起 class 名再用 @apply</b> —— 双重错误。React 组件已经是抽象层，不需要再加 class 抽象</li>
+          <li><b>"我们用 .btn 是因为设计师要 .btn 名字" </b> —— 设计师不需要看 class 名。Figma 里组件名是 Button、React 里组件名是 Button、CSS 里不需要再有 .btn。</li>
+          <li><b>纠结 Tailwind class 排序</b> —— prettier-plugin-tailwindcss 自动排序，团队不需要手动维护</li>
+          <li><b>"Tailwind class 与设计 token 脱节"</b> —— Tailwind 的 utility scale 就是设计 token（详见 P2.2）。@theme 让 Figma token 同步到 Tailwind token</li>
+          <li><b>"BEM 项目我不能直接迁 Tailwind 太混乱"</b> —— 渐进迁移：新组件用 Tailwind、老组件保留 BEM 直到自然重写。两套可共存</li>
+          <li><b>"我团队多年 BEM，不会接受"</b> —— 用一个小新项目验证、让团队 1-2 周内尝试。多数人会在 2-3 周内转变看法</li>
+          <li><b>认为 utility-first 等于"反对所有抽象"</b> —— Tailwind 的抽象层在<strong>组件</strong>（React component）和 <strong>token</strong>（spacing scale / color palette），不在 class 名</li>
+          <li><b>"co-location 让 Git diff 大"</b> —— 改样式 diff 在 component 文件；不改样式 diff 不动。BEM 改样式 diff 在 .css 文件 + .html 文件，本质工作量没差</li>
+          <li><b>看到一个 Tailwind class 串 100 字符就以为 Tailwind 都这样</b> —— 那是没用 prettier-plugin / 没抽组件的代码。正确写法 className 一般 30-80 字符</li>
+          <li><b>用 Tailwind 但仍以 .css 文件为主、JSX 为辅</b> —— 心智没跟上。Tailwind 项目的 .css 文件应该极短（只有 @theme、global reset、特殊 utility），不是组件样式</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://adamwathan.me/css-utility-classes-and-separation-of-concerns/" target="_blank" rel="noopener">Adam Wathan · "CSS Utility Classes and 'Separation of Concerns'"（一手原文）</a> · Tailwind 哲学根基</li>
+          <li><a href="https://tailwindcss.com/docs/styling-with-utility-classes" target="_blank" rel="noopener">Tailwind Docs · Styling with utility classes</a></li>
+          <li><a href="https://www.refactoringui.com/" target="_blank" rel="noopener">"Refactoring UI" 书</a> · Adam Wathan + Steve Schoger</li>
+          <li><a href="https://tailwindcss.com/docs/reusing-styles" target="_blank" rel="noopener">Tailwind Docs · Reusing styles</a> · 官方关于"不要 @apply"的论述</li>
+          <li><a href="../02-design-tokens.html">本主题 P2.2 · 设计 token 与约束系统</a> · 配 utility-first 看 design system</li>
+          <li><a href="../06-component-patterns/01-cva-cn-merge.html">本主题 P6.1 · CVA + cn</a> · 抽 React component 的进阶模式</li>
+          <li><a href="../../react/06-modern/01-server-components.html">React 主题 P6.1 · Server Components</a> · co-location 哲学的 React 侧体现</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

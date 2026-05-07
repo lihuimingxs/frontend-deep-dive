@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>设计 token 与约束系统 · P2.2 · Tailwind CSS 深度学习</title>
+    <meta name="description" content="Tailwind 默认 token 系统深度解析。spacing scale（4px-based 0/0.5/1/1.5/2/2.5/3/4/.../96）+ OKLCH color palette（24 色家族 × 11 shade，v4 重做）+ typography scale（text-xs/sm/base/.../9xl）+ breakpoints + z-index + border radius。约束如何成为团队 design system；Figma → @theme 同步；多品牌 CSS variables。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2306b6d4'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETW%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Tailwind CSS 深度学习</span><span class="site-title-badge" style="background: oklch(0.65 0.13 210); color: #fff">TW</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · Utility-first 心智</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-utility-first.html">01 · Utility-first 哲学 + co-location</a></li>
+          <li><a href="02-design-tokens.html" class="active">02 · 设计 token 与约束系统</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Tailwind CSS</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · Utility-first 心智</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 设计 token 与约束系统</span>
+        </nav>
+        <h1>设计 token 与约束系统</h1>
+        <p class="lead">
+          Tailwind 不是"反正你想要什么 utility 就生成什么"。它的精髓在<strong>约束</strong> —— 默认有限的 spacing scale（4px 基数）、OKLCH 调色板（24 色家族）、typography scale、breakpoints。约束让团队不纠结"是 14px 还是 15px"、视觉跨页面一致、design system 即工具自身。这一章把每套 token 讲透，再讲 @theme 扩展、与 Figma 同步、多品牌 CSS variables 的实战。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P2.1 utility-first 心智</span>
+          <span><strong>主要来源</strong> tailwindcss.com/docs Theme + "Refactoring UI" 书 + OKLCH spec</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Tailwind 默认 token 系统包含 6 类：<b>spacing scale</b>（间距）/ <b>color palette</b>（颜色）/ <b>typography</b>（字号 + 行高）/ <b>breakpoints</b>（响应断点）/ <b>z-index</b>（层级）/ <b>border-radius</b>（圆角）。每套都基于工程 + 设计经验沉淀的最佳实践。</li>
+          <li>Spacing scale 基于 <strong>4px 基数</strong>：<code>p-0 = 0</code> / <code>p-0.5 = 2px</code> / <code>p-1 = 4px</code> / <code>p-2 = 8px</code> / <code>p-4 = 16px</code> / <code>p-6 = 24px</code> / <code>p-8 = 32px</code> / <code>p-12 = 48px</code> / <code>p-16 = 64px</code> ... 不让你写 <code>padding: 13px</code>。</li>
+          <li>v4 默认调色板用 <strong>OKLCH 色彩空间</strong> 重做，24 个色家族 × 11 个 shade（50/100/.../900/950）。OKLCH 的优势：perceptually uniform（亮度跨色相一致）、wide gamut（P3 / Rec.2020 支持）。这是 v4 的重大变化。</li>
+          <li>Typography scale：<code>text-xs/sm/base/lg/xl/2xl/3xl/4xl/5xl/6xl/7xl/8xl/9xl</code>，每个 size 配对 line-height（base = 1rem font-size + 1.5rem line-height 等）。不需要单独设 line-height，scale 自动配对。</li>
+          <li>Breakpoints（v4）：<code>sm 640px</code> / <code>md 768px</code> / <code>lg 1024px</code> / <code>xl 1280px</code> / <code>2xl 1536px</code>。Mobile-first（默认是最小，prefix 应用更大）。容器 query（<code>@sm:</code>）用相同断点。</li>
+          <li>Z-index 默认 6 个层级：<code>z-0</code> / <code>z-10</code> / <code>z-20</code> / <code>z-30</code> / <code>z-40</code> / <code>z-50</code> + <code>z-auto</code>。10 的步长留扩展空间。</li>
+          <li>Border-radius 7 个尺度：<code>none/sm/md/lg/xl/2xl/3xl/full</code>。<code>rounded-lg = 8px</code>、<code>rounded-2xl = 16px</code>、<code>rounded-full = 9999px</code>（圆形）。</li>
+          <li><strong>约束反而是优势</strong>：设计师不纠结 13px / 14px / 15px、团队全用同一套 spacing、改主题只改 token。"约束让创造力聚焦于真正重要的"是 Tailwind 的核心理念之一。</li>
+          <li>v4 用 <code>@theme</code> 扩展 token：<code>--color-brand: oklch(...)</code> 自动生成 <code>bg-brand</code> / <code>text-brand</code> / <code>border-brand</code> 一套 utility。多品牌通过 CSS variables 覆盖（在 root / 不同 .theme-x class 设不同值）。</li>
+          <li>与 Figma 对接：<b>Tokens Studio plugin</b>（最流行）/ <b>Figma Variables → JSON → @theme</b>（自建脚本）/ <b>反向同步</b>（少见）。设计师在 Figma 改 token，自动同步到代码。这是 Tailwind 时代 design system 的标准工作流。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Spacing Scale · 4px 基数的根因</h3>
+
+        <p>Tailwind 的 spacing scale 基于 <strong>4px 基数</strong>（rem 表示是 0.25rem）：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Class</th>
+              <th>值</th>
+              <th>常见用法</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>p-0</code></td><td>0</td><td>无 padding</td></tr>
+            <tr><td><code>p-0.5</code></td><td>2px</td><td>极小间隙</td></tr>
+            <tr><td><code>p-1</code></td><td>4px</td><td>icon padding</td></tr>
+            <tr><td><code>p-1.5</code></td><td>6px</td><td>小间隙</td></tr>
+            <tr><td><code>p-2</code></td><td>8px</td><td>常用 button 内边距</td></tr>
+            <tr><td><code>p-3</code></td><td>12px</td><td>表单 input padding</td></tr>
+            <tr><td><code>p-4</code></td><td>16px</td><td>卡片标准 padding</td></tr>
+            <tr><td><code>p-5</code></td><td>20px</td><td>稍大间隙</td></tr>
+            <tr><td><code>p-6</code></td><td>24px</td><td>大卡片 padding</td></tr>
+            <tr><td><code>p-8</code></td><td>32px</td><td>section 间距</td></tr>
+            <tr><td><code>p-12</code></td><td>48px</td><td>大 section</td></tr>
+            <tr><td><code>p-16</code></td><td>64px</td><td>极大区块</td></tr>
+            <tr><td><code>p-24</code></td><td>96px</td><td>页面级</td></tr>
+          </tbody>
+        </table>
+
+        <p>为什么是 4px？这是 design system 工程实践的经验沉淀：</p>
+
+        <ul>
+          <li><b>视觉对齐</b>：4px 是大多数屏幕的 1 字符高度（12px = 3 × 4）的因子，对齐文字 baseline 自然</li>
+          <li><b>团队一致性</b>：4px 基数让设计师和工程师不需要纠结"是 13px 还是 14px"，强制选 12 / 16</li>
+          <li><b>性能</b>：rem-based scale 让全局缩放（root font-size 改）按比例工作</li>
+          <li><b>响应式</b>：4px 在不同设备 DPI 下都能渲染清晰</li>
+        </ul>
+
+        <p>Material Design 用 8px 基数（步长更大）；Apple HIG 用 4px 基数（与 Tailwind 一致）。Tailwind 选 4px 是与 Apple 设计语言对齐 + 设计师社区主流共识。</p>
+
+        <p>Spacing scale 不是只用于 padding，所有间距 utility 都用同一 scale：</p>
+        <ul>
+          <li><code>m-4</code>（margin）/ <code>p-4</code>（padding）/ <code>gap-4</code>（flex gap）/ <code>space-x-4</code>（兄弟间距）</li>
+          <li><code>w-4</code>（width）/ <code>h-4</code>（height）/ <code>size-4</code>（width + height，v4 新）</li>
+          <li><code>top-4</code> / <code>left-4</code> / <code>inset-4</code>（位置）</li>
+        </ul>
+
+        <p>这种"一套 scale 处处用"是约束的核心。一个组件 padding-4 + gap-4 + width-12 自动视觉对齐。</p>
+
+        <h3>Color Palette · OKLCH 重做（v4）</h3>
+
+        <p>Tailwind v4 默认调色板用 OKLCH 色彩空间重做。核心特性：</p>
+
+        <p><b>1. 24 个色家族 × 11 个 shade</b>：</p>
+        <ul>
+          <li>中性：slate / gray / zinc / neutral / stone（5 个灰色家族）</li>
+          <li>暖色：red / orange / amber / yellow（4 个）</li>
+          <li>冷色：lime / green / emerald / teal / cyan / sky / blue / indigo / violet / purple / fuchsia / pink / rose（13 个）</li>
+          <li>v4.2 新加：mauve / olive / mist / taupe（4 个中性补充）</li>
+        </ul>
+
+        <p>每个家族 11 个 shade：50（最浅）/ 100 / 200 / 300 / 400 / 500（基准）/ 600 / 700 / 800 / 900 / 950（最深）。</p>
+
+        <p><b>2. OKLCH 色彩空间</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* v3 用 sRGB hex */
+--color-blue-500: #3b82f6;
+
+/* v4 用 OKLCH */
+--color-blue-500: oklch(0.62 0.19 240);
+/* 0.62 = 亮度 (Lightness, 0-1)
+   0.19 = 饱和度 (Chroma, 0-0.4 左右)
+   240  = 色相 (Hue, 0-360)
+*/</code></pre>
+        </div>
+
+        <p>OKLCH 的工程优势：</p>
+        <ul>
+          <li><b>Perceptually uniform</b>：blue-500 和 red-500 视觉亮度一致（sRGB 下不同色相的同 lightness 看起来不一样）</li>
+          <li><b>Wide gamut</b>：支持 P3 / Rec.2020（更宽广的色域，新 Mac / iPhone 屏幕能显示更鲜艳的颜色）</li>
+          <li><b>更好的 mix / lighten / darken</b>：OKLCH 数学计算比 HSL / sRGB 更接近人眼感知</li>
+          <li><b>更平滑的渐变</b>：在两个 OKLCH 颜色间渐变不会出现"灰色中间带"（HSL 的常见问题）</li>
+        </ul>
+
+        <p>v3 → v4 升级时，默认色微调（同样 blue-500 视觉略有差异）。需要 visual regression 测试。如果团队不接受默认色调整，可以在 @theme 显式覆盖回 v3 sRGB 值。</p>
+
+        <p><b>3. opacity 修饰符</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- bg-blue-500 with 50% opacity --&gt;
+&lt;div class="bg-blue-500/50"&gt;...&lt;/div&gt;
+&lt;!-- 任意 opacity --&gt;
+&lt;div class="bg-blue-500/[0.37]"&gt;...&lt;/div&gt;</code></pre>
+        </div>
+
+        <p>底层用 CSS <code>color-mix()</code> 函数（详见 P4）。<code>bg-blue-500/50</code> 编译为 <code>color-mix(in oklab, var(--color-blue-500) 50%, transparent)</code>。</p>
+
+        <h3>Typography Scale · font-size + line-height 配对</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Class</th>
+              <th>font-size</th>
+              <th>line-height</th>
+              <th>常见用法</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>text-xs</code></td><td>12px</td><td>16px</td><td>caption / footnote</td></tr>
+            <tr><td><code>text-sm</code></td><td>14px</td><td>20px</td><td>secondary text</td></tr>
+            <tr><td><code>text-base</code></td><td>16px</td><td>24px</td><td>body text（默认）</td></tr>
+            <tr><td><code>text-lg</code></td><td>18px</td><td>28px</td><td>大正文</td></tr>
+            <tr><td><code>text-xl</code></td><td>20px</td><td>28px</td><td>小标题</td></tr>
+            <tr><td><code>text-2xl</code></td><td>24px</td><td>32px</td><td>section title</td></tr>
+            <tr><td><code>text-3xl</code></td><td>30px</td><td>36px</td><td>page title</td></tr>
+            <tr><td><code>text-4xl</code></td><td>36px</td><td>40px</td><td>large heading</td></tr>
+            <tr><td><code>text-5xl</code></td><td>48px</td><td>1 (none)</td><td>hero</td></tr>
+            <tr><td><code>text-6xl</code></td><td>60px</td><td>1</td><td>display</td></tr>
+            <tr><td><code>text-7xl/8xl/9xl</code></td><td>72/96/128px</td><td>1</td><td>marketing hero</td></tr>
+          </tbody>
+        </table>
+
+        <p>关键：每个 size 默认带配对 line-height。不需要单独 <code>leading-*</code> utility（除非要覆盖）。例如 <code>text-base</code> = font-size: 16px + line-height: 24px（即 1.5）。</p>
+
+        <p>这是设计经验：每个 font-size 有适合它的 line-height（小字号用 1.5、大字号用 1.0-1.2）。Tailwind 替你想好。</p>
+
+        <h3>Breakpoints · Mobile-first 哲学</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Prefix</th>
+              <th>Min-width</th>
+              <th>设备</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>（无）</td><td>0</td><td>mobile（默认）</td></tr>
+            <tr><td><code>sm:</code></td><td>640px</td><td>大屏手机 / 小平板</td></tr>
+            <tr><td><code>md:</code></td><td>768px</td><td>iPad portrait</td></tr>
+            <tr><td><code>lg:</code></td><td>1024px</td><td>iPad landscape / 小笔记本</td></tr>
+            <tr><td><code>xl:</code></td><td>1280px</td><td>桌面</td></tr>
+            <tr><td><code>2xl:</code></td><td>1536px</td><td>大显示器</td></tr>
+          </tbody>
+        </table>
+
+        <p>Mobile-first 心智：默认 class 是最小尺寸样式，prefix 应用更大尺寸：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;div class="text-base md:text-lg lg:text-xl"&gt;
+  &lt;!-- mobile: 16px / md+: 18px / lg+: 20px --&gt;
+&lt;/div&gt;</code></pre>
+        </div>
+
+        <p>这与传统 desktop-first 媒体查询相反（desktop-first 是默认大屏样式、media query 应用更小屏）。Mobile-first 让"渐进增强"成为默认：基础体验所有设备都有，更大屏幕加更多。详见 P5.1。</p>
+
+        <h3>Z-index · 6 层 + auto</h3>
+
+        <ul>
+          <li><code>z-0</code> / <code>z-10</code> / <code>z-20</code> / <code>z-30</code> / <code>z-40</code> / <code>z-50</code></li>
+          <li><code>z-auto</code>（默认 inherit）</li>
+        </ul>
+
+        <p>步长 10 留扩展空间（项目可以扩 z-15 / z-25 等 arbitrary）。</p>
+
+        <p>常见用法：</p>
+        <ul>
+          <li>z-0：默认</li>
+          <li>z-10：sticky header / floating button</li>
+          <li>z-20：dropdown / tooltip</li>
+          <li>z-30：modal / dialog</li>
+          <li>z-40：popover / 通知</li>
+          <li>z-50：toast / 全屏 modal</li>
+        </ul>
+
+        <p>不要写 <code>z-9999</code>。约束让团队不打 z-index 战争。</p>
+
+        <h3>Border Radius · 7 个尺度</h3>
+
+        <table>
+          <thead>
+            <tr><th>Class</th><th>值</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>rounded-none</code></td><td>0</td></tr>
+            <tr><td><code>rounded-sm</code></td><td>2px</td></tr>
+            <tr><td><code>rounded</code></td><td>4px</td></tr>
+            <tr><td><code>rounded-md</code></td><td>6px</td></tr>
+            <tr><td><code>rounded-lg</code></td><td>8px</td></tr>
+            <tr><td><code>rounded-xl</code></td><td>12px</td></tr>
+            <tr><td><code>rounded-2xl</code></td><td>16px</td></tr>
+            <tr><td><code>rounded-3xl</code></td><td>24px</td></tr>
+            <tr><td><code>rounded-full</code></td><td>9999px（圆形 / 胶囊）</td></tr>
+          </tbody>
+        </table>
+
+        <h3>v4 @theme · 扩展 token 的 CSS-first 方式</h3>
+
+        <p>v4 的 @theme 指令让你在 CSS 里定义 token，自动生成对应 utility：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@import "tailwindcss";
+
+@theme {
+  /* 自定义品牌色 */
+  --color-brand-50: oklch(0.97 0.013 240);
+  --color-brand-500: oklch(0.62 0.19 240);
+  --color-brand-900: oklch(0.27 0.10 240);
+
+  /* 自定义字体 */
+  --font-display: "Inter Display", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* 自定义 spacing */
+  --spacing-em: 1em;
+  --spacing-128: 32rem; /* 512px */
+
+  /* 自定义 breakpoint */
+  --breakpoint-3xl: 1920px;
+}
+
+/* 自动生成的 utility：
+   .bg-brand-50 / .text-brand-500 / .border-brand-900
+   .font-display / .font-mono
+   .p-em / .p-128 / .gap-em
+   .3xl:flex
+*/</code></pre>
+        </div>
+
+        <p>命名规则：<code>--{namespace}-{key}</code> 自动映射到 utility。namespace 包括：</p>
+        <ul>
+          <li><code>--color-*</code> → <code>bg-* / text-* / border-* / ring-*</code></li>
+          <li><code>--spacing-*</code> → <code>p-* / m-* / w-* / h-* / gap-* / inset-*</code></li>
+          <li><code>--font-*</code> → <code>font-*</code></li>
+          <li><code>--text-*</code> → <code>text-*</code>（含 size + line-height 配对）</li>
+          <li><code>--breakpoint-*</code> → <code>sm: / md: ...</code></li>
+          <li><code>--radius-*</code> → <code>rounded-*</code></li>
+        </ul>
+
+        <h3>多品牌 · CSS variables 覆盖</h3>
+
+        <p>大型项目可能需要多品牌（同一应用支持多个客户的 white-label）。通过 CSS variables 在不同 root 类设不同值：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@theme {
+  --color-brand: oklch(0.62 0.19 240);  /* 默认蓝 */
+}
+
+/* 红色品牌 */
+.theme-red {
+  --color-brand: oklch(0.62 0.21 30);
+}
+
+/* 绿色品牌 */
+.theme-green {
+  --color-brand: oklch(0.62 0.18 145);
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;html class="theme-red"&gt;
+  &lt;body&gt;
+    &lt;button class="bg-brand text-white"&gt;Buy now&lt;/button&gt;
+    &lt;!-- 自动用红色，因为 .theme-red 覆盖了 --color-brand --&gt;
+  &lt;/body&gt;
+&lt;/html&gt;</code></pre>
+        </div>
+
+        <h3>Figma 与 Tailwind token 同步</h3>
+
+        <p>2026 年的标准工作流：</p>
+
+        <ol>
+          <li><b>Figma 里建 Variables</b>（颜色 / spacing / typography token）</li>
+          <li><b>Tokens Studio plugin</b> 把 Figma Variables 导出 JSON</li>
+          <li><b>自建脚本</b> 把 JSON 转 @theme CSS</li>
+          <li><b>提交到 Git</b>，CI / Vercel 自动 build</li>
+        </ol>
+
+        <p>这让设计师 Figma 的 token 改动几小时内反映到生产。Tailwind 时代 design system 工作流的标杆。</p>
+
+        <p>反向同步（代码 → Figma）也存在但少见，因为通常设计师驱动 token 变化。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 起新项目时定义品牌色</h3>
+
+        <p>步骤：</p>
+        <ol>
+          <li>设计师在 Figma 给品牌色（11 个 shade）</li>
+          <li>用 OKLCH 表达（让设计师习惯 OKLCH，比 HSL/sRGB 更可控）</li>
+          <li>在 @theme 加 <code>--color-brand-50</code> 到 <code>--color-brand-950</code></li>
+          <li>验证 utility 生成（<code>bg-brand-500</code> 等可用）</li>
+          <li>建 Button / Card 组件用品牌色</li>
+        </ol>
+
+        <h3>场景 2 · 团队不熟悉 OKLCH 怎么办</h3>
+
+        <p>给团队 1 小时讲座：</p>
+        <ul>
+          <li>OKLCH = Lightness + Chroma + Hue（与 HSL 类似）</li>
+          <li>提供 <a href="https://oklch.com" target="_blank" rel="noopener">oklch.com</a> 在线工具（粘贴 hex 看 OKLCH 值）</li>
+          <li>设计师工具：Figma 已支持 OKLCH 输入</li>
+          <li>提供 sRGB → OKLCH 转换函数（codemod / 在线工具）</li>
+        </ul>
+
+        <p>2-3 周团队就习惯了。</p>
+
+        <h3>场景 3 · 多品牌应用</h3>
+
+        <p>SaaS 平台支持 5 个客户 white-label，每个客户自己的色：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/layout.tsx
+async function RootLayout({ children, params }) {
+  const tenant = await getTenant(params.tenantId);
+  const themeClass = `theme-${tenant.id}`;
+  return (
+    &lt;html className={themeClass}&gt;
+      &lt;body&gt;{children}&lt;/body&gt;
+    &lt;/html&gt;
+  );
+}
+
+// app.css
+.theme-acme { --color-brand: oklch(0.62 0.21 30); }
+.theme-globex { --color-brand: oklch(0.62 0.18 145); }
+.theme-initech { --color-brand: oklch(0.62 0.19 240); }
+/* ... */</code></pre>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 完整 @theme 配置（v4）</h3>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* app.css */
+@import "tailwindcss";
+
+@theme {
+  /* 颜色 - 11 个 shade 的品牌色 */
+  --color-brand-50: oklch(0.97 0.013 240);
+  --color-brand-100: oklch(0.94 0.026 240);
+  --color-brand-200: oklch(0.87 0.060 240);
+  --color-brand-300: oklch(0.78 0.105 240);
+  --color-brand-400: oklch(0.70 0.150 240);
+  --color-brand-500: oklch(0.62 0.190 240);
+  --color-brand-600: oklch(0.54 0.190 240);
+  --color-brand-700: oklch(0.46 0.170 240);
+  --color-brand-800: oklch(0.38 0.140 240);
+  --color-brand-900: oklch(0.30 0.110 240);
+  --color-brand-950: oklch(0.20 0.080 240);
+
+  /* 字体 */
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-display: "Inter Display", "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* 自定义 spacing（扩展默认） */
+  --spacing-em: 1em;
+  --spacing-128: 32rem;
+
+  /* 自定义 breakpoint */
+  --breakpoint-3xl: 1920px;
+
+  /* 自定义 z-index */
+  --z-dropdown: 100;
+  --z-modal: 200;
+  --z-toast: 300;
+
+  /* 自定义 radius */
+  --radius-extra: 32px;
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · 用 Tokens Studio 同步 Figma</h3>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// tokens-studio export 出的 JSON（部分）
+{
+  "color": {
+    "brand": {
+      "50":  { "value": "oklch(0.97 0.013 240)" },
+      "500": { "value": "oklch(0.62 0.19 240)" },
+      "950": { "value": "oklch(0.20 0.08 240)" }
+    }
+  },
+  "spacing": {
+    "card": { "value": "16px" }
+  }
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-javascript">// scripts/tokens-to-theme.js
+import fs from 'fs';
+const tokens = JSON.parse(fs.readFileSync('design-tokens.json', 'utf-8'));
+
+let css = '@theme {\n';
+for (const [shade, { value }] of Object.entries(tokens.color.brand)) {
+  css += `  --color-brand-${shade}: ${value};\n`;
+}
+for (const [name, { value }] of Object.entries(tokens.spacing)) {
+  css += `  --spacing-${name}: ${value};\n`;
+}
+css += '}\n';
+
+fs.writeFileSync('src/theme.css', css);
+console.log('✅ Generated src/theme.css from design-tokens.json');</code></pre>
+        </div>
+
+        <p>CI 配置：每次 design-tokens.json 改动 → 跑 <code>node scripts/tokens-to-theme.js</code> → commit theme.css → 部署。</p>
+
+        <h3>代码 3 · 暗色模式 token 切换</h3>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@theme {
+  /* 默认（亮色）token */
+  --color-bg: oklch(1 0 0);          /* white */
+  --color-text: oklch(0.15 0 0);     /* near black */
+  --color-card: oklch(0.98 0 0);     /* off-white */
+  --color-border: oklch(0.90 0 0);   /* light gray */
+}
+
+/* 暗色覆盖 */
+.dark {
+  --color-bg: oklch(0.15 0 0);       /* near black */
+  --color-text: oklch(0.95 0 0);     /* off-white */
+  --color-card: oklch(0.20 0 0);
+  --color-border: oklch(0.30 0 0);
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 用 utility，token 自动跟随 --&gt;
+&lt;div class="bg-bg text-text"&gt;
+  &lt;div class="bg-card border border-border p-4"&gt;...&lt;/div&gt;
+&lt;/div&gt;</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>不熟悉 4px 基数，常用 arbitrary value 写 13px / 15px</b> —— 大多数情况应该接受 12 或 16，强制设计对齐 4px scale。少数特殊情况用 arbitrary，不要滥用</li>
+          <li><b>v4 默认色比 v3 鲜艳了，设计师抱怨</b> —— OKLCH 调色板视觉差异。要么团队适应（推荐），要么在 @theme 显式覆盖回 v3 sRGB 值</li>
+          <li><b>不知道 OKLCH 怎么读</b> —— L 是亮度（0-1）/ C 是饱和度（0-0.4）/ H 是色相（0-360）。oklch(0.62 0.19 240) ≈ 中等亮度 + 高饱和的蓝</li>
+          <li><b>给 Figma 设计师传 hex 让 ta 转 OKLCH</b> —— 给设计师 OKLCH 工具（oklch.com / Figma 内置 OKLCH 输入），让 ta 自己用 OKLCH 思维设计</li>
+          <li><b>多品牌用 utility 而不是 CSS variables</b> —— 错。多品牌应该用 CSS variables 让 token 切换；不应该 5 个品牌 build 5 套 utility</li>
+          <li><b>Z-index 写 9999 / 99999</b> —— Tailwind 默认 z-50 已经是最高。不要打 z-index 战争，用 portal / z-stack 重新设计</li>
+          <li><b>把 @theme 写在每个组件 css 里</b> —— @theme 应该在 root（app.css），不是组件级。组件级 @theme 不会生效</li>
+          <li><b>v3 项目 tailwind.config.js 的 theme 不知道怎么迁 v4</b> —— 跑 codemod（npx @tailwindcss/upgrade）。手动迁也简单：theme.extend.colors → @theme --color-* 等</li>
+          <li><b>typography scale 改 line-height 单独写</b> —— 大多数情况不需要，scale 自带 line-height 配对。除非真的需要 leading-snug 这种特殊调整</li>
+          <li><b>用 arbitrary 改字号 <code>text-[15px]</code></b> —— scale 里没 15px 通常意味着设计需要重新审视。强制选 14（text-sm）或 16（text-base）</li>
+          <li><b>Figma → @theme 同步出错没人发现</b> —— CI 里跑 visual regression（Playwright snapshot），token 变化导致视觉变化第一时间能 catch</li>
+          <li><b>"我们不需要 design token，直接 hex"</b> —— 短期省事，长期亏。design token 是项目超过 10 个组件后必备</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://tailwindcss.com/docs/theme" target="_blank" rel="noopener">Tailwind Docs · Theme</a></li>
+          <li><a href="https://tailwindcss.com/docs/colors" target="_blank" rel="noopener">Tailwind Docs · Colors</a></li>
+          <li><a href="https://tailwindcss.com/docs/spacing" target="_blank" rel="noopener">Tailwind Docs · Spacing</a></li>
+          <li><a href="https://oklch.com/" target="_blank" rel="noopener">oklch.com</a> · OKLCH 在线工具 + sRGB 转换</li>
+          <li><a href="https://www.w3.org/TR/css-color-4/#ok-lab" target="_blank" rel="noopener">CSS Color Module Level 4 · OKLCH spec</a></li>
+          <li><a href="https://tokens.studio/" target="_blank" rel="noopener">Tokens Studio · Figma plugin</a></li>
+          <li><a href="https://www.refactoringui.com/" target="_blank" rel="noopener">"Refactoring UI" 书</a> · spacing / typography / color 设计经验</li>
+          <li><a href="../01-utility-first.html">本主题 P2.1 · Utility-first 哲学</a> · 配 token 系统看心智</li>
+          <li><a href="../04-modern-css/01-modern-css-features.html">本主题 P4.1 · 现代 CSS 特性</a> · OKLCH / @property 详细</li>
+          <li><a href="../03-engine-config/02-css-first-config.html">本主题 P3.2 · CSS-first 配置</a> · @theme 完整指令</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

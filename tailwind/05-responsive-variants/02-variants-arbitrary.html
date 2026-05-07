@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>状态变体 + arbitrary values · P5.2 · Tailwind CSS 深度学习</title>
+    <meta name="description" content="Tailwind 变体系统全谱深度解析。基础状态（hover/focus/active/disabled）+ 结构变体（first/last/odd/even/nth-*）+ 群组同级变体（group-* / peer-*）+ 数据 / aria 变体（data-*/aria-*）+ has-[]: parent selector + arbitrary values 何时用 + 自定义变体 @custom-variant。「无 JS 实现复杂交互」的根因。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2306b6d4'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETW%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Tailwind CSS 深度学习</span><span class="site-title-badge" style="background: oklch(0.65 0.13 210); color: #fff">TW</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · 响应式 + 变体</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-responsive-dark.html">01 · 响应式策略 + 暗色模式</a></li>
+          <li><a href="02-variants-arbitrary.html" class="active">02 · 状态变体 + arbitrary values</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Tailwind CSS</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · 响应式 + 变体</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 状态变体 + arbitrary values</span>
+        </nav>
+        <h1>状态变体 + arbitrary values</h1>
+        <p class="lead">
+          Tailwind 强大的根因之一在变体系统 —— hover / focus / active / aria / data / group / peer / has 让"<strong>无 JS 实现复杂交互</strong>"成为可能。这一章把变体全谱讲透 + arbitrary values 何时用 + 自定义变体。读完能写出 95% 的 UI 状态联动而不需要 JS。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P5.1 响应式 + 暗色模式</span>
+          <span><strong>主要来源</strong> tailwindcss.com/docs Hover, Focus, Active / Variants 全套</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Tailwind 变体系统按"<strong>什么状态触发</strong>"分 5 类：<b>基础状态</b>（hover/focus/active）/ <b>结构</b>（first/last/odd/even）/ <b>群组同级</b>（group-* / peer-*）/ <b>数据 / aria</b>（data-* / aria-*）/ <b>has-[]:</b>（含某子元素的父元素）。</li>
+          <li><b>基础状态变体</b>：<code>hover:</code> / <code>focus:</code> / <code>focus-within:</code> / <code>focus-visible:</code> / <code>active:</code> / <code>disabled:</code> / <code>visited:</code>。与原生 CSS 伪类一一对应。</li>
+          <li><b>结构变体</b>：<code>first:</code> / <code>last:</code> / <code>odd:</code> / <code>even:</code> / <code>nth-3:</code>（第 3 个）/ <code>empty:</code>（无内容）。大幅减少 JS 计算 className 的需求。</li>
+          <li><b>group-*</b>：父元素加 <code>group</code> class，子元素用 <code>group-hover:</code> 响应父 hover。"hover 卡片显示按钮"经典场景。</li>
+          <li><b>peer-*</b>：兄弟元素加 <code>peer</code> class，后续兄弟用 <code>peer-checked:</code> 响应。"checkbox 控制兄弟显示"经典场景。</li>
+          <li><b>data-* / aria-*</b>：响应 data attribute / aria attribute。与 Radix UI（用 data-state）配合极佳。例如 <code>data-[state=open]:translate-y-0</code>。</li>
+          <li><b>has-[...]:</b>（v3.4+）：CSS :has() 在 Tailwind 的封装。父元素响应子元素状态。<code>has-[input:checked]:bg-blue-500</code> = "含选中 input 的父元素变蓝"。</li>
+          <li><b>arbitrary values</b>（v3+）：<code>w-[123px]</code> / <code>bg-[#ff5733]</code> / <code>grid-cols-[repeat(3,1fr)]</code>。escape utility 系统的逃生口。<strong>临时一次性值用、不要滥用</strong>，否则失去 design system 约束。</li>
+          <li><b>自定义变体（@custom-variant）</b>：v4 让自定义变体一行 CSS 搞定，替代 v3 plugin function。<code>@custom-variant theme-dark (&amp;:where([data-theme=dark] *))</code>。</li>
+          <li>变体可<strong>任意组合</strong>（v3+ JIT 引擎能力）：<code>group-hover:focus:dark:ring-2</code> 完全合法。这让"无 JS 实现复杂交互"变得真实可行。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>基础状态变体</h3>
+
+        <table>
+          <thead>
+            <tr><th>变体</th><th>对应 CSS</th><th>用途</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>hover:</code></td><td>:hover</td><td>鼠标悬停（移动端不触发）</td></tr>
+            <tr><td><code>focus:</code></td><td>:focus</td><td>键盘 / 鼠标 focus</td></tr>
+            <tr><td><code>focus-within:</code></td><td>:focus-within</td><td>子元素 focus 时父元素响应</td></tr>
+            <tr><td><code>focus-visible:</code></td><td>:focus-visible</td><td>仅键盘 focus（鼠标 click 不触发）</td></tr>
+            <tr><td><code>active:</code></td><td>:active</td><td>按下时</td></tr>
+            <tr><td><code>disabled:</code></td><td>:disabled</td><td>禁用状态</td></tr>
+            <tr><td><code>visited:</code></td><td>:visited</td><td>已访问的链接（受浏览器隐私限制）</td></tr>
+          </tbody>
+        </table>
+
+        <p>实战常见组合：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- Button 标准状态样式 --&gt;
+&lt;button class="
+  px-4 py-2 rounded-md
+  bg-blue-500 text-white
+  hover:bg-blue-600
+  focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
+  active:bg-blue-700
+  disabled:opacity-50 disabled:cursor-not-allowed
+  transition-colors
+"&gt;
+  Click
+&lt;/button&gt;</code></pre>
+        </div>
+
+        <h3>结构变体</h3>
+
+        <p>响应元素在 DOM 中的位置：</p>
+
+        <table>
+          <thead>
+            <tr><th>变体</th><th>对应 CSS</th><th>用途</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>first:</code></td><td>:first-child</td><td>列表第一个</td></tr>
+            <tr><td><code>last:</code></td><td>:last-child</td><td>列表最后一个</td></tr>
+            <tr><td><code>only:</code></td><td>:only-child</td><td>唯一子元素</td></tr>
+            <tr><td><code>odd:</code></td><td>:nth-child(odd)</td><td>奇数（1/3/5...）</td></tr>
+            <tr><td><code>even:</code></td><td>:nth-child(even)</td><td>偶数</td></tr>
+            <tr><td><code>nth-N:</code></td><td>:nth-child(N)</td><td>第 N 个</td></tr>
+            <tr><td><code>empty:</code></td><td>:empty</td><td>无内容</td></tr>
+          </tbody>
+        </table>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 表格斑马纹（无 JS） --&gt;
+&lt;tbody&gt;
+  &lt;tr class="even:bg-gray-50 odd:bg-white"&gt;
+    &lt;td&gt;Row 1&lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr class="even:bg-gray-50 odd:bg-white"&gt;
+    &lt;td&gt;Row 2&lt;/td&gt;
+  &lt;/tr&gt;
+&lt;/tbody&gt;
+
+&lt;!-- 列表第一项无上 border --&gt;
+&lt;ul&gt;
+  &lt;li class="border-t first:border-t-0 py-2"&gt;Item 1&lt;/li&gt;
+  &lt;li class="border-t first:border-t-0 py-2"&gt;Item 2&lt;/li&gt;
+&lt;/ul&gt;</code></pre>
+        </div>
+
+        <h3>group-* · 父元素状态控制子元素</h3>
+
+        <p>核心机制：父元素加 <code>group</code> class、子元素用 <code>group-{state}:</code> 前缀响应父状态。</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- hover 卡片，子元素的"读更多"显现 --&gt;
+&lt;article class="group p-4 border rounded-lg cursor-pointer hover:shadow-lg transition"&gt;
+  &lt;h2&gt;Article Title&lt;/h2&gt;
+  &lt;p&gt;Excerpt...&lt;/p&gt;
+  &lt;span class="opacity-0 group-hover:opacity-100 transition-opacity"&gt;
+    Read more →
+  &lt;/span&gt;
+&lt;/article&gt;</code></pre>
+        </div>
+
+        <p>变体支持的状态：<code>group-hover:</code> / <code>group-focus:</code> / <code>group-active:</code> / <code>group-disabled:</code> / <code>group-data-*:</code> / <code>group-aria-*:</code> 等。</p>
+
+        <p>命名 group（解决嵌套）：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 嵌套 group：用名字区分 --&gt;
+&lt;article class="group/card"&gt;
+  &lt;header class="group/header hover:bg-gray-100"&gt;
+    &lt;h2 class="group-hover/card:text-blue-500"&gt;
+      &lt;!-- 响应外层 card hover --&gt;
+    &lt;/h2&gt;
+    &lt;span class="group-hover/header:underline"&gt;
+      &lt;!-- 响应内层 header hover --&gt;
+    &lt;/span&gt;
+  &lt;/header&gt;
+&lt;/article&gt;</code></pre>
+        </div>
+
+        <h3>peer-* · 同级元素状态控制</h3>
+
+        <p>类似 group-*，但作用于<strong>兄弟元素</strong>。peer 元素加 class，<strong>后续兄弟</strong>响应：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- Checkbox 控制兄弟元素显示（无 JS） --&gt;
+&lt;label class="flex gap-2 items-center cursor-pointer"&gt;
+  &lt;input type="checkbox" class="peer" /&gt;
+  &lt;span class="peer-checked:line-through peer-checked:text-gray-400"&gt;
+    Done item
+  &lt;/span&gt;
+&lt;/label&gt;
+
+&lt;!-- Radio 选中显示对应详情 --&gt;
+&lt;label class="block"&gt;
+  &lt;input type="radio" name="plan" value="basic" class="peer/basic" /&gt;
+  &lt;span&gt;Basic&lt;/span&gt;
+  &lt;p class="hidden peer-checked/basic:block text-gray-500"&gt;
+    $9/month, basic features
+  &lt;/p&gt;
+&lt;/label&gt;</code></pre>
+        </div>
+
+        <p>注意：peer 必须是<strong>前序</strong>兄弟。CSS 没有"前面的兄弟"选择器，所以 peer 元素必须在被影响元素<strong>之前</strong>。</p>
+
+        <h3>data-* / aria-* 变体</h3>
+
+        <p>响应 data attribute / aria attribute。与 Radix UI / Headless UI 配合极佳：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// Radix Dialog 内部用 data-state="open" / "closed"
+import * as Dialog from '@radix-ui/react-dialog';
+
+&lt;Dialog.Content className="
+  data-[state=open]:animate-in
+  data-[state=closed]:animate-out
+  data-[state=open]:fade-in-0
+  data-[state=closed]:fade-out-0
+"&gt;
+  ...
+&lt;/Dialog.Content&gt;</code></pre>
+        </div>
+
+        <p>aria-* 变体增加 a11y：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- aria-checked 控制视觉 --&gt;
+&lt;button role="switch" aria-checked="true" class="
+  bg-gray-300 aria-checked:bg-blue-500
+  transition-colors
+"&gt;
+  ...
+&lt;/button&gt;
+
+&lt;!-- aria-expanded 控制旋转 --&gt;
+&lt;button aria-expanded={isOpen} class="..."&gt;
+  &lt;ChevronIcon class="aria-expanded:rotate-180 transition-transform" /&gt;
+&lt;/button&gt;</code></pre>
+        </div>
+
+        <h3>has-[...]: · CSS :has() 封装</h3>
+
+        <p>v3.4+ 新增。父元素响应子元素状态。详细机制见 P4。</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 含选中 checkbox 的 label 高亮 --&gt;
+&lt;label class="
+  block p-4 border rounded-lg cursor-pointer
+  has-[input:checked]:bg-blue-50
+  has-[input:checked]:border-blue-500
+"&gt;
+  &lt;input type="checkbox" /&gt;
+  &lt;span&gt;Accept terms&lt;/span&gt;
+&lt;/label&gt;
+
+&lt;!-- 含错误 input 的 form 加红边 --&gt;
+&lt;form class="
+  border rounded-lg p-4
+  has-[input:invalid]:border-red-500
+  has-[input:invalid]:bg-red-50
+"&gt;
+  &lt;input required minLength={3} /&gt;
+&lt;/form&gt;
+
+&lt;!-- 含 hover 任意子元素时父元素阴影 --&gt;
+&lt;article class="has-[*:hover]:shadow-lg transition-shadow"&gt;
+  ...
+&lt;/article&gt;</code></pre>
+        </div>
+
+        <h3>Arbitrary values · 何时用</h3>
+
+        <p>Tailwind 默认 scale 不一定覆盖所有需求。arbitrary values 是 escape：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 任意尺寸 --&gt;
+&lt;div class="w-[123px] h-[456px]"&gt;...&lt;/div&gt;
+
+&lt;!-- 任意颜色 --&gt;
+&lt;div class="bg-[#ff5733] text-[hsl(200,50%,40%)]"&gt;...&lt;/div&gt;
+
+&lt;!-- 任意 grid layout --&gt;
+&lt;div class="grid grid-cols-[200px_1fr_300px]"&gt;...&lt;/div&gt;
+
+&lt;!-- 任意 calc --&gt;
+&lt;div class="w-[calc(100%-2rem)]"&gt;...&lt;/div&gt;
+
+&lt;!-- 任意 selector（CSS variable 用法） --&gt;
+&lt;div class="[--my-var:#ff5733] bg-[var(--my-var)]"&gt;...&lt;/div&gt;</code></pre>
+        </div>
+
+        <p>何时用 / 何时不用：</p>
+        <ul>
+          <li>✅ 临时一次性值（"这次设计稿就这个 13px"）</li>
+          <li>✅ 必须精确像素（margin / padding 必须 1px）</li>
+          <li>✅ 复杂 calc / grid layout</li>
+          <li>❌ 项目里反复用的值 → 加到 @theme（成为 token）</li>
+          <li>❌ 团队定的 design system 里没有的值 → 与设计师对齐</li>
+        </ul>
+
+        <p>Adam Wathan 的建议："arbitrary 是后门、不是前门"。能用 scale 的就用 scale；scale 没有的优先扩展 @theme；临时实在没办法才 arbitrary。</p>
+
+        <h3>变体任意组合</h3>
+
+        <p>v3+ JIT 引擎让变体可以<strong>深度链式组合</strong>：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 父 hover + focus + dark 全满足时 ring --&gt;
+&lt;div class="group"&gt;
+  &lt;button class="
+    group-hover:focus:dark:ring-2
+    group-hover:focus:dark:ring-blue-400
+  "&gt;...&lt;/button&gt;
+&lt;/div&gt;
+
+&lt;!-- 移动端 dark + group-hover 时不同样式 --&gt;
+&lt;div class="group"&gt;
+  &lt;span class="md:dark:group-hover:text-blue-400"&gt;...&lt;/span&gt;
+&lt;/div&gt;</code></pre>
+        </div>
+
+        <p>变体顺序通常无关（CSS 选择器特异性 calc）。但<strong>响应式前缀建议在最外层</strong>（更易读）：<code>md:dark:hover:bg-blue-500</code> 比 <code>dark:hover:md:bg-blue-500</code> 更直观。</p>
+
+        <h3>v4 自定义变体 @custom-variant</h3>
+
+        <p>v3 时代自定义变体要写 plugin function（10+ 行 JS）。v4 一行 CSS：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* 桌面 hover（仅在桌面设备 hover 生效） */
+@custom-variant desktop-hover (&amp;:hover:where(@media (hover: hover) and (pointer: fine) *));
+
+/* data-state */
+@custom-variant data-open (&amp;:where([data-state=open]));
+@custom-variant data-active (&amp;:where([data-state=active]));
+
+/* RTL 文化 */
+@custom-variant rtl (&amp;:where([dir=rtl] *));
+
+/* 多主题（不止 light/dark） */
+@custom-variant theme-sepia (&amp;:where([data-theme=sepia], [data-theme=sepia] *));
+@custom-variant theme-high-contrast (&amp;:where([data-theme=high-contrast], [data-theme=high-contrast] *));</code></pre>
+        </div>
+
+        <p>用法（与内置变体相同）：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;button class="hover:bg-blue-500 desktop-hover:bg-blue-600"&gt;
+  &lt;!-- 移动 tap 时 hover:bg-blue-500 --&gt;
+  &lt;!-- 桌面 hover 时 desktop-hover:bg-blue-600 --&gt;
+&lt;/button&gt;
+
+&lt;div data-state="open" class="data-open:translate-y-0"&gt;...&lt;/div&gt;
+
+&lt;p class="text-left rtl:text-right"&gt;Hello&lt;/p&gt;</code></pre>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 无 JS 的 Tab 实现</h3>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- Radio + peer 实现 tab 切换（不需要 JS） --&gt;
+&lt;div class="border-b mb-4"&gt;
+  &lt;label class="cursor-pointer"&gt;
+    &lt;input type="radio" name="tab" value="overview" class="peer/overview hidden" defaultChecked /&gt;
+    &lt;span class="px-4 py-2 inline-block peer-checked/overview:text-blue-500 peer-checked/overview:border-b-2 peer-checked/overview:border-blue-500"&gt;
+      Overview
+    &lt;/span&gt;
+  &lt;/label&gt;
+  &lt;label class="cursor-pointer"&gt;
+    &lt;input type="radio" name="tab" value="details" class="peer/details hidden" /&gt;
+    &lt;span class="px-4 py-2 inline-block peer-checked/details:text-blue-500 peer-checked/details:border-b-2 peer-checked/details:border-blue-500"&gt;
+      Details
+    &lt;/span&gt;
+  &lt;/label&gt;
+&lt;/div&gt;
+
+&lt;!-- Tab content（peer-checked 控制显示） --&gt;
+&lt;div class="hidden peer-checked/overview:block"&gt;Overview content&lt;/div&gt;
+&lt;div class="hidden peer-checked/details:block"&gt;Details content&lt;/div&gt;</code></pre>
+        </div>
+
+        <h3>场景 2 · 与 Radix UI Dialog 集成</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import * as Dialog from '@radix-ui/react-dialog';
+
+&lt;Dialog.Root&gt;
+  &lt;Dialog.Trigger className="px-4 py-2 bg-blue-500 text-white rounded"&gt;
+    Open
+  &lt;/Dialog.Trigger&gt;
+
+  &lt;Dialog.Portal&gt;
+    &lt;Dialog.Overlay className="
+      fixed inset-0 bg-black/50
+      data-[state=open]:animate-in data-[state=open]:fade-in-0
+      data-[state=closed]:animate-out data-[state=closed]:fade-out-0
+    " /&gt;
+    &lt;Dialog.Content className="
+      fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2
+      bg-white rounded-lg p-6 shadow-lg
+      data-[state=open]:animate-in
+      data-[state=open]:zoom-in-95
+      data-[state=closed]:zoom-out-95
+    "&gt;
+      &lt;Dialog.Title&gt;Confirm&lt;/Dialog.Title&gt;
+      &lt;Dialog.Close className="..."&gt;Cancel&lt;/Dialog.Close&gt;
+    &lt;/Dialog.Content&gt;
+  &lt;/Dialog.Portal&gt;
+&lt;/Dialog.Root&gt;</code></pre>
+        </div>
+
+        <h3>场景 3 · 表单状态联动</h3>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- input invalid 时 label 变红、错误消息显示 --&gt;
+&lt;div class="flex flex-col gap-1"&gt;
+  &lt;label class="text-sm peer-invalid:text-red-500"&gt;Email&lt;/label&gt;
+  &lt;input
+    type="email"
+    required
+    class="peer px-3 py-2 border rounded
+           valid:border-green-500
+           invalid:border-red-500
+           focus:outline-none focus:ring-2"
+  /&gt;
+  &lt;p class="text-xs text-red-500 hidden peer-invalid:peer-focus:block"&gt;
+    Please enter a valid email
+  &lt;/p&gt;
+&lt;/div&gt;</code></pre>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 完整 Button 状态样式</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function Button({ children, ...props }) {
+  return (
+    &lt;button
+      className="
+        inline-flex items-center justify-center gap-2
+        px-4 py-2 rounded-md
+        text-sm font-medium
+        bg-blue-500 text-white
+        hover:bg-blue-600
+        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2
+        active:bg-blue-700
+        disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none
+        dark:bg-blue-400 dark:hover:bg-blue-300 dark:active:bg-blue-200
+        transition-colors
+      "
+      {...props}
+    &gt;
+      {children}
+    &lt;/button&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · Card 加 group hover</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function ArticleCard({ title, excerpt }) {
+  return (
+    &lt;article className="
+      group relative
+      p-4 border rounded-lg
+      hover:shadow-lg hover:-translate-y-0.5
+      transition-all
+    "&gt;
+      &lt;h2 className="text-lg font-semibold group-hover:text-blue-500 transition-colors"&gt;
+        {title}
+      &lt;/h2&gt;
+      &lt;p className="text-gray-500 mt-2"&gt;{excerpt}&lt;/p&gt;
+      &lt;span className="
+        inline-block mt-2 text-blue-500 text-sm
+        opacity-0 translate-x-0
+        group-hover:opacity-100 group-hover:translate-x-1
+        transition-all
+      "&gt;
+        Read more →
+      &lt;/span&gt;
+    &lt;/article&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 3 · 自定义 desktop-hover 变体</h3>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* app.css */
+@custom-variant desktop-hover (&amp;:hover:where(@media (hover: hover) and (pointer: fine) *));</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 用法：移动设备 tap 不触发，桌面 hover 才触发
+function NavLink({ href, children }) {
+  return (
+    &lt;a href={href} className="
+      px-3 py-2 rounded
+      desktop-hover:bg-gray-100
+      desktop-hover:text-blue-500
+      transition-colors
+    "&gt;
+      {children}
+    &lt;/a&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 4 · arbitrary values 何时用</h3>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- ✅ 合理：复杂 grid layout --&gt;
+&lt;div class="grid grid-cols-[200px_1fr_minmax(300px,400px)] gap-4"&gt;...&lt;/div&gt;
+
+&lt;!-- ✅ 合理：calc 表达 --&gt;
+&lt;div class="h-[calc(100vh-4rem)]"&gt;...&lt;/div&gt;
+
+&lt;!-- ✅ 合理：临时品牌色（待加 token） --&gt;
+&lt;div class="bg-[#ff6b35]"&gt;...&lt;/div&gt;
+&lt;!-- TODO: 加到 @theme --color-accent --&gt;
+
+&lt;!-- ❌ 反例：项目里反复用 13px padding --&gt;
+&lt;button class="p-[13px]"&gt;...&lt;/button&gt;
+&lt;button class="p-[13px]"&gt;...&lt;/button&gt;
+&lt;!-- 应该：用 p-3 (12px) 或 p-3.5 (14px) 接受 scale；
+     如果设计师坚持 13px → 加到 @theme --spacing-13 --&gt;</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>group-hover 没在父加 group class</b> —— 必须父元素 <code>class="group"</code>，子元素的 <code>group-hover:</code> 才生效</li>
+          <li><b>peer-* 兄弟顺序错</b> —— peer 必须在被影响元素<strong>之前</strong>。CSS 没有"前面兄弟"选择器</li>
+          <li><b>嵌套 group 不命名</b> —— 子 group-hover 响应内层还是外层不明确。命名（<code>group/card</code>）解决</li>
+          <li><b>data-* 变体方括号语法错</b> —— <code>data-[state=open]:</code> 是正确的；<code>data-state=open:</code> 不是</li>
+          <li><b>has-[]: 在老浏览器</b> —— :has() 2023 年支持，2026 95%+。极老浏览器项目谨慎</li>
+          <li><b>arbitrary values 滥用</b> —— 项目反复出现的值应该加到 @theme 成为 token，不要每次写 arbitrary</li>
+          <li><b>arbitrary values 用变量</b> —— <code>w-[${size}px]</code> 不工作（JIT 看到的是模板字符串）。用 inline style 或固定 size enum</li>
+          <li><b>focus-visible 与 focus 混淆</b> —— focus 鼠标 + 键盘都触发；focus-visible 只键盘。Button 类组件用 focus-visible 更优（鼠标点击不显示难看的 ring）</li>
+          <li><b>hover 在移动端被 tap 触发然后停在 hover 状态</b> —— 移动设备模拟 hover 体验差。用自定义 desktop-hover 变体限定桌面</li>
+          <li><b>变体链顺序写得难读</b> —— 推荐顺序：响应式前缀 → 主题 → 状态。<code>md:dark:hover:bg-blue-500</code> 比 <code>dark:hover:md:bg-blue-500</code> 直观</li>
+          <li><b>aria-* 变体写错</b> —— <code>aria-[checked=true]:</code> 是正确的；<code>aria-checked=true:</code> 不是</li>
+          <li><b>在 div 上加 disabled:</b> —— disabled 伪类只对 form 元素（input/button/select/textarea）生效。div 的 disabled 不工作</li>
+          <li><b>用 first: 在不是直接子元素</b> —— first/last/odd/even 是 :nth-child，必须直接父子关系，不跨层级</li>
+          <li><b>peer 同名嵌套</b> —— <code>peer/x</code> 在嵌套 form 里冲突。用不同名字区分</li>
+          <li><b>@custom-variant 写在子 CSS 文件</b> —— 必须在 root（@import 入口同级）；子文件 @custom-variant 不会生效</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://tailwindcss.com/docs/hover-focus-and-other-states" target="_blank" rel="noopener">Tailwind Docs · Hover, Focus, &amp; Other States</a></li>
+          <li><a href="https://tailwindcss.com/docs/adding-custom-styles#using-arbitrary-values" target="_blank" rel="noopener">Tailwind Docs · Arbitrary Values</a></li>
+          <li><a href="https://tailwindcss.com/docs/adding-custom-styles#using-custom-variants" target="_blank" rel="noopener">Tailwind Docs · Custom Variants</a></li>
+          <li><a href="https://www.radix-ui.com/" target="_blank" rel="noopener">Radix UI</a> · 用 data-state 配合 Tailwind 的代表</li>
+          <li><a href="../01-responsive-dark.html">本主题 P5.1 · 响应式</a> · 配变体看完整变体系统</li>
+          <li><a href="../06-component-patterns/01-cva-cn-merge.html">本主题 P6.1 · CVA + cn</a> · 把变体抽到组件</li>
+          <li><a href="../04-modern-css/01-modern-css-features.html">本主题 P4.1 · :has()</a> · has-[]: 底层</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

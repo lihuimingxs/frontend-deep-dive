@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>决策树 + 设计系统对接 · P7.2 · Tailwind CSS 深度学习</title>
+    <meta name="description" content="Tailwind 主题收束章。何时用 Tailwind / 何时不用 + 与 Figma 设计 token 对接（Tokens Studio plugin / Figma Variables → JSON → @theme）+ 多品牌 CSS variables + 大型项目踩坑总结（不要 @apply / safelist 动态 class / prettier-plugin 必装 / eslint-plugin）+ 2027 展望（Oxide 成熟 / 现代 CSS 主流化 / shadcn v3+ / AI 辅助）。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2306b6d4'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETW%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Tailwind CSS 深度学习</span><span class="site-title-badge" style="background: oklch(0.65 0.13 210); color: #fff">TW</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P7 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · 生态决策</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-ui-libraries.html">01 · UI 库横评</a></li>
+          <li><a href="02-decision-tree.html" class="active">02 · 决策树 + 设计系统对接</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Tailwind CSS</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · 生态决策</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 决策树 + 设计系统对接</span>
+        </nav>
+        <h1>决策树 + 设计系统对接</h1>
+        <p class="lead">
+          Tailwind 主题收束章。把 P1-P7.1 学到的串起来，给一份能直接用到生产的决策框架：什么时候用 Tailwind 是对的、什么时候应该选别的；Figma 设计 token → 代码同步的 2026 标准工作流；多品牌 CSS variables；大型项目避坑清单；2027 展望。读完这一章你应该能独立判断"我们项目的样式方案该用什么"。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P1-P7.1 全部</span>
+          <span><strong>主要来源</strong> tailwindcss.com/docs 完整 + Tokens Studio docs + 真实生产案例</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>2026 年 Tailwind 选型决策的<strong>第一问</strong>：项目是 React / Vue / Svelte / Astro 这类组件框架吗？是 → 强烈推荐 Tailwind；否（CMS / 邮件 / WordPress）→ 评估 Tailwind 在你环境的可行性。</li>
+          <li><strong>第二问</strong>：团队接受 utility-first 心智吗？接受 → Tailwind v4 + shadcn/ui；不接受 → DaisyUI（仍享受 Tailwind 引擎）/ Mantine（独立）/ vanilla-extract（TS-first）。</li>
+          <li><strong>第三问</strong>：项目规模？小（&lt; 10 页）→ 纯 Tailwind 够；中（10-100 页 + 多组件）→ Tailwind + shadcn/ui + CVA；大（100+ 页 + 多团队）→ Tailwind + shadcn/ui + Tokens Studio Figma 同步 + monorepo。</li>
+          <li>"何时不用 Tailwind"：CMS 输出（不能改 HTML class）/ 邮件模板（inline CSS 必需）/ 极小项目（5 页营销站）/ 强反 utility-first 文化的团队 / Web Components Shadow DOM 隔离场景。</li>
+          <li>设计系统对接的 2026 标准工作流：<b>Figma Variables 定 token</b> → <b>Tokens Studio plugin 导出 JSON</b> → <b>自建脚本转 @theme</b> → <b>commit + CI build</b>。设计师 Figma 改色，几小时反映到生产。</li>
+          <li>多品牌（white-label）：<b>CSS variables 在不同 .theme-x class 设不同值</b>，不是 build 多套 utility。同一个 utility（<code>bg-brand</code>）跟随当前 theme class 切换实际颜色。</li>
+          <li>大型项目避坑清单：<b>禁止 @apply 滥用</b>（用组件抽取）/ <b>safelist 动态 class</b>（或完整字符串写法）/ <b>prettier-plugin-tailwindcss 必装</b>（团队风格一致）/ <b>eslint-plugin-tailwindcss</b>（catch 错误）/ <b>visual regression</b>（v3 → v4 升级时）。</li>
+          <li>v4 时代的项目模板（推荐起点）：Next.js 16 + Tailwind v4 + shadcn/ui + next-themes + Tokens Studio。这套组合是 2026 React SaaS 的事实标准。</li>
+          <li>2027 展望：<b>Oxide 引擎进一步成熟</b>（Wasm 部署 / 与 SWC 共享 AST）/ <b>现代 CSS 主流化</b>（cascade layers / container queries / OKLCH 全 95%+ 支持）/ <b>shadcn/ui v3+</b>（生态扩张到所有框架）/ <b>AI 辅助 utility 生成</b>（Cursor / Copilot 已能流畅写 Tailwind）。</li>
+          <li>本章是<strong>实战决策章</strong>。给"看场景选什么"的决策矩阵 + 强观点。读完能在团队里讨论 Tailwind 选型时给出具体推荐 + 论据。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>选型决策树</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">问题 1：项目是组件框架（React/Vue/Svelte/Astro）吗？
+  ├─ 否（纯 HTML / CMS / 邮件）→ 评估场景：
+  │   ├─ 邮件 → inline CSS（不要 Tailwind）
+  │   ├─ WordPress / CMS → 看是否能改 HTML class（不能 → 纯 CSS / Sass）
+  │   └─ 静态营销站 → Tailwind 仍可用
+  └─ 是 → 进问题 2
+
+问题 2：团队接受 utility-first 心智吗？
+  ├─ 否 → DaisyUI（Tailwind 引擎 + semantic）/ Mantine（独立）/ MUI
+  └─ 是 → 进问题 3
+
+问题 3：项目规模？
+  ├─ 小（&lt; 10 页 + 1-2 人）→ 纯 Tailwind
+  ├─ 中（10-100 页 + 5+ 人）→ Tailwind + shadcn/ui + CVA
+  └─ 大（100+ 页 + 多团队）→ Tailwind + shadcn/ui + Tokens Studio Figma 同步 + monorepo
+
+问题 4：是否需要付费精美组件参考？
+  ├─ 是（商业项目 + 预算）→ 买 Tailwind UI（299$ lifetime）作设计参考
+  └─ 否 → shadcn/ui 已够（免费 + 设计精致）
+
+问题 5：是否要支持多品牌 / 暗色模式？
+  ├─ 暗色 → next-themes + 语义色 token（详见 P5.1）
+  ├─ 多品牌 → CSS variables 在 .theme-x 切换
+  └─ 复杂 design system → Tokens Studio 同步 Figma</code></pre>
+        </div>
+
+        <h3>何时<strong>不</strong>用 Tailwind</h3>
+
+        <p>Tailwind 不是万能的。具体场景：</p>
+
+        <p><b>1. CMS 输出 / 不能改 HTML</b></p>
+
+        <p>WordPress / Drupal / Ghost 等 CMS，HTML 由 CMS 生成、内容编辑器不会写 Tailwind class。这种场景：</p>
+        <ul>
+          <li>用纯 CSS / Sass + 主题约定 class（<code>.entry-content h2</code>）</li>
+          <li>或用 <code>@tailwindcss/typography</code> plugin（专门给 prose 内容）</li>
+          <li>不要让内容编辑器写 utility class</li>
+        </ul>
+
+        <p><b>2. 邮件模板</b></p>
+
+        <p>邮件客户端（Outlook / Gmail）支持 CSS 极有限：</p>
+        <ul>
+          <li>必须 inline CSS（<code>&lt;td style="..."&gt;</code>）</li>
+          <li>不支持 flexbox / grid（要 table 布局）</li>
+          <li>媒体查询支持有限</li>
+        </ul>
+
+        <p>用专门的邮件框架（React Email / MJML / Maizzle）。Maizzle 用 Tailwind 但 build 时把 utility 转 inline CSS。</p>
+
+        <p><b>3. 极小项目（5 页营销站）</b></p>
+
+        <p>"装 Tailwind + 配置 build"对 5 页静态站点是 overkill。直接写一份 200 行 CSS 简单。</p>
+
+        <p><b>4. 强反 utility-first 文化的团队</b></p>
+
+        <p>如果团队就是不接受 utility-first（详见 P2.1），强推会留下技术债务。选 Mantine / MUI / 纯 CSS。1-2 年后再评估。</p>
+
+        <p><b>5. Web Components Shadow DOM</b></p>
+
+        <p>Shadow DOM 隔离 CSS。Tailwind global utility 不能跨 Shadow boundary 工作。要么：</p>
+        <ul>
+          <li>不用 Web Components（直接 React component）</li>
+          <li>或在每个 Shadow root 单独 inject Tailwind 输出（复杂）</li>
+        </ul>
+
+        <h3>设计系统对接 · Figma → 代码同步工作流</h3>
+
+        <p>2026 年标准工作流（Tokens Studio plugin 路径）：</p>
+
+        <ol>
+          <li><b>Figma 里建 Variables</b>：颜色 / spacing / typography token，按 design system 分组</li>
+          <li><b>装 Tokens Studio Figma plugin</b>：把 Figma Variables 转成 design tokens JSON</li>
+          <li><b>导出 JSON</b>（W3C Design Tokens 格式或 Tokens Studio 自有格式）</li>
+          <li><b>提交 JSON 到 Git</b>（与代码同仓库）</li>
+          <li><b>自建脚本转 @theme CSS</b>（Node.js 读 JSON、生成 src/theme.css）</li>
+          <li><b>CI 跑脚本</b>：tokens.json 改动 → 跑 transform → commit theme.css → 部署</li>
+        </ol>
+
+        <p>这让设计师在 Figma 改 token，几小时内反映到生产。是 Tailwind 时代 design system 工作流的标杆。</p>
+
+        <p>反向同步（代码 → Figma）也存在但少见，因为通常设计师驱动 token 变化。</p>
+
+        <h3>多品牌（white-label）实现</h3>
+
+        <p>SaaS 平台支持多客户 white-label，每客户自己的色：</p>
+
+        <p>策略：<strong>CSS variables 在 root class 切换</strong>，不是 build 多套 utility。</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@theme {
+  --color-brand: oklch(0.62 0.19 240);  /* 默认蓝 */
+  --color-brand-foreground: oklch(0.98 0 0);
+}
+
+.theme-acme {
+  --color-brand: oklch(0.62 0.21 30);   /* Acme 红 */
+}
+
+.theme-globex {
+  --color-brand: oklch(0.62 0.18 145);  /* Globex 绿 */
+}
+
+.theme-initech {
+  --color-brand: oklch(0.62 0.19 280);  /* Initech 紫 */
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/[tenantId]/layout.tsx (Next.js)
+import { getTenant } from '@/lib/tenants';
+
+export default async function TenantLayout({ children, params }) {
+  const tenant = await getTenant(params.tenantId);
+  return (
+    &lt;div className={`theme-${tenant.id}`}&gt;
+      {children}
+    &lt;/div&gt;
+  );
+}
+
+// 组件用统一 utility：
+&lt;button className="bg-brand text-brand-foreground"&gt;Buy now&lt;/button&gt;
+{/* 自动跟随当前 .theme-x 颜色 */}</code></pre>
+        </div>
+
+        <p>优势：</p>
+        <ul>
+          <li>组件代码不变（仍用 <code>bg-brand</code>）</li>
+          <li>build 一次（不需要给每个 tenant build 自己的 CSS bundle）</li>
+          <li>新增 tenant 只加一段 .theme-newtenant CSS</li>
+        </ul>
+
+        <h3>大型项目避坑清单</h3>
+
+        <p>10+ 工程师 / 100+ 页面规模的 Tailwind 项目，常见坑 + 避免：</p>
+
+        <p><b>1. @apply 滥用</b>（最常见）</p>
+        <ul>
+          <li>禁止把 utility 合并成 .btn / .card 这种 semantic class（详见 P2.1）</li>
+          <li>用 React component 抽象（CVA + cn 模式，详见 P6）</li>
+          <li>code review 见到 @apply 直接打回</li>
+        </ul>
+
+        <p><b>2. 动态 class 拼接</b></p>
+        <ul>
+          <li>禁止 <code>className={`bg-${color}-500`}</code> 模板拼接</li>
+          <li>用 lookup 表 + 完整字符串（<code>colorClasses[color]</code>）</li>
+          <li>实在没办法 → safelist（@source inline）</li>
+        </ul>
+
+        <p><b>3. prettier-plugin-tailwindcss 必装</b></p>
+        <ul>
+          <li>团队 review 不再纠结 class 顺序</li>
+          <li>git diff 干净（不会因为顺序变化产生噪音）</li>
+        </ul>
+
+        <p><b>4. eslint-plugin-tailwindcss 推荐</b></p>
+        <ul>
+          <li>catch 拼错的 class（<code>bg-blue500</code> 警告）</li>
+          <li>catch 冲突 class（<code>px-4 px-6</code> 警告）</li>
+          <li>建议 shorthand（<code>w-4 h-4</code> → <code>size-4</code>）</li>
+        </ul>
+
+        <p><b>5. v3 → v4 升级 visual regression</b></p>
+        <ul>
+          <li>v4 默认色 OKLCH 微调，与 v3 视觉略有差异</li>
+          <li>跑 Playwright snapshot 对比关键页面</li>
+          <li>修复差异（要么团队适应、要么 @theme 显式覆盖）</li>
+        </ul>
+
+        <p><b>6. design token 与代码脱节</b></p>
+        <ul>
+          <li>设计师在 Figma 改色但工程师不知道</li>
+          <li>设计师与工程师代码 token 不同步</li>
+          <li>解决：Tokens Studio 同步流程 + CI 自动 build</li>
+        </ul>
+
+        <p><b>7. monorepo 共享 design token</b></p>
+        <ul>
+          <li>多个 app 共享一套 design system</li>
+          <li>把 @theme 抽到共享 package（packages/design-tokens）</li>
+          <li>每个 app import：<code>@import "@myorg/design-tokens";</code></li>
+        </ul>
+
+        <h3>2027 展望</h3>
+
+        <p>基于 2026 主线状态推测：</p>
+
+        <ul>
+          <li><b>Oxide 引擎进一步成熟</b> —— Rust 工具链（SWC / Turbopack / Biome）共享 AST 缓存。Tailwind 与 build tool 集成更深</li>
+          <li><b>现代 CSS 主流化</b> —— cascade layers / @property / color-mix / OKLCH / container queries 全部 99%+ 浏览器支持。Tailwind 输出更精简</li>
+          <li><b>shadcn/ui 生态扩张</b> —— shadcn-vue / shadcn-svelte / NativeWind 配合 React Native 等。"copy-paste 模式"成为跨框架事实</li>
+          <li><b>AI 辅助 utility 生成</b> —— Cursor / GitHub Copilot / Claude 已能流畅写 Tailwind。2027 设计稿 → Tailwind 代码可能成为 AI 标准能力</li>
+          <li><b>Figma 与代码 design system 双向同步</b> —— Tokens Studio 等工具继续成熟。设计师 Figma 改 → 代码自动改 / 代码改 → Figma 自动改</li>
+          <li><b>v5 路线图</b>：暂未公开。v4 在 2026-2028 都将是主线</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 起 React SaaS 完整 stack</h3>
+
+        <p>2026 推荐栈：</p>
+
+        <ul>
+          <li><b>Framework</b>：Next.js 16 + App Router</li>
+          <li><b>样式</b>：Tailwind v4 + CSS-first 配置</li>
+          <li><b>UI 组件</b>：shadcn/ui</li>
+          <li><b>变体管理</b>：CVA + cn() + tailwind-merge</li>
+          <li><b>暗色</b>：next-themes（class 策略）</li>
+          <li><b>设计系统</b>：Tokens Studio + Figma Variables → @theme</li>
+          <li><b>code 工具</b>：prettier-plugin-tailwindcss + eslint-plugin-tailwindcss</li>
+          <li><b>测试</b>：Vitest（单元）+ Playwright（E2E + visual regression）</li>
+          <li><b>monorepo</b>：pnpm + Turborepo（如多 app）</li>
+        </ul>
+
+        <h3>场景 2 · 内部管理后台</h3>
+
+        <p>不需要 SEO、内部用、性能要求中等：</p>
+        <ul>
+          <li><b>Framework</b>：Vite + React + React Router</li>
+          <li><b>样式</b>：Tailwind v4 + shadcn/ui</li>
+          <li><b>状态</b>：TanStack Query + Zustand</li>
+          <li><b>表 / 表单</b>：TanStack Table + react-hook-form + Zod</li>
+        </ul>
+
+        <h3>场景 3 · 公司官网 / 文档站</h3>
+
+        <p>选 <b>Astro</b>（不是 Next.js），仍可用 Tailwind：</p>
+        <ul>
+          <li><b>Framework</b>：Astro</li>
+          <li><b>样式</b>：Tailwind v4（Astro 一等支持）</li>
+          <li><b>文档</b>：Astro Starlight</li>
+          <li><b>blog</b>：Content Collections + MDX</li>
+          <li><b>交互组件</b>：React component + Astro Islands</li>
+        </ul>
+
+        <h3>场景 4 · 大型企业项目（已用 MUI）</h3>
+
+        <p>继续 MUI：</p>
+        <ul>
+          <li>迁移成本不值得</li>
+          <li>MUI v6 + React 19 兼容</li>
+          <li>有需要时新模块用 Tailwind 但不混用（不同 page 不同栈）</li>
+        </ul>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 完整 Tokens Studio → @theme 同步脚本</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-javascript">// scripts/tokens-to-theme.js
+import fs from 'node:fs';
+import path from 'node:path';
+
+const tokens = JSON.parse(fs.readFileSync('design-tokens.json', 'utf-8'));
+
+function flattenTokens(obj, prefix = '') {
+  const result = {};
+  for (const [key, value] of Object.entries(obj)) {
+    const fullKey = prefix ? `${prefix}-${key}` : key;
+    if (value &amp;&amp; typeof value === 'object' &amp;&amp; 'value' in value) {
+      result[fullKey] = value.value;
+    } else if (value &amp;&amp; typeof value === 'object') {
+      Object.assign(result, flattenTokens(value, fullKey));
+    }
+  }
+  return result;
+}
+
+const colors = flattenTokens(tokens.color, 'color');
+const spacing = flattenTokens(tokens.spacing, 'spacing');
+const fonts = flattenTokens(tokens.font, 'font');
+
+let css = '/* AUTO-GENERATED - DO NOT EDIT */\n@theme {\n';
+for (const [key, value] of Object.entries({ ...colors, ...spacing, ...fonts })) {
+  css += `  --${key}: ${value};\n`;
+}
+css += '}\n';
+
+fs.writeFileSync(path.join('src', 'theme.css'), css);
+console.log('✅ Generated src/theme.css from design-tokens.json');</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// package.json scripts
+{
+  "scripts": {
+    "tokens": "node scripts/tokens-to-theme.js",
+    "build": "npm run tokens &amp;&amp; vite build"
+  }
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · 多品牌完整集成（Next.js + middleware）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// middleware.ts
+import { NextRequest, NextResponse } from 'next/server';
+
+export function middleware(req: NextRequest) {
+  // 从 subdomain 检测 tenant
+  const host = req.headers.get('host') || '';
+  const subdomain = host.split('.')[0];
+  const tenant = ['acme', 'globex', 'initech'].includes(subdomain) ? subdomain : 'default';
+
+  const res = NextResponse.next();
+  res.headers.set('x-tenant', tenant);
+  return res;
+}
+
+// app/layout.tsx
+import { headers } from 'next/headers';
+
+export default async function RootLayout({ children }) {
+  const tenant = (await headers()).get('x-tenant') || 'default';
+  return (
+    &lt;html className={`theme-${tenant}`}&gt;
+      &lt;body&gt;{children}&lt;/body&gt;
+    &lt;/html&gt;
+  );
+}
+
+// app.css
+@theme {
+  --color-brand: oklch(0.62 0.19 240);
+}
+.theme-acme    { --color-brand: oklch(0.62 0.21 30); }
+.theme-globex  { --color-brand: oklch(0.62 0.18 145); }
+.theme-initech { --color-brand: oklch(0.62 0.19 280); }</code></pre>
+        </div>
+
+        <h3>代码 3 · 完整 prettier + eslint 配置</h3>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// .prettierrc.json
+{
+  "semi": true,
+  "singleQuote": true,
+  "plugins": ["prettier-plugin-tailwindcss"]
+}
+
+// .eslintrc.json
+{
+  "extends": ["next/core-web-vitals"],
+  "plugins": ["tailwindcss"],
+  "rules": {
+    "tailwindcss/no-contradicting-classname": "error",
+    "tailwindcss/no-custom-classname": "off",
+    "tailwindcss/enforces-shorthand": "warn",
+    "tailwindcss/classnames-order": "off"
+  },
+  "settings": {
+    "tailwindcss": {
+      "callees": ["cn", "cva"]
+    }
+  }
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>用 Tailwind 写邮件模板</b> —— 不要。邮件需要 inline CSS + table 布局，用 React Email / Maizzle</li>
+          <li><b>WordPress 主题用 Tailwind 让客户编辑</b> —— 客户不会写 utility class。用 prose plugin + 主题约定 class</li>
+          <li><b>5 页营销站起 Tailwind 工程</b> —— 配置成本不值得。直接 200 行纯 CSS 简单</li>
+          <li><b>团队反 utility-first 但被强推 Tailwind</b> —— 留下技术债务。让团队选他们接受的（DaisyUI / Mantine）</li>
+          <li><b>Web Components Shadow DOM 用 Tailwind</b> —— global utility 不跨 Shadow boundary。要么不用 Web Components、要么每个 Shadow root inject Tailwind</li>
+          <li><b>Figma token 与代码不同步靠人手</b> —— 设计师改色工程师不知道。建立 Tokens Studio 同步流程</li>
+          <li><b>多品牌 build 多套 CSS bundle</b> —— 不必要。CSS variables 在 root class 切换更优</li>
+          <li><b>大型项目无 prettier-plugin</b> —— code review 充满"class 顺序"争论。装上之后省时间</li>
+          <li><b>升 v4 不跑 visual regression</b> —— 默认色 OKLCH 微调可能让 UI 视觉变化。Playwright snapshot 对比</li>
+          <li><b>shadcn/ui 不维护组件代码</b> —— copy-paste 后视为项目代码，要 review / test / 重构</li>
+          <li><b>monorepo 不抽共享 design token</b> —— 每个 app 自己 @theme 容易不一致。抽到共享 package</li>
+          <li><b>2026 年项目不接 AI 辅助</b> —— Cursor / Copilot 写 Tailwind 比手写快很多。新工作流的优势</li>
+          <li><b>"我们一定要 vendor-neutral 不用 Tailwind"</b> —— Tailwind 实际上是 vendor-neutral（开源 + MIT + 不绑特定平台）。如果你想 vendor-neutral 是因为不喜欢 Vercel，与 Tailwind 无关</li>
+          <li><b>跨阶段决策只看一面</b> —— 选型是技术 + 团队 + 产品三维决策。Tailwind 技术上很强但团队不接受、与产品不匹配也不要选</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://tailwindcss.com/docs" target="_blank" rel="noopener">Tailwind Docs</a> · 完整参考</li>
+          <li><a href="https://tokens.studio/" target="_blank" rel="noopener">Tokens Studio</a> · Figma Variables → JSON 同步</li>
+          <li><a href="https://www.designtokens.org/tr/drafts/format/" target="_blank" rel="noopener">W3C Design Tokens Format</a> · 标准 token 格式</li>
+          <li><a href="https://maizzle.com/" target="_blank" rel="noopener">Maizzle</a> · Tailwind 邮件模板（build 时转 inline）</li>
+          <li><a href="https://react.email/" target="_blank" rel="noopener">React Email</a> · React 邮件模板</li>
+          <li><a href="https://github.com/tailwindlabs/tailwindcss-typography" target="_blank" rel="noopener">@tailwindcss/typography</a> · prose plugin</li>
+          <li><a href="../01-ui-libraries.html">本主题 P7.1 · UI 库横评</a> · 配决策树看选型</li>
+          <li><a href="../../next/index.html">Next.js 主题</a> · Next.js + Tailwind 完整 stack</li>
+          <li><a href="../../testing/index.html">测试主题</a> · Visual regression（Playwright snapshot）</li>
+          <li><a href="../../pnpm-monorepo/index.html">pnpm-monorepo 主题</a> · monorepo design token 共享</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

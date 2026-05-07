@@ -1,0 +1,639 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CSS-first 配置（v4 革命）· P3.2 · Tailwind CSS 深度学习</title>
+    <meta name="description" content="Tailwind v4 CSS-first 配置深度解析。@import 'tailwindcss' + @theme（设计 token + 自动生成 utility）+ @utility（自定义 utility，参数化）+ @custom-variant（自定义变体）+ @source（显式扫描路径）+ @plugin。从 v3 tailwind.config.js（JS）迁到 v4 @theme（CSS）的完整路径 + 心智转变。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2306b6d4'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETW%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Tailwind CSS 深度学习</span><span class="site-title-badge" style="background: oklch(0.65 0.13 210); color: #fff">TW</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · 引擎与配置 ⭐</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-jit-oxide.html">01 · JIT → Oxide 引擎演化</a></li>
+          <li><a href="02-css-first-config.html" class="active">02 · CSS-first 配置（v4 革命）</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Tailwind CSS</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · 引擎与配置</a><span class="breadcrumb-sep">/</span>
+          <span>02 · CSS-first 配置（v4 革命）</span>
+        </nav>
+        <h1>CSS-first 配置（v4 革命）</h1>
+        <p class="lead">
+          v4 把所有配置从 tailwind.config.js（JS）移到 CSS（@theme / @utility / @custom-variant），是 9 年来最大的一次断代式重写。这一章把 v4 五大指令（@import / @theme / @utility / @custom-variant / @source）全部讲透 + 给出 v3 → v4 完整迁移路径 + 解释"为什么从 JS 转 CSS"的根本动机。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P3.1 引擎演化 + P2.2 设计 token</span>
+          <span><strong>主要来源</strong> tailwindcss.com/blog v4 + tailwindcss.com/docs Theme/Adding-Custom-Styles + Adam Wathan 公开访谈</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>v4 用 5 个核心 CSS 指令替代 v3 tailwind.config.js：<b>@import "tailwindcss"</b>（替代 @tailwind base/components/utilities）/ <b>@theme</b>（设计 token + 自动生成 utility）/ <b>@utility</b>（自定义 utility）/ <b>@custom-variant</b>（自定义变体）/ <b>@source</b>（显式扫描路径）/ <b>@plugin</b>（加载 v3 兼容 plugin）。</li>
+          <li>"为什么从 JS 转 CSS"的 4 个理由：JS 配置启动慢（要 require Node module）/ 类型推导差（IDE 不能跳转 token）/ theme 最终产物是 CSS 变量、中间转换层让人困惑 / CSS 配置直接对应输出，所见即所得。</li>
+          <li><b>@theme</b> 是 v4 配置的核心。在 CSS 里定义 <code>--color-brand: oklch(...)</code>，自动生成 <code>bg-brand</code> / <code>text-brand</code> / <code>border-brand</code> 一套 utility。namespace 命名规则替代 v3 的 theme 配置对象。</li>
+          <li><b>@utility</b> 让自定义 utility 一行 CSS 搞定，且支持参数化（<code>tab-* { tab-size: --value(--tab-size-*); }</code> 自动生成 tab-2 / tab-4 / tab-8）。这在 v3 要写 plugin 函数。</li>
+          <li><b>@custom-variant</b> 让自定义变体一行 CSS 搞定（<code>@custom-variant theme-dark (&amp;:where([data-theme=dark] *))</code> 自动生成 <code>theme-dark:</code> 前缀）。这在 v3 也要写 plugin。</li>
+          <li><b>@source</b> 替代 v3 content 配置 —— 显式指定扫描路径，含 inline mode（<code>@source inline("bg-red-500 ...")</code> 等价 v3 safelist）和 not mode（排除路径）。</li>
+          <li>从 v3 升 v4 用 <code>npx @tailwindcss/upgrade</code> 自动迁移 80%+。codemod 处理 tailwind.config.js → @theme + @tailwind 指令 → @import + PostCSS plugin 配置变化。</li>
+          <li>v4 兼容模式：tailwind.config.js 仍可用（@plugin "tailwindcss-v3-config" 加载），但官方建议新项目用 @theme。这给老项目留余地。</li>
+          <li>CSS-first 的隐藏优势：<strong>theme 与 CSS variables 一致</strong>。@theme 里定义的 token 直接是 CSS variables（<code>--color-brand</code>），可以在 inline style 用、可以被 .dark 覆盖、可以被 JS 读取（<code>getComputedStyle</code>）。这是 v3 时代要绕弯实现的。</li>
+          <li>CSS-first 心智上的转变：把 Tailwind 当 CSS 库（不是 JS-build-tool），让 CSS 的能力（cascade / variables / scoping）成为你的工具。一旦适应这个心智，v4 比 v3 直观得多。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>v3 tailwind.config.js 的痛点</h3>
+
+        <p>看一份典型的 v3 配置：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-javascript">// tailwind.config.js (v3)
+const colors = require('tailwindcss/colors');
+
+module.exports = {
+  content: [
+    './src/**/*.{html,js,jsx,ts,tsx}',
+    './packages/ui/**/*.{ts,tsx}',
+  ],
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        brand: {
+          50: '#eff6ff',
+          500: '#3b82f6',
+          900: '#1e3a8a',
+        },
+      },
+      fontFamily: {
+        display: ['Inter Display', 'sans-serif'],
+      },
+      spacing: {
+        em: '1em',
+        128: '32rem',
+      },
+      screens: {
+        '3xl': '1920px',
+      },
+    },
+  },
+  plugins: [
+    require('@tailwindcss/forms'),
+    require('@tailwindcss/typography'),
+    function ({ addUtilities }) {
+      addUtilities({
+        '.tab-2': { tabSize: 2 },
+        '.tab-4': { tabSize: 4 },
+        '.tab-8': { tabSize: 8 },
+      });
+    },
+  ],
+};</code></pre>
+        </div>
+
+        <p>痛点：</p>
+        <ul>
+          <li><b>启动慢</b>：每次 build 要 <code>require()</code> tailwind.config.js，跑 Node module 解析、加载 plugins</li>
+          <li><b>类型推导差</b>：IDE 不能从 className 跳转到 brand 定义；只能看 IntelliSense 提示</li>
+          <li><b>token 与 CSS 脱节</b>：你定义的是 JS 对象（<code>colors.brand[500] = '#3b82f6'</code>），但 Tailwind 输出的是 CSS（<code>.bg-brand-500 { background: #3b82f6 }</code>）。中间有转换层</li>
+          <li><b>plugin 写起来繁琐</b>：自定义 utility 要写 JS 函数（<code>function ({ addUtilities }) {...}</code>），不直观</li>
+          <li><b>暗色模式配置分散</b>：darkMode: 'class' 在 config，但 dark 变体怎么用要查文档</li>
+          <li><b>theme.extend 与 theme 区别让人困惑</b>：extend 合并、无 extend 覆盖默认</li>
+        </ul>
+
+        <p>这些痛点让 Tailwind v3 时代很多团队对 config 文件又爱又恨。</p>
+
+        <h3>v4 CSS-first 配置 · 5 大指令</h3>
+
+        <p>v4 用 5 个 CSS 指令替代上面整套 JS config：</p>
+
+        <p><b>1. @import "tailwindcss"</b></p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* v4 */
+@import "tailwindcss";
+
+/* 等价 v3 的：
+   @tailwind base;
+   @tailwind components;
+   @tailwind utilities;
+*/</code></pre>
+        </div>
+
+        <p>一行 import 替代 v3 的三行 @tailwind 指令。Tailwind 知道你想要默认的 base + components + utilities 全套。</p>
+
+        <p>如果只想要 utilities（不要 base）：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@import "tailwindcss/utilities";
+/* 不含 preflight (base reset) */</code></pre>
+        </div>
+
+        <p><b>2. @theme</b>（最重要）</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@theme {
+  --color-brand-50: oklch(0.97 0.013 240);
+  --color-brand-500: oklch(0.62 0.190 240);
+  --color-brand-900: oklch(0.27 0.110 240);
+
+  --font-display: "Inter Display", sans-serif;
+
+  --spacing-em: 1em;
+  --spacing-128: 32rem;
+
+  --breakpoint-3xl: 1920px;
+}</code></pre>
+        </div>
+
+        <p>命名规则 <code>--{namespace}-{key}</code> 自动映射到 utility。namespace 完整列表：</p>
+
+        <table>
+          <thead>
+            <tr><th>Namespace</th><th>生成的 utility</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>--color-*</code></td><td>bg-* / text-* / border-* / ring-* / from-* / to-* / fill-* / stroke-*</td></tr>
+            <tr><td><code>--spacing-*</code></td><td>p-* / m-* / w-* / h-* / size-* / gap-* / inset-* / top-* ...</td></tr>
+            <tr><td><code>--font-*</code></td><td>font-*</td></tr>
+            <tr><td><code>--text-*</code></td><td>text-*（含 size + line-height 配对）</td></tr>
+            <tr><td><code>--breakpoint-*</code></td><td>sm: / md: / lg: 等响应式前缀</td></tr>
+            <tr><td><code>--container-*</code></td><td>@sm: / @md: 容器查询前缀</td></tr>
+            <tr><td><code>--radius-*</code></td><td>rounded-*</td></tr>
+            <tr><td><code>--shadow-*</code></td><td>shadow-*</td></tr>
+            <tr><td><code>--ease-*</code></td><td>ease-*</td></tr>
+            <tr><td><code>--animate-*</code></td><td>animate-*</td></tr>
+          </tbody>
+        </table>
+
+        <p>看到这个表就明白了 —— @theme 不只是定义 CSS variables，<strong>同时是 utility 的 schema 声明</strong>。Tailwind 看到 <code>--color-brand-500</code> 就知道要生成 <code>bg-brand-500 / text-brand-500 / border-brand-500</code> 一整套 utility。</p>
+
+        <p>这是 v3 → v4 的核心心智差异。v3 你写 JS 对象（<code>colors.brand[500] = '...'</code>），v4 你直接写 CSS variable（<code>--color-brand-500</code>）。前者要转换、后者直接是输出。</p>
+
+        <p><b>3. @utility</b></p>
+
+        <p>自定义 utility，支持参数化：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* 简单 utility */
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+}
+
+/* 参数化 utility（用 --value 引用 @theme 里的 token） */
+@theme {
+  --tab-size-2: 2;
+  --tab-size-4: 4;
+  --tab-size-8: 8;
+}
+
+@utility tab-* {
+  tab-size: --value(--tab-size-*);
+}
+
+/* 自动生成 .tab-2 / .tab-4 / .tab-8 */</code></pre>
+        </div>
+
+        <p>v3 同样功能要写 JS plugin（10 行函数）。v4 几行 CSS 搞定。</p>
+
+        <p><b>4. @custom-variant</b></p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* 自定义变体：当父级有 [data-theme=dark] 时应用 */
+@custom-variant theme-dark (&amp;:where([data-theme=dark] *));
+
+/* 自动生成 theme-dark: 前缀 */
+/* &lt;div class="bg-white theme-dark:bg-black"&gt;...&lt;/div&gt; */</code></pre>
+        </div>
+
+        <p>v3 同样功能要写 plugin function。v4 一行 CSS。</p>
+
+        <p>常用自定义变体：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* 暗色（class 策略） */
+@custom-variant dark (&amp;:where(.dark, .dark *));
+
+/* 移动设备 */
+@custom-variant mobile (&amp;:where([data-mobile=true]));
+
+/* 受控状态 */
+@custom-variant data-active (&amp;:where([data-state=active]));</code></pre>
+        </div>
+
+        <p><b>5. @source</b>（替代 v3 content 配置）</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* 显式指定扫描路径（默认扫 src/**\/* + 当前 CSS 同级文件） */
+@source "./src/**/*.{html,js,jsx,ts,tsx}";
+@source "./packages/ui/**/*.{ts,tsx}";
+
+/* 排除某路径 */
+@source not "./node_modules/**";
+
+/* inline safelist */
+@source inline("bg-red-500 bg-blue-500 bg-green-500");
+
+/* 模式语法 */
+@source inline("{hover:,focus:}bg-{red,blue,green}-500");</code></pre>
+        </div>
+
+        <h3>命名空间映射的 namespace 规则</h3>
+
+        <p>@theme 里的 CSS variable 名字遵循 <code>--{namespace}-{key}</code> 模式。</p>
+
+        <p>例如：</p>
+        <ul>
+          <li><code>--color-brand-500</code> → namespace = "color"，key = "brand-500" → 生成 <code>bg-brand-500</code></li>
+          <li><code>--spacing-em</code> → namespace = "spacing"，key = "em" → 生成 <code>p-em / m-em / gap-em</code></li>
+          <li><code>--font-display</code> → namespace = "font"，key = "display" → 生成 <code>font-display</code></li>
+          <li><code>--breakpoint-3xl</code> → namespace = "breakpoint"，key = "3xl" → 生成 <code>3xl:</code> 响应式前缀</li>
+        </ul>
+
+        <p>不在标准 namespace 里的 variable 不生成 utility（仅作为普通 CSS variable）：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@theme {
+  --my-custom: 42px;  /* 不生成 utility，仅作为 CSS variable 可用 */
+}
+
+/* 用法 */
+.my-component { padding: var(--my-custom); }</code></pre>
+        </div>
+
+        <h3>从 v3 → v4 的完整迁移路径</h3>
+
+        <p>大部分项目跑 codemod：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">npx @tailwindcss/upgrade@latest</code></pre>
+        </div>
+
+        <p>codemod 做 5 件事：</p>
+
+        <ol>
+          <li><b>tailwind.config.js → @theme</b>：把 theme.extend 转成 @theme 里的 CSS variables</li>
+          <li><b>@tailwind base/components/utilities → @import "tailwindcss"</b></li>
+          <li><b>PostCSS plugin 配置改</b>：tailwindcss → @tailwindcss/postcss</li>
+          <li><b>个别 utility 重命名</b>（极少）</li>
+          <li><b>更新 package.json 依赖</b>：tailwindcss 升 v4，加 @tailwindcss/postcss 等</li>
+        </ol>
+
+        <p>codemod <strong>不做</strong> 的事，需手动审视：</p>
+        <ul>
+          <li>默认色调整（OKLCH 重做）—— visual regression 测试</li>
+          <li>plugin 兼容性 —— 检查每个 plugin 是否有 v4 兼容版本</li>
+          <li>自定义 plugin 函数（addUtilities / addVariant）—— 迁到 @utility / @custom-variant</li>
+          <li>@apply 滥用代码 —— 这次重构是好时机一并清理（详见 P2.1）</li>
+        </ul>
+
+        <h3>v4 兼容模式 · tailwind.config.js 仍可用</h3>
+
+        <p>v4 提供兼容模式给老项目：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@import "tailwindcss";
+@config "./tailwind.config.js";  /* 加载老 v3 config */</code></pre>
+        </div>
+
+        <p>这让"暂时不迁 config 也能升级到 v4 引擎"成为可能。但官方建议：升级时同时迁 config，避免长期保留兼容包袱。</p>
+
+        <h3>多文件组织 @theme</h3>
+
+        <p>大型项目 @theme 内容多，可以拆多个文件：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* app.css */
+@import "tailwindcss";
+@import "./theme/colors.css";
+@import "./theme/typography.css";
+@import "./theme/spacing.css";
+
+/* theme/colors.css */
+@theme {
+  --color-brand-50: oklch(0.97 0.013 240);
+  --color-brand-500: oklch(0.62 0.19 240);
+  /* ... */
+}
+
+/* theme/typography.css */
+@theme {
+  --font-display: "Inter Display", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}</code></pre>
+        </div>
+
+        <p>多个 @theme 块会合并。Tailwind 处理时把所有 @theme 内容当作一个统一 token 集合。</p>
+
+        <h3>CSS-first 的隐藏优势</h3>
+
+        <p>v4 把 token 用 CSS variables 表达，带来 v3 时代要绕弯实现的能力：</p>
+
+        <p><b>1. token 直接在 inline style 用</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 动态尺寸（utility 不支持的情况）
+&lt;div style={{ width: 'calc(var(--spacing-em) * 10)' }}&gt;...&lt;/div&gt;</code></pre>
+        </div>
+
+        <p><b>2. token 可被 .dark / .theme-x 覆盖</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@theme {
+  --color-bg: oklch(1 0 0);  /* 亮色默认 */
+}
+
+.dark {
+  --color-bg: oklch(0.15 0 0);  /* 暗色覆盖 */
+}
+
+/* &lt;div class="bg-bg"&gt; 自动跟随主题 */</code></pre>
+        </div>
+
+        <p><b>3. token 可被 JS 读取</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-javascript">// 在 JS 里读 Tailwind theme 值
+const brandColor = getComputedStyle(document.documentElement)
+  .getPropertyValue('--color-brand-500')
+  .trim();
+// 结果：'oklch(0.62 0.19 240)'</code></pre>
+        </div>
+
+        <p>这些能力 v3 都要绕弯（要么把 theme export 成 JS、要么用 css-vars plugin）。v4 原生支持。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 起新项目的最简 v4 配置</h3>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* app.css 全部内容 */
+@import "tailwindcss";
+
+@theme {
+  --color-brand: oklch(0.62 0.19 240);
+  --font-sans: "Inter", system-ui, sans-serif;
+}</code></pre>
+        </div>
+
+        <p>这就够了。Tailwind 默认配置（spacing scale / color palette / typography）已包含在 @import "tailwindcss" 里。</p>
+
+        <h3>场景 2 · 从 v3 大型项目迁移</h3>
+
+        <p>步骤：</p>
+        <ol>
+          <li>跑 codemod：<code>npx @tailwindcss/upgrade</code></li>
+          <li>检查生成的 app.css 内容（@import + @theme + @plugin）</li>
+          <li>检查 plugin 兼容性（@tailwindcss/forms / typography 在 v4 已兼容）</li>
+          <li>跑 build、跑测试</li>
+          <li>跑 visual regression（Playwright snapshot）—— 默认色微调可能影响视觉</li>
+          <li>修复颜色差异（要么团队适应、要么显式覆盖）</li>
+          <li>清理 @apply 滥用（这次重构机会）</li>
+        </ol>
+
+        <h3>场景 3 · 多 CSS 文件组织</h3>
+
+        <p>大型项目把 @theme 拆分：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">src/
+├── app.css                # 入口（@import "tailwindcss" + @import 子文件）
+├── theme/
+│   ├── colors.css         # @theme 颜色
+│   ├── typography.css     # @theme 字体 + size
+│   ├── spacing.css        # @theme 间距
+│   └── components.css     # @theme 组件级 token
+├── utilities/
+│   ├── scrollbar.css      # @utility 自定义
+│   └── tab-size.css
+└── variants/
+    └── theme-modes.css    # @custom-variant</code></pre>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 完整 v4 配置（生产级）</h3>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* app.css */
+@import "tailwindcss";
+
+@source "./src/**/*.{html,js,jsx,ts,tsx,vue}";
+@source "../../packages/ui/**/*.tsx";
+
+@theme {
+  /* 品牌色 - 11 个 shade */
+  --color-brand-50:  oklch(0.97 0.013 240);
+  --color-brand-100: oklch(0.94 0.026 240);
+  --color-brand-200: oklch(0.87 0.060 240);
+  --color-brand-300: oklch(0.78 0.105 240);
+  --color-brand-400: oklch(0.70 0.150 240);
+  --color-brand-500: oklch(0.62 0.190 240);
+  --color-brand-600: oklch(0.54 0.190 240);
+  --color-brand-700: oklch(0.46 0.170 240);
+  --color-brand-800: oklch(0.38 0.140 240);
+  --color-brand-900: oklch(0.30 0.110 240);
+  --color-brand-950: oklch(0.20 0.080 240);
+
+  /* 主题语义色（亮色默认） */
+  --color-bg: oklch(1 0 0);
+  --color-fg: oklch(0.15 0 0);
+  --color-card: oklch(0.98 0 0);
+  --color-border: oklch(0.90 0 0);
+
+  /* 字体 */
+  --font-sans: "Inter Variable", system-ui, sans-serif;
+  --font-display: "Inter Display", "Inter Variable", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* 自定义 spacing */
+  --spacing-em: 1em;
+
+  /* 自定义 breakpoint */
+  --breakpoint-3xl: 1920px;
+}
+
+/* 暗色覆盖（class 策略） */
+.dark {
+  --color-bg: oklch(0.15 0 0);
+  --color-fg: oklch(0.95 0 0);
+  --color-card: oklch(0.20 0 0);
+  --color-border: oklch(0.30 0 0);
+}
+
+/* 自定义 variant */
+@custom-variant theme-dark (&amp;:where([data-theme=dark] *));
+
+/* 自定义 utility */
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-brand-500) transparent;
+}
+
+/* 加载兼容 v3 plugin */
+@plugin "@tailwindcss/forms";
+@plugin "@tailwindcss/typography";</code></pre>
+        </div>
+
+        <h3>代码 2 · v3 → v4 配置迁移逐字对比</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-javascript">// v3 · tailwind.config.js
+module.exports = {
+  content: ['./src/**/*.{html,js,ts,jsx,tsx}'],
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        brand: {
+          500: '#3b82f6',
+        },
+      },
+      spacing: {
+        em: '1em',
+      },
+    },
+  },
+  plugins: [require('@tailwindcss/forms')],
+};</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* v4 · app.css */
+@import "tailwindcss";
+@source "./src/**/*.{html,js,ts,jsx,tsx}";
+@plugin "@tailwindcss/forms";
+
+@theme {
+  --color-brand-500: oklch(0.62 0.19 240);  /* OKLCH 等价 #3b82f6 */
+  --spacing-em: 1em;
+}
+
+/* dark mode 'class' 策略：v4 默认就是 (.dark) */
+/* 不需要 darkMode: 'class' 显式配置 */</code></pre>
+        </div>
+
+        <h3>代码 3 · 自定义参数化 utility</h3>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* 自定义带参数的 tab-size utility */
+@theme {
+  --tab-size-2: 2;
+  --tab-size-4: 4;
+  --tab-size-8: 8;
+}
+
+@utility tab-* {
+  tab-size: --value(--tab-size-*);
+}
+
+/* 用法
+   &lt;pre class="tab-2"&gt;...&lt;/pre&gt;  → tab-size: 2
+   &lt;pre class="tab-4"&gt;...&lt;/pre&gt;  → tab-size: 4
+   &lt;pre class="tab-8"&gt;...&lt;/pre&gt;  → tab-size: 8
+*/</code></pre>
+        </div>
+
+        <h3>代码 4 · 自定义变体（连锁）</h3>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* 自定义 "桌面 hover" 变体（仅在桌面设备 hover 生效） */
+@custom-variant desktop-hover (&amp;:hover:where(@media (hover: hover) and (pointer: fine) *));
+
+/* 用法 */
+/* &lt;button class="desktop-hover:bg-brand-600"&gt;...&lt;/button&gt; */
+/* 移动端 tap 时不触发，桌面端 hover 才触发 */
+
+/* 自定义 "data-state=open" 变体 */
+@custom-variant data-open (&amp;:where([data-state=open]));
+
+/* 与 Radix UI 配合：
+   &lt;div data-state="open" class="data-open:translate-y-0"&gt; */</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>v4 项目仍写 tailwind.config.js</b> —— 兼容模式可用，但偏离 v4 新心智。建议迁 @theme</li>
+          <li><b>@theme 写在组件级 CSS</b> —— @theme 只能在 root（@import 的入口）。组件级 @theme 不会生效</li>
+          <li><b>"为什么 bg-brand 不工作"</b> —— 检查 @theme 里是否定义了 <code>--color-brand</code>（namespace 必须是 color）。<code>--brand</code> 不会生成 utility</li>
+          <li><b>@theme 里写了 <code>--color-brand</code> 但 IntelliSense 不提示</b> —— 装 Tailwind VS Code extension 最新版本（v4 兼容）</li>
+          <li><b>跨多个 CSS 文件 @theme 但 token 没合并</b> —— 检查 @import 顺序（@theme 必须在 @import "tailwindcss" 之后）</li>
+          <li><b>v3 plugin 在 v4 不工作</b> —— 检查 plugin 版本（@tailwindcss/forms / typography 等主流 plugin 已全部 v4 兼容）。第三方 plugin 看其 GitHub</li>
+          <li><b>codemod 跑了但配置乱</b> —— codemod 处理 80%。剩 20% 手动审视，特别是自定义 plugin 函数（要迁 @utility / @custom-variant）</li>
+          <li><b>"v4 默认色和 v3 不一样"</b> —— OKLCH 重做的视觉差异。要么团队适应、要么 @theme 显式覆盖回 sRGB 值</li>
+          <li><b>@source 路径错</b> —— 用相对于 css 文件的路径。<code>./src/**/*</code> 是相对路径、<code>/src/**/*</code> 是绝对路径（不推荐）</li>
+          <li><b>@source inline 滥用</b> —— inline 是 safelist 替代品，给"动态 class 不能静态分析"的场景用。能完整字符串写就完整写</li>
+          <li><b>"darkMode: 'class' 我没看到 v4 文档说怎么配"</b> —— v4 默认就是 .dark class 策略，不需要显式配置。要 media 策略用 @custom-variant 自定义</li>
+          <li><b>团队对 CSS-first 抗拒</b> —— 给 1-2 周适应期。@theme 的可读性 + theme-与-CSS-一致 优势体验过就回不去</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://tailwindcss.com/docs/theme" target="_blank" rel="noopener">Tailwind Docs · Theme（@theme）</a></li>
+          <li><a href="https://tailwindcss.com/docs/adding-custom-styles" target="_blank" rel="noopener">Tailwind Docs · Adding Custom Styles</a></li>
+          <li><a href="https://tailwindcss.com/blog/tailwindcss-v4" target="_blank" rel="noopener">Tailwind v4 release · CSS-first 介绍</a></li>
+          <li><a href="https://tailwindcss.com/docs/upgrade-guide" target="_blank" rel="noopener">Tailwind Upgrade Guide</a></li>
+          <li><a href="../01-jit-oxide.html">本主题 P3.1 · JIT → Oxide 引擎演化</a> · 配 CSS-first 看引擎</li>
+          <li><a href="../../next/index.html">Next.js 主题</a> · Next.js + Tailwind v4 集成</li>
+          <li><a href="../../vite/07-plugins-and-next/01-plugin-system.html">Vite 主题 P7.1 · plugin 系统</a> · @tailwindcss/vite 实现</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

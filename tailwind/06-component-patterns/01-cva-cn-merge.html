@@ -1,0 +1,650 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CVA + cn() + tailwind-merge · P6.1 · Tailwind CSS 深度学习</title>
+    <meta name="description" content="Tailwind 团队规模化下不崩的标准工具链：class-variance-authority (CVA) 类型安全管理组件变体；cn() helper 用 clsx + tailwind-merge 解决条件 className + 冲突；prettier-plugin-tailwindcss 自动排序；eslint-plugin-tailwindcss 静态检查。完整 Button + Card + Dialog 组件模板。shadcn/ui 推广的事实标准。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2306b6d4'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETW%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Tailwind CSS 深度学习</span><span class="site-title-badge" style="background: oklch(0.65 0.13 210); color: #fff">TW</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · 组件模式</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-cva-cn-merge.html" class="active">01 · CVA + cn() + tailwind-merge</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Tailwind CSS</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · 组件模式</a><span class="breadcrumb-sep">/</span>
+          <span>01 · CVA + cn() + tailwind-merge</span>
+        </nav>
+        <h1>CVA + cn() + tailwind-merge</h1>
+        <p class="lead">
+          一个组件有多种变体（primary/secondary/outline/ghost）+ 多种尺寸（sm/md/lg）+ 用户传 className 想覆盖默认样式 —— 这是 Tailwind 团队规模化下能不能不崩的关键。CVA + cn() + tailwind-merge + prettier-plugin-tailwindcss 是 2024+ 事实标准工具链，由 shadcn/ui 推广。这一章给完整 Button + Card + Dialog 组件模板，让你团队代码风格一致。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P2 utility-first + P5 变体系统 + TypeScript 基础</span>
+          <span><strong>主要来源</strong> CVA docs + tailwind-merge docs + shadcn/ui 源码 + Joe Bell 公开演讲</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Tailwind 项目在团队规模化下的 4 个工具链组件：<b>CVA</b>（class-variance-authority，类型安全的变体管理）/ <b>cn()</b>（clsx + tailwind-merge，条件 className + 冲突解决）/ <b>prettier-plugin-tailwindcss</b>（自动排序 class）/ <b>eslint-plugin-tailwindcss</b>（静态检查）。</li>
+          <li><b>CVA</b> 由 Joe Bell 设计，shadcn/ui 推广为事实标准。它解决"组件多变体 + 多尺寸怎么类型安全管理"的问题。<code>cva(base, { variants })</code> 接收基础 class + 变体配置，返回函数。</li>
+          <li><b>cn() helper</b>（来自 shadcn/ui，内部用 clsx + tailwind-merge）解决两个问题：<b>1) 条件 className</b>（<code>cn('base', isActive &amp;&amp; 'active')</code>）/ <b>2) class 冲突</b>（<code>cn('px-4', 'px-6')</code> 后者赢）。</li>
+          <li><b>tailwind-merge</b>：理解 Tailwind utility 优先级规则（<code>px-4</code> 与 <code>px-6</code> 冲突，<code>p-4</code> 与 <code>px-6</code> 也冲突）。让"用户传 className 覆盖默认"成为可能。</li>
+          <li><b>prettier-plugin-tailwindcss</b>：自动按推荐顺序排列 class（layout → spacing → color → state）。装上之后团队 review 不再纠结 class 顺序。</li>
+          <li><b>eslint-plugin-tailwindcss</b>：静态检查（catch 拼错 class、多余 utility、错误的 arbitrary value 等）。可选但推荐。</li>
+          <li>CVA + cn 的标准模式让组件 API 类型安全 + 可复用 + 可被外部覆盖样式。这是 shadcn/ui 模板核心。</li>
+          <li>典型 Button 组件用 CVA 管理 5+ variants × 3+ sizes，配 <code>VariantProps&lt;typeof buttonVariants&gt;</code> 自动推导类型。TS catch 拼错的 variant 名字。</li>
+          <li>"asChild" 模式（Radix 推广）：让组件渲染为传入的子元素（<code>&lt;Button asChild&gt;&lt;Link&gt;...&lt;/Link&gt;&lt;/Button&gt;</code>），用 Radix Slot 实现。这是 shadcn/ui 组件的标配。</li>
+          <li>这一章给的模板与 shadcn/ui 完全兼容。如果你后面要用 shadcn/ui（详见 P7），心智完全一致。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>问题：组件变体管理的痛点</h3>
+
+        <p>没有 CVA 时，写个有 4 variants × 3 sizes 的 Button：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ 反模式：手动拼 className
+function Button({ variant = 'primary', size = 'md', children, ...props }) {
+  let classes = 'inline-flex items-center justify-center rounded-md font-medium transition-colors';
+
+  if (variant === 'primary') classes += ' bg-blue-500 text-white hover:bg-blue-600';
+  else if (variant === 'secondary') classes += ' bg-gray-200 text-gray-900 hover:bg-gray-300';
+  else if (variant === 'outline') classes += ' border border-gray-200 hover:bg-gray-100';
+  else if (variant === 'ghost') classes += ' hover:bg-gray-100';
+
+  if (size === 'sm') classes += ' h-8 px-3 text-xs';
+  else if (size === 'md') classes += ' h-10 px-4';
+  else if (size === 'lg') classes += ' h-12 px-6 text-base';
+
+  return &lt;button className={classes} {...props}&gt;{children}&lt;/button&gt;;
+}</code></pre>
+        </div>
+
+        <p>痛点：</p>
+        <ul>
+          <li>类型不安全：拼错 <code>variant="primery"</code> TypeScript 不报错</li>
+          <li>用户传 className 不能 override（<code>className="..."</code> 被 base + variant + size 覆盖）</li>
+          <li>variant 多了代码炸（10 variants × 5 sizes 写不下去）</li>
+          <li>组件库不能批量修改 base style</li>
+        </ul>
+
+        <h3>CVA 解决变体管理</h3>
+
+        <p>CVA 把 variant 配置抽成结构化对象 + 自动生成函数：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 安装：npm i class-variance-authority
+
+import { cva, type VariantProps } from 'class-variance-authority';
+
+const buttonVariants = cva(
+  // base styles（所有变体共享）
+  'inline-flex items-center justify-center rounded-md font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50',
+  {
+    variants: {
+      variant: {
+        primary: 'bg-blue-500 text-white hover:bg-blue-600',
+        secondary: 'bg-gray-200 text-gray-900 hover:bg-gray-300',
+        outline: 'border border-gray-200 bg-transparent hover:bg-gray-100',
+        ghost: 'hover:bg-gray-100',
+        link: 'text-blue-500 underline-offset-4 hover:underline',
+        destructive: 'bg-red-500 text-white hover:bg-red-600',
+      },
+      size: {
+        sm: 'h-8 px-3 text-xs',
+        md: 'h-10 px-4',
+        lg: 'h-12 px-6 text-base',
+        icon: 'h-10 w-10',
+      },
+    },
+    defaultVariants: {
+      variant: 'primary',
+      size: 'md',
+    },
+  },
+);
+
+// 使用
+buttonVariants({ variant: 'primary', size: 'md' });
+// 返回完整 class 字符串：'inline-flex ... bg-blue-500 ... h-10 px-4'</code></pre>
+        </div>
+
+        <p>组件用法：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">type ButtonProps = React.ButtonHTMLAttributes&lt;HTMLButtonElement&gt; &amp; VariantProps&lt;typeof buttonVariants&gt;;
+
+function Button({ className, variant, size, ...props }: ButtonProps) {
+  return (
+    &lt;button
+      className={cn(buttonVariants({ variant, size }), className)}
+      {...props}
+    /&gt;
+  );
+}
+
+// 使用方
+&lt;Button variant="primary" size="lg"&gt;Save&lt;/Button&gt;
+&lt;Button variant="outline"&gt;Cancel&lt;/Button&gt;
+&lt;Button variant="ghost" className="text-red-500"&gt;Delete&lt;/Button&gt;
+{/* className 通过 cn() 与 buttonVariants 输出合并，可以覆盖默认 */}</code></pre>
+        </div>
+
+        <p>类型安全：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ✅ TypeScript 自动推导
+&lt;Button variant="primary" size="md"&gt;OK&lt;/Button&gt;
+
+// ❌ TS 编译错误
+&lt;Button variant="primery"&gt;Typo&lt;/Button&gt;
+//              ^^^^^^^^^ Type '"primery"' is not assignable to type ...</code></pre>
+        </div>
+
+        <p><code>VariantProps&lt;typeof buttonVariants&gt;</code> 自动推导出：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">type VariantProps = {
+  variant?: 'primary' | 'secondary' | 'outline' | 'ghost' | 'link' | 'destructive';
+  size?: 'sm' | 'md' | 'lg' | 'icon';
+}</code></pre>
+        </div>
+
+        <h3>cn() helper 详解</h3>
+
+        <p>cn() 来自 shadcn/ui，是 clsx + tailwind-merge 的组合：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">// lib/utils.ts
+import { clsx, type ClassValue } from 'clsx';
+import { twMerge } from 'tailwind-merge';
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}</code></pre>
+        </div>
+
+        <p>它做两件事：</p>
+
+        <p><b>1. clsx · 条件 className</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">cn('base', isActive &amp;&amp; 'active', { highlighted: hasError });
+// 等价：[ 'base', isActive ? 'active' : '', hasError ? 'highlighted' : '' ].filter(Boolean).join(' ')
+
+// 输入 ClassValue 类型支持：
+//   字符串：'base'
+//   数组：['a', 'b']
+//   对象：{ active: true, highlighted: false }
+//   嵌套：cn('a', ['b', { c: true }])</code></pre>
+        </div>
+
+        <p><b>2. tailwind-merge · 解决 class 冲突</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">// 不用 tailwind-merge：两个 class 都进 className
+cn('px-4', 'px-6');  // 'px-4 px-6' —— 浏览器按 CSS 顺序，px-6 赢（不稳定）
+
+// 用 tailwind-merge：理解 Tailwind 优先级
+twMerge('px-4 px-6');  // 'px-6' —— 智能保留后者
+
+// 复杂冲突也能处理
+twMerge('p-4 px-6');     // 'p-4 px-6' → 'py-4 px-6'（p-4 等于 py-4 + px-4，被 px-6 覆盖 px 部分）
+
+// 不同 utility 不冲突
+twMerge('px-4 mx-4');    // 'px-4 mx-4'（保留两者）</code></pre>
+        </div>
+
+        <p>tailwind-merge 内部维护 utility 优先级表（哪些 class 是同类、谁覆盖谁）。这让"用户传 className 覆盖默认"成为可能：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function Button({ className, ...props }) {
+  return (
+    &lt;button
+      className={cn(
+        'px-4 py-2 bg-blue-500',  // 默认
+        className,                  // 用户传入（如 'px-6 bg-red-500'）
+      )}
+      {...props}
+    /&gt;
+  );
+}
+
+&lt;Button className="px-6 bg-red-500"&gt;Override&lt;/Button&gt;
+{/* 实际输出 className: 'py-2 px-6 bg-red-500'
+    px-4 被 px-6 覆盖、bg-blue-500 被 bg-red-500 覆盖、py-2 保留 */}</code></pre>
+        </div>
+
+        <p>没有 tailwind-merge 时：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ 没用 tailwind-merge
+&lt;button className={`px-4 py-2 bg-blue-500 ${className}`}&gt;
+  {/* 实际：'px-4 py-2 bg-blue-500 px-6 bg-red-500'
+      px-4 与 px-6 冲突，浏览器解析顺序决定（不稳定 + 优先级混乱） */}
+&lt;/button&gt;</code></pre>
+        </div>
+
+        <h3>prettier-plugin-tailwindcss · 自动排序</h3>
+
+        <p>装这个 plugin 自动按推荐顺序排 class：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">npm i -D prettier-plugin-tailwindcss</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-javascript">// .prettierrc.json
+{
+  "plugins": ["prettier-plugin-tailwindcss"]
+}</code></pre>
+        </div>
+
+        <p>排序规则（大致）：</p>
+        <ol>
+          <li>布局（flex / grid / block）</li>
+          <li>定位（absolute / fixed）</li>
+          <li>display / visibility</li>
+          <li>spacing（margin / padding / gap）</li>
+          <li>size（width / height）</li>
+          <li>typography（font / text）</li>
+          <li>color（bg / text / border）</li>
+          <li>border / radius / shadow</li>
+          <li>transition / animation</li>
+          <li>state variants（hover / focus / dark）</li>
+        </ol>
+
+        <p>装上之后，<code>className="text-white px-4 flex bg-blue-500 py-2"</code> 自动变 <code>className="flex bg-blue-500 px-4 py-2 text-white"</code>。团队代码风格统一。</p>
+
+        <h3>eslint-plugin-tailwindcss · 静态检查</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">npm i -D eslint-plugin-tailwindcss</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// .eslintrc.json
+{
+  "plugins": ["tailwindcss"],
+  "rules": {
+    "tailwindcss/classnames-order": "warn",
+    "tailwindcss/no-custom-classname": "warn",
+    "tailwindcss/no-contradicting-classname": "error",
+    "tailwindcss/enforces-shorthand": "warn"
+  }
+}</code></pre>
+        </div>
+
+        <p>能 catch 的问题：</p>
+        <ul>
+          <li>拼错 class 名（<code>bg-blue-500</code> 写成 <code>bg-blue500</code>）</li>
+          <li>同个属性多次写（<code>px-4 px-6</code> 警告）</li>
+          <li>能用 shorthand 时未用（<code>w-4 h-4</code> 警告 → 建议 <code>size-4</code>）</li>
+        </ul>
+
+        <p>注意：与 prettier-plugin 配合时，让 prettier 管排序，eslint 管 lint，避免冲突。</p>
+
+        <h3>asChild 模式（Radix 推广）</h3>
+
+        <p>shadcn/ui 组件常见模式：让 Button 能渲染为 a / Link / 任何元素。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { Slot } from '@radix-ui/react-slot';
+
+interface ButtonProps extends React.ButtonHTMLAttributes&lt;HTMLButtonElement&gt;, VariantProps&lt;typeof buttonVariants&gt; {
+  asChild?: boolean;
+}
+
+function Button({ className, variant, size, asChild = false, ...props }: ButtonProps) {
+  const Comp = asChild ? Slot : 'button';
+  return (
+    &lt;Comp
+      className={cn(buttonVariants({ variant, size }), className)}
+      {...props}
+    /&gt;
+  );
+}
+
+// 使用 1：普通 button
+&lt;Button&gt;Click&lt;/Button&gt;
+// 渲染：&lt;button class="..."&gt;Click&lt;/button&gt;
+
+// 使用 2：asChild + Next.js Link
+&lt;Button asChild variant="primary"&gt;
+  &lt;Link href="/dashboard"&gt;Dashboard&lt;/Link&gt;
+&lt;/Button&gt;
+// 渲染：&lt;a href="/dashboard" class="..."&gt;Dashboard&lt;/a&gt;
+// （Slot 把 Button 的 className + props 转给内部 Link / a）</code></pre>
+        </div>
+
+        <p>这种模式让 Button 既可以是 button 又可以是 link，不用维护两个组件。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 起新组件库</h3>
+
+        <p>步骤：</p>
+        <ol>
+          <li>装依赖：<code>npm i class-variance-authority clsx tailwind-merge @radix-ui/react-slot</code></li>
+          <li>装 dev：<code>npm i -D prettier-plugin-tailwindcss eslint-plugin-tailwindcss</code></li>
+          <li>建 lib/utils.ts（cn helper）</li>
+          <li>每个组件按 CVA 模板写</li>
+          <li>团队建 component template（snippets / scaffolding）</li>
+        </ol>
+
+        <h3>场景 2 · 现有项目接 shadcn/ui</h3>
+
+        <p>shadcn CLI 自动复制组件到你项目，已经按 CVA 模板写好。直接用：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">npx shadcn@latest init
+npx shadcn@latest add button card dialog</code></pre>
+        </div>
+
+        <p>shadcn CLI 会：</p>
+        <ul>
+          <li>装 CVA / clsx / tailwind-merge</li>
+          <li>建 lib/utils.ts（cn helper）</li>
+          <li>建 components/ui/button.tsx 等组件源码</li>
+          <li>组件代码完全在你项目里、可任意修改</li>
+        </ul>
+
+        <h3>场景 3 · 团队 code review 看到拼字符串</h3>
+
+        <p>看到：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">&lt;button className={`px-4 py-2 ${variant === 'primary' ? 'bg-blue-500' : 'bg-gray-200'} ${className}`}&gt;</code></pre>
+        </div>
+
+        <p>建议：</p>
+        <ul>
+          <li>3+ variants 的组件 → 用 CVA</li>
+          <li>简单条件 → 用 cn()</li>
+          <li>禁止用 + 拼字符串</li>
+          <li>用户能传 className → 必须用 cn()（不然冲突）</li>
+        </ul>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 完整 Button 组件（shadcn/ui 风格）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// lib/utils.ts
+import { clsx, type ClassValue } from 'clsx';
+import { twMerge } from 'tailwind-merge';
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
+
+// components/ui/button.tsx
+import * as React from 'react';
+import { Slot } from '@radix-ui/react-slot';
+import { cva, type VariantProps } from 'class-variance-authority';
+import { cn } from '@/lib/utils';
+
+const buttonVariants = cva(
+  'inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50',
+  {
+    variants: {
+      variant: {
+        default: 'bg-primary text-primary-foreground hover:bg-primary/90',
+        destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
+        outline: 'border border-input bg-background hover:bg-accent hover:text-accent-foreground',
+        secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
+        ghost: 'hover:bg-accent hover:text-accent-foreground',
+        link: 'text-primary underline-offset-4 hover:underline',
+      },
+      size: {
+        default: 'h-10 px-4 py-2',
+        sm: 'h-9 rounded-md px-3',
+        lg: 'h-11 rounded-md px-8',
+        icon: 'h-10 w-10',
+      },
+    },
+    defaultVariants: {
+      variant: 'default',
+      size: 'default',
+    },
+  },
+);
+
+export interface ButtonProps
+  extends React.ButtonHTMLAttributes&lt;HTMLButtonElement&gt;,
+    VariantProps&lt;typeof buttonVariants&gt; {
+  asChild?: boolean;
+}
+
+const Button = React.forwardRef&lt;HTMLButtonElement, ButtonProps&gt;(
+  ({ className, variant, size, asChild = false, ...props }, ref) =&gt; {
+    const Comp = asChild ? Slot : 'button';
+    return (
+      &lt;Comp
+        className={cn(buttonVariants({ variant, size, className }))}
+        ref={ref}
+        {...props}
+      /&gt;
+    );
+  },
+);
+Button.displayName = 'Button';
+
+export { Button, buttonVariants };</code></pre>
+        </div>
+
+        <h3>代码 2 · Card 组件（多个 sub-components）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// components/ui/card.tsx
+import * as React from 'react';
+import { cn } from '@/lib/utils';
+
+const Card = React.forwardRef&lt;
+  HTMLDivElement,
+  React.HTMLAttributes&lt;HTMLDivElement&gt;
+&gt;(({ className, ...props }, ref) =&gt; (
+  &lt;div
+    ref={ref}
+    className={cn('rounded-lg border bg-card text-card-foreground shadow-sm', className)}
+    {...props}
+  /&gt;
+));
+Card.displayName = 'Card';
+
+const CardHeader = React.forwardRef&lt;
+  HTMLDivElement,
+  React.HTMLAttributes&lt;HTMLDivElement&gt;
+&gt;(({ className, ...props }, ref) =&gt; (
+  &lt;div ref={ref} className={cn('flex flex-col space-y-1.5 p-6', className)} {...props} /&gt;
+));
+CardHeader.displayName = 'CardHeader';
+
+const CardTitle = React.forwardRef&lt;
+  HTMLParagraphElement,
+  React.HTMLAttributes&lt;HTMLHeadingElement&gt;
+&gt;(({ className, ...props }, ref) =&gt; (
+  &lt;h3 ref={ref} className={cn('text-2xl font-semibold leading-none tracking-tight', className)} {...props} /&gt;
+));
+CardTitle.displayName = 'CardTitle';
+
+const CardContent = React.forwardRef&lt;
+  HTMLDivElement,
+  React.HTMLAttributes&lt;HTMLDivElement&gt;
+&gt;(({ className, ...props }, ref) =&gt; (
+  &lt;div ref={ref} className={cn('p-6 pt-0', className)} {...props} /&gt;
+));
+CardContent.displayName = 'CardContent';
+
+export { Card, CardHeader, CardTitle, CardContent };
+
+// 用法
+&lt;Card&gt;
+  &lt;CardHeader&gt;
+    &lt;CardTitle&gt;Hello&lt;/CardTitle&gt;
+  &lt;/CardHeader&gt;
+  &lt;CardContent&gt;
+    Content here
+  &lt;/CardContent&gt;
+&lt;/Card&gt;</code></pre>
+        </div>
+
+        <h3>代码 3 · cn() 高级用法</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 1. 条件 className
+function Alert({ variant, className }) {
+  return (
+    &lt;div className={cn(
+      'p-4 rounded-md',
+      variant === 'success' &amp;&amp; 'bg-green-100 text-green-700',
+      variant === 'error' &amp;&amp; 'bg-red-100 text-red-700',
+      variant === 'warning' &amp;&amp; 'bg-yellow-100 text-yellow-700',
+      className,  // 允许外部覆盖
+    )}&gt;
+      ...
+    &lt;/div&gt;
+  );
+}
+
+// 2. 对象语法
+function Button({ disabled, loading, className }) {
+  return (
+    &lt;button className={cn(
+      'px-4 py-2 rounded',
+      {
+        'bg-blue-500 text-white': !disabled,
+        'bg-gray-300 text-gray-500 cursor-not-allowed': disabled,
+        'animate-pulse': loading,
+      },
+      className,
+    )}&gt;
+      ...
+    &lt;/button&gt;
+  );
+}
+
+// 3. 嵌套数组
+const baseClasses = ['rounded-md', 'transition'];
+function Card({ className }) {
+  return &lt;div className={cn(baseClasses, 'p-4 bg-white', className)}&gt; ... &lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <h3>代码 4 · 复合 variants（CVA 高级）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">const buttonVariants = cva('rounded-md', {
+  variants: {
+    variant: {
+      primary: 'bg-blue-500',
+      destructive: 'bg-red-500',
+    },
+    size: {
+      sm: 'h-8',
+      lg: 'h-12',
+    },
+  },
+  // 复合：variant=destructive + size=lg 时额外样式
+  compoundVariants: [
+    {
+      variant: 'destructive',
+      size: 'lg',
+      className: 'shadow-lg ring-2 ring-red-300',
+    },
+  ],
+  defaultVariants: { variant: 'primary', size: 'sm' },
+});</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>不用 cn() 直接拼字符串</b> —— 用户 className 不能覆盖、class 冲突无法解决。所有可被外部传 className 的组件都要 cn()</li>
+          <li><b>用 clsx 不用 tailwind-merge</b> —— 解决了条件 className 但没解决 class 冲突。要 cn() = clsx + tailwind-merge</li>
+          <li><b>CVA 后再加 className 没传给 cn()</b> —— <code>buttonVariants(...)</code> 返回字符串，要再 <code>cn(buttonVariants(...), className)</code> 让用户能 override</li>
+          <li><b>VariantProps 类型导出错</b> —— <code>VariantProps&lt;typeof buttonVariants&gt;</code> 是正确写法（typeof）；<code>VariantProps&lt;buttonVariants&gt;</code> 错</li>
+          <li><b>asChild 用不带 forwardRef 的 Button</b> —— Slot 内部需要 ref 传递。Button 组件用 React.forwardRef 包</li>
+          <li><b>prettier-plugin 与 eslint rule 冲突</b> —— prettier 排序后 eslint 仍报序错。让 prettier 管排序、eslint 关闭 classnames-order rule</li>
+          <li><b>tailwind-merge 不识别自定义 utility</b> —— 自定义 utility（@utility / @theme 加的）需要在 twMerge 配置 customGroups（详见 tailwind-merge docs）</li>
+          <li><b>CVA 的 variants 名字撞 React 保留字</b> —— 不要用 className / children / key 作为 variant 名</li>
+          <li><b>compoundVariants 写多了维护复杂</b> —— 复合 3+ 维度时考虑拆组件，不要 CVA 中累积</li>
+          <li><b>每个组件单独定义 buttonVariants</b> —— 应共享 base style 在 lib/variants.ts，组件 import</li>
+          <li><b>"我用 styled-components 不需要 CVA"</b> —— 与 styled-components 心智不同。Tailwind 项目不要用 styled-components 模式</li>
+          <li><b>组件库用 cn() 但不 export</b> —— 团队应该 export cn（通常 lib/utils.ts），让所有组件统一用</li>
+          <li><b>"shadcn/ui 太冗长，我自己实现"</b> —— shadcn/ui 模板是工程经验沉淀，包括 ref forwarding / a11y / asChild。自己写大概率漏掉这些</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://cva.style/" target="_blank" rel="noopener">class-variance-authority docs</a></li>
+          <li><a href="https://github.com/dcastil/tailwind-merge" target="_blank" rel="noopener">tailwind-merge GitHub</a></li>
+          <li><a href="https://github.com/lukeed/clsx" target="_blank" rel="noopener">clsx GitHub</a></li>
+          <li><a href="https://github.com/tailwindlabs/prettier-plugin-tailwindcss" target="_blank" rel="noopener">prettier-plugin-tailwindcss</a></li>
+          <li><a href="https://github.com/francoismassart/eslint-plugin-tailwindcss" target="_blank" rel="noopener">eslint-plugin-tailwindcss</a></li>
+          <li><a href="https://ui.shadcn.com/" target="_blank" rel="noopener">shadcn/ui</a> · CVA + cn 模式的事实标准</li>
+          <li><a href="https://www.radix-ui.com/primitives/docs/utilities/slot" target="_blank" rel="noopener">Radix Slot</a> · asChild 模式底层</li>
+          <li><a href="../07-ecosystem-decision/01-ui-libraries.html">本主题 P7.1 · UI 库横评</a> · shadcn/ui 详细</li>
+          <li><a href="../../react/06-modern/04-misc.html">React 主题 P6.4 · ref as prop</a> · forwardRef 现代用法</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

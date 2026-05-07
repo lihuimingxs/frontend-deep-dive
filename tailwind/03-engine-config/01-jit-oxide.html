@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>JIT → Oxide 引擎演化 · P3.1 · Tailwind CSS 深度学习</title>
+    <meta name="description" content="Tailwind 引擎 9 年演化深度解析。v1-v2.2 完整生成 + PurgeCSS 时代 → v2.2 JIT 实验 → v3 JIT 默认（按需生成、arbitrary values）→ v4 Oxide Rust 重写（与 SWC/Turbopack 同时代）。扫描算法核心：不解析 AST、用正则识别 class 字符串。动态 class 处理 + safelist + 完整字符串写法。性能数字：v3 → v4 增量 8-10x、新 CSS 重编译 100x。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2306b6d4'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETW%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Tailwind CSS 深度学习</span><span class="site-title-badge" style="background: oklch(0.65 0.13 210); color: #fff">TW</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · 引擎与配置 ⭐</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-jit-oxide.html" class="active">01 · JIT → Oxide 引擎演化</a></li>
+          <li><a href="02-css-first-config.html">02 · CSS-first 配置（v4 革命）</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Tailwind CSS</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · 引擎与配置</a><span class="breadcrumb-sep">/</span>
+          <span>01 · JIT → Oxide 引擎演化</span>
+        </nav>
+        <h1>JIT → Oxide 引擎演化</h1>
+        <p class="lead">
+          Tailwind 引擎 9 年的演化主线：v1-v2 时代"完整生成所有 utility（几 MB CSS） + PurgeCSS 删未用"的笨重 → v2.2-v3 JIT 引擎（扫源码、按需生成、arbitrary values 第一次成为可能）→ v4 Oxide 引擎（Rust 重写，与 SWC / Turbopack 同时代）。这一章把每代引擎的扫描算法、性能数字、动态 class 处理讲透。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P1.1 项目史 + P2 心智</span>
+          <span><strong>主要来源</strong> tailwindcss.com/blog v3 / v4 release notes + Tailwind Labs YouTube + GitHub source</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Tailwind 引擎 3 代演化：<b>v1-v2.2 完整生成</b>（穷举所有可能 utility + PurgeCSS 删）→ <b>v2.2-v3 JIT</b>（按需生成）→ <b>v4 Oxide</b>（Rust 重写 + 增量缓存）。</li>
+          <li>v1-v2 时代："先生成几 MB CSS，再 PurgeCSS 删未用"。启动 5-10 秒、不能 arbitrary values、PurgeCSS 配置复杂。这是 v2.2 JIT 出现的根因。</li>
+          <li>v2.2-v3 JIT 引擎反转编译模型：<strong>扫源码 → 提取 class 字符串 → 按需生成对应 CSS</strong>。完整 build 1-3 秒、增量 50-200ms、arbitrary values（<code>w-[123px]</code>）第一次成为可能。</li>
+          <li>v4 Oxide 引擎用 Rust 重写（与 SWC / Turbopack / Rolldown 同时代的 Rust 重写浪潮）。完整 build 100-200ms（v3 的 1/5）、增量 5ms（v3 的 1/40）、新 CSS 重编译快 100×。</li>
+          <li>扫描算法的核心：<strong>不解析整个 AST</strong>（太慢）、<strong>不依赖 build pipeline</strong>（独立运行）。Tailwind 用<strong>正则 + 简单规则</strong>识别可能是 class 的字符串。误判可接受（生成 unused CSS 不严重）；漏判不可接受（缺 class）。</li>
+          <li>动态 class 是常见 bug 来源：<code>className={`bg-${color}-500`}</code> 这种动态拼接 JIT 扫不到（看到的是模板字符串字面量、不知道 color 取什么值）。修复方式 3 种：<b>safelist</b>（显式白名单）/ <b>完整字符串写法</b>（<code>color === 'red' ? 'bg-red-500' : 'bg-blue-500'</code>）/ <b>变体表 lookup</b>（<code>colors[color]</code> 配合完整字符串）。</li>
+          <li>v4 Oxide 与 build tool 通过专用 plugin 集成：<b>@tailwindcss/vite</b>（推荐）/ <b>@tailwindcss/postcss</b>（兼容传统 PostCSS）/ <b>@tailwindcss/webpack</b>（v4.2 新增）/ <b>Next.js 自带集成</b>。</li>
+          <li>Oxide 的 Rust 重写不只是性能。它让 Tailwind 与 SWC / Biome 等 Rust 工具链更深度集成（共享 AST 缓存、共享文件 watch）成为可能。这是长期价值。</li>
+          <li>从 v3 升 v4 的引擎层迁移几乎透明（用户不需要改代码）。需要改的是 build tool 配置（PostCSS plugin → Vite plugin / Webpack plugin）。</li>
+          <li>这一章是"为什么 Tailwind 编译这么快"的技术解释。理解扫描算法 + 动态 class 处理是日常 debug 的关键能力。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>v1-v2 时代 · 完整生成 + PurgeCSS</h3>
+
+        <p>2017-2021 年的 Tailwind v1-v2 时代，编译模型是"穷举 + 删"：</p>
+
+        <ol>
+          <li><b>启动时</b>：根据 tailwind.config.js 生成所有可能 utility（每个 color × 每个 shade × 每个 utility 类型 × 每个 variant ...）</li>
+          <li><b>输出</b>：几 MB 的 CSS 文件（含几万个 class）</li>
+          <li><b>PurgeCSS 阶段</b>：扫源码（HTML / JSX），找出实际用到的 class，从 CSS 删未用</li>
+          <li><b>最终 bundle</b>：只剩用到的几十 KB</li>
+        </ol>
+
+        <p>看一下当时 tailwind.config.js + PurgeCSS 配置：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-javascript">// v2 时代 tailwind.config.js
+module.exports = {
+  // PurgeCSS 配置（v2 内嵌）
+  purge: [
+    './src/**/*.{html,js,jsx,ts,tsx}',
+    './public/index.html',
+  ],
+  theme: { /* ... */ },
+  variants: {
+    extend: {
+      // 必须显式列出每个 utility 要支持的 variants
+      backgroundColor: ['hover', 'focus', 'active', 'group-hover'],
+      textColor: ['hover', 'focus', 'group-hover'],
+      // ... 上百行
+    },
+  },
+  plugins: [],
+};</code></pre>
+        </div>
+
+        <p>这套模型的痛点：</p>
+        <ul>
+          <li><b>启动慢</b>：生成几 MB CSS 要几秒</li>
+          <li><b>不能 arbitrary values</b>：<code>w-[123px]</code> 不可能（不在穷举集合里）</li>
+          <li><b>variants 配置爆炸</b>：每个 utility 要显式列变体，配置文件几百行</li>
+          <li><b>variants 组合受限</b>：<code>group-hover:focus:</code> 这种深度组合在 v2 几乎不可能（穷举太多）</li>
+          <li><b>PurgeCSS 配置复杂</b>：扫描漏 class、误删常用 class 是常见 bug</li>
+        </ul>
+
+        <p>2021 年 v2.2 引入 JIT engine 解决这一切。</p>
+
+        <h3>v2.2-v3 JIT 引擎 · 按需生成的反转</h3>
+
+        <p>JIT（Just-In-Time）反转 v1-v2 编译模型：</p>
+
+        <ol>
+          <li><b>扫源码阶段</b>：扫所有匹配的文件（HTML / JSX / TSX / Vue / Svelte），<strong>提取所有可能是 Tailwind class 的字符串</strong></li>
+          <li><b>解析阶段</b>：对每个字符串判断"这是不是 Tailwind class"，是的话生成对应 CSS rule</li>
+          <li><b>输出</b>：只含项目实际用到的 utility，几十 KB</li>
+        </ol>
+
+        <p>核心是<strong>不再穷举 + 不再 PurgeCSS</strong>。生成的 CSS 一开始就只含用到的。</p>
+
+        <p>JIT 带来的能力：</p>
+        <ul>
+          <li><b>arbitrary values</b>：<code>w-[123px]</code> / <code>bg-[#ff5733]</code> / <code>grid-cols-[repeat(3,minmax(0,1fr))]</code> —— 因为 JIT 扫到这个 class 字符串就生成对应 CSS rule</li>
+          <li><b>variants 任意组合</b>：<code>group-hover:focus:dark:ring-2</code> —— JIT 看到就生成、不需要预先穷举</li>
+          <li><b>variants 配置极简</b>：v3 不再需要 variants 配置（默认所有 utility 支持所有 variants）</li>
+          <li><b>启动快</b>：1-3 秒（v2 的 5-10 秒）</li>
+          <li><b>HMR 极快</b>：增量 50-200ms（v2 几秒）</li>
+        </ul>
+
+        <p>v2.2 JIT 是实验特性（要在 config 启用）；v3.0（2021-12）作为默认引擎。从此 Tailwind 编译模型彻底改变。</p>
+
+        <h3>JIT 扫描算法 · 不解析 AST 的核心权衡</h3>
+
+        <p>JIT 怎么"扫源码提取 class"？关键决策：<strong>不解析整个 JSX/HTML AST</strong>。</p>
+
+        <p>原因：</p>
+        <ul>
+          <li>解析 AST 慢（每个文件都要 parse）</li>
+          <li>支持的语言多（HTML / JSX / Vue / Svelte / Pug / Nunjucks ...）每种 parser 都不同</li>
+          <li>误判 class 不严重（生成 unused CSS，被 dead code elimination 删掉）</li>
+        </ul>
+
+        <p>替代方案：<strong>正则 + 简单规则</strong>。Tailwind 的扫描器（v3 时代叫 oxide-prep，v4 时代用 Rust 重写）大致：</p>
+
+        <ol>
+          <li>读文件内容</li>
+          <li>用正则匹配 "可能是 class 的字符串"（字母、数字、<code>-</code>、<code>:</code>、<code>[</code>、<code>]</code>、<code>/</code> 等字符的连续序列）</li>
+          <li>对每个候选字符串，用规则判断"这是不是 Tailwind class"（看前缀、变体、值）</li>
+          <li>是的话生成对应 CSS rule</li>
+        </ol>
+
+        <p>这种方式的优势：</p>
+        <ul>
+          <li>不依赖任何特定 parser、能扫所有文本文件</li>
+          <li>极快（正则比 AST 快几十倍）</li>
+          <li>误判生成 unused CSS 不严重（CSS 去重 + tree-shake 处理）</li>
+        </ul>
+
+        <p>劣势：</p>
+        <ul>
+          <li><strong>动态拼接 class 扫不到</strong>（核心限制，看下文）</li>
+          <li>个别 false positive（生成不必要 utility，但量小）</li>
+        </ul>
+
+        <h3>动态 class 的根本问题</h3>
+
+        <p>JIT 看的是"源码字符串"，不是"运行时值"。所以这种代码扫不到：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ 扫不到
+function Button({ color }: { color: 'red' | 'blue' | 'green' }) {
+  return &lt;button className={`bg-${color}-500 text-white`}&gt;Click&lt;/button&gt;;
+}
+// JIT 扫到的字符串是 "bg-${color}-500"（带模板占位符）
+// 不知道 color 实际取什么值，无法生成对应 CSS
+// 运行时 className 是 "bg-red-500"，但 CSS 里没有 bg-red-500 → 样式不应用</code></pre>
+        </div>
+
+        <p>修复方式 1 · <strong>safelist</strong>（显式白名单）：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* v4 用 @source 内联 */
+@source inline("bg-red-500 bg-blue-500 bg-green-500");
+
+/* v3 用 tailwind.config.js
+   safelist: ['bg-red-500', 'bg-blue-500', 'bg-green-500'],
+*/</code></pre>
+        </div>
+
+        <p>修复方式 2 · <strong>完整字符串写法</strong>（最推荐）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ✅ JIT 能扫到完整 class 字符串
+function Button({ color }: { color: 'red' | 'blue' | 'green' }) {
+  const colorClasses = {
+    red: 'bg-red-500',
+    blue: 'bg-blue-500',
+    green: 'bg-green-500',
+  };
+  return &lt;button className={`${colorClasses[color]} text-white`}&gt;Click&lt;/button&gt;;
+}
+// JIT 扫到 "bg-red-500" / "bg-blue-500" / "bg-green-500" 三个完整字符串
+// 都生成对应 CSS</code></pre>
+        </div>
+
+        <p>修复方式 3 · <strong>条件三元</strong>：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ✅ 也行
+&lt;button className={color === 'red' ? 'bg-red-500' : color === 'blue' ? 'bg-blue-500' : 'bg-green-500'}&gt;</code></pre>
+        </div>
+
+        <p>团队规则：<strong>禁止动态拼 class 字符串</strong>。要么完整写出所有可能值，要么用 safelist。这是 Tailwind 项目最常见的 bug 来源之一。</p>
+
+        <h3>v4 Oxide 引擎 · Rust 重写 + 增量缓存</h3>
+
+        <p>v4 Oxide 引擎用 Rust 完整重写。核心动机：</p>
+        <ul>
+          <li>JIT v3 是 PostCSS plugin，性能受 PostCSS 限制</li>
+          <li>Rust 工具链（SWC / Turbopack / Rolldown）成熟，重写时机到了</li>
+          <li>增量缓存能力（task-based incremental computation）让大型项目的二次 build 极快</li>
+        </ul>
+
+        <p>性能数字（基于官方 benchmark）：</p>
+
+        <table>
+          <thead>
+            <tr><th>场景</th><th>v3 时间</th><th>v4 时间</th><th>提升</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>完整 build（中型项目）</td><td>378ms</td><td>100ms</td><td>3.5×</td></tr>
+            <tr><td>增量 rebuild</td><td>44ms</td><td>5ms</td><td>8-10×</td></tr>
+            <tr><td>新 CSS 添加重编译</td><td>几百 ms</td><td>5ms</td><td>100×</td></tr>
+            <tr><td>大型 monorepo build</td><td>5s+</td><td>500ms</td><td>10×+</td></tr>
+          </tbody>
+        </table>
+
+        <p>性能数字依赖项目规模 + 配置。小项目差异不明显；中大型项目（1000+ 模块、monorepo）优势大。</p>
+
+        <p>Oxide 内部架构：</p>
+        <ul>
+          <li><b>Rust 解析器</b>：扫源码、提取 class（替代 v3 JS 实现）</li>
+          <li><b>Lightning CSS</b>：CSS minify / vendor prefix（替代 PostCSS）</li>
+          <li><b>增量缓存</b>：每个文件的 class 列表缓存，未变文件不重扫</li>
+          <li><b>Vite plugin / Webpack plugin / PostCSS plugin</b>：与不同 build tool 集成</li>
+        </ul>
+
+        <h3>与 build tool 集成路径</h3>
+
+        <p>v4 提供 4 种集成方式：</p>
+
+        <p><b>1. Vite plugin（推荐）</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">// vite.config.ts
+import { defineConfig } from 'vite';
+import tailwindcss from '@tailwindcss/vite';
+
+export default defineConfig({
+  plugins: [tailwindcss()],
+});</code></pre>
+        </div>
+
+        <p><b>2. PostCSS plugin（兼容传统 pipeline）</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-javascript">// postcss.config.js
+export default {
+  plugins: {
+    '@tailwindcss/postcss': {},
+  },
+};</code></pre>
+        </div>
+
+        <p><b>3. Webpack plugin（v4.2+ 新）</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-javascript">// webpack.config.js
+import { TailwindcssPlugin } from '@tailwindcss/webpack';
+export default {
+  plugins: [new TailwindcssPlugin()],
+};</code></pre>
+        </div>
+
+        <p><b>4. Next.js（零配置）</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># Next.js 16 起内置集成，npm i tailwindcss + 在 globals.css 加 @import 即可
+npm install tailwindcss @tailwindcss/postcss postcss</code></pre>
+        </div>
+
+        <p>选哪个看 build tool。Vite 项目首选 Vite plugin（最快）；老 Webpack 项目用 Webpack plugin；多 build tool 项目用 PostCSS plugin（兼容性最好）。</p>
+
+        <h3>从 v3 升 v4 引擎层的变化</h3>
+
+        <p>引擎层迁移用户层面几乎透明：</p>
+        <ul>
+          <li>v3 项目代码 className="..." 不需要改</li>
+          <li>v3 的 utility 名字 v4 大多保留（个别小调整，codemod 处理）</li>
+          <li>v3 的 PostCSS plugin 配置在 v4 改为 @tailwindcss/postcss（codemod 处理）</li>
+          <li>v3 的 tailwind.config.js 在 v4 仍可用（兼容模式），但官方建议迁到 @theme</li>
+        </ul>
+
+        <p>实际迁移：跑 <code>npx @tailwindcss/upgrade</code>。codemod 处理 80%+。剩 20% 手动审视（特别是默认色微调 + plugin 兼容）。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 调试 "为什么 className 没生效"</h3>
+
+        <p>排查路径：</p>
+        <ol>
+          <li>检查 Tailwind 是否正常 build（CSS 文件是否包含期望 class）</li>
+          <li>检查动态 class（template literal 拼接？）—— 最常见原因</li>
+          <li>检查 @source 路径（是否扫描了正确的文件）</li>
+          <li>检查 class 拼写（容易拼错 <code>bg-blue-500</code> 写成 <code>bg-blue500</code>）</li>
+          <li>检查 variants（<code>hover:bg-blue-500</code> 在 hover 时才生效）</li>
+          <li>检查 specificity（其他 CSS 优先级覆盖）</li>
+        </ol>
+
+        <h3>场景 2 · 给团队定 "禁止动态 class" 规则</h3>
+
+        <p>ESLint plugin 配合：</p>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// .eslintrc.json
+{
+  "plugins": ["readable-tailwind"],
+  "rules": {
+    "readable-tailwind/no-unnecessary-whitespace": "error",
+    "readable-tailwind/multiline": "error"
+  }
+}</code></pre>
+        </div>
+
+        <p>review 时 catch 动态拼接（template literal 含 <code>${</code> 在 className 里）。</p>
+
+        <h3>场景 3 · 大型 monorepo 升 v4 看效果</h3>
+
+        <p>v3 项目升 v4 在大型 monorepo 优势最明显：</p>
+        <ul>
+          <li>Turborepo / Nx 配合 cache，Tailwind build 不必每次跑</li>
+          <li>未改 package 的 build 直接命中 cache</li>
+          <li>Vercel remote cache 跨实例共享 build 产物</li>
+          <li>整体 CI 时间下降 30-50%</li>
+        </ul>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 动态 class 反例 + 修复</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ 反例 1：模板字符串拼接
+function Status({ status }: { status: 'success' | 'warning' | 'error' }) {
+  return &lt;div className={`bg-${status === 'success' ? 'green' : status === 'warning' ? 'yellow' : 'red'}-100`}&gt;
+    {status}
+  &lt;/div&gt;;
+}
+
+// ✅ 修复：完整字符串
+function Status({ status }: { status: 'success' | 'warning' | 'error' }) {
+  const bgClasses = {
+    success: 'bg-green-100',
+    warning: 'bg-yellow-100',
+    error: 'bg-red-100',
+  };
+  return &lt;div className={bgClasses[status]}&gt;{status}&lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ 反例 2：拼接尺寸
+function Avatar({ size }: { size: number }) {
+  return &lt;img className={`w-${size} h-${size}`} /&gt;;
+}
+
+// ✅ 修复 1：用 arbitrary value
+function Avatar({ sizePx }: { sizePx: number }) {
+  return &lt;img className={`w-[${sizePx}px] h-[${sizePx}px]`} /&gt;;
+  // 注意：arbitrary value 必须是<strong>字面量</strong>不能是 JS 变量
+  // 实际上这个写法 JIT 也扫不到（因为 ${sizePx}px 是变量）
+}
+
+// ✅ 修复 2：用 inline style（合理使用）
+function Avatar({ sizePx }: { sizePx: number }) {
+  return &lt;img className="rounded-full" style={{ width: sizePx, height: sizePx }} /&gt;;
+}
+
+// ✅ 修复 3：固定几个尺寸 → enum
+function Avatar({ size = 'md' }: { size?: 'sm' | 'md' | 'lg' }) {
+  const sizeClasses = { sm: 'w-8 h-8', md: 'w-12 h-12', lg: 'w-16 h-16' };
+  return &lt;img className={`${sizeClasses[size]} rounded-full`} /&gt;;
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · @source 显式扫描路径</h3>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* app.css */
+@import "tailwindcss";
+
+/* 默认扫 src/**\/*.{html,js,jsx,ts,tsx,vue,svelte}
+   但项目可能有特殊路径 */
+
+@source "./src/**/*.{html,js,jsx,ts,tsx}";
+@source "./packages/ui/**/*.{ts,tsx}";
+
+/* safelist：显式白名单 class */
+@source inline("bg-red-500 bg-blue-500 bg-green-500");
+@source inline("{hover:,focus:}bg-{red,blue,green}-500");  /* 模式语法 */</code></pre>
+        </div>
+
+        <h3>代码 3 · v3 升 v4 codemod</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 跑官方 codemod
+npx @tailwindcss/upgrade@latest
+
+# codemod 做的事：
+# 1. tailwind.config.js → @theme 在 CSS
+# 2. @tailwind base/components/utilities → @import "tailwindcss"
+# 3. PostCSS plugin 配置改为 @tailwindcss/postcss
+# 4. 个别 utility 重命名（非常少）
+# 5. 默认色调整（codemod 不改，需手动 visual regression）
+
+# 验证
+npm run build
+# 跑 visual regression（Playwright snapshot）
+npm run test:visual</code></pre>
+        </div>
+
+        <h3>代码 4 · 性能 benchmark 自测</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 测 Tailwind build 时间（在 Vite 项目）
+time npm run build
+
+# 测 HMR 速度
+# 用 Vite 自带 perf measure
+# 改一个文件后看 Network 面板 HMR 时间</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>动态拼 class 字符串（最常见）</b> —— <code>className={`bg-${color}-500`}</code> 不工作。用完整字符串 lookup 表</li>
+          <li><b>arbitrary value 用变量</b> —— <code>w-[${size}px]</code> 不工作（变量值不是编译时常量）。用 inline style 或固定 size enum</li>
+          <li><b>跨文件扫描漏</b> —— 项目结构特殊（monorepo packages / vendored modules）需要 @source 显式指定路径</li>
+          <li><b>@source 路径错</b> —— 用相对于 css 文件的路径，不是项目根。注意 <code>**/*</code> 与 <code>**/**/*</code> 差异</li>
+          <li><b>升 v4 后 PostCSS plugin 不工作</b> —— 改 plugin 名为 @tailwindcss/postcss（codemod 处理），不是 tailwindcss</li>
+          <li><b>Vite 项目用了 PostCSS plugin 但没装 Vite plugin 优势</b> —— 改用 @tailwindcss/vite，速度更快</li>
+          <li><b>性能 benchmark 在小项目对比</b> —— 小项目差距不明显。Oxide 的优势在中大型项目（1000+ 模块、monorepo）</li>
+          <li><b>升 v4 后默认色与 Figma 不一致</b> —— OKLCH 重做的视觉差异。要么团队适应、要么在 @theme 显式覆盖</li>
+          <li><b>safelist 滥用</b> —— safelist 是逃生口、不是常态。能用完整字符串就用，safelist 只给"真无法静态分析"的场景</li>
+          <li><b>JIT 慢比 v2 还慢</b> —— 检查是否 @source 配错（扫描了 node_modules 等大量无关文件）；检查 plugin 兼容性</li>
+          <li><b>Tailwind class 在 markdown 文件不工作</b> —— @source 默认不扫 .md。要扩展 @source 包含 md 文件</li>
+          <li><b>"我以为 Oxide 是 build tool"</b> —— Oxide 是 Tailwind v4 的引擎名（与 Turbopack 等 build tool 不同概念）。Tailwind 仍通过 plugin 与 Vite/Webpack 集成</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://tailwindcss.com/blog/tailwindcss-v4" target="_blank" rel="noopener">Tailwind v4 release · Oxide 引擎介绍</a></li>
+          <li><a href="https://tailwindcss.com/blog/tailwindcss-v3" target="_blank" rel="noopener">Tailwind v3 release · JIT 默认</a></li>
+          <li><a href="https://tailwindcss.com/blog/just-in-time-the-next-generation-of-tailwind-css" target="_blank" rel="noopener">Tailwind v2.2 JIT alpha 公告</a> · 设计动机原文</li>
+          <li><a href="https://github.com/tailwindlabs/tailwindcss" target="_blank" rel="noopener">tailwindcss GitHub</a> · 源码（仅本章涉及）</li>
+          <li><a href="https://lightningcss.dev/" target="_blank" rel="noopener">Lightning CSS</a> · v4 用的 CSS 处理工具</li>
+          <li><a href="../02-css-first-config.html">本主题 P3.2 · CSS-first 配置</a> · 配引擎讲配置</li>
+          <li><a href="../../next/06-turbopack/01-turbopack-bundlers.html">Next.js 主题 P6.1 · Turbopack</a> · Rust 工具链同时代</li>
+          <li><a href="../../vite/02-vite-architecture/01-dev-mode.html">Vite 主题 P2.1 · Vite 双模架构</a> · 与 Tailwind v4 Vite plugin 集成</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

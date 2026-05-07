@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>现代 CSS 特性全谱 · P4.1 · Tailwind CSS 深度学习</title>
+    <meta name="description" content="Tailwind v4 押注的 7 个现代 CSS 特性深度解析。Cascade Layers (@layer) 显式分层 + @property 注册自定义属性可动画 + color-mix() 颜色插值 + OKLCH 色彩空间 + Container Queries 组件级响应 + :has() 选择器 + Native CSS Nesting + Logical Properties (v4.2)。这些特性 2023-2025 才稳定，给了 v4 重做的可能。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2306b6d4'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ETW%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>Tailwind CSS 深度学习</span><span class="site-title-badge" style="background: oklch(0.65 0.13 210); color: #fff">TW</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · 现代 CSS 特性</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-modern-css-features.html" class="active">01 · 现代 CSS 特性全谱</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">Tailwind CSS</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · 现代 CSS 特性</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 现代 CSS 特性全谱</span>
+        </nav>
+        <h1>现代 CSS 特性全谱</h1>
+        <p class="lead">
+          Tailwind v4 押注现代 CSS 特性 —— cascade layers / @property / color-mix / OKLCH / container queries / :has() / native nesting / logical properties。这些特性 2023-2025 浏览器主流支持，给了 v4 用 Rust 重写 + CSS-first 配置的前提。这一章把每个特性讲清 + Tailwind 怎么用它，让你看完知道"为什么 v4 这么设计"。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P3 引擎与配置 + 基础 CSS 知识</span>
+          <span><strong>主要来源</strong> tailwindcss.com/blog v4 + MDN CSS specs + Can I Use 兼容性数据</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Tailwind v4 用了 7 个现代 CSS 特性：<b>Cascade Layers (@layer)</b> / <b>@property</b> / <b>color-mix()</b> / <b>OKLCH</b> / <b>Container Queries (@container)</b> / <b>:has()</b> / <b>Native CSS Nesting</b>。+ v4.2 加 <b>Logical Properties</b>。这些特性 2023-2025 浏览器主流支持，给 v4 重写的前提。</li>
+          <li><b>Cascade Layers (@layer)</b>：让 cascade 优先级<strong>显式分层</strong>。Tailwind v4 用 <code>@layer base, components, utilities</code> 组织，避免 user CSS 与 Tailwind utility 冲突。这解决 v3 时代 "我写 .my-style 怎么被 Tailwind 覆盖了" 的痛点。</li>
+          <li><b>@property</b>：让 CSS 自定义属性<strong>有类型 + 默认值 + 可动画</strong>。Tailwind v4 用它注册所有 theme variables，让 transition / animation 能作用于 color 等 token 变化（v3 不行）。</li>
+          <li><b>color-mix()</b>：在两种颜色间插值。Tailwind v4 用它实现 opacity 修饰符（<code>bg-blue-500/50</code> 编译为 <code>color-mix(in oklab, var(--color-blue-500) 50%, transparent)</code>）。这是为什么 v4 opacity 渲染更精准。</li>
+          <li><b>OKLCH 色彩空间</b>：perceptually uniform（亮度跨色相一致）+ wide gamut（P3 / Rec.2020 支持）。Tailwind v4 默认调色板全用 OKLCH 重做。详见 P2.2。</li>
+          <li><b>Container Queries (@container)</b>：让样式响应"<strong>容器尺寸</strong>"而不是"viewport 尺寸"。Tailwind <code>@sm:</code> <code>@md:</code> 容器前缀。卡片在 sidebar 里小、在主区大 —— 这是 viewport 媒体查询解决不了的。</li>
+          <li><b>:has() 选择器</b>：CSS 第一次有<strong>真正的 parent selector</strong>。<code>article:has(img)</code> 表示"含图片的 article"。Tailwind 用 <code>has-[...]:</code> 变体封装：<code>has-[input:checked]:bg-blue-500</code>。</li>
+          <li><b>Native CSS Nesting</b>：2023-2024 年浏览器主流支持。Tailwind v4 用 native nesting 输出，不再依赖 PostCSS nested syntax。这意味着输出 CSS 体积更小、build 更快。</li>
+          <li><b>Logical Properties</b>（v4.2）：<code>margin-block-start</code> / <code>inline-size</code> / <code>inset-s</code> 等支持 RTL（阿拉伯语 / 希伯来语）和双向布局。Tailwind v4.2 加了 <code>inset-s-*</code> / <code>inset-e-*</code> / <code>inline-size-*</code> 等 utility。</li>
+          <li>这一章是"v4 为什么能 Rust 重写 + CSS-first"的<strong>前提解释</strong>。这些 CSS 特性 2023-2025 才稳定，让 Tailwind 可以下放更多事情给浏览器。读完能理解 Tailwind 与 CSS spec 演化的协同。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Cascade Layers (@layer) · 显式优先级分层</h3>
+
+        <p>2022 年 GA。CSS 第一次让你显式定义 cascade 优先级层级：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* 声明 layer 顺序（先声明的优先级低） */
+@layer base, components, utilities;
+
+@layer base {
+  body { font-family: sans-serif; }
+}
+
+@layer components {
+  .btn { padding: 8px 16px; }
+}
+
+@layer utilities {
+  .p-4 { padding: 16px; }
+}
+
+/* 不在 layer 里的 CSS 优先级最高 */
+.my-style { padding: 24px; }  /* 优先级最高 */</code></pre>
+        </div>
+
+        <p>cascade 顺序（优先级从低到高）：</p>
+        <ol>
+          <li>第一个声明的 layer（base）</li>
+          <li>第二个声明的 layer（components）</li>
+          <li>第三个声明的 layer（utilities）</li>
+          <li>不在任何 layer 的 CSS</li>
+          <li>!important</li>
+        </ol>
+
+        <p>Tailwind v4 用这个机制：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* @import "tailwindcss" 实际相当于： */
+@layer theme, base, components, utilities;
+
+@layer theme { /* @theme variables */ }
+@layer base { /* preflight reset */ }
+@layer components { /* 自定义 component class */ }
+@layer utilities { /* 所有 utility */ }</code></pre>
+        </div>
+
+        <p>用户写的 CSS 不在 layer 里，自动比 utilities 优先级高。这解决 v3 痛点："我写 .my-style 怎么被 Tailwind utility 覆盖"。</p>
+
+        <p>注意 cascade layers 与 specificity（特异性）独立 —— layer 优先级<strong>覆盖</strong> specificity。</p>
+
+        <p>浏览器支持：2022-2024 年 Chrome / Safari / Firefox 全部 GA，2026 年 95%+ 兼容。</p>
+
+        <h3>@property · 注册自定义属性</h3>
+
+        <p>CSS 原本的 custom properties（CSS variables）有限制：</p>
+        <ul>
+          <li>没有类型（任何字符串都可赋值）</li>
+          <li>不能动画（transition 不能作用）</li>
+          <li>没有默认值（未定义时 unset）</li>
+        </ul>
+
+        <p>@property 解决这些：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@property --color-brand {
+  syntax: '&lt;color&gt;';        /* 类型 */
+  inherits: true;
+  initial-value: #3b82f6;    /* 默认值 */
+}
+
+/* 现在 --color-brand 可以动画 */
+.box {
+  background: var(--color-brand);
+  transition: --color-brand 300ms ease;
+}
+.box:hover {
+  --color-brand: #ef4444;
+}</code></pre>
+        </div>
+
+        <p>v3 时代 CSS variables 不能 transition，所以 Tailwind theme 改色不能动画（要么用 inline style + JS animation、要么手动改 class）。</p>
+
+        <p>v4 用 @property 注册所有 theme variables：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* v4 内部生成的注册（用户不需要手写） */
+@property --color-bg {
+  syntax: '&lt;color&gt;';
+  inherits: true;
+  initial-value: white;
+}
+
+/* 用户写： */
+.dark {
+  --color-bg: black;  /* 这次切换可以 transition */
+}
+
+body {
+  background: var(--color-bg);
+  transition: background 300ms;
+}</code></pre>
+        </div>
+
+        <p>暗色切换的 fade 效果在 v4 是免费的、v3 要 JS 处理。</p>
+
+        <p>浏览器支持：2024 年 Safari 主流支持后达 95%+ 兼容。</p>
+
+        <h3>color-mix() · 颜色插值函数</h3>
+
+        <p>2023 年浏览器全主流支持。在两种颜色间按百分比混合：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* blue-500 与 transparent 混合 50% = bg-blue-500/50 */
+.bg-half {
+  background: color-mix(in oklab, #3b82f6 50%, transparent);
+}
+
+/* 两种颜色间渐变 */
+.bg-mixed {
+  background: color-mix(in oklch, red 30%, blue);  /* 30% red + 70% blue */
+}
+
+/* 深化某色（与 black 混合） */
+.bg-darker {
+  background: color-mix(in oklch, var(--color-brand) 80%, black);
+}</code></pre>
+        </div>
+
+        <p>关键参数 <code>in oklab</code> / <code>in oklch</code> / <code>in srgb</code> 是<strong>插值色彩空间</strong>。OKLAB / OKLCH 插值更接近人眼感知（红 + 蓝在 sRGB 下是灰色，OKLAB 下是紫色，更直观）。</p>
+
+        <p>Tailwind v4 用 color-mix() 实现 opacity 修饰符：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- bg-blue-500/50 编译为： --&gt;
+&lt;div style="background: color-mix(in oklab, var(--color-blue-500) 50%, transparent);"&gt;</code></pre>
+        </div>
+
+        <p>v3 时代 opacity 修饰符用 <code>rgba(...)</code> 或 <code>opacity</code> 实现。v4 用 color-mix() 在 OKLAB 空间插值，视觉更自然。</p>
+
+        <h3>OKLCH 色彩空间</h3>
+
+        <p>已在 P2.2 详细讲过，这里补充 v4 用法：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@theme {
+  --color-brand-500: oklch(0.62 0.19 240);
+  /*                       L    C   H
+     L (Lightness): 0-1，亮度
+     C (Chroma): 0-0.4 左右，饱和度
+     H (Hue): 0-360，色相
+  */
+}</code></pre>
+        </div>
+
+        <p>v4 默认调色板用 OKLCH 重做的好处：</p>
+        <ul>
+          <li>blue-500 / red-500 / green-500 视觉亮度一致（sRGB 不一致）</li>
+          <li>支持 wide gamut（在 P3 屏幕上更鲜艳）</li>
+          <li>color-mix() 在 OKLAB / OKLCH 空间插值更自然</li>
+          <li>渐变更平滑（不出现"灰色中间带"）</li>
+        </ul>
+
+        <h3>Container Queries (@container) · 组件级响应</h3>
+
+        <p>2023 年 GA。让 CSS 响应"<strong>父容器尺寸</strong>"而不是"viewport 尺寸"：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* 标记容器 */
+.card-wrapper {
+  container-type: inline-size;
+  /* 或 container: card / inline-size; 给容器命名 */
+}
+
+/* 响应容器尺寸 */
+@container (min-width: 400px) {
+  .card { display: flex; }
+}</code></pre>
+        </div>
+
+        <p>解决问题：同一个 card 组件放在 sidebar 里（窄）和主区里（宽）应该不同布局。viewport media query 不能区分（viewport 一样），container query 可以。</p>
+
+        <p>Tailwind <code>@container</code> + 容器前缀：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 标记容器 --&gt;
+&lt;div class="@container"&gt;
+  &lt;!-- 容器 &gt;= sm（640px）时应用 flex --&gt;
+  &lt;article class="block @sm:flex @sm:gap-4"&gt;
+    &lt;img class="w-12 @sm:w-24" /&gt;
+    &lt;div&gt;...&lt;/div&gt;
+  &lt;/article&gt;
+&lt;/div&gt;</code></pre>
+        </div>
+
+        <p>容器查询使用与 viewport 查询相同 breakpoint（@theme 里 --breakpoint 也作为容器尺寸）。</p>
+
+        <p>命名容器（v4）：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;div class="@container/sidebar"&gt;
+  &lt;article class="@sm/sidebar:flex"&gt;...&lt;/article&gt;
+&lt;/div&gt;</code></pre>
+        </div>
+
+        <p>命名容器解决"嵌套容器"歧义（避免子元素查询错误的容器）。</p>
+
+        <h3>:has() 选择器 · 真正的 parent selector</h3>
+
+        <p>2023 年浏览器全主流支持。CSS 第一次有"父元素选择器"：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* 含图片的 article */
+article:has(img) { padding: 16px; }
+
+/* 含选中 input 的 form */
+form:has(input:checked) { background: lightblue; }
+
+/* 含 hover 子元素的父元素 */
+.card:has(.button:hover) { box-shadow: 0 0 20px blue; }</code></pre>
+        </div>
+
+        <p>这是 CSS 30 年来一直缺失的特性。"父元素选择器"在 jQuery / JS 里是常见操作，但 CSS 里之前不可能。</p>
+
+        <p>Tailwind v3.4+ 用 <code>has-[...]:</code> 变体封装：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 含选中 checkbox 的 label 变蓝 --&gt;
+&lt;label class="has-[input:checked]:bg-blue-100 p-4"&gt;
+  &lt;input type="checkbox" /&gt; Toggle
+&lt;/label&gt;
+
+&lt;!-- 含图片的 card 添加 padding --&gt;
+&lt;div class="has-[img]:p-4 has-[img]:bg-gray-50"&gt;
+  &lt;img src="..." /&gt;
+  ...
+&lt;/div&gt;
+
+&lt;!-- 任何子元素 hover 时父元素发光 --&gt;
+&lt;article class="has-[*:hover]:shadow-lg transition-shadow"&gt;
+  &lt;h2&gt;...&lt;/h2&gt;
+  &lt;p&gt;...&lt;/p&gt;
+&lt;/article&gt;</code></pre>
+        </div>
+
+        <p>:has() 让"无 JS 实现复杂交互"再上一层楼。group-hover / peer 之类的变体加 has() 让 95% UI 状态联动可以纯 CSS 实现。</p>
+
+        <h3>Native CSS Nesting · 替代 Sass nesting</h3>
+
+        <p>2023-2024 年浏览器主流支持。CSS 原生支持嵌套（之前要 Sass / PostCSS）：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">.card {
+  padding: 16px;
+  background: white;
+
+  &amp; .title {  /* & 引用父选择器（与 Sass 类似） */
+    font-size: 18px;
+    font-weight: 600;
+  }
+
+  &amp;:hover {
+    background: #f9f9f9;
+  }
+
+  @media (min-width: 768px) {
+    padding: 24px;
+  }
+}</code></pre>
+        </div>
+
+        <p>Tailwind v4 用 native nesting 输出 CSS（不再依赖 PostCSS nested 处理）。这让 build 更快 + 输出 CSS 更小。</p>
+
+        <p>对用户的影响：你写 Tailwind 不直接写 nesting；但当你扩展自定义 CSS 时可以用 native nesting：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* 你的 components.css */
+@layer components {
+  .card {
+    padding: 16px;
+    background: white;
+
+    &amp;:hover {
+      background: #f9f9f9;
+    }
+  }
+}</code></pre>
+        </div>
+
+        <h3>Logical Properties (v4.2 新)</h3>
+
+        <p>v4.2 加了 logical properties utilities，支持 RTL（right-to-left）和 bidirectional 布局：</p>
+
+        <table>
+          <thead>
+            <tr><th>Physical</th><th>Logical</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>ml-*</code> (margin-left)</td><td><code>ms-*</code> (margin-inline-start)</td></tr>
+            <tr><td><code>mr-*</code> (margin-right)</td><td><code>me-*</code> (margin-inline-end)</td></tr>
+            <tr><td><code>w-*</code> (width)</td><td><code>inline-size-*</code></td></tr>
+            <tr><td><code>h-*</code> (height)</td><td><code>block-size-*</code></td></tr>
+            <tr><td><code>top-*</code></td><td><code>inset-bs-*</code> (inset-block-start)</td></tr>
+            <tr><td><code>left-*</code></td><td><code>inset-s-*</code></td></tr>
+          </tbody>
+        </table>
+
+        <p>用法：在阿拉伯语 / 希伯来语等 RTL 文化里，<code>ms-4</code>（margin-inline-start）自动变成 margin-right（因为 RTL 文字方向从右向左）。<code>ml-4</code> 永远是 margin-left。</p>
+
+        <p>多语言项目用 logical properties 才能正确支持 RTL；纯英文 / 中文项目用 physical 也行。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 用 :has() 实现纯 CSS 表单状态</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 含错误的 form 自动加红边框
+function ContactForm() {
+  return (
+    &lt;form className="has-[[data-error=true]]:border-red-500 has-[[data-error=true]]:bg-red-50 border rounded-lg p-4 transition"&gt;
+      &lt;input data-error={!isValid} ... /&gt;
+    &lt;/form&gt;
+  );
+}
+
+// 含选中 checkbox 的 label 高亮
+&lt;label className="has-[input:checked]:bg-blue-50 has-[input:checked]:border-blue-500 p-4 border rounded-lg"&gt;
+  &lt;input type="checkbox" /&gt;
+  &lt;span&gt;Accept terms&lt;/span&gt;
+&lt;/label&gt;</code></pre>
+        </div>
+
+        <h3>场景 2 · Container Queries 实现卡片自适应</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function ProductCard({ product }) {
+  return (
+    &lt;article className="@container border rounded-lg overflow-hidden"&gt;
+      &lt;div className="block @sm:flex @sm:gap-4"&gt;
+        &lt;img className="w-full @sm:w-48" src={product.image} /&gt;
+        &lt;div className="p-4"&gt;
+          &lt;h2 className="text-base @sm:text-lg"&gt;{product.name}&lt;/h2&gt;
+          &lt;p className="hidden @md:block"&gt;{product.description}&lt;/p&gt;
+        &lt;/div&gt;
+      &lt;/div&gt;
+    &lt;/article&gt;
+  );
+}
+
+// 同一个 ProductCard 在 sidebar（窄）显示纵向布局
+// 在主区（宽）显示横向布局
+// 自动响应容器，不依赖 viewport</code></pre>
+        </div>
+
+        <h3>场景 3 · 暗色切换 fade 动画（v4 自动支持）</h3>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@theme {
+  --color-bg: oklch(1 0 0);
+  --color-fg: oklch(0.15 0 0);
+}
+
+.dark {
+  --color-bg: oklch(0.15 0 0);
+  --color-fg: oklch(0.95 0 0);
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  /* v4 自动用 @property 注册 --color-bg / --color-fg，可以 transition */
+  transition: background 300ms, color 300ms;
+}
+
+/* class .dark toggle 时，颜色平滑过渡，不再是瞬间切换 */</code></pre>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · cascade layers 解决用户 CSS 与 Tailwind 冲突</h3>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* app.css */
+@import "tailwindcss";
+
+/* 你的自定义 CSS 不在 layer 里，优先级最高 */
+.my-special-button {
+  background: red !important;  /* 不需要 !important */
+}
+
+/* 你也可以显式放在 components layer（与 Tailwind 风格一致） */
+@layer components {
+  .my-card { padding: 16px; }
+  /* 这个 .my-card 会被 utility 覆盖（utilities 优先级更高） */
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · :has() 复杂交互</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// Card 含 image 时移除 padding（让图片贴边）
+&lt;article className="rounded-lg overflow-hidden has-[img:first-child]:p-0 p-4"&gt;
+  &lt;img src="..." /&gt;
+  ...
+&lt;/article&gt;
+
+// Form 任意 input invalid 时整个 form 边框变红
+&lt;form className="has-[input:invalid]:border-red-500 border rounded p-4"&gt;
+  &lt;input required minLength={3} /&gt;
+  &lt;input type="email" required /&gt;
+&lt;/form&gt;
+
+// 列表内任一项 selected 时整个列表加阴影
+&lt;ul className="has-[[data-selected=true]]:shadow-lg p-4"&gt;
+  ...
+&lt;/ul&gt;</code></pre>
+        </div>
+
+        <h3>代码 3 · color-mix opacity</h3>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- v4 编译： --&gt;
+&lt;div class="bg-blue-500/50"&gt;...&lt;/div&gt;
+
+&lt;!-- 等价 CSS： --&gt;
+&lt;style&gt;
+  .bg-blue-500\/50 {
+    background-color: color-mix(in oklab, var(--color-blue-500) 50%, transparent);
+  }
+&lt;/style&gt;
+
+&lt;!-- 任意 opacity (arbitrary) --&gt;
+&lt;div class="bg-blue-500/[0.37]"&gt;...&lt;/div&gt;</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>用 :has() 但不知道老浏览器</b> —— 2023 年支持，2026 年 95%+ 兼容。但要支持极老浏览器（IE / 老 Safari）的项目谨慎用</li>
+          <li><b>Container queries 忘了标记容器</b> —— 必须在父元素加 <code>@container</code>，否则 <code>@sm:</code> 不响应。常见 bug</li>
+          <li><b>Container queries 与 viewport queries 混淆</b> —— <code>md:flex</code> 是 viewport &gt;= 768px 时 flex；<code>@md:flex</code> 是容器 &gt;= 768px 时 flex。两者独立</li>
+          <li><b>嵌套 container queries 不命名</b> —— 子元素查询时不知道是哪个容器。命名（<code>@container/main</code>）解决歧义</li>
+          <li><b>OKLCH 颜色没准备好兼容</b> —— OKLCH 浏览器支持 95%+（2026），但要支持 IE 11 / 老 Safari 的项目要 fallback。Tailwind v4 自动生成 sRGB fallback</li>
+          <li><b>cascade layers 顺序写错</b> —— <code>@layer base, components, utilities;</code> 顺序决定优先级。颠倒就乱</li>
+          <li><b>@property 注册了但 transition 不生效</b> —— @property 必须在第一次使用 variable 之前声明，否则 transition 不工作</li>
+          <li><b>用 native CSS nesting 在老 PostCSS 配置</b> —— 老 PostCSS 不识别 native nesting。v4 用 Lightning CSS 处理，不依赖 PostCSS</li>
+          <li><b>用 logical properties 但纯英文项目</b> —— 没必要。logical properties 是给 RTL 项目设计的；英文项目用 physical 更直观</li>
+          <li><b>color-mix 写错色彩空间</b> —— <code>in srgb</code> 与 <code>in oklab</code> 结果差异大。OKLAB / OKLCH 视觉更自然，sRGB 经常出现"灰色中间带"</li>
+          <li><b>Container queries 被 prerender 干扰</b> —— SSR / 静态 HTML 在初始没有容器尺寸，可能导致 hydration mismatch。用 CSS only（无 JS 依赖）避免</li>
+          <li><b>"我项目还在用 Sass"</b> —— 2026 年 native nesting + custom properties + container queries 已能覆盖 Sass 90% 用例。新项目不必引入 Sass</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://developer.mozilla.org/en-US/docs/Web/CSS/@layer" target="_blank" rel="noopener">MDN · @layer</a></li>
+          <li><a href="https://developer.mozilla.org/en-US/docs/Web/CSS/@property" target="_blank" rel="noopener">MDN · @property</a></li>
+          <li><a href="https://developer.mozilla.org/en-US/docs/Web/CSS/color_value/color-mix" target="_blank" rel="noopener">MDN · color-mix()</a></li>
+          <li><a href="https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_containment/Container_queries" target="_blank" rel="noopener">MDN · Container Queries</a></li>
+          <li><a href="https://developer.mozilla.org/en-US/docs/Web/CSS/:has" target="_blank" rel="noopener">MDN · :has()</a></li>
+          <li><a href="https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_nesting" target="_blank" rel="noopener">MDN · CSS Nesting</a></li>
+          <li><a href="https://www.w3.org/TR/css-color-4/" target="_blank" rel="noopener">CSS Color Module Level 4</a> · OKLCH spec</li>
+          <li><a href="https://caniuse.com/" target="_blank" rel="noopener">Can I Use</a> · 兼容性数据</li>
+          <li><a href="https://tailwindcss.com/docs/responsive-design" target="_blank" rel="noopener">Tailwind Docs · Responsive (含 container queries)</a></li>
+          <li><a href="../../browser-rendering/index.html">浏览器渲染主题</a> · cascade / specificity / GPU 合成</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
