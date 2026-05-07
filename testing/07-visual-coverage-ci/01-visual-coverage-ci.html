@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>视觉回归 + Coverage + CI 决策树 · P7.1 · 测试工具深度学习</title>
+    <meta name="description" content="视觉回归（Chromatic / Percy / Playwright snapshot）+ Coverage 真相（Istanbul vs V8）+ flaky 治理 + 完整 CI 决策树。本主题的实战收束。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2334a853'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ET%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>测试工具深度学习</span><span class="site-title-badge" style="background: oklch(0.6 0.17 150); color: #fff">Test</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P7 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · 视觉、覆盖率、CI</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-visual-coverage-ci.html" class="active">01 · 视觉回归 + Coverage + CI 决策树</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">测试工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · 视觉、覆盖率、CI</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 视觉 + Coverage + CI</span>
+        </nav>
+        <h1>视觉回归 + Coverage + CI 决策树</h1>
+        <p class="lead">
+          全主题的实战收束。把 P1-P6 的工具知识落地到 CI 流水线：视觉回归怎么集成、覆盖率到底测什么、flaky 怎么治理、最终给一份完整 GitHub Actions 配置 + 决策树。中立——不当任何家广告。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P1-P6 全部</span>
+          <span><strong>主要来源</strong> Chromatic / Percy / Playwright 官方 + 真实开源 CI 配置</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>视觉回归三家——Chromatic（基于 Storybook，社区主流）/ Percy（跨平台，BrowserStack 旗下）/ Playwright snapshot（内置免费，自建简单）。各有 sweet spot。</li>
+          <li>Coverage 真相——Istanbul（成熟慢，babel transform 注入计数）/ V8 coverage（Vitest 默认，快但精度略差）。100% 覆盖率 ≠ 0 bug，覆盖率是工具不是目标。</li>
+          <li>覆盖率三种粒度——line / branch / function。branch 是最有价值的（揭露未测的 if/else 分支）；line 是最常见的；function 容易被简单组件糊弄到 100%。</li>
+          <li>flaky 治理——Playwright retries 区分 flaky vs 真失败 / 仪表盘看 flaky 趋势 / 每周 review 列表 / 根因排查（动画 / 网络时序 / 竞态）。</li>
+          <li>CI 推荐配置——Vitest + Playwright + cache + retries + trace。配合 Turborepo cache（详见 <a href="../../pnpm-monorepo/05-orchestration/01-turborepo.html">pnpm P5.1</a>）让 CI 时间减少 50%+。</li>
+          <li>最终决策树——单元 = Vitest + Testing Library + happy-dom；集成 = Vitest + MSW；e2e = Playwright；视觉 = Chromatic（OSS）/ Playwright snapshot（自建）；覆盖率 = Vitest v8 provider。</li>
+          <li>5 年展望——Vitest 取代 Jest 成主流；Playwright 取代 Cypress；Component Testing 模糊单元/集成边界；AI 辅助测试生成（Anthropic Computer Use / Playwright AI）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>视觉回归三家对比</h3>
+
+        <p>视觉回归测试解决"组件视觉变化"——文字 / lay / 颜色 / 间距等不在代码逻辑能 catch 的回归。</p>
+
+        <p>核心机制：渲染组件 → 截图 → 与基线图像对比 → 像素差超过阈值 → 失败 + 提供 diff 视图。</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 100px">维度</th>
+              <th>Chromatic</th>
+              <th>Percy</th>
+              <th>Playwright snapshot</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>定位</td>
+              <td>Storybook 视觉回归（行业标准）</td>
+              <td>跨平台视觉回归</td>
+              <td>Playwright 内置截图对比</td>
+            </tr>
+            <tr>
+              <td>团队</td>
+              <td>Storybook 创始团队</td>
+              <td>BrowserStack（2020 收购）</td>
+              <td>Microsoft（Playwright 团队）</td>
+            </tr>
+            <tr>
+              <td>定价</td>
+              <td>免费层 + 团队付费</td>
+              <td>免费层 + 团队付费</td>
+              <td>完全免费（自建）</td>
+            </tr>
+            <tr>
+              <td>UI review</td>
+              <td>极佳（团队 review 内置）</td>
+              <td>不错</td>
+              <td>需要自建</td>
+            </tr>
+            <tr>
+              <td>跨浏览器</td>
+              <td>Chromium / Firefox</td>
+              <td>多浏览器矩阵</td>
+              <td>Chromium / Firefox / WebKit</td>
+            </tr>
+            <tr>
+              <td>主流场景</td>
+              <td>组件库 + Storybook 用户</td>
+              <td>大型企业 + 多平台</td>
+              <td>e2e 测试附带视觉</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>选哪个：</p>
+        <ul>
+          <li>已用 Storybook → Chromatic（集成最好）</li>
+          <li>大型企业 + 多平台 → Percy</li>
+          <li>已用 Playwright + 不想付费 → Playwright snapshot</li>
+          <li>开源项目 → Chromatic（OSS 免费层够用）</li>
+        </ul>
+
+        <h3>Coverage 真相</h3>
+
+        <p>覆盖率测试常被误解为"测试质量指标"。实际它只是"代码被跑过的比例"，不能保证测试覆盖了所有可能行为。</p>
+
+        <p>两种实现：</p>
+
+        <p>Istanbul（传统）：</p>
+        <ul>
+          <li>babel-plugin-istanbul 在编译期注入计数代码</li>
+          <li>每行代码加 <code>cov['line:1']++</code> 等</li>
+          <li>精度高（精确到 statement）</li>
+          <li>慢（编译 + 运行计数）</li>
+          <li>Jest 默认</li>
+        </ul>
+
+        <p>V8 coverage（现代）：</p>
+        <ul>
+          <li>用 V8 内置的 <code>Inspector.Profiler</code> coverage API</li>
+          <li>不需要编译期注入；运行时由 V8 自带</li>
+          <li>快（几乎零 overhead）</li>
+          <li>精度略差（V8 优化代码后某些行不可见）</li>
+          <li>Vitest / Bun test 默认</li>
+        </ul>
+
+        <p>2026 推荐：Vitest 用 v8 provider。差距对绝大多数项目无影响，速度优势明显。</p>
+
+        <p>三种粒度：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>粒度</th>
+              <th>含义</th>
+              <th>价值</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>line</td>
+              <td>多少行代码被跑过</td>
+              <td>最常见，但容易被糊弄（一行可能含多个分支）</td>
+            </tr>
+            <tr>
+              <td>branch</td>
+              <td>多少 if/else / 三元 / && 短路被覆盖</td>
+              <td>最有价值（揭露真正未测的分支）</td>
+            </tr>
+            <tr>
+              <td>function</td>
+              <td>多少函数至少被调用一次</td>
+              <td>低价值（简单组件容易 100% function）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>团队定 KPI 时建议：branch ≥ 70% + line ≥ 80%。不要追求 100%——边缘情况覆盖率往往得不偿失。</p>
+
+        <p>覆盖率 ≠ 测试质量：</p>
+        <ul>
+          <li>100% 覆盖率仍可能漏 bug（覆盖代码不等于测了所有行为）</li>
+          <li>低覆盖率不代表测试差（可能集成测试覆盖了但单元层不覆盖）</li>
+          <li>覆盖率作为"提醒未测部分"工具有用，作为目标会扭曲</li>
+        </ul>
+
+        <h3>flaky 治理</h3>
+
+        <p>flaky 测试（偶发失败）是 e2e 永恒的痛。治理思路 4 步：</p>
+
+        <p>1. 检测 · retries 区分 flaky vs 真失败：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// playwright.config.ts
+export default {
+  retries: process.env.CI ? 2 : 0
+};</code></pre>
+        </div>
+        <p>失败 + 重试通过 = flaky；失败 + 重试仍失败 = 真失败。Playwright HTML report 区分两类。</p>
+
+        <p>2. 量化 · flaky 仪表盘：</p>
+        <ul>
+          <li>每个测试统计 flaky 率（重试通过比例 / 总运行）</li>
+          <li>排序展示"最 flaky 的 10 个测试"</li>
+          <li>每周 review</li>
+        </ul>
+
+        <p>工具：</p>
+        <ul>
+          <li>Playwright + GitHub Actions 内置（HTML report 中的 flaky tag）</li>
+          <li>第三方：Buildkite Test Analytics / Datadog Test Visibility / Currents.dev（Cypress）</li>
+        </ul>
+
+        <p>3. 根因排查：</p>
+        <p>flaky 常见根因：</p>
+        <ul>
+          <li>动画时序——元素 transitioning 时点击。修：等动画结束（auto-wait 或 waitForAnimation）</li>
+          <li>网络时序——API 慢导致等待不够。修：调长 timeout 或 mock 网络</li>
+          <li>竞态条件——多个异步操作交织。修：明确 await 顺序</li>
+          <li>第三方依赖——OAuth / CDN / analytics 间歇失败。修：mock 或 stub</li>
+          <li>测试间状态串味——前一测试留 cookie 影响后一测试。修：fixtures 隔离</li>
+        </ul>
+
+        <p>Playwright trace viewer 是排查的杀手锏——回放整个执行过程，看哪一步异常。</p>
+
+        <p>4. 阈值与规则：</p>
+        <ul>
+          <li>flaky 率 &gt; 5% 的测试 → 立即修</li>
+          <li>flaky 率 1-5% → 加入 watch 列表</li>
+          <li>flaky 率 &lt; 1% → 接受（绝对稳定不现实）</li>
+          <li>2 周持续 flaky 不修 → 删除（保留 flaky 测试比无测试更糟）</li>
+        </ul>
+
+        <h3>CI 决策矩阵</h3>
+
+        <p>把所有工具决策汇总：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>层</th>
+              <th>工具</th>
+              <th>占比</th>
+              <th>CI 时间预算</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>静态</td>
+              <td>TypeScript + ESLint + Prettier</td>
+              <td>—</td>
+              <td>&lt; 30s</td>
+            </tr>
+            <tr>
+              <td>单元</td>
+              <td>Vitest + Testing Library + happy-dom</td>
+              <td>30%</td>
+              <td>1-2 分钟</td>
+            </tr>
+            <tr>
+              <td>集成</td>
+              <td>Vitest + Testing Library + MSW</td>
+              <td>50%</td>
+              <td>2-3 分钟</td>
+            </tr>
+            <tr>
+              <td>E2E</td>
+              <td>Playwright（5-10 关键路径）</td>
+              <td>15%</td>
+              <td>3-5 分钟</td>
+            </tr>
+            <tr>
+              <td>视觉</td>
+              <td>Chromatic 或 Playwright snapshot</td>
+              <td>5%</td>
+              <td>1-2 分钟</td>
+            </tr>
+            <tr>
+              <td>覆盖率</td>
+              <td>Vitest v8 provider</td>
+              <td>—</td>
+              <td>+10-30s</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>典型中型项目 CI 总时间：8-12 分钟（不带 cache）/ 3-5 分钟（带 Turborepo cache）。</p>
+
+        <h3>5 年展望</h3>
+
+        <p>2026-2030 趋势预测：</p>
+
+        <ul>
+          <li>Vitest 取代 Jest 成主流——新项目几乎不选 Jest；存量 Jest 项目逐步迁移；2030 年 Jest 进入"仅 React Native + Next.js 历史项目"状态</li>
+          <li>Playwright 取代 Cypress——类似 Vitest vs Jest 路径；Cypress 进入维护期</li>
+          <li>Component Testing 主流化——Vitest browser mode + Playwright Component Testing 模糊单元/集成边界；"组件级 + 真浏览器"成为标准 layer</li>
+          <li>AI 辅助测试生成——Anthropic Computer Use / Playwright AI test gen 自动生成 e2e 测试。2026-2030 普及。改变测试编写工作流</li>
+          <li>视觉回归普及——基础设施成本降低让中型团队也能跑视觉回归。2030 年 50%+ 的 React 项目用视觉回归</li>
+          <li>覆盖率工具简化——V8 provider 完全替代 Istanbul（仅边界 case 用 Istanbul）</li>
+        </ul>
+
+        <div class="callout info">
+          <div class="callout-title">💡 关键洞见：测试栈的护城河是"团队习惯"</div>
+          <p>P1-P7 讲了大量工具技术。但<strong>真正决定项目测试质量的不是工具选择</strong>，是团队习惯——是否每个 PR 都加测试、是否定期清理 flaky、是否优先测行为不测实现。工具只是放大器：好习惯的团队用 Jest 也能写出好测试；坏习惯的团队用 Vitest + Playwright 也照样烂。P2 测试心智 + 持续投入 是核心。本主题最后一句话：选好工具，但不要把工具当救星。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 给新项目搭完整 CI</h3>
+          <p><strong>背景</strong>：3 人团队新项目，要从零搭测试 CI。预算：1-2 周时间。</p>
+          <p><strong>方案</strong>（按优先级）：</p>
+          <ul>
+            <li>第 1 天：装 Vitest + Testing Library + happy-dom + MSW，写 3-5 个示范测试</li>
+            <li>第 2 天：装 Playwright，写 1-2 个 e2e（登录 + 关键路径）</li>
+            <li>第 3 天：配 GitHub Actions（lint + test + build），用 actions/cache 缓存</li>
+            <li>第 4 天：开 Vitest v8 coverage，定 70% branch / 80% line 目标</li>
+            <li>第 5-10 天：补单元 + 集成测试到 ~50 个</li>
+            <li>第 11-14 天：装 Storybook + Chromatic（如果有 UI 组件库需求）</li>
+          </ul>
+          <p>2 周后：完整测试栈跑起来，CI 5-8 分钟。后续每写一个新功能加测试。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · 大量 flaky 治理</h3>
+          <p><strong>背景</strong>：项目 e2e 测试 flaky 率达 15%，CI 经常需要重试 2-3 次才过。</p>
+          <p><strong>治理 1 个月计划</strong>：</p>
+          <ul>
+            <li>第 1 周：装 Playwright HTML report，开 retries: 2 + trace: 'on-first-retry'。让 flaky 可见</li>
+            <li>第 2 周：列出 flaky 率 &gt; 5% 的测试（约 10-20 个）。逐个看 trace 找根因。常见：动画时序、网络 timeout、第三方 OAuth</li>
+            <li>第 3 周：修复前 50% 的 flaky（动画用 waitForAnimation；网络拉长 timeout 或 mock；OAuth stub）</li>
+            <li>第 4 周：剩余 flaky 评估——能修则修，2 周不动的删除</li>
+          </ul>
+          <p>预期：flaky 率从 15% → &lt; 3%。CI 不再需要频繁重试。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · 团队覆盖率指标定不准</h3>
+          <p><strong>背景</strong>：管理层要求"覆盖率 100%"。开发反馈这不现实。怎么协调？</p>
+          <p><strong>沟通策略</strong>：</p>
+          <ul>
+            <li>引用业界共识："100% 覆盖率不能保证 0 bug；80%+ 是合理目标"（Google / Microsoft 工程团队公开数据）</li>
+            <li>区分 line / branch / function：branch 70% 比 line 100% 更有价值</li>
+            <li>展示反例：100% 覆盖但仍有用户路径 bug 的具体例子（用 P2.2 的反模式列表）</li>
+            <li>建议折中：branch ≥ 70% + line ≥ 80% + 关键模块 ≥ 90%（按业务关键性分级）</li>
+            <li>同时投入"测试质量"——奖杯模型 + 测行为不测实现 + flaky 治理</li>
+          </ul>
+          <p>覆盖率是工具不是目标。和管理层达成"覆盖率 + 测试质量并重"的共识。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">完整 GitHub Actions 工作流</span>
+          <pre class="code"><code class="lang-yaml">name: CI
+
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # 静态层
+      - run: pnpm typecheck
+      - run: pnpm lint
+
+      # 单元 + 集成（Vitest）
+      - run: pnpm vitest run --coverage
+      - uses: codecov/codecov-action@v5
+        with: { files: ./coverage/lcov.info }
+
+      # 构建
+      - run: pnpm build
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+
+      # 装 Playwright 浏览器（cache）
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('pnpm-lock.yaml') }}
+      - run: pnpm playwright install --with-deps
+
+      # 跑 e2e
+      - run: pnpm playwright test
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+
+  visual:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }    # Chromatic 需要完整 git 历史
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+
+      # Chromatic
+      - uses: chromaui/action@v11
+        with:
+          projectToken: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">Vitest 覆盖率配置</span>
+          <pre class="code"><code class="lang-typescript">// vitest.config.ts
+export default defineConfig({
+  test: {
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'lcov', 'html'],
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: [
+        'src/**/*.test.{ts,tsx}',
+        'src/**/*.stories.{ts,tsx}',
+        'src/**/types.ts',
+        'src/**/*.d.ts'
+      ],
+      thresholds: {
+        lines: 80,
+        branches: 70,
+        functions: 80
+      }
+    }
+  }
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">Playwright 视觉对比</span>
+          <pre class="code"><code class="lang-typescript">test('homepage visual', async ({ page }) =&gt; {
+  await page.goto('/');
+  await expect(page).toHaveScreenshot('homepage.png', {
+    maxDiffPixels: 100,    // 允许 100 像素差异
+    threshold: 0.2          // 单像素差异阈值
+  });
+});
+
+// 第一次跑生成基线
+// 后续跑对比
+// 故意改后：pnpm playwright test --update-snapshots</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">Chromatic + Storybook 集成</span>
+          <pre class="code"><code class="lang-bash"># 装 Chromatic CLI
+pnpm add -D chromatic
+
+# 第一次：在 Chromatic.com 创建项目，拿 token
+
+# CI / 本地跑：
+CHROMATIC_PROJECT_TOKEN=&lt;token&gt; pnpm chromatic
+# 自动构建 Storybook + 上传 snapshot
+# Chromatic 后台对比 + UI review</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">flaky 检测脚本</span>
+          <pre class="code"><code class="lang-bash"># Playwright HTML report 自带 flaky 标记
+# 也可以用脚本分析
+pnpm playwright test --reporter=json &gt; results.json
+
+# 用 jq 找 flaky（重试通过的）
+jq '.suites[].specs[] | select(.tests[].results | length &gt; 1)' results.json</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 把 100% 覆盖率当目标</div>
+          <p>追求 100% 让团队写"凑覆盖率"测试——测琐碎边界 case，浪费时间。覆盖率是提醒工具不是目标。80%+ branch 已经够；最后 20% 边缘 case ROI 极低。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 视觉回归阈值太严</div>
+          <p>设阈值 0 像素差。结果每次浏览器小升级都让所有视觉测试 fail（字体微变 / 抗锯齿差异）。合理阈值：100-500 像素差 + 0.1-0.3 单像素阈值。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 不开 retries 让 flaky 阻塞 CI</div>
+          <p>e2e flaky 率 1-3% 是常态。不开 retries 让偶发 fail 阻塞 PR 合并。CI 默认 retries: 2——区分 flaky vs 真失败 + 不阻塞。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 视觉回归覆盖所有页面</div>
+          <p>试图给每个页面都跑视觉回归。结果 snapshot 数千张，CI 时间爆炸 + 维护成本高。<strong>策略</strong>：仅核心 UI 组件（Button / Input / Card 等）+ 关键页面（首页 / 产品详情）跑视觉回归。详情页等不跑。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 测试栈搭好不维护</div>
+          <p>项目初期搭完整 CI，后期没人 review flaky 列表 / 没人补新功能测试 / 覆盖率慢慢下滑。测试是持续投入的工程，不是一次性建设。每周 30 分钟 review 测试健康度（flaky / 覆盖率 / CI 时间）是合理投入。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://www.chromatic.com/" target="_blank" rel="noopener">Chromatic 官方</a></li>
+          <li><a href="https://percy.io/" target="_blank" rel="noopener">Percy 官方</a></li>
+          <li><a href="https://playwright.dev/docs/test-snapshots" target="_blank" rel="noopener">Playwright Snapshot 文档</a></li>
+          <li><a href="https://vitest.dev/guide/coverage.html" target="_blank" rel="noopener">Vitest Coverage 文档</a></li>
+          <li><a href="https://martinfowler.com/articles/eradicating-non-determinism-in-tests.html" target="_blank" rel="noopener">Martin Fowler · Eradicating Non-Determinism in Tests</a></li>
+          <li><a href="https://kentcdodds.com/blog/the-merits-of-mocking" target="_blank" rel="noopener">Kent C. Dodds · The Merits of Mocking</a></li>
+          <li><a href="../../pnpm-monorepo/05-orchestration/01-turborepo.html">pnpm P5.1 · Turborepo cache（CI 提速）</a></li>
+          <li><a href="../06-e2e/02-playwright-vs-cypress.html">P6.2 · Playwright vs Cypress（前一阶段）</a></li>
+          <li><a href="../01-overview/01-history.html">P1.1 · 测试工具项目史（本主题首章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../06-e2e/02-playwright-vs-cypress.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P6.2 · Playwright vs Cypress</span>
+          </a>
+          <a class="next" href="../index.html">
+            <span class="label">主题完成 →</span>
+            <span class="title">回到主题首页</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
