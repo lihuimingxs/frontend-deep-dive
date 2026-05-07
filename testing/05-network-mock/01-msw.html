@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MSW · Service Worker + Node 双模 · P5.1 · 测试工具深度学习</title>
+    <meta name="description" content="MSW 2.0 三模一统设计：Service Worker 浏览器 + undici Node + WebSocket interceptor。一份 handlers 服务 dev / test / Storybook 三场景。回答「为什么不在应用层 mock fetch」。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2334a853'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ET%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>测试工具深度学习</span><span class="site-title-badge" style="background: oklch(0.6 0.17 150); color: #fff">Test</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="https://mswjs.io/" target="_blank" rel="noopener">MSW</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · 网络 mock</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-msw.html" class="active">01 · MSW · Service Worker + Node 双模</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">测试工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · 网络 mock</a><span class="breadcrumb-sep">/</span>
+          <span>01 · MSW</span>
+        </nav>
+        <h1>MSW · Service Worker + Node 双模</h1>
+        <p class="lead">
+          网络 mock 不是"模拟 fetch 函数"，是<strong>在网络层拦截请求</strong>——让测试代码与生产代码完全一致。MSW（Mock Service Worker）2.0 把这套理念做成事实标准：浏览器用 Service Worker 拦截 / Node 用 undici interceptor / WebSocket 也支持。一份 handlers 同时服务 dev / test / Storybook 三个场景。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P4（DOM 测试）</span>
+          <span><strong>主要来源</strong> mswjs.io / Aleksandra Sikora 演讲 / undici interceptor 源码</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>MSW 设计原则——<strong>在网络层拦截</strong>而不是在应用代码层替换 fetch。优点：测试代码与生产代码完全一致；切换 dev / test / prod 只换 server.start() / handlers。</li>
+          <li>三模实现——浏览器用 Service Worker（拦截 fetch / XHR）；Node 用 undici interceptor（拦截 global fetch）；WebSocket 用 MSW 2.0+ 新增的 ws interceptor。</li>
+          <li>handlers 写法——<code>http.get('/api/users', handler)</code>；支持 path params / query / body 解析；支持 dynamic response（按 input 返回不同 mock）。</li>
+          <li>vs nock——nock 仅 Node + 拦截 http module（旧接口）。MSW 拦截 fetch（新接口）+ 跨浏览器/Node。MSW 2024 接管 nock 的市场份额。</li>
+          <li>vs vi.mock('axios')——应用层 mock 让测试代码与生产代码不一致；多 endpoint 时累。MSW 在网络层拦截更干净。</li>
+          <li>handlers 三场景复用——一份 handlers.ts 同时服务：dev 模式（worker.start() 在浏览器入口注入）、单元/集成测试（server.listen() in setup）、Storybook（msw-storybook-addon）。</li>
+          <li>常见陷阱——Service Worker 的 cache 干扰；handlers 顺序问题（first match wins）；Node 18+ 不需要 node-fetch polyfill。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>"网络层 mock"vs"应用层 mock"</h3>
+
+        <p>测试中需要 mock API 请求。两种思路：</p>
+
+        <p><strong>应用层 mock</strong>（旧路线）：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 在测试中 mock 应用代码导入的 fetch / axios
+vi.mock('axios', () =&gt; ({
+  default: { get: vi.fn().mockResolvedValue({ data: { name: 'Alice' } }) }
+}));
+
+// 或更糙：替换 global fetch
+globalThis.fetch = vi.fn().mockResolvedValue({
+  ok: true,
+  json: () =&gt; Promise.resolve({ name: 'Alice' })
+});</code></pre>
+        </div>
+
+        <p>问题：</p>
+        <ul>
+          <li>测试代码与生产代码<strong>不一致</strong>（生产用 fetch / axios，测试 mock 它们）</li>
+          <li>多 endpoint 时累（每个 endpoint 写一段 mock）</li>
+          <li>如果生产改了请求方式（fetch → axios），测试 mock 全废</li>
+        </ul>
+
+        <p><strong>网络层 mock</strong>（MSW 路线）：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// handlers 描述"网络层"的契约
+const handlers = [
+  http.get('/api/users/:id', ({ params }) =&gt; {
+    return HttpResponse.json({ id: params.id, name: 'Alice' });
+  })
+];
+
+// 测试代码完全不知道 mock 的存在
+const user = await fetchUser('1');     // 真实代码，不变
+expect(user.name).toBe('Alice');</code></pre>
+        </div>
+
+        <p>优势：</p>
+        <ul>
+          <li>应用代码完全不变（无论用 fetch / axios / 自定义 client）</li>
+          <li>handlers 描述"API 契约"——前后端协议级别的真相</li>
+          <li>同一份 handlers 服务 dev / test / Storybook 三场景</li>
+          <li>switching MSW 只是设置变化，应用代码 0 改</li>
+        </ul>
+
+        <p>这就是 MSW 在 2024 年取代 nock / fetch-mock 等"应用层 mock"工具的原因。</p>
+
+        <h3>三模实现详解</h3>
+
+        <p>MSW 2.0 的三模架构：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>环境</th>
+              <th>拦截机制</th>
+              <th>启动 API</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>浏览器</td>
+              <td>Service Worker</td>
+              <td>worker.start()</td>
+            </tr>
+            <tr>
+              <td>Node</td>
+              <td>undici interceptor（拦截 global fetch）</td>
+              <td>server.listen()</td>
+            </tr>
+            <tr>
+              <td>WebSocket（MSW 2.0+）</td>
+              <td>ws interceptor（拦截 WebSocket 构造）</td>
+              <td>同上 worker / server</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>浏览器 · Service Worker 拦截：</p>
+        <ul>
+          <li>worker.start() 注册一个 Service Worker（mockServiceWorker.js）</li>
+          <li>SW 拦截页面所有 fetch / XHR 请求</li>
+          <li>匹配 handlers → 返回 mock 响应；不匹配 → 透传到真实网络</li>
+          <li>开发者工具的 Network 面板能看到 SW 拦截的请求（标记 "from ServiceWorker"）</li>
+        </ul>
+
+        <p>Node · undici interceptor：</p>
+        <ul>
+          <li>server.listen() 在 Node 中安装一个 undici interceptor</li>
+          <li>拦截 global fetch（Node 18+ 内置）</li>
+          <li>不是 polyfill global fetch；而是 hook undici dispatcher</li>
+          <li>对应用代码透明（fetch 用法不变）</li>
+        </ul>
+
+        <p>WebSocket interceptor（MSW 2.0+）：</p>
+        <ul>
+          <li>支持 mock WebSocket connection + message + close</li>
+          <li>handlers 用 <code>ws.link('wss://...')</code></li>
+          <li>2024 年新增；填补"实时通信测试"空白</li>
+        </ul>
+
+        <h3>handlers 写法</h3>
+
+        <p>handlers 是一个数组，每个 handler 描述一个 endpoint：</p>
+
+        <div class="code-block">
+          <span class="code-label">handlers.ts（共享在 dev / test / Storybook）</span>
+          <pre class="code"><code class="lang-typescript">import { http, HttpResponse, delay } from 'msw';
+
+export const handlers = [
+  // 简单 GET
+  http.get('/api/health', () =&gt; {
+    return HttpResponse.json({ status: 'ok' });
+  }),
+
+  // path params
+  http.get('/api/users/:id', ({ params }) =&gt; {
+    return HttpResponse.json({ id: params.id, name: `User ${params.id}` });
+  }),
+
+  // query params
+  http.get('/api/search', ({ request }) =&gt; {
+    const url = new URL(request.url);
+    const q = url.searchParams.get('q');
+    return HttpResponse.json({ query: q, results: [] });
+  }),
+
+  // POST + body 解析
+  http.post('/api/login', async ({ request }) =&gt; {
+    const body = await request.json() as { username: string; password: string };
+    if (body.username === 'alice') {
+      return HttpResponse.json({ token: 'abc' });
+    }
+    return HttpResponse.json({ error: 'Invalid' }, { status: 401 });
+  }),
+
+  // 模拟延迟
+  http.get('/api/slow', async () =&gt; {
+    await delay(2000);
+    return HttpResponse.json({ data: 'finally' });
+  }),
+
+  // 错误响应
+  http.get('/api/error', () =&gt; {
+    return new HttpResponse(null, { status: 500 });
+  }),
+
+  // 网络错误（连接失败）
+  http.get('/api/unreachable', () =&gt; {
+    return HttpResponse.error();
+  })
+];</code></pre>
+        </div>
+
+        <h3>三场景集成</h3>
+
+        <p>同一份 handlers.ts 用在三处：</p>
+
+        <p><strong>1. 测试 setup（Vitest / Jest）</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">test/setup.ts</span>
+          <pre class="code"><code class="lang-typescript">import { setupServer } from 'msw/node';
+import { handlers } from '../mocks/handlers';
+import { beforeAll, afterEach, afterAll } from 'vitest';
+
+export const server = setupServer(...handlers);
+
+beforeAll(() =&gt; server.listen({ onUnhandledRequest: 'error' }));
+afterEach(() =&gt; server.resetHandlers());   // 每测试后重置 handlers（清掉 server.use）
+afterAll(() =&gt; server.close());</code></pre>
+        </div>
+
+        <p><strong>2. dev 模式</strong>（让前端在没真后端时跑）：</p>
+        <div class="code-block">
+          <span class="code-label">src/main.tsx（开发入口）</span>
+          <pre class="code"><code class="lang-typescript">async function enableMocking() {
+  if (process.env.NODE_ENV !== 'development') return;
+  const { worker } = await import('./mocks/browser');
+  return worker.start({
+    onUnhandledRequest: 'bypass'   // 未 handler 的请求透传到真后端
+  });
+}
+
+enableMocking().then(() =&gt; {
+  ReactDOM.createRoot(document.getElementById('root')!).render(&lt;App /&gt;);
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">src/mocks/browser.ts</span>
+          <pre class="code"><code class="lang-typescript">import { setupWorker } from 'msw/browser';
+import { handlers } from './handlers';
+
+export const worker = setupWorker(...handlers);</code></pre>
+        </div>
+
+        <p><strong>3. Storybook</strong>：</p>
+        <div class="code-block">
+          <span class="code-label">.storybook/preview.ts</span>
+          <pre class="code"><code class="lang-typescript">import { initialize, mswLoader } from 'msw-storybook-addon';
+import { handlers } from '../src/mocks/handlers';
+
+initialize();
+
+export const loaders = [mswLoader];
+export const parameters = {
+  msw: { handlers }
+};</code></pre>
+        </div>
+
+        <p>三处共享一份 handlers.ts。修改 mock 一处生效全部。这是同源 mock 的工程价值。</p>
+
+        <h3>动态 handlers · 测试中临时改</h3>
+
+        <p>测试中常需要"这一个测试用不同的 mock"。MSW 提供 <code>server.use</code>：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">test('shows error on 500', async () =&gt; {
+  // 临时覆盖 /api/users/:id 返回 500
+  server.use(
+    http.get('/api/users/:id', () =&gt; {
+      return new HttpResponse(null, { status: 500 });
+    })
+  );
+
+  render(&lt;UserCard userId="1" /&gt;);
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(/error/i);
+  // afterEach 中 server.resetHandlers() 会清掉这个临时 handler
+});</code></pre>
+        </div>
+
+        <p>关键：<code>afterEach(() =&gt; server.resetHandlers())</code> 必加。否则测试间 handlers 漂移。</p>
+
+        <h3>onUnhandledRequest 策略</h3>
+
+        <p>测试中遇到未 handlers 的请求，怎么办？三种策略：</p>
+
+        <ul>
+          <li><code>'error'</code>（推荐测试）—— 抛 error 让测试 fail。强制覆盖所有请求</li>
+          <li><code>'warn'</code>（默认）—— console.warn 但通过</li>
+          <li><code>'bypass'</code>（推荐 dev）—— 透传到真实网络</li>
+        </ul>
+
+        <p>测试场景<strong>建议设 'error'</strong>——任何未预料的请求立即报错，避免静默 bug。</p>
+
+        <h3>vs nock vs fetch-mock 对比</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>MSW</th>
+              <th>nock</th>
+              <th>fetch-mock</th>
+              <th>vi.mock('axios')</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>跨浏览器/Node</td>
+              <td>✅ 双模</td>
+              <td>❌ 仅 Node</td>
+              <td>🟡 仅 fetch</td>
+              <td>仅应用层</td>
+            </tr>
+            <tr>
+              <td>拦截层</td>
+              <td>网络层</td>
+              <td>http module</td>
+              <td>fetch global</td>
+              <td>应用层</td>
+            </tr>
+            <tr>
+              <td>dev 模式可用</td>
+              <td>✅</td>
+              <td>❌</td>
+              <td>❌</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td>Storybook 集成</td>
+              <td>✅ msw-storybook-addon</td>
+              <td>—</td>
+              <td>—</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td>WebSocket</td>
+              <td>✅ MSW 2.0+</td>
+              <td>—</td>
+              <td>—</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td>2026 主流度</td>
+              <td>事实标准</td>
+              <td>存量维护</td>
+              <td>少用</td>
+              <td>不推荐</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout info">
+          <div class="callout-title">💡 关键洞见：handlers 是 API 契约的代码化</div>
+          <p>MSW 把 handlers 提升到"API 契约的真相来源"层级。它不只是测试 mock，是开发协作的契约——前端写 handlers 时已经定义了"我期望后端怎么响应"。后端按这个契约实现，自然对齐。这套理念让 MSW 从测试工具进化成前端驱动开发（FDD）的工具。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 新项目搭 MSW</h3>
+          <p><strong>步骤</strong>：</p>
+          <div class="code-block">
+            <span class="code-label">bash</span>
+            <pre class="code"><code class="lang-bash">pnpm add -D msw
+
+# 生成 Service Worker 文件
+pnpm dlx msw init public/ --save</code></pre>
+          </div>
+          <p>建 src/mocks/handlers.ts（共享）+ src/mocks/browser.ts（dev）+ test/setup.ts（test）。</p>
+          <p>vitest.config.ts 的 setupFiles 加上 test/setup.ts。完成。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · 后端还没好，前端先开发</h3>
+          <p><strong>背景</strong>：前端 + 后端并行开发。后端 API 还没好。前端要怎么不被 block？</p>
+          <p><strong>方案</strong>：用 MSW dev 模式。</p>
+          <ul>
+            <li>前后端讨论 API 契约（OpenAPI / GraphQL schema / 简单文档）</li>
+            <li>前端把契约写成 handlers.ts</li>
+            <li>开发模式跑 worker.start()，前端在浏览器看到"假后端"返回的数据</li>
+            <li>后端按契约实现真接口</li>
+            <li>后端好了，前端关 worker（dev 配置切到 bypass 或不启动）</li>
+          </ul>
+          <p>这套流程让前后端真正并行。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · Storybook 与 MSW 配合</h3>
+          <p><strong>背景</strong>：组件库要在 Storybook 里展示组件的"loading / error / success"三种状态。</p>
+          <p><strong>方案</strong>：用 msw-storybook-addon。</p>
+          <div class="code-block">
+            <span class="code-label">UserCard.stories.tsx</span>
+            <pre class="code"><code class="lang-typescript">import { http, HttpResponse, delay } from 'msw';
+import UserCard from './UserCard';
+
+export default { component: UserCard };
+
+export const Loading = {
+  parameters: {
+    msw: {
+      handlers: [
+        http.get('/api/users/:id', async () =&gt; {
+          await delay('infinite');   // 永久 loading
+          return HttpResponse.json({ name: 'Alice' });
+        })
+      ]
+    }
+  }
+};
+
+export const Error = {
+  parameters: {
+    msw: {
+      handlers: [
+        http.get('/api/users/:id', () =&gt; HttpResponse.json({ error: 'Not found' }, { status: 404 }))
+      ]
+    }
+  }
+};
+
+export const Success = {
+  parameters: {
+    msw: {
+      handlers: [
+        http.get('/api/users/:id', () =&gt; HttpResponse.json({ name: 'Alice' }))
+      ]
+    }
+  }
+};</code></pre>
+          </div>
+          <p>三个 story 各自定义 handlers；预览组件自然展示 3 种状态。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">完整 handlers + GraphQL 支持</span>
+          <pre class="code"><code class="lang-typescript">import { http, graphql, HttpResponse, delay } from 'msw';
+
+export const handlers = [
+  // REST
+  http.get('/api/users/:id', ({ params }) =&gt; {
+    return HttpResponse.json({ id: params.id, name: 'Alice' });
+  }),
+
+  http.post('/api/users', async ({ request }) =&gt; {
+    const body = await request.json() as any;
+    return HttpResponse.json({ id: '123', ...body }, { status: 201 });
+  }),
+
+  // GraphQL
+  graphql.query('GetUser', ({ variables }) =&gt; {
+    return HttpResponse.json({
+      data: { user: { id: variables.id, name: 'Alice' } }
+    });
+  }),
+
+  graphql.mutation('CreateUser', async ({ variables }) =&gt; {
+    return HttpResponse.json({
+      data: { createUser: { id: '123', ...variables.input } }
+    });
+  })
+];</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">条件 mock（按用户 ID 返回不同数据）</span>
+          <pre class="code"><code class="lang-typescript">http.get('/api/users/:id', ({ params }) =&gt; {
+  const id = params.id as string;
+  if (id === '1') return HttpResponse.json({ name: 'Alice', role: 'admin' });
+  if (id === '2') return HttpResponse.json({ name: 'Bob', role: 'user' });
+  return HttpResponse.json({ error: 'Not found' }, { status: 404 });
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">访问真实网络的 passthrough</span>
+          <pre class="code"><code class="lang-typescript">import { http, passthrough } from 'msw';
+
+http.get('/api/external/*', () =&gt; passthrough())
+// 让该请求透传到真实网络（即使配了 onUnhandledRequest: 'error'）</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">WebSocket mock（MSW 2.0+）</span>
+          <pre class="code"><code class="lang-typescript">import { ws } from 'msw';
+
+const chat = ws.link('wss://chat.example.com');
+
+export const handlers = [
+  chat.addEventListener('connection', ({ client }) =&gt; {
+    client.addEventListener('message', (event) =&gt; {
+      // 客户端发消息后，模拟服务端回复
+      client.send(JSON.stringify({
+        type: 'echo',
+        data: event.data
+      }));
+    });
+
+    // 主动推消息给客户端
+    setTimeout(() =&gt; {
+      client.send(JSON.stringify({ type: 'welcome' }));
+    }, 100);
+  })
+];</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">test/setup.ts 完整模板</span>
+          <pre class="code"><code class="lang-typescript">import { setupServer } from 'msw/node';
+import { handlers } from '../mocks/handlers';
+import { beforeAll, afterEach, afterAll } from 'vitest';
+
+export const server = setupServer(...handlers);
+
+beforeAll(() =&gt; {
+  server.listen({
+    onUnhandledRequest: 'error'   // 测试中未 mock 的请求立即 fail
+  });
+});
+
+afterEach(() =&gt; {
+  server.resetHandlers();   // 清掉 server.use 加的临时 handlers
+});
+
+afterAll(() =&gt; {
+  server.close();
+});</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 不设 onUnhandledRequest: 'error'</div>
+          <p>测试默认 'warn'，未 mock 的请求只 console warn 但通过。结果：测试代码里偷偷调了真网络（可能命中 production API），导致测试 flaky 或污染真实数据。<strong>测试场景永远设 'error'</strong>——强制每个请求被显式 mock。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 忘记 server.resetHandlers()</div>
+          <p>测试 A 用 <code>server.use</code> 加临时 handler，测试 B 没意识到这个 handler 还在生效。afterEach(() => server.resetHandlers()) 必加。这是 MSW 文档明确写出的标准 pattern。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · Service Worker cache 干扰 dev 模式</div>
+          <p>开发时改 handlers，浏览器仍跑旧 SW 缓存的版本。修复：DevTools → Application → Service Workers → "Update on reload" 勾上；或开发时用 hard reload（Cmd+Shift+R）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · handlers 顺序错（first match wins）</div>
+          <p>有 <code>http.get('/api/users/:id', ...)</code> 和 <code>http.get('/api/users/me', ...)</code>。第一个会匹配 <code>/api/users/me</code>（":id" 是 'me'）。修复：把更具体的 path 放前面（<code>http.get('/api/users/me', ...)</code> 在前）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · Node 18+ 装 node-fetch 干扰 MSW</div>
+          <p>项目继续装 <code>node-fetch</code>（Node 18+ 已内置 fetch）。MSW Node interceptor 拦截 undici fetch；node-fetch 走自己的实现，绕过 MSW。修复：删除 <code>node-fetch</code> 依赖，用 Node 内置 fetch。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://mswjs.io/" target="_blank" rel="noopener">MSW 官方文档</a></li>
+          <li><a href="https://mswjs.io/blog/introducing-msw-2.0" target="_blank" rel="noopener">MSW 2.0 公告（2024-01）</a></li>
+          <li><a href="https://github.com/mswjs/msw-storybook-addon" target="_blank" rel="noopener">msw-storybook-addon</a></li>
+          <li><a href="https://www.youtube.com/watch?v=mxv8r5pZmcU" target="_blank" rel="noopener">Aleksandra Sikora · MSW 2.0 演讲</a></li>
+          <li><a href="https://github.com/nock/nock" target="_blank" rel="noopener">nock 官方（参考）</a></li>
+          <li><a href="../04-dom-testing/01-testing-library.html">P4.1 · Testing Library（前一阶段）</a></li>
+          <li><a href="../06-e2e/01-playwright-internals.html">P6.1 · Playwright 内部（下一阶段）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../04-dom-testing/02-jsdom-vs-browser.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P4.2 · jsdom vs happy-dom vs browser mode</span>
+          </a>
+          <a class="next" href="../06-e2e/index.html">
+            <span class="label">下一阶段 →</span>
+            <span class="title">P6 · E2E 测试</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
