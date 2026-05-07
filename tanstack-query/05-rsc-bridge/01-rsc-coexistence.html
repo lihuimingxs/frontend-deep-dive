@@ -1,0 +1,630 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RSC 时代 TanStack Query 还该用吗 · P5.1 · TanStack Query / SWR 深度学习</title>
+    <meta name="description" content="Next.js 16 + React 19 之后，server-side fetch + Server Actions 接管了一部分 server state。客户端 fetch 库还有位置吗？这一章给完整决策矩阵 + 5 个 TanStack Query 仍不可替代的场景 + 3 个被 RSC 接管的场景 + Tanner / React 团队 / Vercel 三方官方说法对账。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23ff4154'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EQ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>TanStack Query / SWR 深度学习</span><span class="site-title-badge" style="background: #ff4154; color: #fff">Q</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · RSC 共存 ⭐</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-rsc-coexistence.html" class="active">01 · RSC 时代还该用吗</a></li>
+          <li><a href="02-hydration-bridge.html">02 · hydration 桥 + use(promise) + Server Actions</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TanStack Query</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · RSC 共存</a><span class="breadcrumb-sep">/</span>
+          <span>01 · RSC 时代还该用吗</span>
+        </nav>
+        <h1>RSC 时代 TanStack Query 还该用吗 · 决策矩阵</h1>
+        <p class="lead">
+          整个主题最难、最容易误判的一节。Next.js 16 + React 19 之后，<strong>客户端 fetch 库的位置发生根本性变化</strong> —— 不是消失，是收窄。这一章给清楚的决策矩阵：5 个 TanStack Query 仍不可替代的场景 + 3 个被 RSC 接管的场景 + Tanner / React 团队 / Vercel 三方官方说法对账。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P1-P4 全部 + 读过 <a href="../../next/03-rsc-streaming/index.html">Next.js P3 RSC</a> + <a href="../../next/04-server-actions/index.html">Next.js P4 Server Actions</a></span>
+          <span><strong>主要来源</strong> Tanner Linsley 关于 RSC 的多次回应 + React 团队（Sebastian / Dan）公开讨论 + tanstack.com 官方 RSC 集成文档</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>这一章没有"标准答案"。RSC 时代 TanStack Query 的位置取决于<strong>具体场景</strong>，不能一刀切"用"或"不用"。</li>
+          <li>RSC 时代 server state 路径分三层：<b>(1) 首屏数据</b> → Server Component fetch + 'use cache'；<b>(2) 简单变更</b> → Server Action + revalidate；<b>(3) 客户端独有 server state</b> → TanStack Query。</li>
+          <li>5 个 TanStack Query <strong>仍不可替代</strong>的场景：<b>(1) 长生命周期 cache</b>（infinite scroll / 跨导航 cache 复用） / <b>(2) 实时刷新 / 轮询</b>（refetchInterval / WebSocket setQueryData） / <b>(3) 乐观更新</b>（roundtrip 太慢） / <b>(4) WebSocket / SSE 多组件订阅</b>（推送数据进 cache 让多个组件共享） / <b>(5) 第三方客户端 API</b>（CORS / API key 在 client）。</li>
+          <li>3 个被 <strong>RSC 接管</strong>的场景：<b>(1) 首屏渲染数据</b>（async Server Component 比 useQuery 简单 + 零客户端 bundle） / <b>(2) 简单数据变更</b>（Server Action + revalidatePath 比 useMutation + invalidate 直接） / <b>(3) SEO 关键页面</b>（必须 server-render）。</li>
+          <li>Tanner Linsley 的官方表态（2024 多次重申）：<strong>"TanStack Query is not going away. We're complementary, not competing."</strong></li>
+          <li>React 团队（Sebastian / Dan）的官方表态：<strong>"use API 是底层；上层 cache library 仍然有位置；不要把 useQuery 强行替换成 use(promise)。"</strong></li>
+          <li>Vercel（Next.js 团队）的官方表态：<strong>推 RSC + Server Actions，同时官方文档明确支持 hydration 桥的 TanStack Query 用法</strong>。</li>
+          <li>RSC 时代客户端 fetch 库<strong>总需求量下降</strong>（30-50% 的 fetch 移到 server-side），但 TanStack Query 在剩余客户端场景份额仍在提升（吃 SWR 留下的份额）。</li>
+          <li>新项目决策原则：<b>(1) Next.js + 重 SEO + 数据基本静态</b> → 不装客户端 fetch 库；<b>(2) Next.js + 客户端交互重</b> → RSC 管首屏 + TanStack Query 管客户端；<b>(3) 纯 SPA</b> → 装 TanStack Query。</li>
+          <li>"2026 起，新项目第一选择是 RSC + Server Actions，TanStack Query 用在剩下的客户端独有场景"是<strong>强观点</strong>。RSC 不是 TanStack Query 的替代品，是<strong>不同层的工具</strong>。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>RSC 之前 · 客户端 fetch 库覆盖全部 server state</h3>
+
+        <p>2020-2023 年的 React 项目里，server state 全部走客户端 fetch 库：</p>
+
+        <ul>
+          <li>首屏数据 → useQuery（client mount 后 fetch + render）</li>
+          <li>列表 / 详情 / 表单 → useQuery</li>
+          <li>变更 → useMutation + onSuccess invalidate</li>
+          <li>实时数据 → useQuery + refetchInterval / WebSocket setQueryData</li>
+          <li>客户端 cache → 全部统一进 queryClient</li>
+        </ul>
+
+        <p>这套模型简单一致。代价：</p>
+        <ul>
+          <li>首屏 SEO 差（client render → 搜索引擎拿不到内容）</li>
+          <li>包体积大（client bundle 含所有 fetch 逻辑）</li>
+          <li>"loading 1 秒"是常态（client mount 后才发请求）</li>
+        </ul>
+
+        <h3>RSC 出现 · server state 路径分层</h3>
+
+        <p>2024 年 React 19 + Next.js 16 RSC 落地后，server state 不再是"客户端 cache 一种心智"。变成<strong>三层结构</strong>：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>层</th>
+              <th>谁管</th>
+              <th>典型场景</th>
+              <th>工具</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1. 首屏 server-side</td>
+              <td>RSC + 'use cache'</td>
+              <td>blog 文章 / dashboard 静态部分 / 列表页首屏</td>
+              <td>async Server Component + fetch</td>
+            </tr>
+            <tr>
+              <td>2. 数据变更</td>
+              <td>Server Actions + revalidate</td>
+              <td>表单提交 / 简单 CRUD</td>
+              <td>'use server' + revalidatePath/Tag</td>
+            </tr>
+            <tr>
+              <td>3. 客户端独有 server state</td>
+              <td>TanStack Query</td>
+              <td>infinite / 实时 / WebSocket / 第三方 API</td>
+              <td>useQuery / useMutation</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>每一层做自己最擅长的事：</p>
+        <ul>
+          <li>第 1 层：server-render 直接出 HTML，SEO 好，包体小，零 client loading</li>
+          <li>第 2 层：表单提交不必走客户端 cache，server 直接处理 + revalidate</li>
+          <li>第 3 层：客户端独有的复杂 server state（cache 跨导航 / 乐观 / 实时）仍然需要专门工具</li>
+        </ul>
+
+        <h3>5 个 TanStack Query 仍不可替代的场景 · 详细</h3>
+
+        <p><b>场景 1 · 长生命周期客户端 cache</b></p>
+
+        <p>典型例子：用户在 dashboard 看 user list（page A） → 点进 detail（page B） → 切回 page A。</p>
+        <ul>
+          <li>RSC 路径：每次进 page A 都重新 server-render（除非用 router cache，但行为有限）</li>
+          <li>TanStack Query 路径：第一次进 fetch + cache → 之后 stale-while-revalidate（立刻显示 + 后台刷）</li>
+        </ul>
+
+        <p>结论：跨导航复用客户端 cache，TanStack Query 体验更好。Next.js Router Cache 部分覆盖这个场景但<strong>更受限</strong>（v15 默认 stale time 缩短）。</p>
+
+        <p><b>场景 2 · 实时刷新 / 轮询</b></p>
+
+        <p>典型例子：股票价格每 5 秒刷新；任务进度每秒查询；订单状态轮询。</p>
+        <ul>
+          <li>RSC 路径：不擅长。RSC 是 server-render，轮询需要 client 重复请求 → 不如直接 client-side</li>
+          <li>TanStack Query 路径：refetchInterval 一行解决；函数形态可以根据状态调整</li>
+        </ul>
+
+        <p>结论：客户端轮询场景 TanStack Query 是首选。</p>
+
+        <p><b>场景 3 · 乐观更新</b></p>
+
+        <p>典型例子：like 按钮 + 1；删除 todo；编辑评论。用户期望<strong>提交瞬间 UI 更新</strong>。</p>
+        <ul>
+          <li>RSC + Server Action 路径：用户点击 → Server Action → revalidatePath → 重新渲染。<strong>roundtrip 不可避免</strong>，至少 200ms-500ms 延迟。可以配 React 19 useOptimistic 部分缓解</li>
+          <li>TanStack Query 路径：onMutate 4 步乐观更新 + 失败回滚 + onSettled 对账。<strong>体验最好</strong></li>
+        </ul>
+
+        <p>结论：复杂乐观更新（list 增删改）TanStack Query 仍是最完整的方案。简单 like 按钮可以用 useOptimistic + Server Action。</p>
+
+        <p><b>场景 4 · WebSocket / SSE 多组件订阅</b></p>
+
+        <p>典型例子：聊天消息推送；通知推送；多用户协作（Figma / Notion 风格）。</p>
+        <ul>
+          <li>RSC 路径：不能用。RSC 是 server-render 静态产物，不能管 WebSocket lifecycle</li>
+          <li>TanStack Query 路径：WebSocket 收到消息 → setQueryData 写进 cache → 所有用 useQuery 订阅的组件同时更新</li>
+        </ul>
+
+        <p>结论：实时 push 数据 TanStack Query 不可替代。</p>
+
+        <p><b>场景 5 · 第三方客户端 API</b></p>
+
+        <p>典型例子：</p>
+        <ul>
+          <li>用户用自己的 API key 调第三方 API（OpenAI / GitHub）</li>
+          <li>CORS 限制必须从 client 调（不能 proxy 到 server）</li>
+          <li>客户端 SDK（Stripe / Firebase / Supabase JS SDK）</li>
+        </ul>
+
+        <p>结论：这些场景 server-side 接不到，TanStack Query 是天然选择。</p>
+
+        <h3>3 个被 RSC 接管的场景 · 详细</h3>
+
+        <p><b>场景 1 · 首屏渲染数据</b></p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// RSC 路径：极简、零客户端 bundle、SEO 友好
+// app/posts/page.tsx (Server Component)
+export default async function PostsPage() {
+  const posts = await fetch('/api/posts', { next: { revalidate: 60 } }).then(r =&gt; r.json());
+  return &lt;ul&gt;{posts.map(p =&gt; &lt;li key={p.id}&gt;{p.title}&lt;/li&gt;)}&lt;/ul&gt;;
+}
+
+// 等价的 TanStack Query 写法（client-side）
+'use client';
+export default function PostsPage() {
+  const { data: posts, isPending } = useQuery({
+    queryKey: ['posts'],
+    queryFn: () =&gt; fetch('/api/posts').then(r =&gt; r.json()),
+  });
+  if (isPending) return &lt;Loading /&gt;;  // 1 秒 loading
+  return &lt;ul&gt;{posts.map(p =&gt; &lt;li key={p.id}&gt;{p.title}&lt;/li&gt;)}&lt;/ul&gt;;
+}
+// 包体积大（含 TanStack Query）；SEO 差；首屏慢</code></pre>
+        </div>
+
+        <p>结论：首屏数据 RSC 完胜。</p>
+
+        <p><b>场景 2 · 简单数据变更</b></p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// RSC + Server Action 路径
+// app/_actions/posts.ts
+'use server';
+export async function deletePost(id: string) {
+  await db.posts.delete({ where: { id } });
+  revalidatePath('/posts');
+}
+
+// 调用（任意 Server / Client Component）
+&lt;form action={async () =&gt; deletePost(id)}&gt;
+  &lt;button&gt;Delete&lt;/button&gt;
+&lt;/form&gt;
+
+// 等价的 TanStack Query 路径
+const { mutate } = useMutation({
+  mutationFn: api.deletePost,
+  onSuccess: () =&gt; queryClient.invalidateQueries({ queryKey: ['posts'] }),
+});
+&lt;button onClick={() =&gt; mutate(id)}&gt;Delete&lt;/button&gt;</code></pre>
+        </div>
+
+        <p>结论：</p>
+        <ul>
+          <li>简单变更（无乐观更新需求）→ Server Action 更简洁，progressive enhancement 也好（关 JS 也能 submit）</li>
+          <li>复杂变更（乐观更新 / 多组件 cache 同步）→ TanStack Query 更体系</li>
+        </ul>
+
+        <p><b>场景 3 · SEO 关键页面</b></p>
+
+        <p>marketing 页 / blog / 文档站 / 商品详情：必须 server-render（搜索引擎要看到内容）。client-side fetch 不可选。RSC 是默认。</p>
+
+        <h3>三方官方说法对账</h3>
+
+        <p>RSC 时代 TanStack Query 的位置不是猜测，三方都有公开表态：</p>
+
+        <p><b>Tanner Linsley（TanStack 创始人）</b></p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 Tanner 的多次回应（2024-2026）</div>
+          <p>「<i>TanStack Query is not going away. RSC and Server Actions handle a different layer — they don't manage long-lived client-side cache, optimistic updates, infinite scroll, or WebSocket-pushed data with multi-component subscribers. We're complementary, not competing.</i>」</p>
+          <p>「<i>If your data is read-once-on-load and never changes from the client side, you don't need TanStack Query. If you have any of: client-side cache invalidation, optimistic updates, real-time data, infinite queries — you still want it.</i>」</p>
+        </div>
+
+        <p><b>React 团队（Sebastian Markbåge / Dan Abramov）</b></p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 React 团队的表态</div>
+          <p>「<i>The use API is a low-level primitive. Higher-level cache libraries like React Query are still needed for client-side caching, mutations, and lifecycle management.</i>」</p>
+          <p>「<i>Don't replace useQuery with use(promise). They serve different purposes — use is for consuming a promise within a render; useQuery is for a full query lifecycle with caching.</i>」</p>
+        </div>
+
+        <p><b>Vercel（Next.js 团队）</b></p>
+
+        <p>Next.js 官方文档明确支持 TanStack Query 集成（dehydrate + HydrationBoundary 模式）。Vercel 工程 blog 也多次推荐"RSC 管首屏 + TanStack Query 管客户端独有场景"的组合。</p>
+
+        <p>三方说法一致：<strong>不是替代关系，是互补关系</strong>。</p>
+
+        <h3>决策矩阵</h3>
+
+        <p>拿到一个新场景，按 4 步判断要不要用 TanStack Query：</p>
+
+        <ol>
+          <li><b>问 1：是首屏渲染数据吗？</b>
+            <ul>
+              <li>是 → RSC fetch + 'use cache'（不用 TanStack Query）</li>
+              <li>不是 → 进下一问</li>
+            </ul>
+          </li>
+          <li><b>问 2：只是表单提交一次性变更吗？</b>
+            <ul>
+              <li>是（无乐观更新需求） → Server Action + revalidatePath</li>
+              <li>是（要乐观更新） → 进下一问</li>
+              <li>不是 → 进下一问</li>
+            </ul>
+          </li>
+          <li><b>问 3：有以下任一场景吗？</b>
+            <ul>
+              <li>跨导航 cache 复用</li>
+              <li>infinite scroll / 加载更多</li>
+              <li>实时刷新 / 轮询</li>
+              <li>WebSocket / SSE 多组件订阅</li>
+              <li>乐观更新</li>
+              <li>第三方客户端 API</li>
+              <li>是 → 用 TanStack Query</li>
+              <li>不是 → 进下一问</li>
+            </ul>
+          </li>
+          <li><b>问 4：还有什么是 RSC 解决不了的？</b>
+            <ul>
+              <li>没有 → 不用客户端 fetch 库</li>
+              <li>有 → 用 TanStack Query 处理那部分</li>
+            </ul>
+          </li>
+        </ol>
+
+        <h3>新项目典型决策</h3>
+
+        <p><b>项目 A · marketing 站 / 文档站 / blog</b></p>
+        <ul>
+          <li>核心：内容静态，重 SEO，少交互</li>
+          <li>结论：100% RSC，<strong>不装 TanStack Query</strong></li>
+        </ul>
+
+        <p><b>项目 B · 用户 dashboard（B2B SaaS）</b></p>
+        <ul>
+          <li>核心：用户登录后看复杂 dashboard，多列表 / 表单 / 实时数据</li>
+          <li>结论：RSC 管 layout / 静态部分；TanStack Query 管动态列表 / 实时数据 / 乐观更新</li>
+        </ul>
+
+        <p><b>项目 C · 电商商品详情</b></p>
+        <ul>
+          <li>核心：商品信息 SEO 重要；购物车 / 推荐 / 库存实时</li>
+          <li>结论：商品信息 RSC；购物车 + 库存 TanStack Query</li>
+        </ul>
+
+        <p><b>项目 D · 聊天 / 协作（Notion / Figma 风格）</b></p>
+        <ul>
+          <li>核心：实时 / WebSocket / 乐观更新 / 多用户协作</li>
+          <li>结论：以 TanStack Query 为主，RSC 只做登录页 / 设置页</li>
+        </ul>
+
+        <p><b>项目 E · 纯 SPA（不用 Next.js）</b></p>
+        <ul>
+          <li>核心：CSR，没有 RSC 选项</li>
+          <li>结论：TanStack Query 是默认</li>
+        </ul>
+
+        <h3>从 SWR 切 TanStack Query 的判断</h3>
+
+        <p>App Router 项目里之前装了 SWR，要不要切？</p>
+
+        <ul>
+          <li>RSC 已经接管了 80%+ fetch → 留 SWR 也行（剩余客户端 query 简单）</li>
+          <li>剩余客户端 query 复杂（infinite / 多组件 / 乐观）→ 切 TanStack Query 体验明显更好</li>
+          <li>团队对 SWR 熟悉 + 没有具体痛点 → 不必切</li>
+        </ul>
+
+        <p>详细对照见 <a href="../06-swr-peers/01-swr-and-peers.html">P6.1</a>。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · Next.js dashboard 完整路径</h3>
+
+        <p>典型 dashboard：</p>
+        <ul>
+          <li><b>顶部 nav + user info</b> → RSC（async Server Component 读 cookies + fetch user）</li>
+          <li><b>主面板列表（重 SEO）</b> → RSC + 'use cache'（静态时 ISR）</li>
+          <li><b>实时数据卡片（订单数 / 在线人数）</b> → TanStack Query + refetchInterval</li>
+          <li><b>infinite log 列表</b> → TanStack Query useInfiniteQuery</li>
+          <li><b>编辑表单（乐观更新需求弱）</b> → Server Action + form action</li>
+          <li><b>编辑表单（乐观更新强：发评论）</b> → TanStack Query useMutation + onMutate</li>
+          <li><b>实时聊天</b> → TanStack Query + WebSocket setQueryData</li>
+        </ul>
+
+        <p>每个区块用最适合的工具，整页协作。详见 <a href="02-hydration-bridge.html">P5.2</a> 的具体代码。</p>
+
+        <h3>场景 2 · 商品详情页混合</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/products/[id]/page.tsx (RSC)
+export default async function ProductPage({ params }: { params: Promise&lt;{ id: string }&gt; }) {
+  const { id } = await params;
+  // 商品基本信息走 RSC（SEO 关键）
+  const product = await fetch(`/api/products/${id}`, { next: { revalidate: 300 } }).then(r =&gt; r.json());
+
+  return (
+    &lt;Layout&gt;
+      &lt;ProductInfo product={product} /&gt;  {/* server-rendered */}
+      &lt;Suspense fallback={&lt;Skeleton /&gt;}&gt;
+        &lt;ClientStockAndCart productId={id} initialPrice={product.price} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/Layout&gt;
+  );
+}
+
+// app/_components/ClientStockAndCart.tsx
+'use client';
+export default function ClientStockAndCart({ productId, initialPrice }) {
+  // 库存实时刷新 → TanStack Query
+  const { data: stock } = useQuery({
+    queryKey: ['stock', productId],
+    queryFn: () =&gt; api.getStock(productId),
+    refetchInterval: 10_000,
+  });
+
+  // 加入购物车 → 乐观更新
+  const { mutate: addToCart } = useMutation({...});
+
+  return (
+    &lt;&gt;
+      &lt;p&gt;{stock?.count} in stock&lt;/p&gt;
+      &lt;button onClick={() =&gt; addToCart()}&gt;Add&lt;/button&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>商品信息 SEO + 静态 → RSC；库存实时 + 购物车乐观 → TanStack Query。两层共存。</p>
+
+        <h3>场景 3 · 聊天应用 100% TanStack Query</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use client';
+function ChatRoom({ roomId }: { roomId: string }) {
+  const queryClient = useQueryClient();
+
+  // 历史消息：infinite query（双向）
+  const messages = useInfiniteQuery({
+    queryKey: ['messages', roomId],
+    queryFn: ({ pageParam }) =&gt; api.getMessages(roomId, pageParam),
+    initialPageParam: null,
+    getNextPageParam: (last) =&gt; last.nextCursor,
+    getPreviousPageParam: (first) =&gt; first.prevCursor,
+    maxPages: 20,
+  });
+
+  // 发消息：useMutation + 乐观
+  const { mutate: send } = useMutation({
+    mutationFn: api.sendMessage,
+    onMutate: async (text) =&gt; {
+      // 4 步乐观更新到 infinite cache 末页
+    },
+  });
+
+  // WebSocket 接收：setQueryData 推进 cache
+  useEffect(() =&gt; {
+    const ws = new WebSocket(`/ws/rooms/${roomId}`);
+    ws.onmessage = (event) =&gt; {
+      const msg = JSON.parse(event.data);
+      queryClient.setQueryData&lt;typeof messages.data&gt;(['messages', roomId], (old) =&gt; {
+        if (!old) return old;
+        // 把 msg 追加到末页
+        const lastPage = old.pages[old.pages.length - 1];
+        return {
+          ...old,
+          pages: [...old.pages.slice(0, -1), { ...lastPage, items: [...lastPage.items, msg] }],
+        };
+      });
+    };
+    return () =&gt; ws.close();
+  }, [roomId, queryClient]);
+
+  // ... 渲染 messages.data.pages
+}</code></pre>
+        </div>
+
+        <p>聊天应用 RSC 几乎用不上 —— 全部是实时 + 乐观 + WebSocket。100% TanStack Query。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · RSC vs TanStack Query 同一需求对比</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 需求：显示用户列表
+
+// RSC 版（Next.js App Router）
+// app/users/page.tsx
+export default async function UsersPage() {
+  const users = await fetch('/api/users', { next: { revalidate: 60 } }).then(r =&gt; r.json());
+  return &lt;ul&gt;{users.map(u =&gt; &lt;li key={u.id}&gt;{u.name}&lt;/li&gt;)}&lt;/ul&gt;;
+}
+// 优势：零客户端 bundle、SEO 友好、首屏快
+// 限制：用户切走再切回需要重新 server-render（除非 router cache）
+
+// TanStack Query 版
+'use client';
+export default function UsersPage() {
+  const { data: users, isPending } = useQuery({
+    queryKey: ['users'],
+    queryFn: () =&gt; fetch('/api/users').then(r =&gt; r.json()),
+  });
+  if (isPending) return &lt;Loading /&gt;;
+  return &lt;ul&gt;{users.map(u =&gt; &lt;li key={u.id}&gt;{u.name}&lt;/li&gt;)}&lt;/ul&gt;;
+}
+// 优势：跨导航 cache、stale-while-revalidate
+// 限制：包体大、SEO 差、首屏慢
+
+// 混合版（首屏 + 跨导航）
+// app/users/page.tsx (RSC)
+export default async function UsersPage() {
+  const queryClient = new QueryClient();
+  await queryClient.prefetchQuery({
+    queryKey: ['users'],
+    queryFn: () =&gt; fetch('/api/users').then(r =&gt; r.json()),
+  });
+  return (
+    &lt;HydrationBoundary state={dehydrate(queryClient)}&gt;
+      &lt;UserList /&gt;  {/* Client Component 用 useQuery 命中 cache */}
+    &lt;/HydrationBoundary&gt;
+  );
+}
+// 详细见 P5.2</code></pre>
+        </div>
+
+        <h3>代码 2 · 决策矩阵实战</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 项目结构：app/dashboard/page.tsx
+// 决策：哪些用 RSC，哪些 client-side TanStack Query
+
+// app/dashboard/page.tsx (RSC)
+export default async function Dashboard() {
+  // 1. user 信息 → RSC（首屏 + 不变）
+  const user = await getCurrentUser();
+  // 2. layout / nav → RSC（静态）
+  return (
+    &lt;Layout user={user}&gt;
+      {/* 3. 静态统计卡片 → RSC */}
+      &lt;StatsCards /&gt;
+      {/* 4. 实时订单计数 → Client + TanStack Query */}
+      &lt;ClientLiveOrderCount /&gt;
+      {/* 5. infinite log → Client + TanStack Query */}
+      &lt;ClientLogFeed /&gt;
+    &lt;/Layout&gt;
+  );
+}
+
+// app/_components/ClientLiveOrderCount.tsx
+'use client';
+export function ClientLiveOrderCount() {
+  const { data: count } = useQuery({
+    queryKey: ['order-count'],
+    queryFn: api.getOrderCount,
+    refetchInterval: 5000,
+  });
+  return &lt;div&gt;Live: {count}&lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <h3>代码 3 · 渐进迁移（旧 SWR 项目混合）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 旧 Pages Router 项目用 SWR 全量
+// 迁 App Router 时不必一次切完
+
+// 新页面（App Router）：RSC + 部分 TanStack Query
+// app/new-feature/page.tsx
+export default async function NewFeature() {
+  return (
+    &lt;Suspense fallback={&lt;Loading /&gt;}&gt;
+      &lt;ServerSection /&gt;
+      &lt;ClientLiveSection /&gt;
+    &lt;/Suspense&gt;
+  );
+}
+
+// 旧页面（Pages Router）：保留 SWR
+// pages/legacy.tsx
+import useSWR from 'swr';
+export default function LegacyPage() {
+  const { data } = useSWR('/api/legacy', fetcher);
+  return ...;
+}
+
+// 两套并存可以；迁完后统一</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>"RSC 出来了我把所有 useQuery 都换掉"</b> —— 错。RSC 接管首屏，但客户端独有场景仍需要 TanStack Query。强行换会失去 cache / 乐观 / 实时能力</li>
+          <li><b>"用 use(promise) 替代 useQuery"</b> —— 不是同一类东西。use 是消费 promise 的底层 API，没有 cache / refetch / invalidate / mutation 体系。详见 <a href="02-hydration-bridge.html">P5.2</a></li>
+          <li><b>客户端组件里 useQuery 拿首屏数据</b> —— 反模式。应该 RSC fetch 后通过 dehydrate 桥过来。客户端再 useQuery 是双重请求</li>
+          <li><b>用 TanStack Query 拿 SEO 关键页面数据</b> —— 搜索引擎抓不到。SEO 重的页面必须 server-render（RSC 或传统 SSR）</li>
+          <li><b>RSC fetch + 'use cache' 用来管实时数据</b> —— RSC cache 是 server-side，client 拿到就静态了。实时数据走 client TanStack Query</li>
+          <li><b>把 Server Action 当 useMutation 替代</b> —— Server Action 没有客户端 cache 同步能力。复杂场景（多 cache 失效 / 乐观）仍 useMutation</li>
+          <li><b>"装了 TanStack Query 就不用 RSC"</b> —— 反方向错。两个工具不互斥。新项目都要</li>
+          <li><b>跨请求 new QueryClient()</b> —— Server-side prefetch 时每请求必须独立 new。复用会跨用户污染 cache。详见 <a href="02-hydration-bridge.html">P5.2</a></li>
+          <li><b>"Tanner 说 TanStack Query 不会消失，所以全部场景都用"</b> —— 误读。Tanner 强调的是<strong>complementary</strong> —— 互补不是覆盖</li>
+          <li><b>新项目不评估直接装 TanStack Query</b> —— 不一定需要。marketing 站 / 文档站可能整个项目都不需要客户端 fetch 库</li>
+          <li><b>SSR 项目（非 RSC，用旧 SSR）也以为不需要 TanStack Query</b> —— 旧 SSR 没有 RSC 的 cache 机制；客户端 fetch 仍然走 useQuery</li>
+          <li><b>用 useEffect+fetch 替代 RSC 心智</b> —— 两次倒退。客户端不需要复杂 cache 时直接 RSC，需要时直接 TanStack Query。useEffect+fetch 没有意义</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/guides/advanced-ssr" target="_blank" rel="noopener">TanStack Query · Advanced SSR (含 RSC 集成)</a></li>
+          <li><a href="https://nextjs.org/docs/app/guides/migrating/from-vite#step-9-migrating-data-fetching" target="_blank" rel="noopener">Next.js · 与 TanStack Query 集成</a></li>
+          <li><a href="https://tkdodo.eu/blog/you-might-not-need-react-query" target="_blank" rel="noopener">TkDodo · You Might Not Need React Query</a> · RSC 时代的反思</li>
+          <li><a href="https://tkdodo.eu/blog/react-query-meets-react-router" target="_blank" rel="noopener">TkDodo · React Query Meets React Router</a> · Router-driven 模式</li>
+          <li><a href="../../next/03-rsc-streaming/index.html">Next.js 主题 P3 · RSC 与流式</a></li>
+          <li><a href="../../next/04-server-actions/index.html">Next.js 主题 P4 · Server Actions</a></li>
+          <li><a href="../../next/05-caching/index.html">Next.js 主题 P5 · 缓存系统</a></li>
+          <li><a href="../../react/06-modern/01-server-components.html">React 主题 P6.1 · Server Components</a></li>
+          <li><a href="../../react/06-modern/02-actions.html">React 主题 P6.2 · Actions（含 use API + useOptimistic）</a></li>
+          <li><a href="02-hydration-bridge.html">本主题 P5.2 · hydration 桥具体姿势</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../04-advanced-patterns/02-suspense-prefetch-streaming.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P4.2 · Suspense + prefetch + streaming</span>
+          </a>
+          <a class="next" href="02-hydration-bridge.html">
+            <span class="label">下一章 →</span>
+            <span class="title">P5.2 · hydration 桥</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

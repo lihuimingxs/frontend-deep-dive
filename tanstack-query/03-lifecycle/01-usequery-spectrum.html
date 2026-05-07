@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>useQuery 全谱：状态机 + 选项 + 派生数据 · P3.1 · TanStack Query / SWR 深度学习</title>
+    <meta name="description" content="useQuery 返回 status / fetchStatus / isPending / isFetching / isError 一堆状态。这一章讲清双状态正交、select 派生 + memo（被低估的性能武器）、placeholderData + keepPreviousData 切页不闪烁、enabled 控制 dependent query、refetchInterval、retry、structuralSharing。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23ff4154'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EQ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>TanStack Query / SWR 深度学习</span><span class="site-title-badge" style="background: #ff4154; color: #fff">Q</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · query / mutation 生命周期</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-usequery-spectrum.html" class="active">01 · useQuery 全谱</a></li>
+          <li><a href="02-usemutation-optimistic.html">02 · useMutation + 乐观更新</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TanStack Query</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · 生命周期</a><span class="breadcrumb-sep">/</span>
+          <span>01 · useQuery 全谱</span>
+        </nav>
+        <h1>useQuery 全谱：状态机 + 选项 + 派生数据</h1>
+        <p class="lead">
+          useQuery 返回的 status / fetchStatus / isPending / isFetching / isError 一堆，到底有什么差别？什么时候用哪个？这一章把状态机讲清楚 + 把 select / placeholderData / enabled 这些容易被忽略但杀手级的选项讲透。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P2 心智 + 写过至少 5 个 useQuery</span>
+          <span><strong>主要来源</strong> tanstack.com/query/latest/docs/framework/react/reference/useQuery + TkDodo 关于 status 状态的多篇博文</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><b>两套状态正交</b>：<b>status</b>（'pending' | 'success' | 'error' —— 数据视角，"我有没有数据"）+ <b>fetchStatus</b>（'idle' | 'fetching' | 'paused' —— 网络视角，"现在正在请求吗"）。组合产生 stale-while-revalidate UI。</li>
+          <li><b>4 种关键状态组合</b>：<b>(1) pending + fetching</b> 第一次拿数据 / <b>(2) success + idle</b> fresh 状态稳定 / <b>(3) success + fetching</b> stale-while-revalidate 后台刷 / <b>(4) error + idle</b> 失败稳定。</li>
+          <li><b>v5 改名</b>：<code>loading</code> → <code>pending</code>（与 React 19 promise 状态对齐）；<code>isLoading</code> 仍可用（语义：第一次 fetch 中），但 <code>isPending</code> 是新规范。</li>
+          <li><b>select 是被低估的性能武器</b>：从 data 派生子集 + memoize；只有 select 结果变化才 re-render。多个组件用同一 query 但只关心不同字段时差异巨大。</li>
+          <li><b>placeholderData + keepPreviousData</b>：切 queryKey 时（分页 / 过滤）显示上一份数据 + 后台拉新；切页不闪烁的标配。</li>
+          <li><b>enabled 控制 dependent query</b>：<code>enabled: !!previousData</code> 串行触发；不要用 if 包 useQuery（hooks 不能条件调用）。</li>
+          <li><b>refetchInterval</b>：轮询；可以是函数（按状态决定停 / 继续）；refetchIntervalInBackground 控制 tab 后台时是否继续。</li>
+          <li><b>retry 默认 3 次指数退避</b>：4xx 自动 throw 不重试是常见诉求 → 把 retry 写成函数检查 status code。</li>
+          <li><b>structuralSharing</b> 默认开：v5 内部深比对前后引用，只有真正变化的字段触发 re-render。这是为什么 setQueryData 不能直接 mutate。</li>
+          <li><b>v5 移除了 useQuery 的 onSuccess / onError / onSettled</b>：query 层不再有这些 callback，只有 useMutation 保留。query 层用 useEffect 监听 status 改。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>双状态正交 · status vs fetchStatus</h3>
+
+        <p>这是 useQuery 最容易混淆的部分。两套状态描述不同维度：</p>
+
+        <ul>
+          <li><b>status</b> 是<strong>数据视角</strong> · "我现在有没有数据"
+            <ul>
+              <li><code>'pending'</code> · 没数据，第一次拿（之前没 cache）</li>
+              <li><code>'success'</code> · 有数据（无论 fresh / stale / fetching）</li>
+              <li><code>'error'</code> · 拿数据失败（且没有更老的成功数据）</li>
+            </ul>
+          </li>
+          <li><b>fetchStatus</b> 是<strong>网络视角</strong> · "现在请求在不在跑"
+            <ul>
+              <li><code>'idle'</code> · 没在请求</li>
+              <li><code>'fetching'</code> · 正在请求</li>
+              <li><code>'paused'</code> · 暂停（如 networkMode: 'offlineFirst' 离线时）</li>
+            </ul>
+          </li>
+        </ul>
+
+        <p>两个组合 4×3=12 种理论状态，但实际有意义的就 4 种：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>status</th>
+              <th>fetchStatus</th>
+              <th>含义</th>
+              <th>UI 该怎么显示</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>pending</td>
+              <td>fetching</td>
+              <td>第一次拿数据</td>
+              <td>Loading skeleton</td>
+            </tr>
+            <tr>
+              <td>success</td>
+              <td>idle</td>
+              <td>fresh 数据稳定</td>
+              <td>正常显示</td>
+            </tr>
+            <tr>
+              <td>success</td>
+              <td>fetching</td>
+              <td>stale-while-revalidate 后台刷新</td>
+              <td>显示数据 + 小 spinner</td>
+            </tr>
+            <tr>
+              <td>error</td>
+              <td>idle</td>
+              <td>失败稳定（无 cache 数据）</td>
+              <td>错误 + retry 按钮</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>渲染惯用模式：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function UserList() {
+  const { data, isPending, isFetching, isError, error, refetch } = useQuery(...);
+
+  if (isPending) return &lt;Loading /&gt;;          // 没数据 + 在拿
+  if (isError) return &lt;Error error={error} onRetry={refetch} /&gt;;
+  // 这里 status === 'success'，data 一定有
+  return (
+    &lt;&gt;
+      &lt;ul&gt;{data.map(u =&gt; &lt;li key={u.id}&gt;{u.name}&lt;/li&gt;)}&lt;/ul&gt;
+      {isFetching &amp;&amp; &lt;Spinner size="small" /&gt;}  {/* 后台刷新提示 */}
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>这个写法的好处：用户进页面 → 第一次 loading → 拿到数据 → 之后切回都直接显示（无 loading），后台刷新静默进行。</p>
+
+        <h3>v5 改名细节</h3>
+
+        <ul>
+          <li><code>isLoading</code> 在 v5 仍可用，但语义被收窄：等同于 <code>isPending &amp;&amp; isFetching</code>（"第一次 fetch 进行中"）。原因：在没有 cache 但 query 已 disabled 的情况下，pending 但 fetchStatus 是 idle，这时 loading 不直观</li>
+          <li><code>status: 'loading'</code> → <code>status: 'pending'</code>：与 React 19 Promise 状态对齐</li>
+          <li><code>cacheTime</code> → <code>gcTime</code>：原名容易和 staleTime 混淆</li>
+          <li><code>useQuery(['key'], fn, options)</code> 多参签名 → <code>useQuery({ queryKey, queryFn, ...options })</code> 单一 object 签名</li>
+        </ul>
+
+        <p>v3/v4 老代码迁 v5 主要工作量在这些改名 + 移除 useQuery 上的 onSuccess/onError/onSettled。</p>
+
+        <h3>select · 派生数据 + memo</h3>
+
+        <p>select 是从 data 派生的<strong>转换函数</strong>。多个组件用同一 query 但只关心不同字段时杀手级有用：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 组件 A：只关心 user count
+function UserCount() {
+  const { data: count } = useQuery({
+    queryKey: ['users'],
+    queryFn: api.getUsers,
+    select: (users) =&gt; users.length,  // 派生 number
+  });
+  return &lt;span&gt;{count} users&lt;/span&gt;;
+  // 即使列表里某个 user 改名，count 不变 → 这个组件不 re-render
+}
+
+// 组件 B：只关心 active users
+function ActiveUserList() {
+  const { data: activeUsers } = useQuery({
+    queryKey: ['users'],
+    queryFn: api.getUsers,
+    select: (users) =&gt; users.filter(u =&gt; u.active),
+  });
+  return &lt;ul&gt;{activeUsers?.map(...)}&lt;/ul&gt;;
+}
+
+// 组件 C：拿全量
+function FullUserList() {
+  const { data: users } = useQuery({
+    queryKey: ['users'],
+    queryFn: api.getUsers,
+    // 不传 select，拿原始 data
+  });
+}
+
+// 三个组件共享同一 cache + 同一 fetch
+// 但 re-render 范围按 select 结果隔离</code></pre>
+        </div>
+
+        <p>关键点：</p>
+        <ul>
+          <li>select 结果跟 prev 用 <strong>structuralSharing</strong> 比较（v5 默认开）</li>
+          <li>引用稳定才能避免 re-render；select 返回新引用每次都触发</li>
+          <li>性能场景：大列表（1000+ 条）+ 多组件订阅 + 每个组件只看一部分 → select 几乎必备</li>
+        </ul>
+
+        <h3>select 引用稳定的细节</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ 每次 select 创建新对象 → re-render 频繁（v5 structuralSharing 部分救场，但仍非最优）
+useQuery({
+  ...,
+  select: (users) =&gt; ({ count: users.length, max: Math.max(...users.map(u =&gt; u.age)) }),
+});
+
+// ✅ 用 useCallback 稳定 select 函数（v5 不强制，但更可控）
+const select = useCallback(
+  (users: User[]) =&gt; ({ count: users.length, max: Math.max(...users.map(u =&gt; u.age)) }),
+  []
+);
+useQuery({ ..., select });
+
+// ✅ 或派生原始值（number / string / boolean）
+useQuery({ ..., select: (users) =&gt; users.length });</code></pre>
+        </div>
+
+        <h3>placeholderData + keepPreviousData</h3>
+
+        <p>切 queryKey 时（分页 / 过滤 / 排序）默认行为：新 query 进 pending → 显示 loading → 新数据来 → 显示。<strong>每次切都闪一下</strong>。</p>
+
+        <p>v5 提供 <code>placeholderData: keepPreviousData</code> helper：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { keepPreviousData, useQuery } from '@tanstack/react-query';
+
+function UserList({ page, filter }: { page: number; filter: string }) {
+  const { data, isPlaceholderData, isFetching } = useQuery({
+    queryKey: ['users', { page, filter }],
+    queryFn: () =&gt; api.getUsers({ page, filter }),
+    placeholderData: keepPreviousData,
+  });
+
+  // 切页时：
+  // - data 立即变成上一次成功的数据（旧页数据）
+  // - isPlaceholderData = true（指示这是占位）
+  // - isFetching = true（后台拉新页）
+  // 新页来了：
+  // - data 自动替换
+  // - isPlaceholderData = false
+
+  return (
+    &lt;div style={{ opacity: isPlaceholderData ? 0.5 : 1 }}&gt;
+      &lt;ul&gt;{data?.map(...)}&lt;/ul&gt;
+      {isFetching &amp;&amp; &lt;Spinner /&gt;}
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>不依赖前一份数据时，placeholderData 也可以是静态值：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 显示骨架数据
+useQuery({
+  queryKey: ['user', id],
+  queryFn: ...,
+  placeholderData: { id, name: 'Loading...', avatar: null } as User,
+  // 第一次 mount 也立刻有数据，避免 loading
+});
+
+// initialData vs placeholderData 区别：
+// - placeholderData：不进 cache；新数据来覆盖；适合骨架
+// - initialData：进 cache（视为 fresh，无 dataUpdatedAt 不会触发 refetch）；适合 SSR / hydration</code></pre>
+        </div>
+
+        <h3>enabled · dependent query</h3>
+
+        <p>有时候 query B 依赖 query A 的结果。不要用 if 包 useQuery（hooks 不能条件调用）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ 错：违反 hooks 规则
+function UserPosts() {
+  const { data: user } = useQuery({ queryKey: ['user'], queryFn: api.getUser });
+  if (!user) return &lt;Loading /&gt;;
+  // 下面这行违反规则（条件调用 hook）
+  const { data: posts } = useQuery({ queryKey: ['posts', user.id], queryFn: () =&gt; api.getPosts(user.id) });
+}
+
+// ✅ 正：用 enabled
+function UserPosts() {
+  const { data: user } = useQuery({ queryKey: ['user'], queryFn: api.getUser });
+  const { data: posts } = useQuery({
+    queryKey: ['posts', user?.id],
+    queryFn: () =&gt; api.getPosts(user!.id),
+    enabled: !!user,  // user 拿到才触发
+  });
+  // user 还没来时 posts query status = 'pending' but fetchStatus = 'idle'
+}</code></pre>
+        </div>
+
+        <p>enabled 也可以用于"用户操作后才拉":</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function SearchBox() {
+  const [query, setQuery] = useState('');
+  const debouncedQuery = useDebouncedValue(query, 300);
+  const { data } = useQuery({
+    queryKey: ['search', debouncedQuery],
+    queryFn: () =&gt; api.search(debouncedQuery),
+    enabled: debouncedQuery.length &gt;= 2,  // 至少 2 字才搜
+  });
+  // ...
+}</code></pre>
+        </div>
+
+        <h3>refetchInterval · 轮询</h3>
+
+        <p>简单形态：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">useQuery({
+  queryKey: ['stock-price', symbol],
+  queryFn: ...,
+  refetchInterval: 5000,  // 每 5 秒
+  refetchIntervalInBackground: false,  // tab 后台时停（默认 false）
+});</code></pre>
+        </div>
+
+        <p>函数形态（按状态决定）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">useQuery({
+  queryKey: ['job-status', jobId],
+  queryFn: () =&gt; api.getJobStatus(jobId),
+  refetchInterval: (query) =&gt; {
+    const status = query.state.data?.status;
+    if (status === 'completed' || status === 'failed') return false;  // 终态停止
+    if (status === 'processing') return 1000;  // 处理中加快
+    return 5000;
+  },
+});</code></pre>
+        </div>
+
+        <p>这个模式（"任务进度查询"）非常常用：terminal state 停轮询，processing 时加快。</p>
+
+        <h3>retry · 失败重试</h3>
+
+        <p>默认：失败重试 3 次，指数退避（1s / 2s / 4s）。常见调整：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 4xx 不重试（业务错误，重试也是 4xx）
+useQuery({
+  queryKey: ['user', id],
+  queryFn: async () =&gt; {
+    const r = await fetch(`/api/users/${id}`);
+    if (!r.ok) {
+      const err = new Error(`HTTP ${r.status}`);
+      (err as any).status = r.status;
+      throw err;
+    }
+    return r.json();
+  },
+  retry: (failureCount, error: any) =&gt; {
+    if (error.status &gt;= 400 &amp;&amp; error.status &lt; 500) return false;
+    return failureCount &lt; 3;
+  },
+});
+
+// 关键操作只重试一次
+useQuery({
+  ...,
+  retry: 1,
+});
+
+// 完全不重试
+useQuery({
+  ...,
+  retry: false,
+});
+
+// 自定义退避
+useQuery({
+  ...,
+  retryDelay: (attemptIndex) =&gt; Math.min(1000 * 2 ** attemptIndex, 30_000),
+});</code></pre>
+        </div>
+
+        <h3>structuralSharing · re-render 减负</h3>
+
+        <p>v5 默认开。原理：fetch 完成后，TanStack Query 内部用 <code>replaceEqualDeep</code> 比对前后 data；只在真正变化的地方替换引用，其他保持原引用：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 简化原理
+const oldData = { user: { id: 1, name: 'A' }, count: 5 };
+const newData = { user: { id: 1, name: 'A' }, count: 5 };
+// 比对后：完全相同 → 返回 oldData（同一引用）
+// useQuery 不触发 re-render
+
+const oldData2 = { user: { id: 1, name: 'A' }, count: 5 };
+const newData2 = { user: { id: 1, name: 'A' }, count: 6 };
+// 比对：user 没变 → 复用 user 引用；count 变了 → 新对象
+// 用 select: data =&gt; data.user 的组件不 re-render
+// 用 select: data =&gt; data.count 的组件 re-render</code></pre>
+        </div>
+
+        <p>这是为什么 setQueryData 不能直接 mutate（破坏引用比对）。也是为什么 select 引用稳定能减少 re-render。</p>
+
+        <h3>v5 移除 useQuery 上的 onSuccess / onError / onSettled</h3>
+
+        <p>v4 时代 useQuery 支持这三个 callback：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// v4 写法（v5 已移除）
+useQuery(['users'], api.getUsers, {
+  onSuccess: (data) =&gt; toast.success('Loaded'),
+  onError: (err) =&gt; toast.error(err.message),
+});</code></pre>
+        </div>
+
+        <p>v5 移除原因（Tanner / TkDodo 多次解释）：</p>
+        <ul>
+          <li>这些 callback 触发时机有歧义（每次 success 都跑？还是仅第一次？多组件订阅时跑几次？）</li>
+          <li>导致重复 toast / side effect</li>
+          <li>正确处理"成功后做 X"应该用 useEffect 监听 isSuccess</li>
+        </ul>
+
+        <p>v5 推荐写法：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// v5 推荐：useEffect 监听
+const { data, isSuccess, isError, error } = useQuery({ ... });
+
+useEffect(() =&gt; {
+  if (isSuccess) toast.success('Loaded');
+}, [isSuccess]);
+
+// 或全局 callback（QueryCache）
+new QueryClient({
+  queryCache: new QueryCache({
+    onError: (error, query) =&gt; toast.error(`${query.queryKey} failed: ${error.message}`),
+    onSuccess: (data, query) =&gt; { /* ... */ },
+  }),
+});</code></pre>
+        </div>
+
+        <p>useMutation 仍然保留 onSuccess / onError / onSettled，因为 mutation 是命令式触发，时机明确。详见 <a href="02-usemutation-optimistic.html">P3.2</a>。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 大列表多组件订阅 · 用 select 优化 re-render</h3>
+
+        <p>1000 条 user 列表，10 个组件分别显示统计、过滤后子集、特定 user 详情：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 1 个 query，10 个组件订阅
+function useUsers() {
+  return useQuery({ queryKey: ['users'], queryFn: api.getUsers });
+}
+
+// 各组件用 select 派生
+function UserCount() {
+  const { data } = useQuery({ ...useUsers, select: (users) =&gt; users.length });
+  return &lt;span&gt;{data}&lt;/span&gt;;
+}
+
+function ActiveCount() {
+  const { data } = useQuery({ ...useUsers, select: (users) =&gt; users.filter(u =&gt; u.active).length });
+  return &lt;span&gt;{data}&lt;/span&gt;;
+}
+
+function UserDetail({ id }: { id: string }) {
+  const { data } = useQuery({
+    queryKey: ['users'],
+    queryFn: api.getUsers,
+    select: (users) =&gt; users.find(u =&gt; u.id === id),
+  });
+  return &lt;div&gt;{data?.name}&lt;/div&gt;;
+}
+
+// 改一个 user 的 name → 列表整体引用变 → users 引用变
+// 但 UserCount 的 select 结果（length）没变 → 不 re-render
+// ActiveCount 的 select 结果（active count）可能变 → 视情况 re-render
+// UserDetail（id 是改的那个）的 select 结果变 → re-render</code></pre>
+        </div>
+
+        <h3>场景 2 · 异步任务进度查询 · refetchInterval 函数形态</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">type JobStatus = 'queued' | 'processing' | 'completed' | 'failed';
+
+function JobProgress({ jobId }: { jobId: string }) {
+  const { data, isError } = useQuery({
+    queryKey: ['job', jobId],
+    queryFn: () =&gt; api.getJobStatus(jobId),
+    refetchInterval: (query) =&gt; {
+      const status = query.state.data?.status;
+      // 终态：停止
+      if (status === 'completed' || status === 'failed') return false;
+      // queued：慢轮询
+      if (status === 'queued') return 5000;
+      // processing：快轮询
+      return 1000;
+    },
+    refetchIntervalInBackground: false,
+  });
+
+  if (isError) return &lt;Error /&gt;;
+  return (
+    &lt;&gt;
+      &lt;p&gt;Status: {data?.status}&lt;/p&gt;
+      {data?.status === 'processing' &amp;&amp; &lt;ProgressBar value={data.progress} /&gt;}
+      {data?.status === 'completed' &amp;&amp; &lt;DownloadButton url={data.resultUrl} /&gt;}
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>场景 3 · 搜索 debounce + enabled</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function useDebouncedValue&lt;T&gt;(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() =&gt; {
+    const t = setTimeout(() =&gt; setDebounced(value), delay);
+    return () =&gt; clearTimeout(t);
+  }, [value, delay]);
+  return debounced;
+}
+
+function SearchBox() {
+  const [query, setQuery] = useState('');
+  const debounced = useDebouncedValue(query, 300);
+
+  const { data, isFetching } = useQuery({
+    queryKey: ['search', debounced],
+    queryFn: () =&gt; api.search(debounced),
+    enabled: debounced.length &gt;= 2,
+    placeholderData: keepPreviousData,
+  });
+
+  return (
+    &lt;&gt;
+      &lt;input value={query} onChange={e =&gt; setQuery(e.target.value)} /&gt;
+      {isFetching &amp;&amp; &lt;Spinner /&gt;}
+      {data?.map(r =&gt; &lt;li key={r.id}&gt;{r.title}&lt;/li&gt;)}
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · status 状态完整渲染矩阵</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function UserList() {
+  const query = useQuery({
+    queryKey: ['users'],
+    queryFn: api.getUsers,
+    staleTime: 60 * 1000,
+  });
+
+  // 模式 A：早返回（推荐）
+  if (query.isPending) return &lt;Loading /&gt;;
+  if (query.isError) return &lt;Error error={query.error} onRetry={() =&gt; query.refetch()} /&gt;;
+  return &lt;UserListContent users={query.data} isFetching={query.isFetching} /&gt;;
+
+  // 模式 B：switch（适合多状态）
+  switch (query.status) {
+    case 'pending': return &lt;Loading /&gt;;
+    case 'error': return &lt;Error /&gt;;
+    case 'success': return &lt;Content /&gt;;
+  }
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · 自定义 hook 配 staleTime / select / placeholderData</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// hooks/useUsers.ts
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
+
+type UsersFilter = { active?: boolean; role?: string };
+
+export function useUsers(filter: UsersFilter = {}) {
+  return useQuery({
+    queryKey: ['users', filter],
+    queryFn: ({ signal }) =&gt; fetch('/api/users?' + new URLSearchParams(filter as any), { signal }).then(r =&gt; r.json()),
+    staleTime: 30 * 1000,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useUserCount(filter: UsersFilter = {}) {
+  return useQuery({
+    queryKey: ['users', filter],
+    queryFn: ({ signal }) =&gt; fetch('/api/users?' + new URLSearchParams(filter as any), { signal }).then(r =&gt; r.json()),
+    select: (users: User[]) =&gt; users.length,
+    staleTime: 30 * 1000,
+  });
+}
+
+export function useActiveUsers() {
+  return useQuery({
+    queryKey: ['users'],
+    queryFn: api.getUsers,
+    select: (users: User[]) =&gt; users.filter(u =&gt; u.active),
+  });
+}</code></pre>
+        </div>
+
+        <h3>代码 3 · networkMode（离线友好）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// v5 networkMode 选项
+useQuery({
+  queryKey: ['users'],
+  queryFn: api.getUsers,
+  networkMode: 'online',         // 默认：离线 paused，连上后继续
+  // networkMode: 'always',      // 永远尝试（适合 SW + offline cache）
+  // networkMode: 'offlineFirst', // 离线时仍 cache 优先；上线后 revalidate
+});</code></pre>
+        </div>
+
+        <h3>代码 4 · meta 字段携带元信息</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 把 query 的"含义"挂在 meta 上
+useQuery({
+  queryKey: ['users'],
+  queryFn: api.getUsers,
+  meta: {
+    persist: true,           // 自定义：是否进 localStorage 持久化
+    errorMessage: '加载用户失败',
+    auditCategory: 'admin',
+  },
+});
+
+// 全局 onError 读 meta
+queryCache: new QueryCache({
+  onError: (error, query) =&gt; {
+    const msg = query.meta?.errorMessage as string | undefined;
+    toast.error(msg ?? error.message);
+  },
+}),</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>把 isPending 当 isFetching</b> —— isPending 是"没数据"，isFetching 是"在请求"。stale 时 fetching 但 isPending=false。后台刷新用 isFetching 显示 indicator</li>
+          <li><b>v5 仍用 v4 的 onSuccess/onError</b> —— useQuery 上已移除（mutation 仍有）。改用 useEffect 监听 isSuccess / isError 或全局 onError</li>
+          <li><b>把 onSuccess 用来 invalidate 其他 query</b> —— 即使 v4 也是反模式（多组件订阅时跑多次）。invalidate 应该在 useMutation 的 onSuccess 里</li>
+          <li><b>select 返回新对象 + 没 useCallback</b> —— select 函数引用每次 render 变 → v5 仍工作（structuralSharing 比对结果）但不最优。返回原始值或 useCallback 包</li>
+          <li><b>用 useState 缓存 useQuery 的 data</b> —— 反模式。<code>const [users, setUsers] = useState([]); useEffect(() =&gt; setUsers(query.data), [query.data]);</code> 直接用 query.data</li>
+          <li><b>条件调用 useQuery（用 if 包）</b> —— 违反 hooks 规则。改用 enabled</li>
+          <li><b>enabled 用了不稳定值</b> —— <code>enabled: query.length &gt; 0</code> 中 query 是个对象 → 引用每次变。enabled 应该是 boolean 或稳定 boolean 表达式</li>
+          <li><b>refetchInterval 不停 + 关 tab</b> —— 默认 refetchIntervalInBackground=false，tab 后台不轮询。但有些项目错误调成 true 导致 tab 后台仍发请求</li>
+          <li><b>retry 默认 3 次让 4xx 也重试</b> —— 业务错误（401 / 404 / 422）重试也是 4xx，浪费。把 retry 写成函数检查 status</li>
+          <li><b>placeholderData 进 cache 期望持久化</b> —— placeholderData 不进 cache；想进 cache 用 initialData</li>
+          <li><b>把 select 当 reducer 用（在 select 里调 setState）</b> —— select 是纯函数。副作用应该在 useEffect</li>
+          <li><b>setQueryData 直接 mutate</b> —— <code>setQueryData(key, (old) =&gt; { old.name = 'X'; return old; })</code> 破坏 structuralSharing。要返回新对象</li>
+          <li><b>refetchInterval 设短 + queryFn 长</b> —— 上一个还没回下一个又起。TanStack Query 同 key 同时只一个 in-flight，但实战仍建议 interval &gt; 平均请求时间</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/reference/useQuery" target="_blank" rel="noopener">TanStack Query · useQuery API Reference</a></li>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/guides/migrating-to-v5" target="_blank" rel="noopener">v5 Migration Guide</a> · status 改名 / onSuccess 移除等</li>
+          <li><a href="https://tkdodo.eu/blog/status-checks-in-react-query" target="_blank" rel="noopener">TkDodo · Status Checks in React Query</a> · 双状态正交权威博文</li>
+          <li><a href="https://tkdodo.eu/blog/breaking-react-querys-api-on-purpose" target="_blank" rel="noopener">TkDodo · Breaking React Query's API on purpose</a> · v5 设计变更解释</li>
+          <li><a href="https://tkdodo.eu/blog/react-query-data-transformations" target="_blank" rel="noopener">TkDodo · React Query Data Transformations</a> · select 的 4 种模式</li>
+          <li><a href="../../react/03-hooks/index.html">React 主题 P3 · Hooks 全谱</a> · hooks 心智 + 闭包陷阱</li>
+          <li><a href="02-usemutation-optimistic.html">本主题 P3.2 · useMutation + 乐观更新</a> · 写操作配对</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../02-mental-model/02-stale-while-revalidate.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P2.2 · stale-while-revalidate</span>
+          </a>
+          <a class="next" href="02-usemutation-optimistic.html">
+            <span class="label">下一章 →</span>
+            <span class="title">P3.2 · useMutation + 乐观更新</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

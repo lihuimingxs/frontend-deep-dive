@@ -1,0 +1,821 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>3 层决策树 + 12 陷阱清单 + 测试 + 2027 展望 · P7.1 · TanStack Query / SWR 深度学习</title>
+    <meta name="description" content="全主题收束章。3 层决策树（要不要装客户端 fetch 库 → 选哪个 → 怎么配 staleTime / gcTime / retry）+ 12 个常见陷阱清单（每条配修复）+ 测试 query 的姿势（用 MSW mock fetch 而不是 mock useQuery）+ 2027 展望。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23ff4154'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EQ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>TanStack Query / SWR 深度学习</span><span class="site-title-badge" style="background: #ff4154; color: #fff">Q</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P7 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · 决策树 + 陷阱清单</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-decision-tree-pitfalls.html" class="active">01 · 决策树 + 陷阱 + 测试 + 2027</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TanStack Query</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · 决策树 + 陷阱</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 决策树 + 陷阱 + 测试 + 2027</span>
+        </nav>
+        <h1>3 层决策树 + 12 陷阱清单 + 测试 + 2027 展望</h1>
+        <p class="lead">
+          全主题收束章。前 6 阶段把"是谁 / 心智 / 写法 / 边界"讲完，这一章给一份生产用的<strong>决策树 + 陷阱清单 + 测试姿势 + 未来展望</strong>。读完应该能拿到一个新 React 项目就直接定方案、看到症状能直接修。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P1-P6 全部</span>
+          <span><strong>主要来源</strong> 前 6 阶段经验汇总 + tanstack.com 官方 testing 文档 + Tanner Linsley 关于"什么时候不该用 useQuery"的多次发文</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><b>第一层决策</b>：要不要装客户端 fetch 库？Next.js + 重 SEO + 静态数据 → 不装；SPA + 客户端交互重 → 装；Next.js + 客户端交互重 → RSC + TanStack Query 混合。</li>
+          <li><b>第二层决策</b>：选哪个？大部分场景 TanStack Query；极简 + Vercel SWR；已 Redux 全家桶 RTK Query；GraphQL 重 Apollo / Relay。</li>
+          <li><b>第三层决策</b>：怎么配？staleTime 三档（5min / 30min / 1day）；gcTime 默认 5min；refetchOnWindowFocus 后台型应用关；retry 4xx 不重试。</li>
+          <li><strong>12 陷阱清单（每条配修复）</strong>：queryKey 不稳定 / queryFn 闭包 / staleTime 太小 / 4 步乐观漏 / invalidate 后立刻读 / Server Component 全局 queryClient / dehydrate 数据膨胀 / useSuspenseQuery 没包 Suspense / select 返回新引用 / mutation onSuccess navigate 走 onSettled 没跑 / 用 useEffect+fetch 倒退 / 多客户端 fetch 库共存。</li>
+          <li><b>测试 query 姿势 1</b>：用 MSW（Mock Service Worker）mock fetch 层，<strong>不要 mock useQuery</strong>。mock useQuery 等于不测 TanStack Query 的行为</li>
+          <li><b>测试 query 姿势 2</b>：每个 test 独立 queryClient（避免 cache 污染）；用 <code>&lt;QueryClientProvider&gt;</code> 包测试组件；turn off retry 避免测试慢</li>
+          <li><b>测试 query 姿势 3</b>：用 <code>waitFor</code> 等 query 完成；用 <code>queryClient.getQueryData</code> 验证 cache 状态</li>
+          <li><b>2027 展望 1</b>：RSC + Server Actions 进一步蚕食客户端 fetch 场景；TanStack Query 收窄到客户端独有 server state</li>
+          <li><b>2027 展望 2</b>：streamedQuery + AI SDK 集成成为新差异化点（LLM 流式 + 客户端 cache）</li>
+          <li><b>2027 展望 3</b>：SWR 维护节奏继续放缓；GraphQL 客户端市场进一步收缩；TanStack Query 在剩余客户端场景市场份额继续上升</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>3 层决策树详细</h3>
+
+        <p><b>第一层 · 要不要装客户端 fetch 库</b></p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>项目类型</th>
+              <th>客户端 fetch 库需求</th>
+              <th>建议</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>marketing 站 / 文档站 / blog</td>
+              <td>无</td>
+              <td>纯 RSC，<strong>不装</strong></td>
+            </tr>
+            <tr>
+              <td>SPA + 后端 REST + 客户端交互重</td>
+              <td>有</td>
+              <td>装 TanStack Query</td>
+            </tr>
+            <tr>
+              <td>Next.js + 客户端交互重 + 实时数据</td>
+              <td>有（部分）</td>
+              <td>RSC 管首屏 + TanStack Query 管客户端</td>
+            </tr>
+            <tr>
+              <td>电商商品详情</td>
+              <td>有（部分）</td>
+              <td>RSC 管商品信息 + TanStack Query 管库存购物车</td>
+            </tr>
+            <tr>
+              <td>聊天 / 协作</td>
+              <td>有（重）</td>
+              <td>TanStack Query 为主</td>
+            </tr>
+            <tr>
+              <td>纯 dashboard SPA</td>
+              <td>有（重）</td>
+              <td>TanStack Query 是默认</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p><b>第二层 · 选哪个</b></p>
+
+        <p>看决策矩阵：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>条件</th>
+              <th>推荐</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>大部分场景</td>
+              <td><strong>TanStack Query</strong>（默认）</td>
+            </tr>
+            <tr>
+              <td>极简偏好 + Vercel 部署 + 简单 fetch 多</td>
+              <td>SWR</td>
+            </tr>
+            <tr>
+              <td>已经全家桶 Redux + 不想引入第三方 cache</td>
+              <td>RTK Query</td>
+            </tr>
+            <tr>
+              <td>重度 GraphQL + 需要 normalized cache</td>
+              <td>Apollo Client</td>
+            </tr>
+            <tr>
+              <td>Meta 系 / 大型 GraphQL</td>
+              <td>Relay</td>
+            </tr>
+            <tr>
+              <td>已重度依赖 Jotai</td>
+              <td>Jotai-Query（仅参考）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>详细对比见 <a href="../06-swr-peers/01-swr-and-peers.html">P6.1</a>。</p>
+
+        <p><b>第三层 · 怎么配</b></p>
+
+        <p>选了 TanStack Query 之后，全局 defaultOptions 的几个关键值：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>选项</th>
+              <th>默认</th>
+              <th>推荐</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>staleTime</td>
+              <td>0</td>
+              <td>60 * 1000（1 分钟）</td>
+              <td>大部分项目需要调；保持默认会请求过多</td>
+            </tr>
+            <tr>
+              <td>gcTime</td>
+              <td>5 * 60 * 1000（5 分钟）</td>
+              <td>默认即可；长会话应用调到 30 分钟</td>
+              <td>不要小于 staleTime</td>
+            </tr>
+            <tr>
+              <td>refetchOnWindowFocus</td>
+              <td>true</td>
+              <td>普通应用 true；后台运行型 false</td>
+              <td>dashboard / 监控应用关掉</td>
+            </tr>
+            <tr>
+              <td>refetchOnReconnect</td>
+              <td>true</td>
+              <td>true（保持）</td>
+              <td>断网重连应该 refetch</td>
+            </tr>
+            <tr>
+              <td>retry</td>
+              <td>3 次指数退避</td>
+              <td>函数（4xx 不重试）</td>
+              <td>4xx 重试也是 4xx，浪费请求</td>
+            </tr>
+            <tr>
+              <td>networkMode</td>
+              <td>'online'</td>
+              <td>默认</td>
+              <td>需要 PWA 离线时考虑 'offlineFirst'</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>个别 query 可以 override 全局配置（实时数据调短 staleTime / 关键操作调小 retry / 长会话数据调大 gcTime）。</p>
+
+        <h3>staleTime 选择的产品判断</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>数据类型</th>
+              <th>staleTime</th>
+              <th>判断标准</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>marketing / 静态配置</td>
+              <td>1-24 小时</td>
+              <td>几乎不变；浪费请求是错</td>
+            </tr>
+            <tr>
+              <td>用户 profile / settings</td>
+              <td>5 分钟</td>
+              <td>偶尔变；focus 时 refetch 够用</td>
+            </tr>
+            <tr>
+              <td>dashboard / 列表</td>
+              <td>30 秒 - 1 分钟</td>
+              <td>有人在改；适度 refetch</td>
+            </tr>
+            <tr>
+              <td>库存 / 价格</td>
+              <td>5 - 30 秒</td>
+              <td>实时性重要</td>
+            </tr>
+            <tr>
+              <td>金融实时</td>
+              <td>0 + refetchInterval</td>
+              <td>每次都要新；强制轮询</td>
+            </tr>
+            <tr>
+              <td>WebSocket / SSE</td>
+              <td>0 + setQueryData</td>
+              <td>不轮询，靠推送</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>判断方法："如果用户看到 N 秒前的旧数据，会出问题吗"。N 就是 staleTime。</p>
+
+        <h3>测试 query 的正确姿势</h3>
+
+        <p><b>姿势 1 · 用 MSW mock fetch 层而不是 mock useQuery</b></p>
+
+        <p>为什么不要 mock useQuery：</p>
+        <ul>
+          <li>mock useQuery 等于跳过 TanStack Query 的所有行为（cache / refetch / staleTime / invalidate）</li>
+          <li>测的是"组件用了某个值会渲染什么"，<strong>不是测"组件在 server state 变化时怎么响应"</strong></li>
+          <li>真实 bug（竞态 / cache 问题 / refetch 时机）测不出来</li>
+        </ul>
+
+        <p>正确：mock 网络层（fetch / axios），让 TanStack Query 真实跑：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// test/setup.ts
+import { setupServer } from 'msw/node';
+import { http, HttpResponse } from 'msw';
+
+export const server = setupServer(
+  http.get('/api/users', () =&gt; HttpResponse.json([
+    { id: '1', name: 'Alice' },
+    { id: '2', name: 'Bob' },
+  ])),
+  http.post('/api/users', async ({ request }) =&gt; {
+    const body = await request.json();
+    return HttpResponse.json({ id: '3', ...body });
+  }),
+);
+
+// 测试前 / 后 / 各 test 之间
+beforeAll(() =&gt; server.listen());
+afterEach(() =&gt; server.resetHandlers());
+afterAll(() =&gt; server.close());</code></pre>
+        </div>
+
+        <p>详细 MSW 见 <a href="../../testing/06-msw/index.html">测试主题 P6 MSW</a>。</p>
+
+        <p><b>姿势 2 · 每个 test 独立 queryClient</b></p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// test/utils.tsx
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { render, RenderOptions } from '@testing-library/react';
+
+export function renderWithQuery(ui: React.ReactElement, options?: RenderOptions) {
+  // 每个 test 独立 client，避免 cache 污染
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },  // 测试时不重试加快失败
+      mutations: { retry: false },
+    },
+  });
+  return render(ui, {
+    wrapper: ({ children }) =&gt; (
+      &lt;QueryClientProvider client={queryClient}&gt;{children}&lt;/QueryClientProvider&gt;
+    ),
+    ...options,
+  });
+}
+
+// 用法
+test('User loads', async () =&gt; {
+  renderWithQuery(&lt;User id="1" /&gt;);
+  expect(screen.getByText('Loading')).toBeInTheDocument();
+  await waitFor(() =&gt; expect(screen.getByText('Alice')).toBeInTheDocument());
+});</code></pre>
+        </div>
+
+        <p><b>姿势 3 · 用 waitFor 等 query 完成</b></p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">test('User shows data after fetch', async () =&gt; {
+  renderWithQuery(&lt;User id="1" /&gt;);
+  // 不要 await fetch / await server response —— TanStack Query 异步管
+  // 用 waitFor 等 UI 出现
+  await waitFor(() =&gt; {
+    expect(screen.getByText('Alice')).toBeInTheDocument();
+  });
+});
+
+test('Error UI shows when fetch fails', async () =&gt; {
+  // override server handler 让请求失败
+  server.use(http.get('/api/users/1', () =&gt; HttpResponse.error()));
+  renderWithQuery(&lt;User id="1" /&gt;);
+  await waitFor(() =&gt; {
+    expect(screen.getByText(/error/i)).toBeInTheDocument();
+  });
+});</code></pre>
+        </div>
+
+        <p><b>姿势 4 · 验证 cache 状态</b></p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">test('mutation invalidates cache', async () =&gt; {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    &lt;QueryClientProvider client={queryClient}&gt;
+      &lt;TodoListWithAdd /&gt;
+    &lt;/QueryClientProvider&gt;
+  );
+
+  // 等列表加载
+  await waitFor(() =&gt; expect(screen.getByText('Existing Todo')).toBeInTheDocument());
+
+  // 触发 add
+  await userEvent.type(screen.getByRole('textbox'), 'New Todo');
+  await userEvent.click(screen.getByText('Add'));
+
+  // 验证 cache 已 invalidate
+  await waitFor(() =&gt; {
+    expect(queryClient.getQueryState(['todos'])?.isInvalidated).toBe(true);
+  });
+
+  // 验证新 todo 出现
+  await waitFor(() =&gt; expect(screen.getByText('New Todo')).toBeInTheDocument());
+});</code></pre>
+        </div>
+
+        <h3>2027 展望</h3>
+
+        <p><b>趋势 1 · RSC 进一步蚕食客户端 fetch 场景</b></p>
+
+        <p>2024-2026 RSC 已经接管首屏 + 简单变更。2027 预期：</p>
+        <ul>
+          <li>Cache Components（Next.js 16 的 'use cache'）心智稳定，更多团队用</li>
+          <li>Server Actions 体验进一步提升（错误处理 / progressive enhancement / 文件上传）</li>
+          <li>客户端 fetch 库总需求量继续下降（30-50% → 20-30%）</li>
+        </ul>
+
+        <p>但 TanStack Query 在客户端独有场景仍不可替代（infinite / 实时 / 乐观 / WebSocket）。</p>
+
+        <p><b>趋势 2 · streamedQuery + AI SDK 集成</b></p>
+
+        <p>LLM 流式（OpenAI / Claude / Gemini）成为新基础设施。streamedQuery 让 TanStack Query 在 LLM 流式 + 客户端 cache 场景占位。</p>
+
+        <p>预期：</p>
+        <ul>
+          <li>Vercel AI SDK 的 useChat 与 TanStack Query 进一步集成（或互补）</li>
+          <li>客户端 LLM cache（多轮对话历史 + 实时流式）成为新需求</li>
+          <li>TanStack Query 可能引入 LLM 专用 hook</li>
+        </ul>
+
+        <p><b>趋势 3 · 市场份额变化</b></p>
+
+        <p>2027 预测：</p>
+        <ul>
+          <li>TanStack Query: 75-80%（继续上升）</li>
+          <li>SWR: 10-12%（继续下降）</li>
+          <li>RTK Query: 8-10%（与 Redux 共减）</li>
+          <li>Apollo + Relay: 3-4%（GraphQL 持续收缩）</li>
+        </ul>
+
+        <p><b>趋势 4 · 跨框架 server state 心智统一</b></p>
+
+        <p>TanStack Query 多框架（React / Vue / Solid / Svelte / Angular）让"server state 二分法"成为跨技术栈共识。</p>
+
+        <p><b>趋势 5 · Server Components 协议被其他框架采用</b></p>
+
+        <p>RSC 协议会被 React Router v7 / TanStack Start 等其他元框架采用。"server-side fetch + client cache 桥"成为通用模式。TanStack Query 作为 client cache 一等公民地位稳固。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 拿到新项目第一周做什么</h3>
+
+        <ol>
+          <li><b>Day 1</b>：评估项目类型 → 走第一层决策树。如果 marketing 站，关掉这个文档去用 RSC</li>
+          <li><b>Day 2</b>：选库（第二层决策）→ 大部分项目 TanStack Query</li>
+          <li><b>Day 3</b>：装 + Provider setup（详见 <a href="../05-rsc-bridge/02-hydration-bridge.html">P5.2</a>）</li>
+          <li><b>Day 4</b>：定 staleTime / gcTime / retry 全局值（第三层决策）</li>
+          <li><b>Day 5</b>：写 queryKey factory + 第一个 useQuery hook</li>
+          <li><b>Week 2+</b>：写业务 query / mutation；定期回看 DevTools 查 cache 状态</li>
+        </ol>
+
+        <h3>场景 2 · 现有项目症状速查</h3>
+
+        <p>"我项目出现了 X 症状，怎么修"对照表：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>症状</th>
+              <th>可能原因</th>
+              <th>修复</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>持续 refetch 死循环</td>
+              <td>queryKey 用了不稳定引用</td>
+              <td>useMemo 稳定 / queryKey factory</td>
+            </tr>
+            <tr>
+              <td>切换 id 拿到旧值</td>
+              <td>queryKey 缺依赖 / queryFn 闭包</td>
+              <td>id 放 queryKey + 从 context 读</td>
+            </tr>
+            <tr>
+              <td>请求爆炸（一直发请求）</td>
+              <td>staleTime 0 + refetchOnWindowFocus</td>
+              <td>调大 staleTime / 关 focus refetch</td>
+            </tr>
+            <tr>
+              <td>切 tab 切回又请求</td>
+              <td>refetchOnWindowFocus 默认开</td>
+              <td>关 focus 或调大 staleTime</td>
+            </tr>
+            <tr>
+              <td>乐观更新一直显示乐观值</td>
+              <td>onError 没回滚</td>
+              <td>onError setQueryData(prev)</td>
+            </tr>
+            <tr>
+              <td>乐观更新被 server 旧数据覆盖</td>
+              <td>onMutate 没 cancelQueries</td>
+              <td>第一步 await cancelQueries</td>
+            </tr>
+            <tr>
+              <td>invalidate 没生效</td>
+              <td>queryKey 不匹配</td>
+              <td>检查命名空间 / DevTools 看 active queries</td>
+            </tr>
+            <tr>
+              <td>Server Component cache 跨用户泄漏</td>
+              <td>全局 new QueryClient</td>
+              <td>每请求 new + React cache helper</td>
+            </tr>
+            <tr>
+              <td>useSuspenseQuery app 崩溃</td>
+              <td>没包 Suspense</td>
+              <td>父级加 Suspense + ErrorBoundary</td>
+            </tr>
+            <tr>
+              <td>4xx 也重试</td>
+              <td>retry 默认 3 次</td>
+              <td>retry 写成函数检查 status</td>
+            </tr>
+            <tr>
+              <td>infinite invalidate 整体重拉</td>
+              <td>用了 invalidateQueries 而不是 setQueryData 局部改</td>
+              <td>setQueryData 局部改</td>
+            </tr>
+            <tr>
+              <td>select 优化没效果</td>
+              <td>select 返回新引用 / 没 useCallback</td>
+              <td>返回原始值或 useCallback 包</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>场景 3 · 团队培训该讲什么</h3>
+
+        <p>新人加入团队，1 小时培训 TanStack Query 该讲什么：</p>
+
+        <ol>
+          <li><b>10 分钟</b>：server state ≠ client state 心智（P1.2）</li>
+          <li><b>15 分钟</b>：queryKey + queryFn + queryClient（P2.1）</li>
+          <li><b>15 分钟</b>：4 态状态机 + 5 个 refetch 触发条件（P2.2）</li>
+          <li><b>10 分钟</b>：useMutation 4 步乐观（P3.2）</li>
+          <li><b>10 分钟</b>：DevTools 演示 + 项目里看真实 query</li>
+        </ol>
+
+        <p>剩下的（infinite / Suspense / RSC 共存 / 横评）按需读。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 完整 testing 模板</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// test/setup.ts
+import '@testing-library/jest-dom';
+import { setupServer } from 'msw/node';
+import { http, HttpResponse } from 'msw';
+import { afterAll, afterEach, beforeAll } from 'vitest';
+
+export const handlers = [
+  http.get('/api/users', () =&gt; HttpResponse.json([
+    { id: '1', name: 'Alice' },
+    { id: '2', name: 'Bob' },
+  ])),
+  http.get('/api/users/:id', ({ params }) =&gt; HttpResponse.json({ id: params.id, name: 'User ' + params.id })),
+  http.post('/api/users', async ({ request }) =&gt; {
+    const body = await request.json() as any;
+    return HttpResponse.json({ id: 'new', ...body });
+  }),
+];
+
+export const server = setupServer(...handlers);
+
+beforeAll(() =&gt; server.listen({ onUnhandledRequest: 'error' }));
+afterEach(() =&gt; server.resetHandlers());
+afterAll(() =&gt; server.close());
+
+// test/utils.tsx
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { render, RenderOptions } from '@testing-library/react';
+
+export function createTestQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: Infinity },
+      mutations: { retry: false },
+    },
+    logger: { log: () =&gt; {}, warn: () =&gt; {}, error: () =&gt; {} },
+  });
+}
+
+export function renderWithQuery(ui: React.ReactElement, options?: { client?: QueryClient } &amp; RenderOptions) {
+  const queryClient = options?.client ?? createTestQueryClient();
+  return {
+    queryClient,
+    ...render(ui, {
+      wrapper: ({ children }) =&gt; &lt;QueryClientProvider client={queryClient}&gt;{children}&lt;/QueryClientProvider&gt;,
+      ...options,
+    }),
+  };
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · 测试 useMutation + 乐观更新</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">test('add todo with optimistic update', async () =&gt; {
+  const { queryClient } = renderWithQuery(&lt;TodoApp /&gt;);
+
+  // 等列表加载
+  await screen.findByText('Existing Todo');
+
+  // 输入新 todo
+  await userEvent.type(screen.getByRole('textbox'), 'New Todo');
+  await userEvent.click(screen.getByText('Add'));
+
+  // 乐观值立刻显示
+  expect(screen.getByText('New Todo')).toBeInTheDocument();
+
+  // 等 mutation 完成
+  await waitFor(() =&gt; {
+    const cache = queryClient.getQueryData&lt;Todo[]&gt;(['todos']);
+    // 验证 server 真实数据替换了乐观值
+    expect(cache?.find(t =&gt; t.text === 'New Todo' &amp;&amp; t.id !== 'temp')).toBeTruthy();
+  });
+});
+
+test('add todo rolls back on failure', async () =&gt; {
+  // override 让请求失败
+  server.use(http.post('/api/todos', () =&gt; HttpResponse.error()));
+
+  const { queryClient } = renderWithQuery(&lt;TodoApp /&gt;);
+  await screen.findByText('Existing Todo');
+
+  await userEvent.type(screen.getByRole('textbox'), 'Failing Todo');
+  await userEvent.click(screen.getByText('Add'));
+
+  // 乐观值立刻显示
+  expect(screen.getByText('Failing Todo')).toBeInTheDocument();
+
+  // 失败后回滚
+  await waitFor(() =&gt; {
+    expect(screen.queryByText('Failing Todo')).not.toBeInTheDocument();
+  });
+});</code></pre>
+        </div>
+
+        <h3>代码 3 · 用 Sentry 监控 query 错误</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/Providers.tsx
+import * as Sentry from '@sentry/react';
+import { QueryClient, QueryCache, MutationCache } from '@tanstack/react-query';
+
+const queryClient = new QueryClient({
+  queryCache: new QueryCache({
+    onError: (error, query) =&gt; {
+      Sentry.captureException(error, {
+        tags: { queryKey: JSON.stringify(query.queryKey).slice(0, 100) },
+        contexts: { query: { meta: query.meta } },
+      });
+    },
+  }),
+  mutationCache: new MutationCache({
+    onError: (error, variables, _ctx, mutation) =&gt; {
+      Sentry.captureException(error, {
+        tags: { mutationKey: JSON.stringify(mutation.options.mutationKey).slice(0, 100) },
+        contexts: { mutation: { variables } },
+      });
+    },
+  }),
+});</code></pre>
+        </div>
+
+        <h3>代码 4 · 性能监控 query 慢</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 监控慢 query
+new QueryClient({
+  queryCache: new QueryCache({
+    onSuccess: (data, query) =&gt; {
+      const duration = Date.now() - query.state.dataUpdatedAt;
+      const queryStart = query.state.fetchStatus === 'fetching' ? Date.now() : query.state.dataUpdatedAt;
+      // 简化：用 query.state.dataUpdateCount * 一些指标
+      // 真实 setup 用 Performance API + 跟踪 queryFn 时间
+      if (duration &gt; 3000) {
+        analytics.track('slow_query', {
+          queryKey: JSON.stringify(query.queryKey),
+          duration,
+        });
+      }
+    },
+  }),
+});</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱 · 12 条权威清单</span></h2>
+
+        <p>下面是<strong>每个 TanStack Query 用户都会踩的 12 个坑</strong>，按危害排序，每条配修复方案：</p>
+
+        <ol>
+          <li>
+            <b>陷阱 1 · queryKey 用了不稳定引用 → 死循环</b>
+            <p><b>症状</b>：query 持续 refetch，组件不停 re-render。</p>
+            <p><b>根因</b>：queryKey 里的 object 每次 render 是新引用 → query 被识别为新的 → 重新 fetch → re-render → 又是新引用。</p>
+            <p><b>修复</b>：</p>
+            <div class="code-block">
+              <span class="code-label">tsx</span>
+              <pre class="code"><code class="lang-tsx">// ❌ 死循环
+useQuery({ queryKey: ['users', { filter: { active: true } }], ... });
+
+// ✅ 用 useMemo 稳定
+const filter = useMemo(() =&gt; ({ active: true }), []);
+useQuery({ queryKey: ['users', filter], ... });
+
+// ✅ 或用 queryKey factory
+const queryKey = userKeys.list({ active: true });
+useQuery({ queryKey, ... });</code></pre>
+            </div>
+          </li>
+          <li>
+            <b>陷阱 2 · queryFn 闭包过期变量 → 永远拿到旧值</b>
+            <p><b>症状</b>：切 id 但拿到旧 user。</p>
+            <p><b>根因</b>：queryFn 在第一次创建时记住闭包；之后 id 变化但 queryKey 没变 → 复用旧 queryFn → 闭包里仍是旧 id。</p>
+            <p><b>修复</b>：把变量放进 queryKey，从 context 读：</p>
+            <div class="code-block">
+              <span class="code-label">tsx</span>
+              <pre class="code"><code class="lang-tsx">// ❌ 错
+useQuery({
+  queryKey: ['user'],
+  queryFn: () =&gt; api.getUser(id),  // id 闭包，永远是初始值
+});
+
+// ✅ 对
+useQuery({
+  queryKey: ['user', id],
+  queryFn: ({ queryKey: [, userId] }) =&gt; api.getUser(userId as string),
+});</code></pre>
+            </div>
+          </li>
+          <li>
+            <b>陷阱 3 · staleTime 太小 + refetchOnWindowFocus 开 → 网络请求爆炸</b>
+            <p><b>症状</b>：切 tab 切回每次都发请求；DevTools 看一直 fetching。</p>
+            <p><b>根因</b>：默认 staleTime: 0；focus 总触发 refetch。</p>
+            <p><b>修复</b>：调大 staleTime（60+ 秒）或关 focus refetch。</p>
+          </li>
+          <li>
+            <b>陷阱 4 · 乐观更新 4 步漏一步</b>
+            <p><b>症状</b>：失败没回滚 / 乐观值被覆盖 / 拿不到 server 真实 id。</p>
+            <p><b>修复</b>：4 步缺一不可（cancelQueries → 保存 prev → setQueryData → onError 回滚 + onSettled invalidate）。详见 <a href="../03-lifecycle/02-usemutation-optimistic.html">P3.2</a>。</p>
+          </li>
+          <li>
+            <b>陷阱 5 · invalidate 后立刻 getQueryData → 拿到旧值</b>
+            <p><b>症状</b>：mutation 成功 → invalidate → 立刻 getQueryData 期望新值，但拿到旧的。</p>
+            <p><b>根因</b>：invalidate 只标 stale 等下次激活才 refetch。不是同步替换。</p>
+            <p><b>修复</b>：等 refetch 完成 → 用 await refetchQueries 或 invalidateQueries 配 await。</p>
+          </li>
+          <li>
+            <b>陷阱 6 · Server Component 全局 new QueryClient → 跨用户 cache 泄漏</b>
+            <p><b>症状</b>：用户 A 看到用户 B 的数据（生产严重 bug）。</p>
+            <p><b>根因</b>：Server Component 在 server 长跑，全局变量被并发请求共享。</p>
+            <p><b>修复</b>：每请求 new。用 React cache helper：</p>
+            <div class="code-block">
+              <span class="code-label">tsx</span>
+              <pre class="code"><code class="lang-tsx">import { cache } from 'react';
+export const getQueryClient = cache(() =&gt; new QueryClient());</code></pre>
+            </div>
+          </li>
+          <li>
+            <b>陷阱 7 · dehydrate 数据膨胀 → RSC payload 过大 → TTFB 慢</b>
+            <p><b>症状</b>：首屏 HTML 几 MB。</p>
+            <p><b>根因</b>：prefetch 太多 query；或 query 数据本身大。</p>
+            <p><b>修复</b>：只 prefetch 必要的；数据大的 query 不 prefetch（让 client 拿）。</p>
+          </li>
+          <li>
+            <b>陷阱 8 · useSuspenseQuery 没包 Suspense → app 崩溃</b>
+            <p><b>症状</b>：组件挂掉，整个 React tree 报错。</p>
+            <p><b>修复</b>：父级必须有 Suspense + ErrorBoundary。</p>
+          </li>
+          <li>
+            <b>陷阱 9 · select 返回新引用 → 优化失效</b>
+            <p><b>症状</b>：用了 select 仍然每次 re-render。</p>
+            <p><b>根因</b>：select 返回新对象 / 数组 → structuralSharing 部分救场但不最优。</p>
+            <p><b>修复</b>：返回原始值（number / string）；或 useCallback 稳定 select。</p>
+          </li>
+          <li>
+            <b>陷阱 10 · mutation onSuccess 立刻 navigate → onSettled 没跑 cache 没刷</b>
+            <p><b>症状</b>：navigate 到新页面后看到旧 cache 数据。</p>
+            <p><b>修复</b>：用 mutateAsync await 后 navigate；或在 onSettled 里 navigate。</p>
+          </li>
+          <li>
+            <b>陷阱 11 · RSC 项目里继续用 useEffect+fetch → 倒退</b>
+            <p><b>症状</b>：技术栈不一致，混乱。</p>
+            <p><b>修复</b>：RSC 项目首屏走 RSC fetch + 'use cache'；客户端独有走 TanStack Query。<strong>不要用 useEffect+fetch</strong>。</p>
+          </li>
+          <li>
+            <b>陷阱 12 · 多个客户端 fetch 库共存（Apollo + TanStack Query + SWR）</b>
+            <p><b>症状</b>：同一份数据三套 cache 互相不知道；改一个不刷另两个。</p>
+            <p><b>修复</b>：选一个，统一。</p>
+          </li>
+        </ol>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/guides/testing" target="_blank" rel="noopener">TanStack Query · Testing</a> · 官方测试指南</li>
+          <li><a href="https://tkdodo.eu/blog/testing-react-query" target="_blank" rel="noopener">TkDodo · Testing React Query</a> · 测试实战权威博文</li>
+          <li><a href="https://mswjs.io/" target="_blank" rel="noopener">Mock Service Worker</a> · 测试 fetch 层标准工具</li>
+          <li><a href="../../testing/06-msw/index.html">测试主题 P6 · MSW</a></li>
+          <li><a href="../../testing/05-testing-library/index.html">测试主题 P5 · Testing Library</a></li>
+          <li><a href="../01-overview/02-philosophy.html">本主题 P1.2 · server state 设计哲学</a> · 全主题灵魂</li>
+          <li><a href="../05-rsc-bridge/01-rsc-coexistence.html">本主题 P5.1 · RSC 时代还该用吗</a> · 决策核心</li>
+          <li><a href="../05-rsc-bridge/02-hydration-bridge.html">本主题 P5.2 · hydration 桥</a> · RSC 集成姿势</li>
+          <li><a href="https://tkdodo.eu/blog/" target="_blank" rel="noopener">TkDodo Blog</a> · TanStack Query 维护者博客全集</li>
+        </ul>
+
+        <div class="callout success">
+          <div class="callout-title">🎯 全主题完成</div>
+          <p>读完 P7 就完成了 12 章。把<strong>决策树 + 陷阱清单</strong>当 reference 留着，下次拿新项目时翻回来对一遍。</p>
+        </div>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../06-swr-peers/01-swr-and-peers.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P6.1 · SWR + 同代人横评</span>
+          </a>
+          <a class="next" href="../index.html">
+            <span class="label">回到主题首页</span>
+            <span class="title">TanStack Query / SWR 深度学习</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

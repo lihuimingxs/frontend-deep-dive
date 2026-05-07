@@ -1,0 +1,707 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>客户端数据获取 15 年史 + 同代人横评 · P1.1 · TanStack Query / SWR 深度学习</title>
+    <meta name="description" content="客户端数据获取 15 年史：从 2006 年 jQuery $.ajax 到 2024 React 19 use API。讲清 useEffect+fetch 反模式为什么是错误起点、Apollo / Relay / Redux+thunk / SWR / React Query 各自解决了什么前一版的痛点、TanStack Query 怎么从 React Query 改名后扩展到多框架、RSC 时代客户端 fetch 库的位置变化。给后面所有'为什么这样设计'提供历史坐标。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23ff4154'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EQ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>TanStack Query / SWR 深度学习</span><span class="site-title-badge" style="background: #ff4154; color: #fff">Q</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P1 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · 是谁 / 为什么</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html" class="active">01 · 客户端数据获取 15 年史</a></li>
+          <li><a href="02-philosophy.html">02 · server state 设计哲学</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TanStack Query</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · 是谁 / 为什么</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 客户端数据获取 15 年史</span>
+        </nav>
+        <h1>客户端数据获取 15 年史 + 同代人横评</h1>
+        <p class="lead">
+          从 2006 年 jQuery <code>$.ajax</code> 到 2024 React 19 <code>use</code> API，客户端数据获取这条线 15 年踩过 7 类坑、出现过 8 个有影响力的方案。这一章把演化串起来，让"为什么 TanStack Query 现在这样长"有历史根因。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> 写过 React + 至少用过一种 fetch 库</span>
+          <span><strong>主要来源</strong> 各项目 GitHub 历史 + Tanner Linsley / Shu Ding 公开演讲与博文 + React 团队 RFC</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>客户端数据获取的核心矛盾 15 年没变 —— <strong>异步、共享、可能 stale 的远程数据</strong>不能用同步 client state 心智去管。每个时代都在重新发现这件事。</li>
+          <li><b>2006-2014</b> jQuery <code>$.ajax</code> + 回调地狱 → ES6 Promise → React <code>componentDidMount</code> 取数 / <code>componentDidUpdate</code> 同步。"组件挂载就发请求"的直觉从这时定型，并一直拖累后面所有方案。</li>
+          <li><b>2015-2018</b> 三条路线分头试：<b>Redux + thunk / saga</b>（把异步当 client state 写）/ <b>Apollo Client</b>（GraphQL only，normalized cache）/ <b>Relay</b>（Meta 内部生态）。各自解决一部分，没有共识。</li>
+          <li><b>2018-2019</b> Hooks（16.8）+ <code>useEffect + fetch</code> 反模式 —— 表面简洁，实际暗藏竞态、cleanup、loading 状态散落、双重请求 4 个坑。React 文档 2024 才正式承认这是反模式。</li>
+          <li><b>2019</b> SWR（Vercel + Shu Ding）—— 把 HTTP RFC 5861 的 <code>stale-while-revalidate</code> 提到 React hook 层；极简 API + 全局缓存。开始把客户端数据获取当独立问题对待。</li>
+          <li><b>2020</b> React Query v1（Tanner Linsley）—— 关键转折：<strong>明确 server state ≠ client state</strong>，提出独立的 query lifecycle 抽象。这是这条线的根本性认识。</li>
+          <li><b>2021</b> RTK Query（Redux Toolkit 内置）—— Redux 阵营对 React Query 的回应；endpoint-based + 自动生成 hooks；让全家桶 Redux 用户不必引入第三方 fetch 库。</li>
+          <li><b>2022</b> React Query → TanStack Query 改名 —— 从"React 专用"扩展到 Vue / Solid / Svelte / Angular 多框架；vendor-neutral 路线明确。</li>
+          <li><b>2023</b> TanStack Query v5 —— 单一 object signature（<code>useQuery({ queryKey, queryFn })</code>）/ <code>gcTime</code> 取代 <code>cacheTime</code> 命名 / <code>useSuspenseQuery</code> 三件套进一等公民 / <code>pending</code> 取代 <code>loading</code>。</li>
+          <li><b>2024-2026</b> React 19 <code>use(promise)</code> + Server Components + Server Actions —— 部分 server state 直接 server-side 解决，不再过 client cache。<strong>客户端 fetch 库的位置变了，但没消失</strong>。详见 <a href="../05-rsc-bridge/01-rsc-coexistence.html">P5.1</a>。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>2006-2014 · 回调时代 + componentDidMount 直觉的形成</h3>
+
+        <p>这段时间没有"客户端数据获取库"的概念，只有<strong>怎么发 HTTP 请求</strong>这个问题。jQuery 的 <code>$.ajax</code> 是事实标准：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 2008 年的真实写法
+$.ajax({
+  url: '/api/users',
+  success: function(data) {
+    $('#user-list').html(renderUsers(data));
+  },
+  error: function() {
+    alert('Failed');
+  }
+});</code></pre>
+        </div>
+
+        <p>问题清单：回调嵌套（callback hell）、无超时控制、无 cancel、无 cache、错误处理散落。ES6 Promise（2014-2015 浏览器普及）解决了回调嵌套，但其他问题仍在。</p>
+
+        <p>React 出现后（2013），<code>componentDidMount</code> 成为发请求的"自然"位置：</p>
+
+        <div class="code-block">
+          <span class="code-label">jsx</span>
+          <pre class="code"><code class="lang-jsx">// React 0.14 / 16 时代
+class UserList extends Component {
+  state = { users: [], loading: true, error: null };
+
+  componentDidMount() {
+    fetch('/api/users')
+      .then(r =&gt; r.json())
+      .then(users =&gt; this.setState({ users, loading: false }))
+      .catch(error =&gt; this.setState({ error, loading: false }));
+  }
+
+  render() {
+    if (this.state.loading) return &lt;Loading /&gt;;
+    if (this.state.error) return &lt;Error /&gt;;
+    return &lt;ul&gt;{this.state.users.map(...)}&lt;/ul&gt;;
+  }
+}</code></pre>
+        </div>
+
+        <p>这段代码定型了一种心智：<strong>"组件挂载 = 发请求；卸载 = 不管"</strong>。它的隐患直到 Hooks 时代才被看清：</p>
+        <ul>
+          <li>同时挂载 5 个 UserList → 5 个一样的请求（没有 cache 概念）</li>
+          <li>组件卸载请求不 abort（虽然 setState 会报"on unmounted component" warning）</li>
+          <li>props 变了要不要重新拿数据？要写 <code>componentDidUpdate</code> 自己同步</li>
+          <li>错误重试 / 缓存 / 后台刷新 / 多组件共享等高级需求全部要自己实现</li>
+        </ul>
+
+        <h3>2015-2018 · 三条路线分头试</h3>
+
+        <p><b>路线 A · Redux + thunk / saga · 把异步当 client state 写</b></p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 典型 redux-thunk 写法
+const FETCH_USERS_REQUEST = 'FETCH_USERS_REQUEST';
+const FETCH_USERS_SUCCESS = 'FETCH_USERS_SUCCESS';
+const FETCH_USERS_FAILURE = 'FETCH_USERS_FAILURE';
+
+function fetchUsers() {
+  return async (dispatch) =&gt; {
+    dispatch({ type: FETCH_USERS_REQUEST });
+    try {
+      const users = await api.getUsers();
+      dispatch({ type: FETCH_USERS_SUCCESS, payload: users });
+    } catch (error) {
+      dispatch({ type: FETCH_USERS_FAILURE, payload: error });
+    }
+  };
+}
+
+// reducer 里写一遍 loading/error/data 三个 case
+// 每个 query 都要写 3 个 action type + 1 个 thunk + 1 个 reducer 分支</code></pre>
+        </div>
+
+        <p>问题：<strong>样板代码爆炸</strong>。10 个 query 就是 30 个 action + 10 个 thunk + 30 个 reducer 分支。redux-saga 用 generator 改善了可测试性，但代码量更大。</p>
+
+        <p>更深层问题：Redux 把 server state 当成普通 client state 存 store，忽略了 server state 的<strong>5 个独特性质</strong>（远程拥有、异步 API、共享、可能 stale、需要 caching/invalidation —— 详见 <a href="02-philosophy.html">P1.2</a>）。结果是 Redux store 越来越胖，invalidation / refetch / 后台刷新都得手写。</p>
+
+        <p><b>路线 B · Apollo Client · GraphQL only 的 normalized cache</b></p>
+
+        <div class="code-block">
+          <span class="code-label">jsx</span>
+          <pre class="code"><code class="lang-jsx">// Apollo 经典写法
+import { useQuery, gql } from '@apollo/client';
+
+const GET_USER = gql`
+  query GetUser($id: ID!) {
+    user(id: $id) { id name email }
+  }
+`;
+
+function User({ id }) {
+  const { loading, error, data } = useQuery(GET_USER, { variables: { id } });
+  if (loading) return &lt;Loading /&gt;;
+  if (error) return &lt;Error /&gt;;
+  return &lt;div&gt;{data.user.name}&lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <p>Apollo 把客户端缓存做成 <strong>normalized store</strong>（每个 entity 用 <code>__typename:id</code> 索引）—— 改一个 user，所有引用它的组件自动更新。这是当时最先进的设计，但代价：必须用 GraphQL，schema-first 工作流绑定，cache 调试复杂（一个 mutation 改了不该改的东西很难追）。</p>
+
+        <p><b>路线 C · Relay · Meta 内部生态</b></p>
+
+        <p>Relay 把 GraphQL + 编译时优化做到极致：fragment colocation、自动生成类型、按需 fetch。但学习曲线陡到非 Meta 公司很少能用起来；2020 年的 Relay Modern → Relay Hooks 重构进一步抬高门槛。</p>
+
+        <p>这三条路在 2018 年前没有共识 —— 用 GraphQL 就 Apollo / Relay；不用 GraphQL 就 Redux + thunk + 自己写。</p>
+
+        <h3>2018-2019 · Hooks 时代的 useEffect+fetch 反模式</h3>
+
+        <p>React 16.8 引入 Hooks，"组件挂载发请求"心智从 class 平移到函数：</p>
+
+        <div class="code-block">
+          <span class="code-label">jsx</span>
+          <pre class="code"><code class="lang-jsx">// 2019-2024 网上"React 怎么 fetch 数据"教程的标准写法
+function UserList() {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() =&gt; {
+    fetch('/api/users')
+      .then(r =&gt; r.json())
+      .then(setUsers)
+      .catch(setError)
+      .finally(() =&gt; setLoading(false));
+  }, []);
+
+  // ...
+}</code></pre>
+        </div>
+
+        <p>这段代码看起来简洁，<strong>4 个坑同时存在</strong>：</p>
+
+        <p><b>坑 1 · 竞态（race condition）</b>：如果 props 变化驱动重新 fetch，请求 B 可能比请求 A 早返回（B 是新的，A 是旧的），最终 setState(A) 把新值覆盖：</p>
+
+        <div class="code-block">
+          <span class="code-label">jsx</span>
+          <pre class="code"><code class="lang-jsx">// 用户从 user/1 切到 user/2
+function User({ id }) {
+  const [user, setUser] = useState(null);
+  useEffect(() =&gt; {
+    fetch(`/api/users/${id}`).then(r =&gt; r.json()).then(setUser);
+    // 切换 id 时旧 fetch 还在跑，可能晚于新 fetch 返回
+    // setUser(旧 user) 会覆盖 setUser(新 user)
+  }, [id]);
+}</code></pre>
+        </div>
+
+        <p>修复需要 cleanup + 取消标志：</p>
+
+        <div class="code-block">
+          <span class="code-label">jsx</span>
+          <pre class="code"><code class="lang-jsx">useEffect(() =&gt; {
+  let cancelled = false;
+  fetch(`/api/users/${id}`).then(r =&gt; r.json()).then(data =&gt; {
+    if (!cancelled) setUser(data);
+  });
+  return () =&gt; { cancelled = true; };
+}, [id]);
+// 或用 AbortController</code></pre>
+        </div>
+
+        <p>但 99% 的网上教程没有这段。竞态在 dev 环境很难发现（网络快），prod 偶尔出现 bug 难追。</p>
+
+        <p><b>坑 2 · React StrictMode 双 effect</b>：React 18 起 StrictMode 在 dev 故意 mount 组件两次以暴露 effect 不幂等问题。<code>fetch + setState</code> 会执行两次。修复方法和坑 1 一样（cleanup + 取消标志），但很多人只是把 StrictMode 关掉。</p>
+
+        <p><b>坑 3 · loading/error/data 三态散落</b>：每个 query 三个 useState；多个 query 复合就是 6、9、12 个 useState。</p>
+
+        <p><b>坑 4 · 多组件共享同一份数据各拉一遍</b>：UserList 和 UserAvatar 都拿 user，没有共享 cache，所以发两次请求。</p>
+
+        <p>2024 年 React 团队的官方文档明确写了这段是反模式：</p>
+
+        <div class="callout warn">
+          <div class="callout-title">⚠️ React 官方表态（2024）</div>
+          <p>「<i>If you're using a framework, use its built-in data fetching mechanism. ... If you're not using a framework, consider using a client-side cache library like React Query or SWR.</i>」<br>—— react.dev/learn/you-might-not-need-an-effect</p>
+        </div>
+
+        <p>这段话等于承认：原生 <code>useEffect + fetch</code> 是错误起点；要么用 framework（Next.js RSC fetch / Remix loader），要么用客户端 cache 库。</p>
+
+        <h3>2019 SWR · stale-while-revalidate 提到 hook 层</h3>
+
+        <p>SWR（Stale-While-Revalidate）由 Vercel + Shu Ding 在 2019 年开源，名字直接来自 <a href="https://datatracker.ietf.org/doc/html/rfc5861" target="_blank" rel="noopener">HTTP RFC 5861</a> 的 <code>Cache-Control: stale-while-revalidate</code> 头：cache 在 stale 之后短时间内还能用，同时后台 revalidate。</p>
+
+        <p>SWR 把这个心智从 HTTP 缓存抬到 React hook 层：</p>
+
+        <div class="code-block">
+          <span class="code-label">jsx</span>
+          <pre class="code"><code class="lang-jsx">import useSWR from 'swr';
+
+function User({ id }) {
+  const { data, error, isLoading } = useSWR(`/api/users/${id}`, fetcher);
+  if (isLoading) return &lt;Loading /&gt;;
+  if (error) return &lt;Error /&gt;;
+  return &lt;div&gt;{data.name}&lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <p>SWR 一上来就解决了 useEffect+fetch 的全部 4 个坑：</p>
+        <ul>
+          <li>切换 id 自动 cancel + cleanup（无竞态）</li>
+          <li>StrictMode 双 mount 自动去重</li>
+          <li>loading/error/data 三态自动管</li>
+          <li>多组件用同 key 自动共享一份请求 + cache</li>
+        </ul>
+
+        <p>SWR 极简 API（只有 <code>useSWR</code> + <code>mutate</code>）+ 和 Next.js 强绑定，让它在 2019-2022 Pages Router 时代成为默认选择。</p>
+
+        <h3>2020 React Query v1 · server state ≠ client state 的关键认识</h3>
+
+        <p>Tanner Linsley 在 2020 年发布 React Query v1，比 SWR 晚一年但走得更远。Tanner 在 <a href="https://tanstack.com/query/v3/docs/react/overview" target="_blank" rel="noopener">最早的 README</a> 和后来的多次演讲里提出一个根本性观察：</p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 Tanner 原话</div>
+          <p>「<i>Server state is fundamentally different from client state. Server state is persisted remotely, requires asynchronous APIs, implies shared ownership, and can become out-of-date in your applications if you're not careful.</i>」<br>—— React Query v1 docs</p>
+        </div>
+
+        <p>这一句话定位了整个 server state 库的设计：<strong>不是又一个 useState 替代，而是一个全新概念</strong>。详细 5 个性质 + 4 个设计赌注见 <a href="02-philosophy.html">P1.2</a>。</p>
+
+        <p>React Query v1 的 API 比 SWR 复杂但更结构化：</p>
+
+        <div class="code-block">
+          <span class="code-label">jsx</span>
+          <pre class="code"><code class="lang-jsx">// React Query v3 时代写法
+import { useQuery } from 'react-query';
+
+function User({ id }) {
+  const { data, isLoading, isError } = useQuery(
+    ['user', id],         // queryKey 是数组
+    () =&gt; fetcher(`/api/users/${id}`)
+  );
+  // ...
+}
+
+// invalidate 通过 queryClient
+queryClient.invalidateQueries(['user']);  // 模糊匹配所有 ['user', ...]</code></pre>
+        </div>
+
+        <p>关键差异（vs SWR）：</p>
+        <ul>
+          <li><b>queryKey 是数组而不是字符串</b> —— 第一段命名空间，后面是依赖；invalidate 时模糊匹配。详见 <a href="../02-mental-model/01-querykey-queryfn.html">P2.1</a>。</li>
+          <li><b>queryClient 是一等公民</b> —— 提供 imperative API（prefetch / setQueryData / invalidate / refetch），不只是 hook</li>
+          <li><b>更多 lifecycle 钩子</b> —— onSuccess / onError / onSettled / select / placeholderData / refetchInterval</li>
+          <li><b>useMutation 是独立 hook</b> —— 写操作有专门生命周期 + onMutate 乐观更新支持</li>
+        </ul>
+
+        <h3>2021 RTK Query · Redux 阵营的回应</h3>
+
+        <p>2021 年 Redux Toolkit 推出 RTK Query，对 React Query 的回应：endpoint-based + 自动生成 hooks，与 Redux store 共存：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// RTK Query 把 query/mutation 写成 endpoint
+const userApi = createApi({
+  reducerPath: 'userApi',
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  endpoints: (builder) =&gt; ({
+    getUser: builder.query({ query: (id) =&gt; `users/${id}` }),
+    updateUser: builder.mutation({
+      query: ({ id, ...patch }) =&gt; ({ url: `users/${id}`, method: 'PATCH', body: patch }),
+      invalidatesTags: ['User'],
+    }),
+  }),
+});
+
+// 自动生成 useGetUserQuery, useUpdateUserMutation hooks
+import { useGetUserQuery } from './userApi';
+function User({ id }) {
+  const { data, isLoading } = useGetUserQuery(id);
+  // ...
+}</code></pre>
+        </div>
+
+        <p>RTK Query 的定位很清晰：<strong>已经全家桶 Redux 的项目</strong>不需要再引入第三方 fetch 库。但新项目从零开始，RTK Query 比 React Query / TanStack Query 多了 Redux store 依赖（即使你不需要 client state），代价不划算。详细横评见 <a href="../06-swr-peers/01-swr-and-peers.html">P6.1</a>。</p>
+
+        <h3>2022 React Query → TanStack Query · vendor-neutral 多框架</h3>
+
+        <p>2022 年 Tanner 把 React Query 改名成 TanStack Query，扩展到 Vue / Solid / Svelte / Angular。同时把整个组织改名 TanStack（包括 TanStack Table / TanStack Router / TanStack Form）。</p>
+
+        <p>意义：<strong>vendor-neutral</strong>。一个跨框架团队（React + Vue 都有）能用统一 server state 心智；非 React 项目也能享受同一套 staleTime / queryKey 设计。这一步让 TanStack Query 跳出"React 库"的格局。</p>
+
+        <h3>2023 TanStack Query v5 · API 重整</h3>
+
+        <p>v5（2023 年 10 月）做了几个 breaking changes，把 v4 多年积累的 API 杂质清掉：</p>
+        <ul>
+          <li><b>单一 object signature</b>：<code>useQuery({ queryKey, queryFn, ...options })</code>；v3/v4 时代多种重载（位置参数 / 多参数）全砍掉</li>
+          <li><b><code>cacheTime</code> → <code>gcTime</code></b>：原名容易和 staleTime 混淆，gcTime 更直白（"超过这个时间从内存清掉"）</li>
+          <li><b><code>loading</code> → <code>pending</code></b>：状态名与 React 19 Promise 状态对齐</li>
+          <li><b><code>useSuspenseQuery</code> 三件套进一等公民</b>：useSuspenseQuery / useSuspenseInfiniteQuery / useSuspenseQueries</li>
+          <li><b>移除 <code>onSuccess</code> / <code>onError</code> / <code>onSettled</code> 在 useQuery 上</b>：这三个 callback 在 v5 只保留在 useMutation；query 层用 useEffect 监听 status 改</li>
+        </ul>
+
+        <p>v5 是写本主题的目标版本。v3/v4 老 API 不在本主题正文展开。</p>
+
+        <h3>2024-2026 React 19 + RSC · 部分 server state 离开 client</h3>
+
+        <p>2024 年起 React 19 + Server Components 落地，<strong>客户端 fetch 库的位置发生根本性变化</strong>：</p>
+
+        <ul>
+          <li><b>首屏数据</b> → Server Component 直接 <code>async function</code> + fetch + Next.js <code>'use cache'</code>；不再需要 useQuery + 客户端 hydrate</li>
+          <li><b>简单 mutation</b> → Server Action + <code>revalidatePath</code> / <code>revalidateTag</code>；不再需要 useMutation + invalidate 闭环</li>
+          <li><b><code>use(promise)</code> API</b> → 让 Server Component 创建的 promise 在 Client Component 里被流式消费；和 useSuspenseQuery 部分功能重叠</li>
+        </ul>
+
+        <p>但 TanStack Query 没有消失：</p>
+        <ul>
+          <li>客户端长生命周期 cache（infinite scroll / 跨页面 cache 复用）</li>
+          <li>WebSocket / SSE 推送数据多组件订阅</li>
+          <li>第三方客户端 API（CORS / API key 在 client）</li>
+          <li>乐观更新（roundtrip 太慢）</li>
+        </ul>
+
+        <p>这是 P5 章的主战场，详见 <a href="../05-rsc-bridge/01-rsc-coexistence.html">P5.1 RSC 时代还该用吗</a>。</p>
+
+        <h3>15 年时间线总览</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>事件</th>
+              <th>解决了什么前一版的痛</th>
+              <th>留下什么坑</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>2006</td>
+              <td>jQuery $.ajax</td>
+              <td>统一 XHR API + 跨浏览器</td>
+              <td>回调嵌套、无 cache、无 cancel</td>
+            </tr>
+            <tr>
+              <td>2014</td>
+              <td>ES6 Promise + fetch API</td>
+              <td>解决回调嵌套</td>
+              <td>无原生 cancel（直到 AbortController 2017）</td>
+            </tr>
+            <tr>
+              <td>2014</td>
+              <td>React + componentDidMount</td>
+              <td>声明式 UI</td>
+              <td>"挂载即发请求"心智持续到今天</td>
+            </tr>
+            <tr>
+              <td>2015</td>
+              <td>Redux + thunk</td>
+              <td>统一异步状态管理</td>
+              <td>把 server state 当 client state 写</td>
+            </tr>
+            <tr>
+              <td>2016</td>
+              <td>Apollo Client</td>
+              <td>GraphQL normalized cache</td>
+              <td>GraphQL only；运维负担重</td>
+            </tr>
+            <tr>
+              <td>2018</td>
+              <td>React 16.8 Hooks + useEffect+fetch</td>
+              <td>函数组件能管状态</td>
+              <td>4 大坑（竞态/StrictMode/三态散落/重复请求）</td>
+            </tr>
+            <tr>
+              <td>2019</td>
+              <td>SWR v0.x</td>
+              <td>极简 API + 全局缓存</td>
+              <td>无 mutation 体系；invalidation 弱</td>
+            </tr>
+            <tr>
+              <td>2020</td>
+              <td>React Query v1</td>
+              <td>server state ≠ client state</td>
+              <td>API 学习曲线</td>
+            </tr>
+            <tr>
+              <td>2021</td>
+              <td>RTK Query</td>
+              <td>Redux 阵营内置</td>
+              <td>新项目不必引入 Redux</td>
+            </tr>
+            <tr>
+              <td>2022</td>
+              <td>TanStack Query 改名</td>
+              <td>vendor-neutral 多框架</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td>2023</td>
+              <td>TanStack Query v5</td>
+              <td>API 重整 + Suspense 一等公民</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td>2024</td>
+              <td>React 19 use API + RSC</td>
+              <td>部分 server state 离开 client</td>
+              <td>两层 cache 同步成新问题</td>
+            </tr>
+            <tr>
+              <td>2026</td>
+              <td>TanStack Query + Next.js 16 共存模式落地</td>
+              <td>hydration 桥成熟</td>
+              <td>—（当前主线）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 老项目要不要从 useEffect+fetch 迁到 TanStack Query</h3>
+
+        <p>判断标准：</p>
+        <ul>
+          <li>项目里 <code>useEffect + fetch</code> 调用 &gt; 5 处 → 必迁。每多一处 useEffect+fetch 是一份 4 大坑的复制代码</li>
+          <li>已经感受到具体痛（竞态出过 bug、loading 状态散落、多组件重复请求）→ 必迁</li>
+          <li>迁移路径：先包一层 wrapper hook（useUser / useUsers），逐个替换内部实现，不动调用方</li>
+        </ul>
+
+        <h3>场景 2 · Apollo / Relay 老项目要不要切 TanStack Query</h3>
+
+        <p>判断标准：</p>
+        <ul>
+          <li>仍在 GraphQL → 不切。Apollo / Relay 的 normalized cache 是 GraphQL 专属优势</li>
+          <li>从 GraphQL 迁回 REST → 切。GraphQL 客户端在 REST 项目里浪费</li>
+          <li>团队对 GraphQL schema 不再投入（schema 长期不更新）→ 考虑切</li>
+        </ul>
+
+        <h3>场景 3 · Next.js App Router 项目从 SWR 切 TanStack Query</h3>
+
+        <p>App Router 时代两个力量同时影响：</p>
+        <ul>
+          <li>RSC 接管首屏 fetch → 客户端 fetch 库需求量下降；如果项目 80% 数据走 RSC，留 SWR 也够用</li>
+          <li>剩余客户端 query 复杂度上升（infinite scroll / 多组件订阅 / 乐观更新） → SWR 体系化不足；TanStack Query 更合适</li>
+        </ul>
+
+        <p>最优策略通常是<strong>RSC + TanStack Query 组合</strong>。SWR 在 App Router + RSC 时代的位置进一步收窄。详见 <a href="../06-swr-peers/01-swr-and-peers.html">P6.1</a> + <a href="../05-rsc-bridge/index.html">P5</a>。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 同一个需求的 5 种历史写法对比</h3>
+
+        <p>需求："拿用户列表，渲染，loading / error 状态显示"。看 5 个时代怎么写：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · jQuery 2008</span>
+          <pre class="code"><code class="lang-js">$.ajax({ url: '/api/users', success: function(users) {
+  $('#list').html(users.map(u =&gt; '&lt;li&gt;' + u.name + '&lt;/li&gt;').join(''));
+}, error: function() { $('#list').html('Error'); } });</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">jsx · Redux+thunk 2017</span>
+          <pre class="code"><code class="lang-jsx">// actions.js
+const fetchUsers = () =&gt; async (dispatch) =&gt; {
+  dispatch({ type: 'USERS_REQUEST' });
+  try {
+    const users = await api.getUsers();
+    dispatch({ type: 'USERS_SUCCESS', payload: users });
+  } catch (e) {
+    dispatch({ type: 'USERS_FAILURE', payload: e });
+  }
+};
+
+// reducer.js
+function users(state = { loading: false, data: [], error: null }, action) {
+  switch (action.type) {
+    case 'USERS_REQUEST': return { ...state, loading: true };
+    case 'USERS_SUCCESS': return { loading: false, data: action.payload, error: null };
+    case 'USERS_FAILURE': return { loading: false, data: [], error: action.payload };
+    default: return state;
+  }
+}
+
+// component.jsx
+function UserList() {
+  const { loading, data, error } = useSelector(s =&gt; s.users);
+  const dispatch = useDispatch();
+  useEffect(() =&gt; { dispatch(fetchUsers()); }, [dispatch]);
+  if (loading) return &lt;Loading /&gt;;
+  if (error) return &lt;Error /&gt;;
+  return &lt;ul&gt;{data.map(u =&gt; &lt;li key={u.id}&gt;{u.name}&lt;/li&gt;)}&lt;/ul&gt;;
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">jsx · useEffect+fetch 2019</span>
+          <pre class="code"><code class="lang-jsx">function UserList() {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() =&gt; {
+    let cancelled = false;
+    fetch('/api/users')
+      .then(r =&gt; r.json())
+      .then(data =&gt; { if (!cancelled) setUsers(data); })
+      .catch(e =&gt; { if (!cancelled) setError(e); })
+      .finally(() =&gt; { if (!cancelled) setLoading(false); });
+    return () =&gt; { cancelled = true; };
+  }, []);
+
+  if (loading) return &lt;Loading /&gt;;
+  if (error) return &lt;Error /&gt;;
+  return &lt;ul&gt;{users.map(u =&gt; &lt;li key={u.id}&gt;{u.name}&lt;/li&gt;)}&lt;/ul&gt;;
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">jsx · SWR 2020</span>
+          <pre class="code"><code class="lang-jsx">import useSWR from 'swr';
+
+function UserList() {
+  const { data, error, isLoading } = useSWR('/api/users', (u) =&gt; fetch(u).then(r =&gt; r.json()));
+  if (isLoading) return &lt;Loading /&gt;;
+  if (error) return &lt;Error /&gt;;
+  return &lt;ul&gt;{data.map(u =&gt; &lt;li key={u.id}&gt;{u.name}&lt;/li&gt;)}&lt;/ul&gt;;
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx · TanStack Query v5 2026</span>
+          <pre class="code"><code class="lang-tsx">import { useQuery } from '@tanstack/react-query';
+
+function UserList() {
+  const { data, error, isPending } = useQuery({
+    queryKey: ['users'],
+    queryFn: () =&gt; fetch('/api/users').then(r =&gt; r.json()),
+  });
+  if (isPending) return &lt;Loading /&gt;;
+  if (error) return &lt;Error /&gt;;
+  return &lt;ul&gt;{data.map(u =&gt; &lt;li key={u.id}&gt;{u.name}&lt;/li&gt;)}&lt;/ul&gt;;
+}</code></pre>
+        </div>
+
+        <p>关键观察：</p>
+        <ul>
+          <li>从 Redux+thunk 到 SWR 是<strong>样板代码量级下降</strong>（30 行 → 1 行）</li>
+          <li>从 useEffect+fetch 到 SWR 是<strong>正确性提升</strong>（4 大坑全免）</li>
+          <li>从 SWR 到 TanStack Query 是<strong>能力扩展</strong>（cache invalidation / mutation / DevTools）</li>
+        </ul>
+
+        <h3>代码 2 · useEffect+fetch 4 大坑的对照修复</h3>
+
+        <div class="code-block">
+          <span class="code-label">jsx</span>
+          <pre class="code"><code class="lang-jsx">// 反模式版（4 个坑全在）
+function User({ id }) {
+  const [user, setUser] = useState(null);
+  useEffect(() =&gt; {
+    fetch(`/api/users/${id}`).then(r =&gt; r.json()).then(setUser);
+    // 坑 1 竞态：切换 id 时旧 fetch 可能晚于新 fetch 返回
+    // 坑 2 StrictMode 双 mount：dev 下双重请求
+    // 坑 3 三态散落：另要 setLoading / setError
+    // 坑 4 多组件不共享：5 个组件渲染 = 5 个一样的请求
+  }, [id]);
+}
+
+// 正确版（手写）
+function User({ id }) {
+  const [state, setState] = useState({ loading: true, data: null, error: null });
+  useEffect(() =&gt; {
+    const ctrl = new AbortController();
+    setState(s =&gt; ({ ...s, loading: true }));
+    fetch(`/api/users/${id}`, { signal: ctrl.signal })
+      .then(r =&gt; r.json())
+      .then(data =&gt; setState({ loading: false, data, error: null }))
+      .catch(error =&gt; {
+        if (error.name === 'AbortError') return;
+        setState({ loading: false, data: null, error });
+      });
+    return () =&gt; ctrl.abort();
+  }, [id]);
+  // 修了 1 + 2，没修 3 + 4
+}
+
+// TanStack Query 版（4 坑全免 + 自动多组件共享）
+function User({ id }: { id: string }) {
+  const { data, isPending, error } = useQuery({
+    queryKey: ['user', id],
+    queryFn: ({ signal }) =&gt; fetch(`/api/users/${id}`, { signal }).then(r =&gt; r.json()),
+  });
+  // 切换 id 自动 cancel；StrictMode 自动去重；三态自动管；多组件共享 cache
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>把"useEffect + fetch 简单"当真</b> —— 网上 90% 的"React 怎么 fetch"教程是反模式版本。简洁是表面，4 大坑全在</li>
+          <li><b>项目里只有 1-2 处 fetch 就觉得不需要 TanStack Query</b> —— 项目会增长。先 1 处 useEffect+fetch，半年后变 10 处，重构成本陡增</li>
+          <li><b>从 Redux+thunk 全量迁 TanStack Query 一次性改完</b> —— 应该<b>渐进迁</b>：先把新代码用 TanStack Query 写，旧的留着；旧代码痛了再迁那一处</li>
+          <li><b>Apollo 项目盲目切 TanStack Query</b> —— 还在写 GraphQL 的项目继续用 Apollo / Relay 更合适。TanStack Query 是 REST 友好但 GraphQL 上没有 normalized cache</li>
+          <li><b>新 Next.js App Router 项目装 SWR</b> —— 2026 起 App Router 项目客户端 fetch 库默认 TanStack Query。SWR 维护已放缓，App Router 又被 RSC 抢戏</li>
+          <li><b>RTK Query 用在非 Redux 项目</b> —— 为了 RTK Query 引入 Redux store 不划算。新项目直接 TanStack Query</li>
+          <li><b>"我用 useEffect+fetch 没出过 bug"</b> —— 通常是项目还小或网络稳定的幸存者偏差。竞态在 dev 看不到、prod 偶发，难追</li>
+          <li><b>把 TanStack Query 当 Redux 替代品</b> —— 它只管 server state；client state（modal 是否打开 / 表单输入）仍用 useState / Zustand。详见 <a href="02-philosophy.html">P1.2</a></li>
+          <li><b>RSC 项目里把 useQuery 套在 Server Component 外层</b> —— Server Component 不能用 hooks；首屏数据应该走 RSC fetch + 'use cache'，TanStack Query 留给客户端独有场景。详见 <a href="../05-rsc-bridge/01-rsc-coexistence.html">P5.1</a></li>
+          <li><b>"我们项目老，已经写了 useEffect+fetch，不想改"</b> —— 不必一次改完，但<strong>新代码不再用 useEffect+fetch</strong>。两年后老代码会被自然替换</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://tanstack.com/query/latest" target="_blank" rel="noopener">TanStack Query 官方文档</a></li>
+          <li><a href="https://tanstack.com/query/v5/docs/framework/react/guides/migrating-to-v5" target="_blank" rel="noopener">TanStack Query v5 迁移指南</a> · v3/v4 → v5 的所有 breaking changes</li>
+          <li><a href="https://swr.vercel.app/" target="_blank" rel="noopener">SWR 官方文档</a></li>
+          <li><a href="https://tkdodo.eu/blog/practical-react-query" target="_blank" rel="noopener">TkDodo · Practical React Query</a> · TanStack Query 维护者 Dominik 的实战系列博客</li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc5861" target="_blank" rel="noopener">RFC 5861 · stale-while-revalidate</a> · SWR 名字的来源</li>
+          <li><a href="https://react.dev/learn/you-might-not-need-an-effect" target="_blank" rel="noopener">React 官方 · You Might Not Need an Effect</a> · 官方明确 useEffect+fetch 是反模式</li>
+          <li><a href="https://www.apollographql.com/docs/react" target="_blank" rel="noopener">Apollo Client 文档</a> · GraphQL 阵营对照</li>
+          <li><a href="https://redux-toolkit.js.org/rtk-query/overview" target="_blank" rel="noopener">RTK Query 文档</a> · Redux 阵营内置 fetch 库</li>
+          <li><a href="02-philosophy.html">本主题 P1.2 · server state 设计哲学</a> · 5 个性质 + 4 个设计赌注</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../index.html">
+            <span class="label">← 上一级</span>
+            <span class="title">P1 · 阶段概览</span>
+          </a>
+          <a class="next" href="02-philosophy.html">
+            <span class="label">下一章 →</span>
+            <span class="title">P1.2 · server state 设计哲学</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

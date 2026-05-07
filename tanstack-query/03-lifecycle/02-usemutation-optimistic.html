@@ -1,0 +1,713 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>useMutation + 乐观更新 · P3.2 · TanStack Query / SWR 深度学习</title>
+    <meta name="description" content="useMutation 不会自动触发，调用 mutate(variables) 才执行。这一章讲乐观更新的 4 步缺一不可（cancelQueries → 保存 prev → setQueryData → onError 回滚 / onSettled invalidate）+ useMutationState 派生乐观 UI（不动 cache）+ 与 React 19 useOptimistic 的关系（不冲突，分工明确）。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23ff4154'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EQ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>TanStack Query / SWR 深度学习</span><span class="site-title-badge" style="background: #ff4154; color: #fff">Q</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · query / mutation 生命周期</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-usequery-spectrum.html">01 · useQuery 全谱</a></li>
+          <li><a href="02-usemutation-optimistic.html" class="active">02 · useMutation + 乐观更新</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TanStack Query</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · 生命周期</a><span class="breadcrumb-sep">/</span>
+          <span>02 · useMutation + 乐观更新</span>
+        </nav>
+        <h1>useMutation + invalidation + 乐观更新</h1>
+        <p class="lead">
+          useMutation 是 TanStack Query 的"写"操作。最容易踩坑的部分是<strong>乐观更新的 4 步缺一不可</strong>（cancelQueries → 保存 prev → setQueryData 写新值 → onError 回滚 / onSettled invalidate）。漏一步出 bug。这一章把 4 步讲透 + 介绍 v5 的 useMutationState 新写法 + 厘清与 React 19 useOptimistic 的关系。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P3.1 useQuery 全谱 + 写过至少一个 useMutation</span>
+          <span><strong>主要来源</strong> tanstack.com/query/latest/docs/framework/react/guides/optimistic-updates + Tanner 关于乐观更新的多篇博文</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><b>useMutation 不自动触发</b>：与 useQuery 不同，调用 <code>mutate(variables)</code> 才执行。无 queryKey（默认；v5 可选 mutationKey）。</li>
+          <li><b>状态字段</b>：<code>isPending</code>（在跑） / <code>isSuccess</code> / <code>isError</code> / <code>data</code>（成功值） / <code>error</code> / <code>variables</code>（最新提交参数）。</li>
+          <li><b>4 个回调</b>：<code>onMutate</code>（提交前，乐观写入）/ <code>onSuccess</code>（成功）/ <code>onError</code>（失败回滚）/ <code>onSettled</code>（无论成败，最后一步 invalidate）。</li>
+          <li><strong>乐观更新 4 步缺一不可</strong>：(1) <code>cancelQueries</code> 取消进行中的 fetch（避免 race） → (2) 保存 prev cache（onError 回滚用） → (3) <code>setQueryData</code> 写乐观值 → (4) <code>onError</code> 回滚 + <code>onSettled</code> invalidate。</li>
+          <li><b>v5 useMutationState 派生乐观 UI</b>：不动 cache 的乐观更新；适合"乐观显示但不影响其他组件"的场景。</li>
+          <li><b>与 React 19 useOptimistic 的关系</b>：不冲突，分工不同。<code>useOptimistic</code> 管 form transition 临时状态；TanStack Query 管 cache。复杂场景两者协作。</li>
+          <li><b>useMutation 仍保留 onSuccess / onError / onSettled</b>（v5 没像 useQuery 那样移除），因为 mutation 是命令式触发，时机明确。</li>
+          <li><b>mutationFn 调 Server Action</b>：在 Next.js App Router 项目里 mutationFn 直接调 <code>'use server'</code> 函数；与 React 19 form action 协作。详见 <a href="../05-rsc-bridge/02-hydration-bridge.html">P5.2</a>。</li>
+          <li><b>onMutate 返回的对象会作为 context 传给 onError / onSettled</b>：这是 4 步乐观更新的实现机制 —— 在 onMutate return prev，onError 拿到 context.prev 回滚。</li>
+          <li><b>"乐观更新出错没回滚"是踩坑率最高的 bug</b>：症状是 UI 永远显示乐观值，server 已失败但用户不知。修复：onError 必须把 prev 写回 cache。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>useMutation 基础</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { useMutation, useQueryClient } from '@tanstack/react-query';
+
+function AddTodoForm() {
+  const queryClient = useQueryClient();
+  const { mutate, isPending, isError, error } = useMutation({
+    mutationFn: (newTodo: { text: string }) =&gt; api.addTodo(newTodo),
+    onSuccess: () =&gt; {
+      queryClient.invalidateQueries({ queryKey: ['todos'] });
+    },
+    onError: (err) =&gt; {
+      toast.error(`Failed: ${err.message}`);
+    },
+  });
+
+  return (
+    &lt;form onSubmit={(e) =&gt; {
+      e.preventDefault();
+      const text = (new FormData(e.currentTarget).get('text') as string);
+      mutate({ text });
+    }}&gt;
+      &lt;input name="text" required /&gt;
+      &lt;button disabled={isPending}&gt;{isPending ? 'Adding...' : 'Add'}&lt;/button&gt;
+      {isError &amp;&amp; &lt;p&gt;{error.message}&lt;/p&gt;}
+    &lt;/form&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>关键点：</p>
+        <ul>
+          <li><code>mutationFn</code> 接受 variables，返回 promise</li>
+          <li>调用 <code>mutate({...})</code> 触发；<code>mutateAsync({...})</code> 返回 promise</li>
+          <li>4 个回调按顺序：<code>onMutate</code> → <code>onSuccess</code> / <code>onError</code> → <code>onSettled</code></li>
+          <li>不需要 queryKey（mutation 不进 cache）；需要 mutationKey 才能用 useMutationState 查询</li>
+        </ul>
+
+        <h3>onMutate / onSuccess / onError / onSettled · 完整 lifecycle</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">useMutation({
+  mutationFn: api.addTodo,
+  onMutate: async (newTodo) =&gt; {
+    // 1. 提交前。乐观写入 + 返回 context（传给 onError）
+    return { rollback: () =&gt; { /* ... */ } };
+  },
+  onSuccess: (data, variables, context) =&gt; {
+    // 2a. 成功。data 是 mutationFn 返回值
+    console.log('Created:', data);
+  },
+  onError: (error, variables, context) =&gt; {
+    // 2b. 失败。context 是 onMutate 返回的对象
+    context?.rollback?.();
+  },
+  onSettled: (data, error, variables, context) =&gt; {
+    // 3. 无论成败。通常用来 invalidate
+    queryClient.invalidateQueries({ queryKey: ['todos'] });
+  },
+});</code></pre>
+        </div>
+
+        <h3>乐观更新 4 步 · 缺一不可</h3>
+
+        <p>乐观更新（optimistic update）的目标：用户提交后<strong>立即显示"似乎成功"</strong>，不等 server roundtrip。如果 server 实际失败，回滚 UI 到提交前。</p>
+
+        <p>正确实现需要 4 步，缺任一步都会出 bug：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">useMutation({
+  mutationFn: api.addTodo,
+  onMutate: async (newTodo) =&gt; {
+    // 步骤 1：cancelQueries 防止 race
+    // 如果有正在跑的 todos fetch，等它取消，避免回来覆盖我们的乐观值
+    await queryClient.cancelQueries({ queryKey: ['todos'] });
+
+    // 步骤 2：保存 prev（onError 回滚用）
+    const prev = queryClient.getQueryData&lt;Todo[]&gt;(['todos']);
+
+    // 步骤 3：setQueryData 写乐观值
+    queryClient.setQueryData&lt;Todo[]&gt;(['todos'], (old = []) =&gt; [
+      ...old,
+      { id: `temp-${Date.now()}`, text: newTodo.text, done: false },
+    ]);
+
+    // 把 prev 通过 context 传给 onError
+    return { prev };
+  },
+  onError: (_err, _newTodo, context) =&gt; {
+    // 步骤 4a：失败回滚
+    if (context?.prev) {
+      queryClient.setQueryData(['todos'], context.prev);
+    }
+  },
+  onSettled: () =&gt; {
+    // 步骤 4b：无论成败 invalidate（最终一致）
+    queryClient.invalidateQueries({ queryKey: ['todos'] });
+  },
+});</code></pre>
+        </div>
+
+        <p><b>每一步为什么必须有：</b></p>
+
+        <ul>
+          <li><b>步骤 1 cancelQueries</b>：如果用户提交时有别的 in-flight fetch（refetchOnWindowFocus 或别的组件触发），那个 fetch 回来会用 server 旧数据覆盖你的乐观值。cancel 掉避免这个 race</li>
+          <li><b>步骤 2 保存 prev</b>：失败时需要回到提交前状态。getQueryData 拿到的是当前 cache 引用，传给 context</li>
+          <li><b>步骤 3 setQueryData 写乐观值</b>：用户立刻看到新 todo 出现在列表里</li>
+          <li><b>步骤 4a onError 回滚</b>：失败时把 prev 写回 cache。如果不回滚，UI 永远显示乐观值，但 server 已失败，用户不知道</li>
+          <li><b>步骤 4b onSettled invalidate</b>：成功时让 cache 与 server 对账（拿 server 真实数据替换乐观值，特别是 server 生成的 id）；失败时也 invalidate（让 cache 拿到 server 当前真实状态）</li>
+        </ul>
+
+        <p>4 步合一，给用户的体验是：<strong>提交瞬间 UI 更新，要么 server 确认（数据保留），要么悄悄回滚</strong>。</p>
+
+        <h3>v5 useMutationState · 不动 cache 的乐观更新</h3>
+
+        <p>有时候不想动 cache（怕影响其他组件），只想本地组件显示乐观状态。v5 提供 useMutationState：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// hooks/useTodoMutations.ts
+export function useAddTodo() {
+  return useMutation({
+    mutationKey: ['add-todo'],  // 必须有 mutationKey 才能查
+    mutationFn: api.addTodo,
+    onSuccess: () =&gt; queryClient.invalidateQueries({ queryKey: ['todos'] }),
+  });
+}
+
+// 组件里同时拿真实列表 + 进行中的乐观项
+import { useQuery, useMutationState } from '@tanstack/react-query';
+
+function TodoList() {
+  const { data: todos = [] } = useQuery({ queryKey: ['todos'], queryFn: api.getTodos });
+
+  // 拿所有 mutationKey=['add-todo'] 且 status=pending 的 mutation 的 variables
+  const pendingTodos = useMutationState({
+    filters: { mutationKey: ['add-todo'], status: 'pending' },
+    select: (mutation) =&gt; mutation.state.variables as { text: string },
+  });
+
+  // 合并真实数据 + 乐观项
+  return (
+    &lt;ul&gt;
+      {todos.map(t =&gt; &lt;li key={t.id}&gt;{t.text}&lt;/li&gt;)}
+      {pendingTodos.map((t, i) =&gt; (
+        &lt;li key={`pending-${i}`} style={{ opacity: 0.5 }}&gt;{t.text} (saving...)&lt;/li&gt;
+      ))}
+    &lt;/ul&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>对比 onMutate setQueryData 路线：</p>
+        <ul>
+          <li><b>setQueryData 路线</b>：动 cache，所有订阅者立即更新；要管回滚；适合"成功率高 + 不想用户感到延迟"</li>
+          <li><b>useMutationState 路线</b>：不动 cache，只本地组件显示乐观项；自动随 mutation 状态消失；适合"想强调'还在保存'"</li>
+        </ul>
+
+        <h3>与 React 19 useOptimistic 的关系</h3>
+
+        <p>React 19 引入了 <code>useOptimistic</code>（详见 <a href="../../react/06-modern/02-actions.html">React P6.2</a>）。它的设计目标是：<strong>form transition 期间显示乐观状态，transition 结束自动 revert</strong>。</p>
+
+        <p>看一下 useOptimistic 的典型用法：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use client';
+import { useOptimistic, startTransition } from 'react';
+
+function LikeButton({ likes, addLikeAction }) {
+  const [optimisticLikes, addOptimisticLike] = useOptimistic(
+    likes,
+    (current, _add: number) =&gt; current + 1
+  );
+
+  async function handleClick() {
+    startTransition(async () =&gt; {
+      addOptimisticLike(1);
+      await addLikeAction();  // Server Action
+    });
+  }
+
+  return &lt;button onClick={handleClick}&gt;❤️ {optimisticLikes}&lt;/button&gt;;
+}</code></pre>
+        </div>
+
+        <p>看起来和 TanStack Query 乐观更新很像，但<strong>分工不同</strong>：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>能力</th>
+              <th>TanStack Query (onMutate)</th>
+              <th>React 19 useOptimistic</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>作用范围</td>
+              <td>cache 全局（所有订阅者立即更新）</td>
+              <td>组件本地（form transition 期）</td>
+            </tr>
+            <tr>
+              <td>持续时间</td>
+              <td>到 invalidate / refetch 替换</td>
+              <td>到 transition 结束自动 revert</td>
+            </tr>
+            <tr>
+              <td>失败处理</td>
+              <td>手动 onError 回滚</td>
+              <td>自动 revert（无需手写）</td>
+            </tr>
+            <tr>
+              <td>跨组件共享</td>
+              <td>是</td>
+              <td>否</td>
+            </tr>
+            <tr>
+              <td>典型场景</td>
+              <td>添加 / 删除 / 编辑列表项</td>
+              <td>like 计数 / 喜欢按钮</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>实战分工：</p>
+        <ul>
+          <li>RSC + Server Actions 项目里简单乐观（按钮 like / star） → useOptimistic 更顺手</li>
+          <li>跨组件 cache 共享（添加 todo 后多个组件要看到）→ TanStack Query onMutate</li>
+          <li>复杂场景两者协作：useOptimistic 管按钮 transition，TanStack Query 管列表 cache</li>
+        </ul>
+
+        <p>详细配合见 <a href="../05-rsc-bridge/02-hydration-bridge.html">P5.2</a>。</p>
+
+        <h3>mutationFn 调 Server Action</h3>
+
+        <p>Next.js App Router 项目里 mutationFn 可以直接调 <code>'use server'</code> 函数。这是 RSC 时代 TanStack Query 的常见用法之一：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/_actions/todos.ts
+'use server';
+export async function addTodoAction(text: string) {
+  await db.todos.create({ data: { text } });
+  // 不在这里 revalidatePath（让 client 决定是否跨 cache 同步）
+  return { success: true };
+}
+
+// app/_components/AddTodo.tsx
+'use client';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { addTodoAction } from '@/app/_actions/todos';
+
+function AddTodo() {
+  const queryClient = useQueryClient();
+  const { mutate, isPending } = useMutation({
+    mutationFn: addTodoAction,  // 直接调 Server Action
+    onMutate: async (text) =&gt; {
+      // 乐观更新 client cache
+      await queryClient.cancelQueries({ queryKey: ['todos'] });
+      const prev = queryClient.getQueryData(['todos']);
+      queryClient.setQueryData(['todos'], (old: any[] = []) =&gt; [
+        ...old,
+        { id: `temp-${Date.now()}`, text, done: false },
+      ]);
+      return { prev };
+    },
+    onError: (_e, _v, ctx) =&gt; ctx &amp;&amp; queryClient.setQueryData(['todos'], ctx.prev),
+    onSettled: () =&gt; queryClient.invalidateQueries({ queryKey: ['todos'] }),
+  });
+  // ...
+}</code></pre>
+        </div>
+
+        <p>详细的 server cache + client cache 双向同步问题见 <a href="../05-rsc-bridge/02-hydration-bridge.html">P5.2</a>。</p>
+
+        <h3>mutationKey · 给 mutation 命名</h3>
+
+        <p>不传 mutationKey 也能用，但传了就能用 useMutationState 查询、按 key 隔离 retry：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">useMutation({
+  mutationKey: ['todo', 'add'],
+  mutationFn: api.addTodo,
+});
+
+// 查所有 ['todo', 'add'] 的 pending mutation
+const pending = useMutationState({
+  filters: { mutationKey: ['todo', 'add'], status: 'pending' },
+});
+
+// 全局 mutationCache 配置 retry / 错误处理
+new QueryClient({
+  defaultOptions: {
+    mutations: {
+      retry: 1,
+      onError: (err, vars, ctx, mutation) =&gt; {
+        if (mutation.options.mutationKey?.[0] === 'todo') {
+          toast.error(`Todo operation failed: ${err.message}`);
+        }
+      },
+    },
+  },
+});</code></pre>
+        </div>
+
+        <h3>并发 mutation 的处理</h3>
+
+        <p>用户连续点击 3 次"Add Todo"按钮，3 个 mutation 同时跑：</p>
+
+        <ul>
+          <li>每个 mutation 独立有自己的 onMutate / onError / onSettled</li>
+          <li>每个 onMutate 都 cancelQueries + setQueryData → 第 2 个 mutate 的 prev 是"第 1 个 onMutate 后的 cache"，第 3 个的 prev 是"第 2 个 onMutate 后的 cache"</li>
+          <li>3 个都成功：onSettled 触发 3 次 invalidate（其实 1 次也够）</li>
+          <li>第 2 个失败：回滚到"第 1 个 onMutate 后状态"（不是初始状态）</li>
+        </ul>
+
+        <p>实战如果担心并发问题，用 <code>mutate</code> 的 <code>onSuccess</code> 触发下一个，或用 <code>mutateAsync</code> 串行 await。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · todo 添加 / 删除 / 编辑完整闭环</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// hooks/useTodoMutations.ts
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { todoKeys } from '@/queries/todos';
+
+export function useAddTodo() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.addTodo,
+    onMutate: async (newTodo: { text: string }) =&gt; {
+      await qc.cancelQueries({ queryKey: todoKeys.lists() });
+      const prev = qc.getQueryData&lt;Todo[]&gt;(todoKeys.list('all'));
+      qc.setQueryData&lt;Todo[]&gt;(todoKeys.list('all'), (old = []) =&gt; [
+        ...old,
+        { id: `temp-${Date.now()}`, text: newTodo.text, done: false },
+      ]);
+      return { prev };
+    },
+    onError: (_e, _v, ctx) =&gt; ctx &amp;&amp; qc.setQueryData(todoKeys.list('all'), ctx.prev),
+    onSettled: () =&gt; qc.invalidateQueries({ queryKey: todoKeys.lists() }),
+  });
+}
+
+export function useToggleTodo() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, done }: { id: string; done: boolean }) =&gt; api.updateTodo(id, { done }),
+    onMutate: async ({ id, done }) =&gt; {
+      await qc.cancelQueries({ queryKey: todoKeys.lists() });
+      const prev = qc.getQueryData&lt;Todo[]&gt;(todoKeys.list('all'));
+      qc.setQueryData&lt;Todo[]&gt;(todoKeys.list('all'), (old = []) =&gt;
+        old.map(t =&gt; t.id === id ? { ...t, done } : t)
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) =&gt; ctx &amp;&amp; qc.setQueryData(todoKeys.list('all'), ctx.prev),
+    onSettled: () =&gt; qc.invalidateQueries({ queryKey: todoKeys.lists() }),
+  });
+}
+
+export function useDeleteTodo() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =&gt; api.deleteTodo(id),
+    onMutate: async (id) =&gt; {
+      await qc.cancelQueries({ queryKey: todoKeys.lists() });
+      const prev = qc.getQueryData&lt;Todo[]&gt;(todoKeys.list('all'));
+      qc.setQueryData&lt;Todo[]&gt;(todoKeys.list('all'), (old = []) =&gt; old.filter(t =&gt; t.id !== id));
+      return { prev };
+    },
+    onError: (_e, _v, ctx) =&gt; ctx &amp;&amp; qc.setQueryData(todoKeys.list('all'), ctx.prev),
+    onSettled: () =&gt; qc.invalidateQueries({ queryKey: todoKeys.lists() }),
+  });
+}
+
+// 调用方
+function TodoList() {
+  const { data: todos } = useQuery({ queryKey: todoKeys.list('all'), queryFn: api.getTodos });
+  const { mutate: add } = useAddTodo();
+  const { mutate: toggle } = useToggleTodo();
+  const { mutate: del } = useDeleteTodo();
+
+  return (
+    &lt;&gt;
+      &lt;form onSubmit={(e) =&gt; { e.preventDefault(); const text = (new FormData(e.currentTarget).get('text') as string); add({ text }); e.currentTarget.reset(); }}&gt;
+        &lt;input name="text" required /&gt;
+        &lt;button&gt;Add&lt;/button&gt;
+      &lt;/form&gt;
+      &lt;ul&gt;
+        {todos?.map(t =&gt; (
+          &lt;li key={t.id}&gt;
+            &lt;input type="checkbox" checked={t.done} onChange={() =&gt; toggle({ id: t.id, done: !t.done })} /&gt;
+            &lt;span&gt;{t.text}&lt;/span&gt;
+            &lt;button onClick={() =&gt; del(t.id)}&gt;✕&lt;/button&gt;
+          &lt;/li&gt;
+        ))}
+      &lt;/ul&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>注意：3 个 mutation 全都重复 4 步骤。可以抽 helper 减少样板：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function useOptimisticListMutation&lt;T extends { id: string }, V&gt;(
+  queryKey: any[],
+  mutationFn: (vars: V) =&gt; Promise&lt;unknown&gt;,
+  optimisticUpdater: (old: T[], vars: V) =&gt; T[],
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onMutate: async (vars: V) =&gt; {
+      await qc.cancelQueries({ queryKey });
+      const prev = qc.getQueryData&lt;T[]&gt;(queryKey);
+      qc.setQueryData&lt;T[]&gt;(queryKey, (old = []) =&gt; optimisticUpdater(old, vars));
+      return { prev };
+    },
+    onError: (_e, _v, ctx: any) =&gt; ctx?.prev &amp;&amp; qc.setQueryData(queryKey, ctx.prev),
+    onSettled: () =&gt; qc.invalidateQueries({ queryKey }),
+  });
+}
+
+// 调用
+const useAddTodo = () =&gt; useOptimisticListMutation&lt;Todo, { text: string }&gt;(
+  todoKeys.list('all'),
+  api.addTodo,
+  (old, { text }) =&gt; [...old, { id: `temp-${Date.now()}`, text, done: false }],
+);</code></pre>
+        </div>
+
+        <h3>场景 2 · 用 useMutationState 显示 pending 项</h3>
+
+        <p>添加 todo 不动 cache，只本地组件叠加 pending 项显示：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function TodoList() {
+  const { data: todos = [] } = useQuery({ queryKey: ['todos'], queryFn: api.getTodos });
+
+  const pendingAdds = useMutationState({
+    filters: { mutationKey: ['add-todo'], status: 'pending' },
+    select: (m) =&gt; m.state.variables as { text: string },
+  });
+
+  const pendingDeletes = useMutationState({
+    filters: { mutationKey: ['delete-todo'], status: 'pending' },
+    select: (m) =&gt; m.state.variables as string,  // id
+  });
+
+  // 视觉合并
+  const visible = todos
+    .filter(t =&gt; !pendingDeletes.includes(t.id))  // 删除中的 todo 提前隐藏
+    .concat(pendingAdds.map((v, i) =&gt; ({ id: `pending-${i}`, text: v.text, done: false })));
+
+  return &lt;ul&gt;{visible.map(t =&gt; &lt;li key={t.id}&gt;{t.text}&lt;/li&gt;)}&lt;/ul&gt;;
+}</code></pre>
+        </div>
+
+        <h3>场景 3 · 与 React 19 useOptimistic 协作</h3>
+
+        <p>RSC 项目里：列表 cache 用 TanStack Query 管，单个按钮 transition 用 useOptimistic：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use client';
+import { useOptimistic } from 'react';
+import { useMutation } from '@tanstack/react-query';
+
+function PostCard({ post }: { post: Post }) {
+  const [optimisticPost, updatePost] = useOptimistic(post, (curr, action: 'like') =&gt; ({
+    ...curr,
+    likes: curr.likes + 1,
+    likedByMe: true,
+  }));
+
+  const { mutate } = useMutation({
+    mutationFn: () =&gt; api.likePost(post.id),
+    // 不动 cache，让 RSC revalidate 更新
+  });
+
+  return (
+    &lt;button onClick={async () =&gt; {
+      updatePost('like');  // 立刻更新本地 transition 状态
+      mutate();             // 异步发请求
+    }}&gt;
+      ❤️ {optimisticPost.likes}
+    &lt;/button&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · mutate vs mutateAsync</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">const { mutate, mutateAsync } = useMutation({ mutationFn: api.addTodo });
+
+// mutate：fire-and-forget，错误进 onError，组件里用 isError / error 显示
+function handleClick() {
+  mutate({ text: 'X' });
+  // 不能 await mutate，它返回 undefined
+}
+
+// mutateAsync：返回 promise，可以 await + try/catch
+async function handleClick2() {
+  try {
+    const created = await mutateAsync({ text: 'X' });
+    console.log('Got id:', created.id);
+    // 然后 navigate / 弹 modal / 触发别的事
+  } catch (e) {
+    // 也可以这里 catch
+  }
+}
+
+// 注意：mutateAsync 不抑制 onError；onError 仍会跑 + promise 也 reject
+// 选择：需要 await 后续动作 → mutateAsync；只是触发 → mutate</code></pre>
+        </div>
+
+        <h3>代码 2 · 全局 mutation 错误处理</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">new QueryClient({
+  mutationCache: new MutationCache({
+    onError: (error, variables, context, mutation) =&gt; {
+      // 全部 mutation 错误的兜底
+      console.error('Mutation failed:', mutation.options.mutationKey, error);
+      toast.error(`操作失败: ${error.message}`);
+    },
+    onSuccess: (data, variables, context, mutation) =&gt; {
+      // 全部 mutation 成功的兜底（可选）
+    },
+  }),
+});</code></pre>
+        </div>
+
+        <h3>代码 3 · 用 zod 校验 mutation 输入</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { z } from 'zod';
+
+const addTodoSchema = z.object({ text: z.string().min(1).max(200) });
+
+useMutation({
+  mutationFn: async (input: unknown) =&gt; {
+    const parsed = addTodoSchema.parse(input);  // throw if invalid
+    return api.addTodo(parsed);
+  },
+  onError: (err) =&gt; {
+    if (err instanceof z.ZodError) {
+      toast.error('输入不合法: ' + err.issues[0].message);
+    } else {
+      toast.error('请求失败');
+    }
+  },
+});</code></pre>
+        </div>
+
+        <h3>代码 4 · 大列表 setQueryData 性能</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 10000 条列表，删一条
+// ❌ 每次 filter 创建全新数组（10000 次比对）
+qc.setQueryData(['todos'], (old: Todo[]) =&gt; old.filter(t =&gt; t.id !== id));
+
+// ✅ 用 immer 增量改（v5 推荐与 immer 配合）
+import { produce } from 'immer';
+qc.setQueryData(['todos'], (old: Todo[] | undefined) =&gt;
+  old &amp;&amp; produce(old, (draft) =&gt; {
+    const idx = draft.findIndex(t =&gt; t.id === id);
+    if (idx !== -1) draft.splice(idx, 1);
+  })
+);
+// structuralSharing 也会复用其他 9999 项的引用</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>乐观更新没 cancelQueries</b> —— 后台 fetch 回来覆盖你的乐观值。这是踩坑率最高的 bug。乐观更新第 1 步必须 cancel</li>
+          <li><b>乐观更新没保存 prev</b> —— 出错没法回滚。第 2 步必须 getQueryData 存 context</li>
+          <li><b>onError 没回滚</b> —— 错误吞掉，UI 永远显示乐观值。第 4a 步必须 setQueryData(prev)</li>
+          <li><b>onSettled 没 invalidate</b> —— 成功后 cache 是乐观值（可能和 server 真实值有差异，比如 server 生成的 id）；失败也没让 cache 与 server 对账。第 4b 步必须 invalidate</li>
+          <li><b>用 invalidateQueries 代替 setQueryData 做乐观</b> —— invalidate 只让 cache stale 等下次激活才 refetch，不立即写新值。乐观更新必须 setQueryData</li>
+          <li><b>setQueryData 直接 mutate</b> —— <code>setQueryData(key, (old) =&gt; { old.x = 1; return old; })</code> 破坏 structuralSharing。要返回新对象 / 用 immer</li>
+          <li><b>onMutate 是 async 但忘了 await cancelQueries</b> —— cancelQueries 返回 promise，没 await 就接着 setQueryData 时 race 仍可能发生</li>
+          <li><b>mutationFn 扔了 4xx 没 throw</b> —— 同 useQuery，fetch 不自动 reject HTTP 错误。手动 throw 才能进 onError</li>
+          <li><b>用 onMutate 触发 toast</b> —— onMutate 是乐观更新阶段，不该有 user-facing side effect。toast 放 onSuccess / onError</li>
+          <li><b>mutate 后立刻 navigate</b> —— mutate 是 fire-and-forget，立刻 navigate 走 onSettled 没跑。用 mutateAsync await + 然后 navigate；或在 onSuccess 里 navigate</li>
+          <li><b>onSuccess 里 setQueryData(server 返回值)</b> —— 通常多此一举（onSettled 的 invalidate 会 refetch）。但如果想避免一次额外 fetch，是合法优化（直接 setQueryData server 返回的真实数据替换乐观值）</li>
+          <li><b>多个 mutation 同时跑乐观</b> —— prev 串成链，回滚不一定到初始状态。如果担心，用 mutationKey + 串行（mutateAsync await）</li>
+          <li><b>useMutationState 不传 mutationKey</b> —— 没 key 没法 filter 查询。需要 useMutationState 派生时必须给 mutation 加 mutationKey</li>
+          <li><b>"用 useEffect 监听 isSuccess 来 navigate"</b> —— 不必。useMutation 的 onSuccess 是同步触发的，直接在 onSuccess 里 navigate 更合适</li>
+          <li><b>把 useOptimistic 当 onMutate 替代</b> —— 不是同一类工具。useOptimistic 是 form transition 状态；onMutate 是 cache 操作。看场景选</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/guides/mutations" target="_blank" rel="noopener">TanStack Query · Mutations</a> · 官方 useMutation 指南</li>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/guides/optimistic-updates" target="_blank" rel="noopener">TanStack Query · Optimistic Updates</a> · 4 步乐观更新官方文档</li>
+          <li><a href="https://tkdodo.eu/blog/mastering-mutations-in-react-query" target="_blank" rel="noopener">TkDodo · Mastering Mutations</a> · 乐观更新实战权威博文</li>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/reference/useMutationState" target="_blank" rel="noopener">TanStack Query · useMutationState</a> · v5 新写法</li>
+          <li><a href="../../react/06-modern/02-actions.html">React 主题 P6.2 · Actions（含 useOptimistic）</a></li>
+          <li><a href="../05-rsc-bridge/02-hydration-bridge.html">本主题 P5.2 · 与 Server Actions 协作</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-usequery-spectrum.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P3.1 · useQuery 全谱</span>
+          </a>
+          <a class="next" href="../04-advanced-patterns/01-dependent-paginated-infinite.html">
+            <span class="label">下一章 →</span>
+            <span class="title">P4.1 · dependent / paginated / infinite</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

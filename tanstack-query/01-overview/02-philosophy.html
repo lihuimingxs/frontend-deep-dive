@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>server state 设计哲学 · P1.2 · TanStack Query / SWR 深度学习</title>
+    <meta name="description" content="server state ≠ client state 是 TanStack Query 整个设计的根。这一章讲 Tanner Linsley 提出的 5 个 server state 性质（远程拥有 / 异步 / 共享 / 可能 stale / 需要 caching）+ 4 个核心设计赌注（queryKey 是身份证 / stale-while-revalidate 默认 / 不抢 store / vendor-neutral）+ Vercel SWR 的简化哲学，最后给 2026 客户端 fetch 库市场份额。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23ff4154'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EQ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>TanStack Query / SWR 深度学习</span><span class="site-title-badge" style="background: #ff4154; color: #fff">Q</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P1 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · 是谁 / 为什么</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html">01 · 客户端数据获取 15 年史</a></li>
+          <li><a href="02-philosophy.html" class="active">02 · server state 设计哲学</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TanStack Query</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · 是谁 / 为什么</a><span class="breadcrumb-sep">/</span>
+          <span>02 · server state 设计哲学</span>
+        </nav>
+        <h1>server state 设计哲学 · Tanner 的 manifesto + Vercel 的 SWR 视角</h1>
+        <p class="lead">
+          这一章是整个主题的灵魂。读完应该能从本质上回答 —— 我为什么不能用 useState + useEffect 自己写、Tanner Linsley 提的 server state 二分法到底在分什么、Vercel 的 SWR 极简哲学和 TanStack Query 走的是不是同一条路。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P1.1 历史回顾 + 写过任意一种 fetch 库</span>
+          <span><strong>主要来源</strong> Tanner Linsley 关于 server state 的多次公开演讲与博文 + Shu Ding 关于 SWR 的设计文章 + 各项目官方文档</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Tanner Linsley 在 React Query v1（2020）首次提出：<strong>server state 和 client state 是两类东西</strong>，不能用同一套心智管。这是整个主题的根。</li>
+          <li><b>Client state</b>：UI 状态（modal 是否打开 / 表单输入 / 滚动位置）。同步、即时、组件销毁就没了。用 <code>useState</code> / Zustand / Jotai 管。</li>
+          <li><b>Server state</b>：远程数据。具备 5 个独特性质：<b>远程拥有</b>（你不是 source of truth）/ <b>异步 API</b>（要发请求才能拿）/ <b>共享</b>（可能多人同时改）/ <b>可能 stale</b>（拿到的可能不是最新）/ <b>需要 caching + invalidation</b>（不可能每次从头拿）。</li>
+          <li>Redux 把所有状态当一类管，导致 server state 写法臃肿（30 行 thunk + reducer 才完成一个简单请求）。这不是 Redux 错，是把错的东西塞进了对的容器。</li>
+          <li>TanStack Query 4 个核心设计赌注：<b>(1) queryKey 是缓存身份证</b>（数组形式，模糊匹配 invalidate）<b>(2) stale-while-revalidate 是默认</b>（先返回 cache + 后台刷新）<b>(3) 不抢 store 的活</b>（只管 server state，client state 自己用 useState）<b>(4) vendor-neutral</b>（不绑定 GraphQL / React / fetch）。</li>
+          <li>SWR（Vercel + Shu Ding）走另一条路：<b>极简 API</b>（只有 <code>useSWR</code> + <code>mutate</code>）+ 没有 queryClient + 默认 refetch 更激进。哲学不同：<strong>把"好用"当首要目标，能力可以少</strong>。</li>
+          <li>2026 客户端 fetch 库市场份额（粗略）：<b>TanStack Query 70%</b> / SWR 15% / RTK Query 10% / Apollo + Relay 5%。但 RSC 时代客户端 fetch 库总需求量在下降。</li>
+          <li>选 TanStack Query 还是 SWR 不是技术对决，是<strong>项目复杂度 + 团队规模</strong>对决。详细决策表见 <a href="../06-swr-peers/01-swr-and-peers.html">P6.1</a>。</li>
+          <li>"我推荐 TanStack Query 给大部分项目"是<strong>强观点</strong>，原因：(1) 功能最完整 (2) 社区最活跃 (3) DevTools 是调试 server state 的利器 (4) 多框架（Vue/Solid/Svelte）让跨技术栈团队共用心智 (5) 与 React 19 / Next.js / RSC 的官方集成最完善。</li>
+          <li>"不分 server state / client state 的项目，三年内必然踩坑"是<strong>更强观点</strong>。这不是新技术新潮流，是 React 生态 5 年来沉淀下来的事实。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Tanner 的二分法 · 为什么 server state 必须独立</h3>
+
+        <p>看一段 Tanner 在 2020 年 React Query v1 README 里写下的原话：</p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 Tanner 原文</div>
+          <p>「<i>Server state, in its essence, is very different from client state. Server state:</i><br>
+          <i>- Is persisted remotely in a location you do not control or own</i><br>
+          <i>- Requires asynchronous APIs for fetching and updating</i><br>
+          <i>- Implies shared ownership and can be changed by other people without your knowledge</i><br>
+          <i>- Can potentially become "out of date" in your applications if you're not careful</i>」<br>—— React Query v1 docs</p>
+        </div>
+
+        <p>这段话定义了 5 个 server state 特性（v1 是 4 条，后续演讲补了第 5 条 caching/invalidation）：</p>
+
+        <p><b>性质 1 · 远程拥有</b> —— 你不是数据的 source of truth。Database 才是。这个性质让 client 端的 state 永远只能是 <strong>cache</strong>，不能是 truth。当 truth（server）变了，cache 就 stale。</p>
+
+        <p><b>性质 2 · 异步 API</b> —— 拿数据要发请求；改数据也要发请求。这个 latency 不能消除，只能用 cache + optimistic 掩盖。</p>
+
+        <p><b>性质 3 · 共享</b> —— 多个用户、多个 tab、多个设备可能同时改一份数据。client 拿到的是某个时刻的快照，下一秒可能就过时。</p>
+
+        <p><b>性质 4 · 可能 stale</b> —— 性质 1 + 性质 3 的合成。client 端的 cache 必须接受"可能 stale"为常态。这逼着库设计 stale-while-revalidate / 后台 refetch / cache invalidation 这些机制。</p>
+
+        <p><b>性质 5 · 需要 caching + invalidation</b> —— 性质 2 让你不能每次都从头拿（latency 难受），所以要 cache。性质 4 让 cache 不能永远（会 stale），所以要 invalidation。这两个加起来 = 一个完整的 server state lifecycle。</p>
+
+        <p>Client state 一条都不沾边：</p>
+        <ul>
+          <li>Modal 是否打开 → 你拥有，不是远程</li>
+          <li>表单输入值 → 同步，不需要 API</li>
+          <li>滚动位置 → 不共享给其他用户</li>
+          <li>Theme 切换 → 不会 stale（用户不切就不变）</li>
+          <li>Hover 状态 → 不需要 cache（短命）</li>
+        </ul>
+
+        <p>用 <code>useState</code> / Zustand / Jotai 管 client state 是<strong>正确的工具用对了地方</strong>。问题是过去 5 年大量项目把 server state 也塞进 Redux store，相当于用螺丝刀拧钉子 —— 能拧，但费劲。</p>
+
+        <h3>4 个核心设计赌注</h3>
+
+        <p><b>赌注 1 · queryKey 是缓存身份证</b></p>
+
+        <p>每个 query 通过 queryKey 唯一标识。这个 key 决定了：</p>
+        <ul>
+          <li>cache 怎么存（哈希 key 当 map 索引）</li>
+          <li>多组件订阅怎么共享（同 key = 同 cache entry）</li>
+          <li>invalidate 怎么模糊匹配（前缀匹配数组）</li>
+          <li>refetch 怎么去重（同 key 同时只发一个请求）</li>
+        </ul>
+
+        <p>关键决定：<strong>queryKey 是数组而不是字符串</strong>。因为：</p>
+        <ul>
+          <li>第一段是命名空间（<code>['users']</code> / <code>['posts']</code>）</li>
+          <li>后面是依赖（<code>['users', userId, { filter }]</code>）</li>
+          <li>invalidate <code>['users']</code> 自动模糊匹配 <code>['users', ...]</code> 全部</li>
+          <li>对比 SWR 的字符串 key（<code>/api/users/1</code>），TanStack Query 的数组让 invalidate 语义更精准</li>
+        </ul>
+
+        <p>详细 queryKey 设计见 <a href="../02-mental-model/01-querykey-queryfn.html">P2.1</a>。</p>
+
+        <p><b>赌注 2 · stale-while-revalidate 是默认</b></p>
+
+        <p>TanStack Query 和 SWR 共享这一赌注：<strong>用户进页面立刻看到上次缓存的内容</strong>，同时后台 refetch 拿最新。这个心智来自 HTTP RFC 5861，是过去 30 年 web 缓存的成熟方案。</p>
+
+        <p>对比方案：</p>
+        <ul>
+          <li><b>无 cache</b>（裸 useEffect+fetch）：每次进页面 loading 1 秒，体验差</li>
+          <li><b>cache-first（永不 refetch）</b>：永远看到旧数据，stale 严重</li>
+          <li><b>cache-then-network（每次都过期）</b>：cache 没意义</li>
+          <li><b>stale-while-revalidate</b>：<strong>立刻显示 cache + 后台 refetch + 拿到新数据再悄悄更新</strong></li>
+        </ul>
+
+        <p>这是当前最优解。代价是用户偶尔看到 1 秒前的旧数据 —— 但通常这无所谓，金融 / 实时数据可以单独把 staleTime 调成 0。</p>
+
+        <p><b>赌注 3 · 不抢 store 的活</b></p>
+
+        <p>TanStack Query 不是 Redux 替代品。<strong>它只管 server state；client state 你自己用 useState / Zustand / Jotai</strong>。</p>
+
+        <p>这个边界很重要。早期不少人把 TanStack Query 当 Redux 替代试图把 modal 状态、表单状态都塞进 query cache —— 不工作。query cache 是异步、远程、共享的；用来管同步 client state 是滥用。</p>
+
+        <p>正确分工：</p>
+        <ul>
+          <li>Server state（用户数据、列表、详情、配置）→ TanStack Query</li>
+          <li>UI state（modal 开关、tab 选中、sidebar 折叠）→ <code>useState</code></li>
+          <li>跨组件 client state（购物车草稿、theme、locale）→ Zustand / Jotai</li>
+          <li>Form 状态 → React Hook Form / Formik / 原生</li>
+        </ul>
+
+        <p><b>赌注 4 · vendor-neutral</b></p>
+
+        <p>不绑定 GraphQL（对比 Apollo / Relay），不绑定 React（2022 起支持 Vue / Solid / Svelte / Angular），不绑定 fetch 实现（你传任意 <code>queryFn</code>，axios / fetch / GraphQL client / SDK 都行）。</p>
+
+        <p>这个赌注的回报：</p>
+        <ul>
+          <li>跨技术栈团队共用 server state 心智</li>
+          <li>前后端协议变化（REST → GraphQL → tRPC → RSC fetch）不影响 query 写法</li>
+          <li>不被 vendor lock-in（对比 Apollo / Relay 的 GraphQL 绑定）</li>
+        </ul>
+
+        <h3>SWR 的简化哲学 · Vercel 视角</h3>
+
+        <p>SWR 比 React Query 早一年，但路线截然不同。Shu Ding 在多次演讲里强调：</p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 SWR 的设计原则（官方文档）</div>
+          <p><i>"Lightweight, focused on the right primitives. Provide the bare minimum that solves data fetching well, leave everything else to user."</i></p>
+        </div>
+
+        <p>具体表现：</p>
+
+        <ul>
+          <li><b>极简 API</b>：只有 <code>useSWR(key, fetcher, options)</code> + <code>mutate</code> 两个核心。没有 queryClient 概念</li>
+          <li><b>没有 staleTime</b>：默认每次 mount + focus + reconnect 都拉。"激进刷新"哲学</li>
+          <li><b>mutator 局部</b>：<code>useSWR</code> 返回的 <code>mutate</code> 只作用于当前 key；全局 mutate 走 <code>useSWRConfig().mutate</code></li>
+          <li><b>无 mutation 系统</b>：v2 加了 <code>useSWRMutation</code> 但比 useMutation 弱很多</li>
+          <li><b>没有 DevTools</b>：到 2026 仍然没有官方调试工具</li>
+        </ul>
+
+        <p>SWR 的目标不是覆盖所有场景，是<strong>把 80% 简单场景做到极简</strong>。这个哲学在 Pages Router 时代的 Next.js 里很合身（页面级 fetch + 偶尔变更）。</p>
+
+        <p>但 App Router + RSC 时代两个力量同时挤压 SWR：</p>
+        <ul>
+          <li>简单首屏 fetch → RSC 接管，不需要 SWR</li>
+          <li>复杂客户端 query（infinite / 多组件订阅 / 乐观更新）→ SWR 体系不足，TanStack Query 更合适</li>
+        </ul>
+
+        <p>结果是 SWR 的"中间地带"被两头蚕食。Vercel 自己的工程重心也明显从 SWR 转向 RSC + AI SDK，SWR 维护节奏 2025 起放缓。</p>
+
+        <h3>TanStack Query vs SWR · 不分胜负，分场景</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>TanStack Query</th>
+              <th>SWR</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>API 复杂度</td>
+              <td>中（queryKey + queryClient + 多 hook）</td>
+              <td>低（useSWR + mutate）</td>
+            </tr>
+            <tr>
+              <td>queryKey 形态</td>
+              <td>数组（带依赖 + 模糊匹配）</td>
+              <td>字符串（精确匹配）</td>
+            </tr>
+            <tr>
+              <td>queryClient</td>
+              <td>一等公民（imperative API）</td>
+              <td>没有（隐式全局）</td>
+            </tr>
+            <tr>
+              <td>默认 refetch</td>
+              <td>受 staleTime 控制</td>
+              <td>每次 mount/focus/reconnect</td>
+            </tr>
+            <tr>
+              <td>mutation 体系</td>
+              <td>完整（useMutation + 4 步乐观）</td>
+              <td>弱（useSWRMutation v2）</td>
+            </tr>
+            <tr>
+              <td>infinite query</td>
+              <td>useInfiniteQuery（结构化）</td>
+              <td>useSWRInfinite（数组 hack）</td>
+            </tr>
+            <tr>
+              <td>Suspense</td>
+              <td>useSuspenseQuery 三件套（v5）</td>
+              <td>suspense option（实验性）</td>
+            </tr>
+            <tr>
+              <td>多框架</td>
+              <td>React / Vue / Solid / Svelte / Angular</td>
+              <td>React only</td>
+            </tr>
+            <tr>
+              <td>DevTools</td>
+              <td>官方一等公民</td>
+              <td>无</td>
+            </tr>
+            <tr>
+              <td>Bundle size（gzip）</td>
+              <td>~13KB</td>
+              <td>~4KB</td>
+            </tr>
+            <tr>
+              <td>维护活跃度</td>
+              <td>很活跃（Tanner + Dominik）</td>
+              <td>放缓（Vercel 重心转移）</td>
+            </tr>
+            <tr>
+              <td>RSC 集成</td>
+              <td>官方文档完整</td>
+              <td>有但弱</td>
+            </tr>
+            <tr>
+              <td>适合场景</td>
+              <td>复杂应用 / 多组件订阅 / 重 mutation</td>
+              <td>简单 fetch / Vercel 部署 / 极简偏好</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>2026 客户端 fetch 库市场份额</h3>
+
+        <p>根据 npm trends + State of JS 2025 + 各项目 GitHub stars 估算（粗略）：</p>
+
+        <ul>
+          <li><b>TanStack Query 约 70%</b>（新项目首选，2026 事实标准）</li>
+          <li><b>SWR 约 15%</b>（Pages Router 历史项目 + 极简偏好用户）</li>
+          <li><b>RTK Query 约 10%</b>（Redux 全家桶项目）</li>
+          <li><b>Apollo + Relay 约 5%</b>（GraphQL 重度项目，绝大多数是历史存量）</li>
+          <li><b>Jotai-Query / Zustand+自管 / 其他 &lt; 1%</b></li>
+        </ul>
+
+        <p>关键趋势：</p>
+        <ul>
+          <li>RSC 让客户端 fetch 库<strong>总需求量下降</strong>（Next.js 项目里 30-50% 的 fetch 移到 server-side）</li>
+          <li>但 TanStack Query 在剩余客户端场景里<strong>份额仍在提升</strong>（吃 SWR 留下的份额）</li>
+          <li>GraphQL 客户端总体收缩（Apollo / Relay 加起来 5%，5 年前是 25%）</li>
+        </ul>
+
+        <h3>Tanner 的回应 · TanStack Query 在 RSC 时代的位置</h3>
+
+        <p>2024 年 React 19 + RSC 落地后，"TanStack Query 还有用吗"是社区高频问题。Tanner 在多次 Twitter / 演讲中明确表态：</p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 Tanner 的回应</div>
+          <p>「<i>TanStack Query is not going away. RSC and Server Actions handle a different layer — they don't manage long-lived client-side cache, optimistic updates, infinite scroll, or WebSocket-pushed data with multi-component subscribers. We're complementary, not competing.</i>」</p>
+        </div>
+
+        <p>具体复用场景见 <a href="../05-rsc-bridge/01-rsc-coexistence.html">P5.1</a>。简单总结：<strong>TanStack Query 仍然是客户端独有 server state 的标准工具，只是不再覆盖首屏 fetch</strong>。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 团队从 Redux 迁 TanStack Query 怎么分阶段</h3>
+
+        <p>典型 React 项目里 Redux store 的 70% 内容是 server state（user / posts / config / dashboards）。迁移分 3 步：</p>
+
+        <ol>
+          <li><b>第一步</b>：识别 store 里哪些是 server state。判断：是不是来自 API？是不是会因后端变化而 stale？答"是"就是 server state</li>
+          <li><b>第二步</b>：用 TanStack Query 重写这些 slice，逐个替换。同时 Redux store 收窄到只剩真正的 client state（auth token、theme、cart draft）</li>
+          <li><b>第三步</b>：评估剩余 client state 是否还需要 Redux。少量 client state 可以用 Zustand / Jotai 替代；多了或团队熟悉就保留 Redux</li>
+        </ol>
+
+        <p>常见错误：一次性迁完所有 slice。应该<strong>新代码不再加 Redux thunk</strong>，旧代码痛了再迁那一处。半年后绝大部分自然替换。</p>
+
+        <h3>场景 2 · 多组件订阅同一份数据 · 共享 vs 重复请求</h3>
+
+        <p>5 个组件各自渲染 user 信息（avatar / name / email / role / lastLogin），传统 useEffect+fetch 写法发 5 次请求。TanStack Query 自动去重：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 5 个不同组件，都用同一个 queryKey
+function Avatar({ id }) {
+  const { data } = useQuery({ queryKey: ['user', id], queryFn: () =&gt; fetchUser(id) });
+  return &lt;img src={data?.avatar} /&gt;;
+}
+function Name({ id }) {
+  const { data } = useQuery({ queryKey: ['user', id], queryFn: () =&gt; fetchUser(id) });
+  return &lt;span&gt;{data?.name}&lt;/span&gt;;
+}
+// ... 其他 3 个组件相同
+
+// 一个 page 同时挂载 5 个 → 只发 1 次 fetch
+// 这是 server state 库的标志性能力</code></pre>
+        </div>
+
+        <p>原理：queryKey 一致 → 命中同一 cache entry → 触发 dedup → 只发一次请求 + 5 个组件订阅同一份数据。useState + useEffect 写法做不到这点（除非把数据提到 context，但又引发新坑）。</p>
+
+        <h3>场景 3 · 小项目要不要装 TanStack Query</h3>
+
+        <p>"我项目就 3 个页面，是不是杀鸡用牛刀？"</p>
+
+        <p>判断标准：</p>
+        <ul>
+          <li>3 个页面但每个都有 fetch → 装。TanStack Query 减少的是<strong>每处 fetch 的样板代码</strong>，不是项目大小</li>
+          <li>整个项目只有 1 处 fetch（极少见） → 不装。1 处 useEffect+fetch 可控</li>
+          <li>用 Next.js + RSC，所有数据来自 RSC fetch → 不装</li>
+        </ul>
+
+        <p>关键认识：项目会增长。今天 3 页明天 10 页，最初不装将来重构成本陡增。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 同一份数据用 Redux thunk 和 TanStack Query 写</h3>
+
+        <p>对比一个简单的"用户列表 + 添加用户"功能：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript · Redux + thunk</span>
+          <pre class="code"><code class="lang-js">// store/users.js
+const FETCH_REQUEST = 'users/FETCH_REQUEST';
+const FETCH_SUCCESS = 'users/FETCH_SUCCESS';
+const FETCH_FAILURE = 'users/FETCH_FAILURE';
+const ADD_REQUEST = 'users/ADD_REQUEST';
+const ADD_SUCCESS = 'users/ADD_SUCCESS';
+const ADD_FAILURE = 'users/ADD_FAILURE';
+
+export function fetchUsers() {
+  return async (dispatch) =&gt; {
+    dispatch({ type: FETCH_REQUEST });
+    try {
+      const users = await api.getUsers();
+      dispatch({ type: FETCH_SUCCESS, payload: users });
+    } catch (e) { dispatch({ type: FETCH_FAILURE, payload: e }); }
+  };
+}
+
+export function addUser(user) {
+  return async (dispatch) =&gt; {
+    dispatch({ type: ADD_REQUEST });
+    try {
+      const created = await api.addUser(user);
+      dispatch({ type: ADD_SUCCESS, payload: created });
+      // 想刷列表？再 dispatch fetchUsers()
+      dispatch(fetchUsers());
+    } catch (e) { dispatch({ type: ADD_FAILURE, payload: e }); }
+  };
+}
+
+const initialState = { loading: false, data: [], error: null, adding: false };
+export default function reducer(state = initialState, action) {
+  switch (action.type) {
+    case FETCH_REQUEST: return { ...state, loading: true };
+    case FETCH_SUCCESS: return { loading: false, data: action.payload, error: null };
+    case FETCH_FAILURE: return { ...state, loading: false, error: action.payload };
+    case ADD_REQUEST: return { ...state, adding: true };
+    case ADD_SUCCESS: return { ...state, adding: false };
+    case ADD_FAILURE: return { ...state, adding: false, error: action.payload };
+    default: return state;
+  }
+}
+
+// component.jsx
+function UserList() {
+  const { loading, data, error, adding } = useSelector(s =&gt; s.users);
+  const dispatch = useDispatch();
+  useEffect(() =&gt; { dispatch(fetchUsers()); }, [dispatch]);
+
+  return (
+    &lt;&gt;
+      {loading ? &lt;Loading /&gt; : data.map(u =&gt; &lt;li key={u.id}&gt;{u.name}&lt;/li&gt;)}
+      &lt;button disabled={adding} onClick={() =&gt; dispatch(addUser({ name: 'New' }))}&gt;
+        Add
+      &lt;/button&gt;
+    &lt;/&gt;
+  );
+}
+// 总行数：~50 行</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx · TanStack Query v5</span>
+          <pre class="code"><code class="lang-tsx">import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+
+function UserList() {
+  const queryClient = useQueryClient();
+  const { data, isPending } = useQuery({
+    queryKey: ['users'],
+    queryFn: api.getUsers,
+  });
+  const { mutate: addUser, isPending: isAdding } = useMutation({
+    mutationFn: api.addUser,
+    onSuccess: () =&gt; queryClient.invalidateQueries({ queryKey: ['users'] }),
+  });
+
+  if (isPending) return &lt;Loading /&gt;;
+  return (
+    &lt;&gt;
+      {data.map(u =&gt; &lt;li key={u.id}&gt;{u.name}&lt;/li&gt;)}
+      &lt;button disabled={isAdding} onClick={() =&gt; addUser({ name: 'New' })}&gt;Add&lt;/button&gt;
+    &lt;/&gt;
+  );
+}
+// 总行数：~15 行</code></pre>
+        </div>
+
+        <p>对比：</p>
+        <ul>
+          <li><strong>50 行 → 15 行</strong>（70% 代码减少）</li>
+          <li>样板代码（action types / reducers / dispatch）全部消失</li>
+          <li>错误处理 / loading / 多组件共享 / cache 失效全部内置</li>
+          <li>类型推导更好（v5 的 TS 类型是顶级）</li>
+        </ul>
+
+        <h3>代码 2 · client state 仍然用 useState 的边界</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function UserListPage() {
+  // ✅ Server state · TanStack Query
+  const { data: users } = useQuery({ queryKey: ['users'], queryFn: api.getUsers });
+
+  // ✅ Client state · useState
+  const [filter, setFilter] = useState('');
+  const [selectedIds, setSelectedIds] = useState&lt;string[]&gt;([]);
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+
+  // ❌ 反模式：把 filter 当 server state 写
+  // const { data: filter } = useQuery({ queryKey: ['filter'], queryFn: () =&gt; ... })
+  // 错的原因：filter 是 UI 状态，不是远程数据
+
+  const filtered = users?.filter(u =&gt; u.name.includes(filter));
+  return (
+    &lt;&gt;
+      &lt;input value={filter} onChange={e =&gt; setFilter(e.target.value)} /&gt;
+      {filtered?.map(u =&gt; &lt;li key={u.id}&gt;{u.name}&lt;/li&gt;)}
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>把 TanStack Query 当 Redux 替代</b> —— 它只管 server state。client state 仍然用 useState / Zustand / Jotai。把 modal 状态塞进 query cache 是滥用</li>
+          <li><b>把 server state 塞进 useState</b> —— 反方向：拿了 API 数据 setState(data) 是反模式。失去 cache / dedup / 后台 refetch 等所有能力</li>
+          <li><b>"我们用 GraphQL 所以一定要 Apollo"</b> —— 不一定。TanStack Query 可以接 GraphQL（自己写 queryFn 调 graphql-request）；缺 normalized cache。GraphQL 重度团队选 Apollo / Relay；GraphQL 浅尝团队 TanStack Query 也行</li>
+          <li><b>"我们已经有 Redux 所以一定要 RTK Query"</b> —— 不一定。RTK Query 只在<strong>整个项目都用 Redux</strong>且不想引入第三方时才有优势。新模块完全可以单独装 TanStack Query 与 Redux 共存</li>
+          <li><b>SWR 在 App Router 项目里硬塞</b> —— 2026 起 App Router 默认 RSC + TanStack Query。SWR 可以用但不是首选</li>
+          <li><b>"server state 二分法只是营销话术"</b> —— 不是。看一遍 P1.1 + P1.2 应该信服。这是 5 年沉淀的认识，不是新潮流</li>
+          <li><b>不装 DevTools</b> —— TanStack Query DevTools 是调试 server state 的关键工具，看 cache 状态 / 发出请求 / refetch 触发条件一目了然。本地必装</li>
+          <li><b>"TanStack Query 太重了我们项目小用不上"</b> —— 13KB gzip。任何现代 React 项目都不在意这个量级。SWR 4KB 的优势在 bundle 极致优化场景才有意义</li>
+          <li><b>用 query 代替 form state</b> —— 表单输入用 React Hook Form / 原生；提交后用 useMutation 写。不要把表单临时输入做成 query</li>
+          <li><b>RSC 项目里继续用 useEffect+fetch</b> —— RSC 项目首选 server-side fetch + 'use cache'；客户端独有场景用 TanStack Query。不要倒退到 useEffect+fetch。详见 <a href="../05-rsc-bridge/01-rsc-coexistence.html">P5.1</a></li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/overview" target="_blank" rel="noopener">TanStack Query · Overview</a> · 官方哲学叙述</li>
+          <li><a href="https://tkdodo.eu/blog/practical-react-query" target="_blank" rel="noopener">TkDodo · Practical React Query 系列</a> · TanStack Query 维护者 Dominik 的实战博客</li>
+          <li><a href="https://tkdodo.eu/blog/breaking-react-querys-api-on-purpose" target="_blank" rel="noopener">TkDodo · Breaking React Query's API on purpose</a> · v5 设计决策回顾</li>
+          <li><a href="https://swr.vercel.app/docs/getting-started" target="_blank" rel="noopener">SWR · Getting Started</a> · 极简哲学起点</li>
+          <li><a href="https://github.com/vercel/swr" target="_blank" rel="noopener">SWR GitHub</a> · 维护节奏可观察</li>
+          <li><a href="https://stateofjs.com" target="_blank" rel="noopener">State of JS 调研</a> · 客户端 fetch 库年度市场份额数据</li>
+          <li><a href="01-history.html">本主题 P1.1 · 客户端数据获取 15 年史</a> · 为这一章提供历史坐标</li>
+          <li><a href="../06-swr-peers/01-swr-and-peers.html">本主题 P6.1 · SWR + 同代人横评</a> · TanStack Query vs 其他库的具体决策表</li>
+          <li><a href="../05-rsc-bridge/01-rsc-coexistence.html">本主题 P5.1 · RSC 时代还该用吗</a> · TanStack Query 在 RSC 时代的位置</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-history.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P1.1 · 客户端数据获取 15 年史</span>
+          </a>
+          <a class="next" href="../02-mental-model/01-querykey-queryfn.html">
+            <span class="label">下一章 →</span>
+            <span class="title">P2.1 · queryKey + queryFn + queryClient</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>stale-while-revalidate + staleTime / gcTime · P2.2 · TanStack Query / SWR 深度学习</title>
+    <meta name="description" content="TanStack Query 最反直觉的部分：fresh / stale / inactive / gc 四态状态机 + 5 个 refetch 触发条件 + staleTime 不是过期是 refetch 阈值 + gcTime 默认 5 分钟。读完能解释清楚'打开页面立刻看到旧数据 + 后台请求'这种行为为什么是设计而不是 bug。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23ff4154'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EQ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>TanStack Query / SWR 深度学习</span><span class="site-title-badge" style="background: #ff4154; color: #fff">Q</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · TanStack Query 心智</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-querykey-queryfn.html">01 · queryKey + queryFn + queryClient</a></li>
+          <li><a href="02-stale-while-revalidate.html" class="active">02 · stale-while-revalidate + staleTime</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TanStack Query</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · 心智</a><span class="breadcrumb-sep">/</span>
+          <span>02 · stale-while-revalidate + staleTime</span>
+        </nav>
+        <h1>stale-while-revalidate + staleTime / gcTime + fetcher 行为模型</h1>
+        <p class="lead">
+          TanStack Query 最反直觉的部分。"为什么打开页面立刻看到旧数据 + 后台又请求一次"、"我没改代码为什么页面切回来又请求一次"、"我把 staleTime 设成 1 小时为什么还在 refetch" —— 这些问题全部由 4 态状态机 + 5 个 refetch 触发条件回答。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P2.1 三件套 + 写过至少一个 useQuery</span>
+          <span><strong>主要来源</strong> tanstack.com/query/latest/docs/framework/react/guides/caching + Tanner 关于 staleTime 的多篇博文 + RFC 5861</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>stale-while-revalidate</strong>（来自 HTTP RFC 5861）：cache 在 stale 之后短时间内还能用，同时后台 revalidate。TanStack Query 把它从 HTTP cache 提到 React hook 层。</li>
+          <li><b>4 态状态机</b>：<b>fresh</b>（刚拿到，比 staleTime 短，永远不 refetch）→ <b>stale</b>（超过 staleTime，订阅者激活时触发 refetch）→ <b>inactive</b>（没人订阅，进入 gc 倒计时）→ <b>gc</b>（超过 gcTime，从内存清掉）。</li>
+          <li><b>staleTime 默认 0</b>：每次激活都 refetch。这是 TanStack Query 最有争议的默认值，多数项目调成 60 秒以上。</li>
+          <li><b>gcTime 默认 5 分钟</b>（v4 之前叫 cacheTime）。inactive 后 5 分钟才从内存清掉。影响"切走又切回"是否还有 cache。</li>
+          <li><b>5 个 refetch 触发条件</b>（默认全开，可单独关）：<b>(1) mount + 已 stale</b> / <b>(2) window focus</b>（切回 tab） / <b>(3) network reconnect</b> / <b>(4) 显式 refetch / invalidate</b> / <b>(5) refetchInterval</b>（轮询）。</li>
+          <li><strong>staleTime 不是过期，是 refetch 阈值</strong>。fresh 永远不 refetch，无论 mount 多少次；stale 也不会自动 refetch，只在订阅者激活时触发。这是最常见的误解。</li>
+          <li>"打开页面立刻看到旧数据 + 后台请求"是<strong>设计</strong>不是 bug：组件 mount 时 cache 命中先 render（旧数据），同时检查 stale 触发后台 refetch；新数据回来时 re-render。</li>
+          <li>选择 staleTime 不是技术问题是<strong>产品问题</strong>：数据多新算"够新"。Marketing 文案 1 天，dashboard 5 分钟，库存 30 秒，金融实时数据 0。</li>
+          <li>gcTime 应该 ≥ staleTime。否则 cache 还没 stale 就被 gc 了，stale-while-revalidate 失去意义。</li>
+          <li>refetchOnWindowFocus 默认开。后台运行型应用（dashboard / monitoring）应该关掉，避免切回来一波请求风暴。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>stale-while-revalidate 的根 · HTTP RFC 5861</h3>
+
+        <p>2010 年 IETF 发布 <a href="https://datatracker.ietf.org/doc/html/rfc5861" target="_blank" rel="noopener">RFC 5861</a>，定义了 <code>Cache-Control: stale-while-revalidate=N</code> 头：</p>
+
+        <ul>
+          <li>cache 进入 stale 后，N 秒内仍然可以返回给客户端（不阻塞）</li>
+          <li>同时后台 revalidate，下次请求时拿到新数据</li>
+          <li>对终端用户：感觉永远不 loading</li>
+        </ul>
+
+        <p>这个心智在 CDN（Fastly / Cloudflare）已经用了 10+ 年。SWR（2019）和 React Query（2020）把它<strong>从 HTTP cache 抬到 React hook 层</strong>，让客户端 cache 也享受同样的体验：</p>
+
+        <ul>
+          <li>用户进页面 → cache 有就立刻显示（即使 stale）</li>
+          <li>同时后台 refetch</li>
+          <li>新数据来了 → 悄悄更新 UI（不闪 loading）</li>
+        </ul>
+
+        <p>这是过去 5 年客户端数据获取最重要的体验提升。比"loading 1 秒"或"用旧数据"都好。</p>
+
+        <h3>4 态状态机</h3>
+
+        <p>TanStack Query 内部每个 query 在 4 态之间转换：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>状态</th>
+              <th>条件</th>
+              <th>行为</th>
+              <th>触发下一态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><b>fresh</b></td>
+              <td>有数据 + 距离 dataUpdatedAt 不超过 staleTime</td>
+              <td>组件读到数据立即返回；<strong>永远不 refetch</strong></td>
+              <td>超过 staleTime → stale</td>
+            </tr>
+            <tr>
+              <td><b>stale</b></td>
+              <td>有数据 + 超过 staleTime</td>
+              <td>组件读到数据立即返回；订阅者激活时触发 refetch</td>
+              <td>refetch 完成 → 回到 fresh / 没人订阅 → inactive</td>
+            </tr>
+            <tr>
+              <td><b>inactive</b></td>
+              <td>没有组件订阅这个 queryKey</td>
+              <td>cache 仍在内存；不再 refetch</td>
+              <td>有组件订阅 → fresh/stale / 超过 gcTime → gc</td>
+            </tr>
+            <tr>
+              <td><b>gc</b></td>
+              <td>inactive 超过 gcTime</td>
+              <td>从内存清掉</td>
+              <td>下次订阅 → 重新 fetch（无 cache）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>关键观察：</p>
+        <ul>
+          <li><strong>fresh 是绝对的</strong> —— 在 fresh 期内即使你切 tab、reconnect、mount 100 次也不 refetch</li>
+          <li><strong>stale 不自动 refetch</strong> —— 必须有订阅者激活（mount / focus / reconnect / 显式调用）才触发</li>
+          <li><strong>inactive 不等于 gc</strong> —— 没人订阅但 cache 还在内存，gcTime 内可以复用</li>
+          <li><strong>"过期"这个词在 TanStack Query 里没意义</strong> —— stale 不是过期，gc 才是</li>
+        </ul>
+
+        <h3>5 个 refetch 触发条件</h3>
+
+        <p>当 query 在 stale 状态时，5 个条件中任一发生都会触发 refetch（默认全开）：</p>
+
+        <p><b>条件 1 · mount + 已 stale</b>（<code>refetchOnMount</code>）</p>
+
+        <p>组件第一次挂载或重新挂载时，如果 cache 已 stale，触发 refetch。这是最常见触发条件。</p>
+
+        <p><b>条件 2 · window focus</b>（<code>refetchOnWindowFocus</code>）</p>
+
+        <p>用户切回 tab 时触发。基于 <code>visibilitychange</code> + <code>focus</code> 事件。</p>
+
+        <p><b>条件 3 · network reconnect</b>（<code>refetchOnReconnect</code>）</p>
+
+        <p>网络断开后重新连接触发。基于 <code>online</code> 事件。</p>
+
+        <p><b>条件 4 · 显式 refetch / invalidate</b></p>
+
+        <p>调用 <code>queryClient.refetchQueries</code> / <code>refetch()</code> / <code>invalidateQueries</code>。</p>
+
+        <p><b>条件 5 · refetchInterval</b>（轮询）</p>
+
+        <p>设置后每隔 N 毫秒触发一次（无视 stale 状态）。</p>
+
+        <p>每个条件可以单独关：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">useQuery({
+  queryKey: ['users'],
+  queryFn: api.getUsers,
+  refetchOnMount: false,
+  refetchOnWindowFocus: false,
+  refetchOnReconnect: 'always',  // 即使 fresh 也强制
+  refetchInterval: 30 * 1000,
+  refetchIntervalInBackground: false,  // tab 在后台时不轮询
+});</code></pre>
+        </div>
+
+        <h3>staleTime · 默认 0 的争议</h3>
+
+        <p>v5 默认 <code>staleTime: 0</code>。后果：</p>
+        <ul>
+          <li>每次 mount + focus + reconnect 都 refetch</li>
+          <li>新手开发会觉得"为什么我不停发请求"</li>
+          <li>但保证数据最新（保守的默认）</li>
+        </ul>
+
+        <p>Tanner 在多次博文中解释为什么默认是 0：<strong>"不知道你的数据更新频率，默认最保守"</strong>。但实战 95% 项目把 default 调到至少 60 秒：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 在 QueryClient 全局调
+new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 60 * 1000,  // 1 分钟
+    },
+  },
+});</code></pre>
+        </div>
+
+        <p>个别 query 可以 override：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 实时性高的 query 单独设短
+useQuery({
+  queryKey: ['stock-price', symbol],
+  queryFn: ...,
+  staleTime: 0,         // 强制每次 refetch
+  refetchInterval: 5000, // 5 秒轮询
+});
+
+// 几乎不变的 query 设很长
+useQuery({
+  queryKey: ['site-config'],
+  queryFn: ...,
+  staleTime: 24 * 60 * 60 * 1000,  // 24 小时
+});</code></pre>
+        </div>
+
+        <h3>选择 staleTime 的产品判断</h3>
+
+        <p>不是技术问题。三档参考：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>数据类型</th>
+              <th>建议 staleTime</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>marketing 文案 / 静态配置</td>
+              <td>1 小时 - 24 小时</td>
+              <td>几乎不变；浪费请求是错的</td>
+            </tr>
+            <tr>
+              <td>用户 profile / 设置</td>
+              <td>5 分钟</td>
+              <td>偶尔变；focus 时 refetch 够用</td>
+            </tr>
+            <tr>
+              <td>dashboard / 列表</td>
+              <td>30 秒 - 1 分钟</td>
+              <td>有人在改；适度 refetch</td>
+            </tr>
+            <tr>
+              <td>库存 / 价格</td>
+              <td>5 - 30 秒</td>
+              <td>实时性重要</td>
+            </tr>
+            <tr>
+              <td>金融实时数据</td>
+              <td>0 + refetchInterval</td>
+              <td>每次都要新；强制轮询</td>
+            </tr>
+            <tr>
+              <td>个人聊天 / 通知</td>
+              <td>0 + WebSocket setQueryData</td>
+              <td>不轮询，靠推送</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>判断方法："如果用户看到 N 秒前的旧数据，会出问题吗"。N 就是 staleTime。</p>
+
+        <h3>gcTime · 默认 5 分钟</h3>
+
+        <p>gcTime（v4 之前叫 cacheTime）控制 inactive query 多久从内存清掉。默认 5 分钟。</p>
+
+        <p>影响"切走又切回"体验：</p>
+        <ul>
+          <li>用户在 page A 看完 → 切到 page B（page A 的 query 进 inactive）</li>
+          <li>3 分钟内切回 page A → cache 还在，立刻显示（stale-while-revalidate）</li>
+          <li>10 分钟后切回 → cache 已 gc，重新 fetch（loading）</li>
+        </ul>
+
+        <p>设置建议：</p>
+        <ul>
+          <li>5 分钟（默认）适合大部分场景</li>
+          <li>长会话型应用（用户在站内浏览 30 分钟+）调到 30 分钟</li>
+          <li>SPA + 用户经常 tab 切换 + 想保持流畅 → 调到 30 分钟到 1 小时</li>
+          <li>不要小于 staleTime（cache 还没 stale 就被 gc 了，没意义）</li>
+        </ul>
+
+        <h3>"打开页面立刻看到旧数据 + 后台请求"为什么是设计</h3>
+
+        <p>第一次访问 page A → fetch users → cache。</p>
+        <p>切走 → users 进 stale，再 inactive。</p>
+        <p>3 分钟后切回 → 组件 mount → useQuery 的逻辑：</p>
+
+        <ol>
+          <li>检查 cache：有 users 数据 → <strong>立刻 render（旧数据）</strong></li>
+          <li>检查 staleTime：已 stale → 触发 refetch（后台）</li>
+          <li>refetch 完成 → re-render（新数据）</li>
+        </ol>
+
+        <p>用户的体验：<strong>页面瞬间出现 + 几百毫秒后悄悄刷新</strong>。比"loading 1 秒 + 显示新数据"好得多。这是 stale-while-revalidate 的核心价值。</p>
+
+        <h3>refetchOnWindowFocus 的两面性</h3>
+
+        <p>默认开。好处：用户切回 tab 看到最新数据（如果 stale）。坏处：</p>
+        <ul>
+          <li>dashboard 类应用（多 tab 来回切）会发请求风暴</li>
+          <li>移动端切回 app 也算 focus</li>
+          <li>开 DevTools 也算 blur/focus，调试时频繁 refetch</li>
+        </ul>
+
+        <p>常见做法：</p>
+        <ul>
+          <li>dashboard / monitoring 应用 → <strong>关</strong>，靠 refetchInterval 控制</li>
+          <li>普通 web app → 开（默认）</li>
+          <li>极重 query（生成报告 / 大列表）→ 单独关</li>
+        </ul>
+
+        <h3>fetcher 行为模型 · placeholderData / keepPreviousData</h3>
+
+        <p>切换 queryKey 时（比如切页 <code>['users', page]</code> 的 page 变化），默认行为是：</p>
+        <ul>
+          <li>新 query 进 pending（无数据）</li>
+          <li>组件看到 isPending = true → 显示 loading</li>
+          <li>新数据来 → 显示</li>
+        </ul>
+
+        <p>导致<strong>切页闪烁</strong>。<code>placeholderData</code> + <code>keepPreviousData</code> 解决：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { keepPreviousData, useQuery } from '@tanstack/react-query';
+
+function UserList({ page }: { page: number }) {
+  const { data, isPlaceholderData } = useQuery({
+    queryKey: ['users', { page }],
+    queryFn: () =&gt; fetchUsers({ page }),
+    placeholderData: keepPreviousData,  // v5 的写法
+  });
+  // 切页时立即显示上一页数据 + isPlaceholderData=true → 后台拉新页
+  // 新页来了自动替换
+  return (
+    &lt;div style={{ opacity: isPlaceholderData ? 0.5 : 1 }}&gt;
+      {data?.map(u =&gt; &lt;li key={u.id}&gt;{u.name}&lt;/li&gt;)}
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>这是分页 / 过滤器场景的标配。详细见 <a href="../03-lifecycle/01-usequery-spectrum.html">P3.1</a>。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 选 staleTime 的具体场景</h3>
+
+        <p>一个产品 dashboard：</p>
+        <ul>
+          <li>导航栏 user 头像 → user 信息几乎不变 → <code>staleTime: 5 * 60 * 1000</code></li>
+          <li>主面板订单列表 → 30 秒一更新 → <code>staleTime: 30 * 1000</code></li>
+          <li>实时库存数字 → 5 秒一刷 → <code>staleTime: 0, refetchInterval: 5000</code></li>
+          <li>历史报告（已生成） → 永远不变 → <code>staleTime: Infinity</code></li>
+        </ul>
+
+        <p>实战不要全部用同一 staleTime。按 query 调。</p>
+
+        <h3>场景 2 · 后台运行型应用关 refetchOnWindowFocus</h3>
+
+        <p>一个监控大屏，用户经常切 tab 看其他参考资料：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 关掉 focus refetch，靠 interval 控制
+new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      staleTime: 30 * 1000,
+      refetchInterval: 60 * 1000,  // 1 分钟轮询
+      refetchIntervalInBackground: false,  // tab 后台时不轮询省流量
+    },
+  },
+});</code></pre>
+        </div>
+
+        <h3>场景 3 · 长会话 SPA 调大 gcTime</h3>
+
+        <p>用户在站内浏览 1 小时，频繁切多个页面：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 60 * 1000,
+      gcTime: 60 * 60 * 1000,  // 1 小时
+    },
+  },
+});
+// 用户切走 30 分钟再切回来，cache 还在
+// 立刻显示旧数据 + 后台 refetch</code></pre>
+        </div>
+
+        <h3>场景 4 · DevTools 看状态机</h3>
+
+        <p>本地开发打开 DevTools，能看到每个 query 当前状态：</p>
+        <ul>
+          <li><span style="color: green">fresh</span> · 绿色，刚 fetch 完</li>
+          <li><span style="color: orange">fetching</span> · 橙色，正在请求</li>
+          <li><span style="color: blue">stale</span> · 蓝色，过 staleTime 等订阅</li>
+          <li><span style="color: gray">inactive</span> · 灰色，没人订阅</li>
+        </ul>
+
+        <p>切 tab + window focus + 手动 refetch 都能在 DevTools 实时看到状态变化。比看代码理解状态机更直观。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 状态机的完整渲染矩阵</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function UserList() {
+  const {
+    data,
+    status,        // 'pending' | 'success' | 'error'
+    fetchStatus,   // 'idle' | 'fetching' | 'paused'
+    isPending,     // status === 'pending'
+    isFetching,    // fetchStatus === 'fetching'
+    isStale,       // 是否处于 stale 状态
+    isSuccess,
+    isError,
+    error,
+    dataUpdatedAt,
+    refetch,
+  } = useQuery({
+    queryKey: ['users'],
+    queryFn: api.getUsers,
+    staleTime: 60 * 1000,
+  });
+
+  // 4 种主要状态组合
+  if (isPending) return &lt;Loading /&gt;;                                  // 第一次 fetch
+  if (isError) return &lt;Error onRetry={refetch} /&gt;;                    // 失败
+  return (
+    &lt;div&gt;
+      {/* 永远显示 data，无论 fresh / stale / fetching */}
+      &lt;ul&gt;{data.map(u =&gt; &lt;li key={u.id}&gt;{u.name}&lt;/li&gt;)}&lt;/ul&gt;
+      {/* stale + fetching 时显示后台刷新 indicator */}
+      {isFetching &amp;&amp; &lt;Spinner size="small" /&gt;}
+      {/* 显示数据多新 */}
+      &lt;p&gt;Updated {Math.floor((Date.now() - dataUpdatedAt) / 1000)}s ago&lt;/p&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · staleTime 三档分组</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// queries/staleTimes.ts
+export const STALE_TIMES = {
+  RARELY_CHANGES: 60 * 60 * 1000,   // 1 小时（marketing / 配置）
+  SOMETIMES_CHANGES: 5 * 60 * 1000,  // 5 分钟（user profile / settings）
+  OFTEN_CHANGES: 30 * 1000,          // 30 秒（dashboards / lists）
+  REAL_TIME: 0,                       // 0（实时数据）
+} as const;
+
+// hooks/useUser.ts
+export function useUser(id: string) {
+  return useQuery({
+    queryKey: userKeys.detail(id),
+    queryFn: () =&gt; api.getUser(id),
+    staleTime: STALE_TIMES.SOMETIMES_CHANGES,
+  });
+}
+
+// hooks/useStockPrice.ts
+export function useStockPrice(symbol: string) {
+  return useQuery({
+    queryKey: ['stock-price', symbol],
+    queryFn: () =&gt; api.getStockPrice(symbol),
+    staleTime: STALE_TIMES.REAL_TIME,
+    refetchInterval: 5000,
+  });
+}</code></pre>
+        </div>
+
+        <h3>代码 3 · 暂停轮询（query 不可见时）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// refetchInterval 可以是函数，返回 false 暂停
+function StockChart({ symbol }: { symbol: string }) {
+  const { data } = useQuery({
+    queryKey: ['stock-price', symbol],
+    queryFn: () =&gt; api.getStockPrice(symbol),
+    refetchInterval: (query) =&gt; {
+      // 市场关闭时停止轮询
+      if (isMarketClosed()) return false;
+      // 价格波动大时加快轮询
+      if (query.state.data?.volatility &gt; 0.05) return 1000;
+      return 5000;
+    },
+  });
+  return &lt;Chart data={data} /&gt;;
+}</code></pre>
+        </div>
+
+        <h3>代码 4 · 手动控制 stale</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 想强制让 cache 进 stale 但不立刻 refetch
+queryClient.invalidateQueries({
+  queryKey: ['users'],
+  refetchType: 'none',  // 标 stale 但不 refetch；下次激活订阅时才 refetch
+});
+
+// 强制立刻 refetch（无视 staleTime）
+queryClient.refetchQueries({ queryKey: ['users'] });
+
+// 检查某个 query 当前状态
+const state = queryClient.getQueryState(['users']);
+console.log(state?.dataUpdatedAt, state?.isInvalidated);</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>"我设了 staleTime 怎么还在 refetch"</b> —— staleTime 只控制是否触发 refetch；如果你显式 invalidate / refetch / refetchInterval，仍会 refetch。看 DevTools 的 trigger 字段</li>
+          <li><b>staleTime 设很大但数据其实变了</b> —— 用户看到旧数据。修复：mutation 后 invalidate；或调小 staleTime</li>
+          <li><b>staleTime 设 0 + 频繁切 tab</b> —— 网络请求爆炸。每个 tab 切回都 refetch。修复：调大 staleTime 或关 refetchOnWindowFocus</li>
+          <li><b>gcTime &lt; staleTime</b> —— cache 还没 stale 就被 gc 了，stale-while-revalidate 失去意义。永远 gcTime ≥ staleTime</li>
+          <li><b>把 staleTime 当过期理解</b> —— stale 不是过期。stale 期 cache 仍可读，只是激活时会 refetch。"过期"在 TanStack Query 里对应的概念是 gcTime</li>
+          <li><b>refetchInterval 不停 + 组件卸载</b> —— 默认 query 没有订阅者会暂停 interval；但如果有其他订阅者保持活跃，会继续</li>
+          <li><b>refetchOnWindowFocus 在调试时被触发</b> —— 打开 DevTools 算 blur/focus → 调试时反复 refetch。建议本地默认关 focus refetch</li>
+          <li><b>把 refetchInterval 当 staleTime 用</b> —— refetchInterval 是<strong>定时强制 refetch</strong>，不管 staleTime；staleTime 是<strong>触发条件阈值</strong>。语义不同</li>
+          <li><b>"我没改代码为什么页面切回来又请求一次"</b> —— 默认 refetchOnMount + refetchOnWindowFocus + staleTime=0 全开。改 staleTime 或关 focus refetch</li>
+          <li><b>不监控 isFetching 显示后台刷新 indicator</b> —— stale + fetching 时用户看不到正在刷新；可以加个小 spinner 提示</li>
+          <li><b>refetchInterval 设很短 + queryFn 很慢</b> —— 上一个还没回来下一个又起。TanStack Query 内部会跳过（同 key 同时只一个 in-flight），但仍要避免</li>
+          <li><b>关 refetchOnWindowFocus 后期望 mutation 也不刷</b> —— mutation 触发的 invalidate 仍会 refetch（条件 4），与 focus 设置无关</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/guides/caching" target="_blank" rel="noopener">TanStack Query · Caching</a> · 状态机官方说明</li>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/guides/important-defaults" target="_blank" rel="noopener">TanStack Query · Important Defaults</a> · 默认值争议的官方解释</li>
+          <li><a href="https://tkdodo.eu/blog/practical-react-query#the-defaults-explained" target="_blank" rel="noopener">TkDodo · Practical React Query - The Defaults Explained</a> · staleTime / gcTime 实战指南</li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc5861" target="_blank" rel="noopener">RFC 5861 · stale-while-revalidate</a> · 心智来源</li>
+          <li><a href="01-querykey-queryfn.html">本主题 P2.1 · queryKey + queryFn + queryClient</a></li>
+          <li><a href="../03-lifecycle/01-usequery-spectrum.html">本主题 P3.1 · useQuery 全谱</a> · placeholderData + keepPreviousData 完整用法</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-querykey-queryfn.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P2.1 · queryKey + queryFn + queryClient</span>
+          </a>
+          <a class="next" href="../03-lifecycle/01-usequery-spectrum.html">
+            <span class="label">下一章 →</span>
+            <span class="title">P3.1 · useQuery 全谱</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

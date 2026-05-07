@@ -1,0 +1,797 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>dependent / parallel / paginated / infinite queries · P4.1 · TanStack Query / SWR 深度学习</title>
+    <meta name="description" content="单个 useQuery 解决不了真实业务的所有形状。这一章把 4 种结构化查询写法讲清楚：dependent（enabled 串行）/ parallel（同组件多 useQuery + useQueries 动态批量）/ paginated（keepPreviousData 不闪烁）/ infinite（useInfiniteQuery + getNextPageParam + IntersectionObserver 滚到底加载）。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23ff4154'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EQ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>TanStack Query / SWR 深度学习</span><span class="site-title-badge" style="background: #ff4154; color: #fff">Q</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · 高级查询模式</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-dependent-paginated-infinite.html" class="active">01 · dependent / paginated / infinite</a></li>
+          <li><a href="02-suspense-prefetch-streaming.html">02 · Suspense / prefetch / streaming</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TanStack Query</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · 高级模式</a><span class="breadcrumb-sep">/</span>
+          <span>01 · dependent / paginated / infinite</span>
+        </nav>
+        <h1>dependent / parallel / paginated / infinite queries</h1>
+        <p class="lead">
+          单个 useQuery 解决不了真实业务的所有形状。这一章把 4 种结构化查询写法讲清：dependent（一个 query 等另一个）、parallel（多 query 并发）、paginated（页码型，keepPreviousData 不闪烁）、infinite（"加载更多"型，useInfiniteQuery + IntersectionObserver）。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~28 分钟</span>
+          <span><strong>前置</strong> P3 useQuery 全谱 + useMutation 4 步乐观</span>
+          <span><strong>主要来源</strong> tanstack.com/query/latest/docs/framework/react/guides/dependent-queries + parallel-queries + paginated-queries + infinite-queries</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><b>dependent query</b>：query B 等 query A 的结果。用 <code>enabled: !!previousData</code> 控制；不要用 if 包 useQuery（违反 hooks 规则）。</li>
+          <li><b>parallel query 静态数量</b>：同组件多次 <code>useQuery</code> 自动并发。React 自然行为，不用特殊 API。</li>
+          <li><b>parallel query 动态数量</b>：用 <code>useQueries({ queries: [...] })</code>；返回数组，可 map 渲染。典型场景"批量加载头像"。</li>
+          <li><b>paginated query 页码型</b>：cursor 在 queryKey（<code>['posts', { page }]</code>）+ <code>placeholderData: keepPreviousData</code> 切页时显示上一页 + 后台拉新页。</li>
+          <li><b>infinite query "加载更多"型</b>：用专门的 <code>useInfiniteQuery</code> hook（不是 useQuery）；data 结构是 <code>{ pages: [], pageParams: [] }</code>；getNextPageParam 决定下一页 param。</li>
+          <li><b>infinite + IntersectionObserver</b>：滚到底自动 fetchNextPage 是标配实现。可以用 react-intersection-observer 库简化。</li>
+          <li><b>infinite 单项更新陷阱</b>：invalidate 整个 infinite query 会重置所有 pages（用户滚的位置丢）。需要 setQueryData 局部改单页。</li>
+          <li><b>useQueries combinations</b>：v5 新增 <code>combine</code> option，把多个 query 结果聚合派生（"全部 isSuccess 才显示" / "totalCount = 各页累加"）。</li>
+          <li><b>parallel 数量很大慎用</b>：100 个 useQuery 同时跑会发 100 个请求。看后端能否扛；考虑批量 API（一个请求拿 100 条）。</li>
+          <li><b>dependent + parallel 混合</b>：典型 dashboard 场景。先拿 user，再并行拿 user 的 posts / settings / notifications。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>dependent query · enabled 串行</h3>
+
+        <p>真实业务里经常遇到："拿到 user 才能拿 user 的 posts"。不能用 if 跳过 useQuery（违反 hooks 规则），用 enabled：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function UserPosts() {
+  // Query A: 拿 user
+  const { data: user } = useQuery({
+    queryKey: ['user'],
+    queryFn: api.getCurrentUser,
+  });
+
+  // Query B: 等 user 拿到才发
+  const { data: posts, isPending } = useQuery({
+    queryKey: ['posts', user?.id],
+    queryFn: () =&gt; api.getPosts(user!.id),
+    enabled: !!user,  // user 没拿到时 enabled=false → query 不发
+  });
+
+  // user 还没来时：
+  // - posts query: status='pending', fetchStatus='idle'
+  // - 不会触发 queryFn
+  // user 来了：
+  // - enabled 变 true → 自动发请求
+  // - status='pending' → 'fetching' → 'success'
+}</code></pre>
+        </div>
+
+        <p>关键细节：</p>
+        <ul>
+          <li>enabled=false 时 query 处于 idle 状态（pending + idle）</li>
+          <li>enabled=false 时 queryFn 不会被调用，但 query entry 仍占 cache 槽</li>
+          <li>切换 enabled 从 false 到 true 等同于 mount → 会触发 fetch（如果 stale）</li>
+        </ul>
+
+        <h3>多步 dependent · 链式</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 拿 user → 拿 organization → 拿 organization 的 members
+const { data: user } = useQuery({
+  queryKey: ['user'],
+  queryFn: api.getCurrentUser,
+});
+
+const { data: org } = useQuery({
+  queryKey: ['org', user?.orgId],
+  queryFn: () =&gt; api.getOrg(user!.orgId),
+  enabled: !!user?.orgId,
+});
+
+const { data: members } = useQuery({
+  queryKey: ['org', org?.id, 'members'],
+  queryFn: () =&gt; api.getMembers(org!.id),
+  enabled: !!org,
+});</code></pre>
+        </div>
+
+        <p><b>串行链长 = 串行延迟累积</b>。3 步串行 = 3 次 RTT。如果后端能聚合（一个 API 返回 user + org + members），考虑后端聚合而不是 client 多次 fetch。</p>
+
+        <h3>parallel query 静态数量 · 自动并发</h3>
+
+        <p>同组件里多次 useQuery 自动并发，无需特殊 API：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function Dashboard() {
+  // 这 3 个 query 同时发出（并发）
+  const userQuery = useQuery({ queryKey: ['user'], queryFn: api.getUser });
+  const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
+  const notificationsQuery = useQuery({ queryKey: ['notifications'], queryFn: api.getNotifications });
+
+  if (userQuery.isPending || settingsQuery.isPending || notificationsQuery.isPending) {
+    return &lt;Loading /&gt;;
+  }
+  // ...
+}</code></pre>
+        </div>
+
+        <p>3 个 useQuery 并发 = 3 个请求同时出发。React 顺序调用 hook 但 query 是异步起的，不会等前一个完成。</p>
+
+        <h3>parallel query 动态数量 · useQueries</h3>
+
+        <p>数量在编译时未知（比如根据数组渲染）：不能用循环调 useQuery（违反 hooks 规则），用 useQueries：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { useQueries } from '@tanstack/react-query';
+
+function UserAvatars({ ids }: { ids: string[] }) {
+  const queries = useQueries({
+    queries: ids.map(id =&gt; ({
+      queryKey: ['user', id],
+      queryFn: () =&gt; api.getUser(id),
+    })),
+  });
+
+  // queries 是数组，每个元素是一个 useQuery 的返回
+  return (
+    &lt;&gt;
+      {queries.map((q, i) =&gt; (
+        &lt;img key={ids[i]} src={q.data?.avatar} alt={q.data?.name} /&gt;
+      ))}
+    &lt;/&gt;
+  );
+}
+
+// 100 个 ids 会发 100 个请求 —— 注意后端能否扛</code></pre>
+        </div>
+
+        <h3>useQueries combine 选项 · v5 新</h3>
+
+        <p>v5 给 useQueries 加了 combine option，把多个 query 结果聚合：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">const { data, isPending, isError } = useQueries({
+  queries: ids.map(id =&gt; ({
+    queryKey: ['user', id],
+    queryFn: () =&gt; api.getUser(id),
+  })),
+  combine: (results) =&gt; ({
+    data: results.map(r =&gt; r.data),
+    isPending: results.some(r =&gt; r.isPending),  // 任何一个 pending = 整体 pending
+    isError: results.some(r =&gt; r.isError),
+  }),
+});
+
+// 一行拿到聚合状态，不用每个组件都自己写</code></pre>
+        </div>
+
+        <h3>paginated query · keepPreviousData</h3>
+
+        <p>页码型分页（page=1, 2, 3...）。queryKey 包含 page，切页时切 query：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { keepPreviousData, useQuery } from '@tanstack/react-query';
+
+function PostList() {
+  const [page, setPage] = useState(1);
+
+  const { data, isPlaceholderData, isFetching } = useQuery({
+    queryKey: ['posts', { page }],
+    queryFn: () =&gt; api.getPosts({ page }),
+    placeholderData: keepPreviousData,
+  });
+
+  return (
+    &lt;&gt;
+      &lt;ul style={{ opacity: isPlaceholderData ? 0.5 : 1 }}&gt;
+        {data?.items.map(p =&gt; &lt;li key={p.id}&gt;{p.title}&lt;/li&gt;)}
+      &lt;/ul&gt;
+      &lt;button disabled={page === 1 || isFetching} onClick={() =&gt; setPage(p =&gt; p - 1)}&gt;Prev&lt;/button&gt;
+      &lt;span&gt;Page {page} of {data?.totalPages}&lt;/span&gt;
+      &lt;button disabled={page === data?.totalPages || isFetching} onClick={() =&gt; setPage(p =&gt; p + 1)}&gt;Next&lt;/button&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>体验：</p>
+        <ul>
+          <li>用户点 Next → page 变 → queryKey 变 → 新 query</li>
+          <li>placeholderData 让 data 立即变成上一页（旧数据），isPlaceholderData=true</li>
+          <li>新页拉到 → data 替换 → isPlaceholderData=false</li>
+          <li>用户感知：内容平滑过渡，无 loading 闪烁</li>
+        </ul>
+
+        <p>用 prefetch 进一步优化：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 预拉下一页（hover 或 idle 时）
+const queryClient = useQueryClient();
+useEffect(() =&gt; {
+  if (data?.hasNext) {
+    queryClient.prefetchQuery({
+      queryKey: ['posts', { page: page + 1 }],
+      queryFn: () =&gt; api.getPosts({ page: page + 1 }),
+    });
+  }
+}, [page, data?.hasNext, queryClient]);</code></pre>
+        </div>
+
+        <h3>infinite query · "加载更多" / 无限滚动</h3>
+
+        <p>用专门的 <code>useInfiniteQuery</code> hook（不是 useQuery）。关键差异：</p>
+
+        <ul>
+          <li>data 结构是 <code>{ pages: TPage[], pageParams: TPageParam[] }</code> —— 不是单页数据</li>
+          <li>必须提供 <code>initialPageParam</code> 和 <code>getNextPageParam</code></li>
+          <li>调 <code>fetchNextPage()</code> 加载下一页（追加进 pages）</li>
+          <li>组件层 <code>data.pages.flatMap(...)</code> 渲染所有项</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { useInfiniteQuery } from '@tanstack/react-query';
+
+type Page = { items: Post[]; nextCursor: string | null };
+
+function PostFeed() {
+  const {
+    data,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isPending,
+  } = useInfiniteQuery({
+    queryKey: ['posts-feed'],
+    queryFn: ({ pageParam }) =&gt; api.getFeed({ cursor: pageParam }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage: Page) =&gt; lastPage.nextCursor,
+    // 返回 undefined / null 表示没下一页（hasNextPage = false）
+  });
+
+  if (isPending) return &lt;Loading /&gt;;
+
+  // pages 是数组，每页是 Page；扁平化成单一 items 数组
+  const allItems = data.pages.flatMap(p =&gt; p.items);
+
+  return (
+    &lt;&gt;
+      &lt;ul&gt;{allItems.map(p =&gt; &lt;li key={p.id}&gt;{p.title}&lt;/li&gt;)}&lt;/ul&gt;
+      {hasNextPage &amp;&amp; (
+        &lt;button onClick={() =&gt; fetchNextPage()} disabled={isFetchingNextPage}&gt;
+          {isFetchingNextPage ? 'Loading...' : 'Load more'}
+        &lt;/button&gt;
+      )}
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>infinite + IntersectionObserver · 滚到底自动加载</h3>
+
+        <p>把 fetchNextPage 绑到一个底部 sentinel 元素的 IntersectionObserver：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { useEffect, useRef } from 'react';
+
+function PostFeed() {
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({...});
+  const sentinelRef = useRef&lt;HTMLDivElement&gt;(null);
+
+  useEffect(() =&gt; {
+    if (!sentinelRef.current || !hasNextPage) return;
+    const observer = new IntersectionObserver(([entry]) =&gt; {
+      if (entry.isIntersecting &amp;&amp; !isFetchingNextPage) {
+        fetchNextPage();
+      }
+    }, { rootMargin: '200px' });  // 200px 提前触发
+    observer.observe(sentinelRef.current);
+    return () =&gt; observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+  // ...
+  return (
+    &lt;&gt;
+      &lt;ul&gt;...&lt;/ul&gt;
+      &lt;div ref={sentinelRef}&gt;
+        {isFetchingNextPage &amp;&amp; &lt;Spinner /&gt;}
+        {!hasNextPage &amp;&amp; &lt;p&gt;End&lt;/p&gt;}
+      &lt;/div&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>用 react-intersection-observer 库简化：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { useInView } from 'react-intersection-observer';
+
+function PostFeed() {
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({...});
+  const { ref, inView } = useInView({ rootMargin: '200px' });
+
+  useEffect(() =&gt; {
+    if (inView &amp;&amp; hasNextPage &amp;&amp; !isFetchingNextPage) {
+      fetchNextPage();
+    }
+  }, [inView, hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+  return (
+    &lt;&gt;
+      &lt;ul&gt;...&lt;/ul&gt;
+      &lt;div ref={ref}&gt;{isFetchingNextPage &amp;&amp; &lt;Spinner /&gt;}&lt;/div&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>infinite query 单项更新陷阱</h3>
+
+        <p>用户滚到第 5 页 → 有 50 个 todo → 编辑第 3 个 todo → 想刷新这一项。如果直接 invalidate：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">queryClient.invalidateQueries({ queryKey: ['posts-feed'] });
+// 后果：infinite query 整体 refetch
+// 默认行为是只重新拉第 1 页 + 砍掉 2-5 页（refetchPage 设置）
+// 用户的滚动位置丢了</code></pre>
+        </div>
+
+        <p>v5 default behavior 是<strong>只重新 fetch 已加载的所有 pages</strong>（每页一个请求），保留所有页。但仍然有 N 次请求。</p>
+
+        <p>更精细的做法：用 setQueryData 局部改：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// mutation 成功后，找到对应 page 局部改
+const { mutate: editPost } = useMutation({
+  mutationFn: api.editPost,
+  onSuccess: (updated) =&gt; {
+    queryClient.setQueryData&lt;{ pages: Page[]; pageParams: any[] }&gt;(
+      ['posts-feed'],
+      (old) =&gt; {
+        if (!old) return old;
+        return {
+          ...old,
+          pages: old.pages.map(page =&gt; ({
+            ...page,
+            items: page.items.map(item =&gt; item.id === updated.id ? updated : item),
+          })),
+        };
+      }
+    );
+  },
+});</code></pre>
+        </div>
+
+        <h3>maxPages · 限制 infinite 内存</h3>
+
+        <p>v5 新增 <code>maxPages</code> 选项防止 infinite query 占用过多内存：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">useInfiniteQuery({
+  queryKey: ['posts-feed'],
+  queryFn: ...,
+  initialPageParam: null,
+  getNextPageParam: ...,
+  getPreviousPageParam: (firstPage) =&gt; firstPage.prevCursor,  // 双向 infinite
+  maxPages: 5,  // 最多保留 5 页（前后滚动时丢弃远端）
+});</code></pre>
+        </div>
+
+        <p>典型场景：聊天消息列表（双向 infinite）。用户滚回顶部加载历史，滚到底部加载新消息；中间太远的消息可以 gc 掉省内存。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · dashboard 混合 dependent + parallel</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function Dashboard() {
+  // 第一步：拿 user（必须先有）
+  const { data: user, isPending: userPending } = useQuery({
+    queryKey: ['current-user'],
+    queryFn: api.getCurrentUser,
+  });
+
+  // 第二步：并行拿 user 的多个相关数据
+  const [postsQuery, statsQuery, notificationsQuery] = useQueries({
+    queries: [
+      {
+        queryKey: ['posts', user?.id],
+        queryFn: () =&gt; api.getPosts(user!.id),
+        enabled: !!user,
+      },
+      {
+        queryKey: ['stats', user?.id],
+        queryFn: () =&gt; api.getStats(user!.id),
+        enabled: !!user,
+      },
+      {
+        queryKey: ['notifications', user?.id],
+        queryFn: () =&gt; api.getNotifications(user!.id),
+        enabled: !!user,
+      },
+    ],
+  });
+
+  if (userPending) return &lt;Loading /&gt;;
+  // 这里 user 一定有；下面 3 个 query 可能仍在 pending 但可以分别显示
+  return (
+    &lt;Layout user={user}&gt;
+      &lt;Section title="Posts"&gt;{postsQuery.isPending ? &lt;Skeleton /&gt; : &lt;PostList posts={postsQuery.data} /&gt;}&lt;/Section&gt;
+      &lt;Section title="Stats"&gt;{statsQuery.isPending ? &lt;Skeleton /&gt; : &lt;StatsCard stats={statsQuery.data} /&gt;}&lt;/Section&gt;
+      &lt;Section title="Notifications"&gt;{notificationsQuery.isPending ? &lt;Skeleton /&gt; : &lt;NotificationList items={notificationsQuery.data} /&gt;}&lt;/Section&gt;
+    &lt;/Layout&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>场景 2 · 分页表格（排序 / 过滤 / page）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">type SortBy = 'name' | 'createdAt';
+
+function UsersTable() {
+  const [page, setPage] = useState(1);
+  const [sortBy, setSortBy] = useState&lt;SortBy&gt;('createdAt');
+  const [filter, setFilter] = useState({ active: true });
+
+  const { data, isPlaceholderData, isFetching } = useQuery({
+    queryKey: ['users', { page, sortBy, filter }],
+    queryFn: () =&gt; api.getUsers({ page, sortBy, ...filter }),
+    placeholderData: keepPreviousData,
+    staleTime: 30 * 1000,
+  });
+
+  // 切排序 / 过滤时重置 page（不然可能 page=999 但新 sort 只有 5 页）
+  function changeSort(newSort: SortBy) {
+    setSortBy(newSort);
+    setPage(1);  // 重置
+  }
+
+  return (
+    &lt;&gt;
+      &lt;Filters value={filter} onChange={(f) =&gt; { setFilter(f); setPage(1); }} /&gt;
+      &lt;table style={{ opacity: isPlaceholderData ? 0.5 : 1 }}&gt;
+        &lt;thead&gt;
+          &lt;tr&gt;
+            &lt;th onClick={() =&gt; changeSort('name')}&gt;Name {sortBy === 'name' &amp;&amp; '↓'}&lt;/th&gt;
+            &lt;th onClick={() =&gt; changeSort('createdAt')}&gt;Created {sortBy === 'createdAt' &amp;&amp; '↓'}&lt;/th&gt;
+          &lt;/tr&gt;
+        &lt;/thead&gt;
+        &lt;tbody&gt;
+          {data?.items.map(u =&gt; (
+            &lt;tr key={u.id}&gt;&lt;td&gt;{u.name}&lt;/td&gt;&lt;td&gt;{u.createdAt}&lt;/td&gt;&lt;/tr&gt;
+          ))}
+        &lt;/tbody&gt;
+      &lt;/table&gt;
+      &lt;Pagination page={page} totalPages={data?.totalPages} onChange={setPage} disabled={isFetching} /&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>场景 3 · 双向 infinite 聊天消息</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function ChatMessages({ chatId }: { chatId: string }) {
+  const {
+    data,
+    fetchNextPage,
+    fetchPreviousPage,
+    hasNextPage,
+    hasPreviousPage,
+    isFetchingNextPage,
+    isFetchingPreviousPage,
+  } = useInfiniteQuery({
+    queryKey: ['messages', chatId],
+    queryFn: ({ pageParam }) =&gt; api.getMessages(chatId, { cursor: pageParam }),
+    initialPageParam: null as { id: string; direction: 'before' | 'after' } | null,
+    getNextPageParam: (lastPage) =&gt; lastPage.nextCursor &amp;&amp; { id: lastPage.nextCursor, direction: 'after' as const },
+    getPreviousPageParam: (firstPage) =&gt; firstPage.prevCursor &amp;&amp; { id: firstPage.prevCursor, direction: 'before' as const },
+    maxPages: 10,  // 内存上限
+  });
+
+  // 顶部 sentinel：滚到顶 → 加载历史
+  // 底部 sentinel：滚到底 → 加载新消息
+  // ...
+}</code></pre>
+        </div>
+
+        <h3>场景 4 · 批量 query · 动态用户列表头像</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function MentionList({ mentionedUserIds }: { mentionedUserIds: string[] }) {
+  const queries = useQueries({
+    queries: mentionedUserIds.map(id =&gt; ({
+      queryKey: ['user', id],
+      queryFn: () =&gt; api.getUser(id),
+      staleTime: 5 * 60 * 1000,
+    })),
+    combine: (results) =&gt; ({
+      // 派生：拿到所有成功的 user 数据
+      users: results.filter(r =&gt; r.isSuccess).map(r =&gt; r.data!),
+      isLoading: results.some(r =&gt; r.isPending),
+    }),
+  });
+
+  return (
+    &lt;&gt;
+      {queries.users.map(u =&gt; (
+        &lt;img key={u.id} src={u.avatar} alt={u.name} /&gt;
+      ))}
+      {queries.isLoading &amp;&amp; &lt;Spinner /&gt;}
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>注意：100 个 mention 会发 100 个请求。如果后端有批量 API（POST /users/batch?ids=1,2,3），考虑用一个 query 拿全部，效率更高。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · infinite query 完整 + IntersectionObserver</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { useInfiniteQuery } from '@tanstack/react-query';
+import { useInView } from 'react-intersection-observer';
+import { useEffect } from 'react';
+
+type Feed = { items: Post[]; nextCursor: string | null };
+
+function PostFeed() {
+  const {
+    data,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isPending,
+    isError,
+  } = useInfiniteQuery({
+    queryKey: ['posts-feed'],
+    queryFn: ({ pageParam, signal }) =&gt;
+      fetch(`/api/feed?cursor=${pageParam ?? ''}`, { signal }).then(r =&gt; r.json()) as Promise&lt;Feed&gt;,
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) =&gt; lastPage.nextCursor,
+    staleTime: 60 * 1000,
+  });
+
+  const { ref, inView } = useInView({ rootMargin: '200px' });
+
+  useEffect(() =&gt; {
+    if (inView &amp;&amp; hasNextPage &amp;&amp; !isFetchingNextPage) fetchNextPage();
+  }, [inView, hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+  if (isPending) return &lt;Loading /&gt;;
+  if (isError) return &lt;Error /&gt;;
+
+  return (
+    &lt;&gt;
+      &lt;ul&gt;
+        {data.pages.flatMap(p =&gt; p.items).map(post =&gt; (
+          &lt;li key={post.id}&gt;{post.title}&lt;/li&gt;
+        ))}
+      &lt;/ul&gt;
+      &lt;div ref={ref} className="sentinel"&gt;
+        {isFetchingNextPage ? &lt;Spinner /&gt; : !hasNextPage ? &lt;p&gt;End&lt;/p&gt; : null}
+      &lt;/div&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · infinite query 局部更新（不破坏滚动）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 编辑 post：mutation 成功后局部改 cache
+const { mutate: edit } = useMutation({
+  mutationFn: api.editPost,
+  onSuccess: (updated) =&gt; {
+    queryClient.setQueryData&lt;{ pages: Feed[]; pageParams: any[] }&gt;(
+      ['posts-feed'],
+      (old) =&gt; old &amp;&amp; ({
+        ...old,
+        pages: old.pages.map(page =&gt; ({
+          ...page,
+          items: page.items.map(item =&gt; item.id === updated.id ? updated : item),
+        })),
+      })
+    );
+    // 不 invalidate，避免重新拉所有页
+  },
+});
+
+// 删除 post：移除某项
+const { mutate: del } = useMutation({
+  mutationFn: api.deletePost,
+  onMutate: async (id: string) =&gt; {
+    await queryClient.cancelQueries({ queryKey: ['posts-feed'] });
+    const prev = queryClient.getQueryData(['posts-feed']);
+    queryClient.setQueryData&lt;{ pages: Feed[]; pageParams: any[] }&gt;(
+      ['posts-feed'],
+      (old) =&gt; old &amp;&amp; ({
+        ...old,
+        pages: old.pages.map(page =&gt; ({
+          ...page,
+          items: page.items.filter(item =&gt; item.id !== id),
+        })),
+      })
+    );
+    return { prev };
+  },
+  onError: (_e, _v, ctx) =&gt; ctx &amp;&amp; queryClient.setQueryData(['posts-feed'], ctx.prev),
+});</code></pre>
+        </div>
+
+        <h3>代码 3 · 用 useQueries 实现"先批量再批量"</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 拿 5 个 org，每个 org 拿成员列表
+function OrgsWithMembers({ orgIds }: { orgIds: string[] }) {
+  // 第一批：并行拿所有 org
+  const orgs = useQueries({
+    queries: orgIds.map(id =&gt; ({
+      queryKey: ['org', id],
+      queryFn: () =&gt; api.getOrg(id),
+    })),
+    combine: (results) =&gt; results.filter(r =&gt; r.isSuccess).map(r =&gt; r.data!),
+  });
+
+  // 第二批：等所有 org 拿到后并行拿成员
+  const members = useQueries({
+    queries: orgs.map(o =&gt; ({
+      queryKey: ['org', o.id, 'members'],
+      queryFn: () =&gt; api.getMembers(o.id),
+      enabled: !!o.id,  // org 拿到才发
+    })),
+  });
+
+  return (
+    &lt;&gt;
+      {orgs.map((org, i) =&gt; (
+        &lt;div key={org.id}&gt;
+          &lt;h3&gt;{org.name}&lt;/h3&gt;
+          {members[i]?.isPending ? &lt;Skeleton /&gt; :
+            &lt;ul&gt;{members[i]?.data?.map(m =&gt; &lt;li key={m.id}&gt;{m.name}&lt;/li&gt;)}&lt;/ul&gt;}
+        &lt;/div&gt;
+      ))}
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 4 · paginated query 配 prefetch 下一页</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function PostsPaginated() {
+  const queryClient = useQueryClient();
+  const [page, setPage] = useState(1);
+
+  const { data, isPlaceholderData } = useQuery({
+    queryKey: ['posts', { page }],
+    queryFn: () =&gt; api.getPosts({ page }),
+    placeholderData: keepPreviousData,
+  });
+
+  // 当前页拿到后立刻预拉下一页
+  useEffect(() =&gt; {
+    if (data?.hasNext) {
+      queryClient.prefetchQuery({
+        queryKey: ['posts', { page: page + 1 }],
+        queryFn: () =&gt; api.getPosts({ page: page + 1 }),
+      });
+    }
+  }, [page, data?.hasNext, queryClient]);
+
+  // 用户点 Next 时下一页 cache 已经在了，瞬间显示
+  return (
+    &lt;&gt;
+      {/* ... */}
+      &lt;button onClick={() =&gt; setPage(p =&gt; p + 1)}&gt;Next&lt;/button&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>用 if 包 useQuery 实现 dependent</b> —— 违反 hooks 规则。改用 enabled</li>
+          <li><b>dependent 链很长（5+ 步）</b> —— 串行延迟累积。考虑后端聚合 API</li>
+          <li><b>useQueries 数量爆炸（100+ 并发请求）</b> —— 后端可能扛不住。考虑批量 API（一个请求拿 100 条）</li>
+          <li><b>paginated 切排序 / 过滤忘了重置 page</b> —— 用户在第 5 页，切排序仍 page=5，但新结果可能只有 3 页 → 显示空</li>
+          <li><b>paginated 没用 keepPreviousData</b> —— 切页 loading 闪烁，UX 差</li>
+          <li><b>infinite query 用 useQuery 而不是 useInfiniteQuery</b> —— 用错 hook，没 fetchNextPage / hasNextPage</li>
+          <li><b>infinite query 忘了 initialPageParam</b> —— v5 强制要求；v4 自动 undefined</li>
+          <li><b>infinite query getNextPageParam 返回 0 / 空字符串</b> —— 0 是 falsy，TanStack Query 视为没下一页。要么返回明确的 cursor，要么用 nullish</li>
+          <li><b>infinite invalidate 整体 refetch 滚动位置丢</b> —— v5 默认重新拉所有 pages（保留位置但 N 次请求）。精细更新用 setQueryData 局部改</li>
+          <li><b>infinite 单页失败重试整体</b> —— 默认 retry 在每页层面。某页失败不影响其他页</li>
+          <li><b>useQueries 的 combine 引用每次新</b> —— combine 函数返回新对象 → 触发 re-render。返回原始值或 useCallback 包</li>
+          <li><b>maxPages 设太小</b> —— 用户滚回顶部时丢失中间页 → 重新拉。maxPages 应至少能容纳一屏</li>
+          <li><b>把 infinite 当 paginated 用（每次 fetchNextPage 替换上一页）</b> —— infinite 是追加，不是替换。用 paginated + page state 才是替换</li>
+          <li><b>双向 infinite 没 getPreviousPageParam</b> —— 只有 next 没 previous，hasPreviousPage 永远 false</li>
+          <li><b>parallel 用 Promise.all + 单个 useQuery</b> —— <code>queryFn: () =&gt; Promise.all([fetchA(), fetchB()])</code> 不利于 cache 复用（合并的 cache key 是 ['ab']，A 和 B 不能单独 invalidate）。分开多个 useQuery 更好</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/guides/dependent-queries" target="_blank" rel="noopener">TanStack Query · Dependent Queries</a></li>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/guides/parallel-queries" target="_blank" rel="noopener">TanStack Query · Parallel Queries</a></li>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/guides/paginated-queries" target="_blank" rel="noopener">TanStack Query · Paginated Queries</a></li>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/guides/infinite-queries" target="_blank" rel="noopener">TanStack Query · Infinite Queries</a></li>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/reference/useQueries" target="_blank" rel="noopener">useQueries API（v5 含 combine）</a></li>
+          <li><a href="https://tkdodo.eu/blog/react-query-and-react-context" target="_blank" rel="noopener">TkDodo · React Query and React Context</a> · 跨组件共享数据的几种姿势</li>
+          <li><a href="https://github.com/thebuilder/react-intersection-observer" target="_blank" rel="noopener">react-intersection-observer</a> · 滚到底加载常用库</li>
+          <li><a href="02-suspense-prefetch-streaming.html">本主题 P4.2 · Suspense + prefetch + streaming</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../03-lifecycle/02-usemutation-optimistic.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P3.2 · useMutation + 乐观更新</span>
+          </a>
+          <a class="next" href="02-suspense-prefetch-streaming.html">
+            <span class="label">下一章 →</span>
+            <span class="title">P4.2 · Suspense + prefetch + streaming</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

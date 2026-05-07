@@ -1,0 +1,780 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SWR 设计 + Apollo / Relay / RTK Query / Jotai-Query 横评 · P6.1 · TanStack Query / SWR 深度学习</title>
+    <meta name="description" content="一章把 TanStack Query 之外的客户端 fetch 库讲完。SWR 极简哲学（Vercel + Shu Ding 视角）、Apollo Client 现状（GraphQL 阵营）、Relay（Meta 内部生态）、RTK Query 定位（Redux 全家桶）、Jotai-Query 等小众路线。最后给 2026 客户端 fetch 库市场份额和决策表。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23ff4154'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EQ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>TanStack Query / SWR 深度学习</span><span class="site-title-badge" style="background: #ff4154; color: #fff">Q</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · SWR + 同代人</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-swr-and-peers.html" class="active">01 · SWR + Apollo / Relay / RTK Query 横评</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TanStack Query</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · SWR + 同代人</a><span class="breadcrumb-sep">/</span>
+          <span>01 · SWR + Apollo / Relay / RTK Query 横评</span>
+        </nav>
+        <h1>SWR 设计 + Apollo / Relay / RTK Query / Jotai-Query 横评</h1>
+        <p class="lead">
+          一章把 TanStack Query 之外的客户端 fetch 库讲完。SWR 极简哲学（Vercel 视角）、Apollo / Relay 在 GraphQL 阵营的现状、RTK Query 是不是 Redux 项目的"自然延续"、Jotai-Query 等小众路线。最后给 2026 客户端 fetch 库市场份额和决策表。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P1 设计哲学 + 至少了解 SWR / Apollo / RTK Query 中的一个</span>
+          <span><strong>主要来源</strong> swr.vercel.app + apollographql.com/docs/react + relay.dev + redux-toolkit.js.org/rtk-query + 各项目 GitHub 维护节奏</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><b>SWR 极简哲学</b>：只有 <code>useSWR</code> + <code>mutate</code> 两个核心 API；没有 queryClient；默认 refetch 更激进（每次 mount + focus + reconnect 都拉）；无 staleTime 概念。</li>
+          <li><b>SWR 适合</b>：极简偏好 / Pages Router 历史项目 / Vercel 部署生态。<b>不适合</b>：复杂 mutation 体系 / DevTools 需求 / 大型应用 cache invalidation 网络。</li>
+          <li><b>Apollo Client</b>：GraphQL only；normalized cache（用 __typename:id 索引）；适合 GraphQL 重度团队。运维负担重，2026 总体收缩。</li>
+          <li><b>Relay</b>：Meta 内部生态；强类型 + 编译时优化；学习曲线陡；非 Meta 系大公司很少用。</li>
+          <li><b>RTK Query</b>：Redux Toolkit 内置；endpoint-based + 自动生成 hooks；只在已经全家桶 Redux 项目里有优势；新项目不必引入 Redux 来用 RTK Query。</li>
+          <li><b>Jotai-Query / Zustand+自管 fetch</b>：状态库阵营对 server state 的回应。市场份额小（&lt;1%）；不推荐新项目用。</li>
+          <li><b>2026 市场份额</b>（粗略）：TanStack Query 70% / SWR 15% / RTK Query 10% / Apollo + Relay 5% / 其他 &lt;1%。</li>
+          <li><b>客户端 GraphQL 收缩</b>：5 年前 Apollo + Relay 共占 25%，现在 5%。原因：REST + tRPC + RSC fetch 抢回份额。</li>
+          <li><b>选型决策不是技术对决</b>：是项目复杂度 + 团队规模 + 现有技术栈。</li>
+          <li><b>"我推荐 TanStack Query 给大部分新项目"</b>是<strong>强观点</strong>。<b>"GraphQL 项目继续 Apollo / Relay"</b>是<strong>弱观点</strong>（看团队和规模）。<b>"全家桶 Redux 老项目用 RTK Query"</b>是<strong>不观点</strong>（替换不替换都行）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>SWR · 极简哲学</h3>
+
+        <p>SWR 由 Vercel 在 2019 年开源，作者 Shu Ding。设计原则（官方文档原话）：</p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 SWR 设计哲学</div>
+          <p><i>"Lightweight, focused on the right primitives. Provide the bare minimum that solves data fetching well, leave everything else to user."</i></p>
+        </div>
+
+        <p>典型用法：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import useSWR, { mutate, useSWRConfig } from 'swr';
+
+const fetcher = (url: string) =&gt; fetch(url).then(r =&gt; r.json());
+
+function User({ id }: { id: string }) {
+  const { data, error, isLoading, mutate: localMutate } = useSWR(
+    `/api/users/${id}`,
+    fetcher,
+    { revalidateOnFocus: false }
+  );
+
+  if (isLoading) return &lt;Loading /&gt;;
+  if (error) return &lt;Error /&gt;;
+  return &lt;div&gt;{data.name}&lt;/div&gt;;
+}
+
+// 全局 mutate（任意 key）
+function useUpdateUser() {
+  const { mutate: globalMutate } = useSWRConfig();
+  return (id: string, newName: string) =&gt; {
+    return fetch(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify({ name: newName }) })
+      .then(() =&gt; globalMutate(`/api/users/${id}`));  // 通过 key 触发 revalidate
+  };
+}</code></pre>
+        </div>
+
+        <p>SWR 的特点：</p>
+
+        <ul>
+          <li><b>API 极简</b>：useSWR + mutate。没有 queryClient / queryKey factory / mutation hook 体系</li>
+          <li><b>key 是字符串或数组</b>：默认字符串，复杂场景用数组（类似 TanStack Query）</li>
+          <li><b>没有 staleTime</b>：每次 mount + focus + reconnect 都 revalidate（除非显式关）。激进刷新哲学</li>
+          <li><b>mutator 局部</b>：useSWR 返回的 mutate 只对当前 key；全局 mutate 走 useSWRConfig</li>
+          <li><b>没有 mutation 体系</b>：v2 加了 useSWRMutation，但 vs useMutation 体系功能弱很多</li>
+          <li><b>没有 DevTools</b>：到 2026 仍然没有官方调试工具</li>
+        </ul>
+
+        <h3>SWR 默认行为更激进的原因</h3>
+
+        <p>SWR 名字直接来自 stale-while-revalidate（HTTP RFC 5861），但它的"激进"是指<strong>更频繁触发 revalidate</strong>：</p>
+
+        <ul>
+          <li>无 staleTime：默认 0（mount 就 stale）</li>
+          <li>focus 重新激活：默认开（切回 tab 就 revalidate）</li>
+          <li>无静默期（dedupingInterval 默认 2 秒）</li>
+        </ul>
+
+        <p>结果：用户感觉 SWR "总是最新"。代价：网络请求更多。</p>
+
+        <p>对比 TanStack Query 的"保守 + 可调"：</p>
+        <ul>
+          <li>默认 staleTime 0（保守）</li>
+          <li>但鼓励调到 60 秒（实战首选）</li>
+          <li>每个 query 可以 override</li>
+        </ul>
+
+        <h3>SWR vs TanStack Query 全维度对比</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>SWR</th>
+              <th>TanStack Query</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>API 复杂度</td>
+              <td>极简（2 个核心）</td>
+              <td>中（多 hook 体系）</td>
+            </tr>
+            <tr>
+              <td>key 形态</td>
+              <td>字符串 / 数组</td>
+              <td>必须数组</td>
+            </tr>
+            <tr>
+              <td>命名空间 + 模糊匹配</td>
+              <td>有限（手动管理）</td>
+              <td>原生支持（前缀匹配）</td>
+            </tr>
+            <tr>
+              <td>queryClient</td>
+              <td>无（隐式全局）</td>
+              <td>一等公民（imperative API）</td>
+            </tr>
+            <tr>
+              <td>Mutation</td>
+              <td>useSWRMutation（弱）</td>
+              <td>useMutation 完整（4 步乐观）</td>
+            </tr>
+            <tr>
+              <td>Infinite query</td>
+              <td>useSWRInfinite</td>
+              <td>useInfiniteQuery（更结构化）</td>
+            </tr>
+            <tr>
+              <td>Suspense</td>
+              <td>suspense option（实验）</td>
+              <td>useSuspenseQuery 三件套（v5 一等）</td>
+            </tr>
+            <tr>
+              <td>staleTime</td>
+              <td>无（dedupingInterval 替代）</td>
+              <td>有（细粒度控制）</td>
+            </tr>
+            <tr>
+              <td>多框架</td>
+              <td>React only</td>
+              <td>React / Vue / Solid / Svelte / Angular</td>
+            </tr>
+            <tr>
+              <td>DevTools</td>
+              <td>无</td>
+              <td>官方一等公民</td>
+            </tr>
+            <tr>
+              <td>Bundle size (gzip)</td>
+              <td>~4KB</td>
+              <td>~13KB</td>
+            </tr>
+            <tr>
+              <td>SSR / RSC</td>
+              <td>支持但弱（fallback prop）</td>
+              <td>dehydrate + HydrationBoundary 完整</td>
+            </tr>
+            <tr>
+              <td>维护节奏</td>
+              <td>放缓（Vercel 重心转移）</td>
+              <td>非常活跃</td>
+            </tr>
+            <tr>
+              <td>2026 市场份额</td>
+              <td>~15%</td>
+              <td>~70%</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>选择：</p>
+        <ul>
+          <li>项目小 + 极简偏好 + Vercel 部署 → SWR</li>
+          <li>大型应用 / 复杂 mutation / 多组件订阅 / 需要 DevTools → TanStack Query</li>
+          <li>跨框架团队 / 重 RSC 集成 → TanStack Query</li>
+        </ul>
+
+        <h3>SWR 在 App Router 时代的位置变化</h3>
+
+        <p>SWR 起家于 Next.js Pages Router 时代（2019-2022）：</p>
+        <ul>
+          <li>Pages Router 没有 server-side fetch 默认能力</li>
+          <li>SWR 的 fallback prop（getStaticProps + 客户端 hydrate）是当时主流模式</li>
+          <li>Vercel 强力推广 → 大量 Next.js Pages Router 项目装了 SWR</li>
+        </ul>
+
+        <p>App Router 时代（2024+）：</p>
+        <ul>
+          <li>RSC 接管首屏 fetch → SWR 的 fallback prop 不再必要</li>
+          <li>Server Actions 接管简单 mutation → useSWRMutation 用得少</li>
+          <li>SWR 的"中间地带"被两头蚕食</li>
+          <li>Vercel 自己工程重心明显转 RSC + AI SDK</li>
+          <li>SWR 维护节奏 2025+ 放缓（基本只 bug fix）</li>
+        </ul>
+
+        <p>对比 TanStack Query：官方文档完整支持 RSC 集成（dehydrate + HydrationBoundary），社区方案成熟，吃了 SWR 让出的份额。</p>
+
+        <h3>Apollo Client · GraphQL 阵营老大哥</h3>
+
+        <p>Apollo Client 由 Apollo（公司）2016 年发布，是 GraphQL 客户端的事实标准之一。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { useQuery, useMutation, gql } from '@apollo/client';
+
+const GET_USER = gql`
+  query GetUser($id: ID!) {
+    user(id: $id) {
+      id name email
+      posts { id title }
+    }
+  }
+`;
+
+const UPDATE_NAME = gql`
+  mutation UpdateName($id: ID!, $name: String!) {
+    updateUser(id: $id, name: $name) {
+      id name
+    }
+  }
+`;
+
+function User({ id }) {
+  const { data, loading, error } = useQuery(GET_USER, { variables: { id } });
+  const [updateName] = useMutation(UPDATE_NAME);
+
+  // ...
+}</code></pre>
+        </div>
+
+        <p>Apollo 的核心特性：</p>
+        <ul>
+          <li><b>normalized cache</b>：每个 entity 用 <code>__typename:id</code> 索引；改一个 user 所有引用它的组件自动更新</li>
+          <li><b>schema-first 工作流</b>：GraphQL schema + codegen 生成类型</li>
+          <li><b>fragment colocation</b>：组件声明自己需要的字段</li>
+          <li><b>InMemoryCache 强大配置</b>：typePolicies / fieldPolicies / cache.modify</li>
+          <li><b>Apollo Studio</b>（付费）：调试 + monitoring + schema 管理</li>
+        </ul>
+
+        <p>Apollo 的代价：</p>
+        <ul>
+          <li><b>必须用 GraphQL</b>：REST / tRPC 项目不能用</li>
+          <li><b>schema 维护负担</b>：schema 长期演化、向后兼容是工程问题</li>
+          <li><b>cache 调试复杂</b>：normalized cache 有时不直观（"为什么这个 mutation 没让那个 query 失效"）</li>
+          <li><b>包体积大</b>：Apollo Client 30+KB gzip</li>
+        </ul>
+
+        <p>2026 现状：</p>
+        <ul>
+          <li>大型 B2B SaaS / 重 GraphQL 项目仍用</li>
+          <li>新项目极少选 GraphQL（REST + tRPC 抢回份额）</li>
+          <li>市场份额从 5 年前的 ~15% 跌到 ~3%</li>
+        </ul>
+
+        <h3>Relay · Meta 内部生态外溢</h3>
+
+        <p>Relay 由 Meta 2015 年开源，是 Facebook / Instagram 内部使用的 GraphQL 客户端。</p>
+
+        <p>核心特点：</p>
+        <ul>
+          <li><b>编译时优化</b>：Relay Compiler 解析 GraphQL → 生成类型 + 优化 query</li>
+          <li><b>fragment colocation 极致</b>：组件声明 fragment + 数据形状强类型</li>
+          <li><b>data-driven dependencies</b>：组件按需 fetch fragment 字段</li>
+          <li><b>store + cache 自动管理</b>：normalized + reactive</li>
+        </ul>
+
+        <p>Relay 的代价：</p>
+        <ul>
+          <li><strong>学习曲线陡</strong>：fragment / connection / refetch container 等概念多</li>
+          <li><strong>编译步骤</strong>：Relay Compiler 必须配置；增加 build 复杂度</li>
+          <li><strong>Meta 生态</strong>：很多设计决定优化 Meta 内部场景，外部不一定合适</li>
+        </ul>
+
+        <p>2026 现状：</p>
+        <ul>
+          <li>Meta 系（Facebook / Instagram / Threads）内部主力</li>
+          <li>外部少数大型 GraphQL 团队（Shopify 部分项目）</li>
+          <li>市场份额 &lt;2%</li>
+        </ul>
+
+        <h3>RTK Query · Redux 阵营内置</h3>
+
+        <p>RTK Query 在 2021 年加入 Redux Toolkit，是 Redux 阵营对 React Query 的回应。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// store/userApi.ts
+import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+
+export const userApi = createApi({
+  reducerPath: 'userApi',
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  tagTypes: ['User'],
+  endpoints: (builder) =&gt; ({
+    getUser: builder.query&lt;User, string&gt;({
+      query: (id) =&gt; `users/${id}`,
+      providesTags: (_, __, id) =&gt; [{ type: 'User', id }],
+    }),
+    updateUser: builder.mutation&lt;User, { id: string; name: string }&gt;({
+      query: ({ id, ...patch }) =&gt; ({ url: `users/${id}`, method: 'PATCH', body: patch }),
+      invalidatesTags: (_, __, { id }) =&gt; [{ type: 'User', id }],
+    }),
+  }),
+});
+
+export const { useGetUserQuery, useUpdateUserMutation } = userApi;
+
+// 组件
+function User({ id }: { id: string }) {
+  const { data, isLoading } = useGetUserQuery(id);
+  const [updateUser] = useUpdateUserMutation();
+  // ...
+}</code></pre>
+        </div>
+
+        <p>RTK Query 的特点：</p>
+        <ul>
+          <li><b>endpoint-based</b>：API 集中定义在 createApi；自动生成 hooks</li>
+          <li><b>tag-based 失效</b>：providesTags + invalidatesTags 类似 TanStack Query 的 queryKey 模糊匹配</li>
+          <li><b>与 Redux store 共存</b>：cache 进 Redux store 的 reducer</li>
+          <li><b>codegen 支持</b>：从 OpenAPI / GraphQL schema 生成 endpoints</li>
+        </ul>
+
+        <p>RTK Query 的定位：</p>
+        <ul>
+          <li>已经全家桶 Redux 的项目（client state 走 Redux）→ 新加 server state 时直接 RTK Query</li>
+          <li>新项目想"一栈到底" → RTK Query 也行（但通常 TanStack Query 更轻）</li>
+          <li>不要为了 RTK Query 引入 Redux（仅为 server state 不划算）</li>
+        </ul>
+
+        <h3>RTK Query vs TanStack Query 对比</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>RTK Query</th>
+              <th>TanStack Query</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>API 心智</td>
+              <td>endpoint-based（集中定义）</td>
+              <td>hook-based（分散定义）</td>
+            </tr>
+            <tr>
+              <td>失效机制</td>
+              <td>tag-based</td>
+              <td>queryKey prefix-based</td>
+            </tr>
+            <tr>
+              <td>Cache 存储</td>
+              <td>Redux store</td>
+              <td>独立 queryClient</td>
+            </tr>
+            <tr>
+              <td>客户端 state</td>
+              <td>已经在 Redux</td>
+              <td>分开管（useState / Zustand）</td>
+            </tr>
+            <tr>
+              <td>codegen</td>
+              <td>有（OpenAPI / GraphQL）</td>
+              <td>需要第三方</td>
+            </tr>
+            <tr>
+              <td>学习曲线</td>
+              <td>需要 Redux 心智</td>
+              <td>独立学习</td>
+            </tr>
+            <tr>
+              <td>Bundle size</td>
+              <td>需要 RTK 全套</td>
+              <td>单独 ~13KB</td>
+            </tr>
+            <tr>
+              <td>多框架</td>
+              <td>React only</td>
+              <td>React / Vue / Solid / Svelte / Angular</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Jotai-Query / Zustand + 自管 fetch</h3>
+
+        <p>状态库阵营对 server state 的回应：</p>
+
+        <p><b>Jotai-Query</b>（jotai-tanstack-query）：把 Jotai atom 系统延伸到 server state。优势：与 Jotai atomic state 心智一致。劣势：学习成本高 + 不如直接 TanStack Query 简洁。</p>
+
+        <p><b>Zustand + 自管 fetch</b>：Zustand 是 client state 库，本身不管 server state。一些团队用 Zustand store 写 fetch 逻辑（实质上是手动复刻 TanStack Query），不推荐 —— 重复造轮子且功能弱。</p>
+
+        <p>市场份额：合计 &lt;1%。新项目不推荐用，除非已经 Jotai 重度依赖。</p>
+
+        <h3>2026 客户端 fetch 库市场份额</h3>
+
+        <p>根据 npm trends + State of JS 2025 + 各项目 GitHub stars 估算：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>库</th>
+              <th>2026 占比</th>
+              <th>5 年前占比</th>
+              <th>趋势</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>TanStack Query</td>
+              <td>~70%</td>
+              <td>~15%</td>
+              <td>↗ 持续上升</td>
+            </tr>
+            <tr>
+              <td>SWR</td>
+              <td>~15%</td>
+              <td>~30%</td>
+              <td>↘ 下降</td>
+            </tr>
+            <tr>
+              <td>RTK Query</td>
+              <td>~10%</td>
+              <td>~10%</td>
+              <td>→ 稳定（与 Redux 总占比联动）</td>
+            </tr>
+            <tr>
+              <td>Apollo Client</td>
+              <td>~3%</td>
+              <td>~15%</td>
+              <td>↘ 严重下降（与 GraphQL 整体收缩同步）</td>
+            </tr>
+            <tr>
+              <td>Relay</td>
+              <td>~2%</td>
+              <td>~5%</td>
+              <td>↘ 下降（基本是 Meta 生态）</td>
+            </tr>
+            <tr>
+              <td>useEffect+fetch（仍在用）</td>
+              <td>~未统计</td>
+              <td>—</td>
+              <td>残留但下降</td>
+            </tr>
+            <tr>
+              <td>其他</td>
+              <td>&lt;1%</td>
+              <td>—</td>
+              <td>—</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>关键趋势：</p>
+        <ul>
+          <li>RSC 让客户端 fetch 库总需求量下降</li>
+          <li>但 TanStack Query 在剩余客户端场景份额仍在提升（吃 SWR 留下的份额）</li>
+          <li>GraphQL 客户端收缩（Apollo + Relay 5%，5 年前是 25%）</li>
+          <li>RTK Query 与 Redux 整体绑定，没有独立增长动力</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 新项目客户端 fetch 库决策</h3>
+
+        <p>"我新起一个 React 项目，选什么客户端 fetch 库？"</p>
+
+        <ol>
+          <li>项目用 GraphQL？
+            <ul>
+              <li>是 + 重度（schema 主导工程）→ Apollo / Relay</li>
+              <li>是 + 浅尝（少数 query）→ TanStack Query 也行（自己写 GraphQL queryFn）</li>
+              <li>否 → 进下一问</li>
+            </ul>
+          </li>
+          <li>项目已经全家桶 Redux？
+            <ul>
+              <li>是 → RTK Query 自然延续</li>
+              <li>否 → 进下一问</li>
+            </ul>
+          </li>
+          <li>项目偏好极简 + Vercel 部署 + 简单 fetch 多？
+            <ul>
+              <li>是 → SWR</li>
+              <li>否 → TanStack Query（默认）</li>
+            </ul>
+          </li>
+        </ol>
+
+        <p>大部分新项目走到第 3 问选 TanStack Query。</p>
+
+        <h3>场景 2 · SWR 老项目要不要切 TanStack Query</h3>
+
+        <p>典型场景：Pages Router 项目用 SWR 5+ 年，最近迁 App Router。</p>
+
+        <p>判断：</p>
+        <ul>
+          <li>RSC 接管了 80%+ 数据 fetch → 留 SWR 也行（剩余客户端 query 简单）</li>
+          <li>剩余客户端 query 复杂（infinite / 多组件订阅 / 乐观更新）→ 切 TanStack Query 体验明显更好</li>
+          <li>团队对 SWR 熟悉 + 没具体痛点 → 不必切</li>
+        </ul>
+
+        <p>切的话：渐进迁移。新代码用 TanStack Query，旧代码留 SWR；半年到一年自然替换大部分。</p>
+
+        <h3>场景 3 · GraphQL 项目 Apollo vs TanStack Query</h3>
+
+        <p>"我们是 GraphQL 项目，必须用 Apollo / Relay 吗？"</p>
+
+        <p>不一定。判断：</p>
+        <ul>
+          <li>需要 normalized cache（一个 entity 改了所有引用自动更新）→ Apollo / Relay</li>
+          <li>不需要 normalized cache（mutation 后手动 invalidate）→ TanStack Query 也行</li>
+          <li>团队已经用 Apollo + 没具体痛点 → 留</li>
+          <li>Apollo 用得很重但项目里 GraphQL 比例下降（部分迁 REST）→ 考虑切 TanStack Query 统一</li>
+        </ul>
+
+        <p>用 TanStack Query 调 GraphQL：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import request, { gql } from 'graphql-request';
+
+const getUserDocument = gql`query GetUser($id: ID!) { user(id: $id) { id name } }`;
+
+useQuery({
+  queryKey: ['user', id],
+  queryFn: () =&gt; request('/graphql', getUserDocument, { id }),
+});</code></pre>
+        </div>
+
+        <p>能用，缺 normalized cache（手动 setQueryData / invalidate）。</p>
+
+        <h3>场景 4 · Redux 老项目演化路径</h3>
+
+        <p>Redux + thunk 老项目（2017-2020 左右），现在想现代化：</p>
+
+        <ol>
+          <li>识别 store 里的 server state（70% 是）</li>
+          <li>方案 A：迁 RTK Query（仍在 Redux 里）—— 渐进、心智一致</li>
+          <li>方案 B：迁 TanStack Query（Redux 收窄到只剩 client state）—— 长期更现代但迁移工作量大</li>
+          <li>方案 C：保留现状（如果痛点不大）</li>
+        </ol>
+
+        <p>选 A 还是 B 看团队规模 + 现代化预算。小团队选 A 更稳；大团队 + 长期投入选 B 更彻底。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · SWR 完整 setup</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// _app.tsx 或 layout.tsx
+import { SWRConfig } from 'swr';
+
+function App({ children }) {
+  return (
+    &lt;SWRConfig
+      value={{
+        fetcher: (url: string) =&gt; fetch(url).then(r =&gt; r.json()),
+        revalidateOnFocus: false,
+        dedupingInterval: 5000,
+        errorRetryCount: 3,
+        onError: (err) =&gt; toast.error(err.message),
+      }}
+    &gt;
+      {children}
+    &lt;/SWRConfig&gt;
+  );
+}
+
+// 组件
+import useSWR from 'swr';
+function User({ id }: { id: string }) {
+  const { data, error, isLoading } = useSWR(`/api/users/${id}`);
+  // ...
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · Apollo Client 完整 setup</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// apollo.ts
+import { ApolloClient, InMemoryCache, ApolloProvider, gql, useQuery, useMutation } from '@apollo/client';
+
+const client = new ApolloClient({
+  uri: '/graphql',
+  cache: new InMemoryCache({
+    typePolicies: {
+      User: {
+        fields: {
+          posts: { merge: false },  // 替换不合并
+        },
+      },
+    },
+  }),
+});
+
+// _app.tsx
+function App({ children }) {
+  return &lt;ApolloProvider client={client}&gt;{children}&lt;/ApolloProvider&gt;;
+}
+
+// 组件
+const GET_USER = gql`query Get($id: ID!) { user(id: $id) { id name posts { id title } } }`;
+const UPDATE_USER = gql`mutation Upd($id: ID!, $name: String!) { updateUser(id: $id, name: $name) { id name } }`;
+
+function User({ id }) {
+  const { data, loading, error } = useQuery(GET_USER, { variables: { id } });
+  const [update] = useMutation(UPDATE_USER, {
+    optimisticResponse: ({ id, name }) =&gt; ({
+      __typename: 'Mutation',
+      updateUser: { __typename: 'User', id, name },
+    }),
+  });
+  // ...
+}</code></pre>
+        </div>
+
+        <h3>代码 3 · RTK Query 完整 setup</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// store/userApi.ts
+import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+
+export const userApi = createApi({
+  reducerPath: 'userApi',
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  tagTypes: ['User'],
+  endpoints: (builder) =&gt; ({
+    getUser: builder.query&lt;User, string&gt;({
+      query: (id) =&gt; `users/${id}`,
+      providesTags: (_, __, id) =&gt; [{ type: 'User', id }],
+    }),
+    listUsers: builder.query&lt;User[], void&gt;({
+      query: () =&gt; 'users',
+      providesTags: (result) =&gt; result
+        ? [...result.map(u =&gt; ({ type: 'User' as const, id: u.id })), { type: 'User', id: 'LIST' }]
+        : [{ type: 'User', id: 'LIST' }],
+    }),
+    updateUser: builder.mutation&lt;User, Partial&lt;User&gt; &amp; { id: string }&gt;({
+      query: ({ id, ...patch }) =&gt; ({ url: `users/${id}`, method: 'PATCH', body: patch }),
+      invalidatesTags: (_, __, { id }) =&gt; [{ type: 'User', id }],
+    }),
+  }),
+});
+
+export const { useGetUserQuery, useListUsersQuery, useUpdateUserMutation } = userApi;
+
+// store/index.ts
+import { configureStore } from '@reduxjs/toolkit';
+export const store = configureStore({
+  reducer: { [userApi.reducerPath]: userApi.reducer },
+  middleware: (getDefault) =&gt; getDefault().concat(userApi.middleware),
+});</code></pre>
+        </div>
+
+        <h3>代码 4 · TanStack Query 调 GraphQL</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { GraphQLClient, gql } from 'graphql-request';
+import { useQuery } from '@tanstack/react-query';
+
+const client = new GraphQLClient('/graphql');
+
+const GET_USER = gql`query Get($id: ID!) { user(id: $id) { id name } }`;
+
+function User({ id }: { id: string }) {
+  const { data } = useQuery({
+    queryKey: ['user', id],
+    queryFn: () =&gt; client.request(GET_USER, { id }),
+  });
+  // 没有 normalized cache，但 TanStack Query 的其他能力都在
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>SWR 老项目盲目切 TanStack Query</b> —— 代价不一定值得。先评估剩余客户端 query 复杂度</li>
+          <li><b>新项目装 SWR + 后悔切 TanStack Query</b> —— 2026 起 App Router 项目首选 TanStack Query。除非你确认极简偏好 + 不会复杂化</li>
+          <li><b>"用 GraphQL 必须 Apollo"</b> —— 不一定。浅尝 GraphQL 项目 TanStack Query + graphql-request 也行</li>
+          <li><b>"用 TanStack Query 必须放弃 GraphQL"</b> —— 反方向错。TanStack Query 不在乎 queryFn 内部用什么协议</li>
+          <li><b>"为了 RTK Query 引入 Redux"</b> —— 单纯为 server state 不划算。新项目不需要 Redux 的话直接 TanStack Query</li>
+          <li><b>Apollo 项目里也装 TanStack Query</b> —— 通常没必要。Apollo 一个就够。除非 GraphQL 比例下降想渐进迁出</li>
+          <li><b>Apollo cache 调试问题以为是 bug</b> —— 多半是 typePolicies 配错或 cache.modify 没写对。Apollo cache 调试是经验问题</li>
+          <li><b>Relay 在小团队用</b> —— 学习曲线陡，团队规模 + 长期投入不够时不要选</li>
+          <li><b>多个客户端 fetch 库共存</b> —— Apollo + TanStack Query + SWR 同时装在一个项目，cache 各自独立 → 同一份数据三套 cache 互相不知道。<strong>统一选一个</strong></li>
+          <li><b>"SWR 简单所以一定好"</b> —— SWR 简单是优势，但功能少也是事实。看项目复杂度</li>
+          <li><b>"TanStack Query 复杂所以不学"</b> —— 学习曲线投资 1-2 周，受益 5+ 年。是最值得学的客户端库之一</li>
+          <li><b>市场份额数字当成"必须选 70% 那个"</b> —— 选型看场景不是看市场份额。70% 是参考，不是命令</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://swr.vercel.app/" target="_blank" rel="noopener">SWR 官方文档</a></li>
+          <li><a href="https://github.com/vercel/swr" target="_blank" rel="noopener">SWR GitHub</a> · 维护节奏可观察</li>
+          <li><a href="https://www.apollographql.com/docs/react" target="_blank" rel="noopener">Apollo Client 官方文档</a></li>
+          <li><a href="https://relay.dev/docs/" target="_blank" rel="noopener">Relay 官方文档</a></li>
+          <li><a href="https://redux-toolkit.js.org/rtk-query/overview" target="_blank" rel="noopener">RTK Query 官方文档</a></li>
+          <li><a href="https://github.com/jotai-labs/jotai-tanstack-query" target="_blank" rel="noopener">Jotai-Tanstack-Query</a></li>
+          <li><a href="https://2024.stateofjs.com/en-US/libraries/data-fetching/" target="_blank" rel="noopener">State of JS 2024 · Data Fetching</a></li>
+          <li><a href="../01-overview/02-philosophy.html">本主题 P1.2 · server state 设计哲学</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../05-rsc-bridge/02-hydration-bridge.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P5.2 · hydration 桥</span>
+          </a>
+          <a class="next" href="../07-decision/01-decision-tree-pitfalls.html">
+            <span class="label">下一章 →</span>
+            <span class="title">P7.1 · 决策树 + 陷阱清单</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

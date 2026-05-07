@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>queryKey + queryFn + queryClient 三件套 · P2.1 · TanStack Query / SWR 深度学习</title>
+    <meta name="description" content="TanStack Query 的核心是 queryKey + queryFn + queryClient。这一章讲为什么 queryKey 是数组而不是字符串、模糊匹配 invalidate 是怎么工作的、queryFn 的 signal 如何实现自动 cancel、queryClient 跨组件共享 cache 的机制、queryKey factory 模式怎么避免散落引用陷阱。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23ff4154'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EQ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>TanStack Query / SWR 深度学习</span><span class="site-title-badge" style="background: #ff4154; color: #fff">Q</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · TanStack Query 心智</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-querykey-queryfn.html" class="active">01 · queryKey + queryFn + queryClient</a></li>
+          <li><a href="02-stale-while-revalidate.html">02 · stale-while-revalidate + staleTime</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TanStack Query</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · 心智</a><span class="breadcrumb-sep">/</span>
+          <span>01 · queryKey + queryFn + queryClient</span>
+        </nav>
+        <h1>queryKey + queryFn + queryClient 三件套</h1>
+        <p class="lead">
+          TanStack Query 的 API 表面看就是 <code>useQuery({ queryKey, queryFn })</code> 两个参数，但<strong>每个参数都有反直觉的设计决定</strong> —— queryKey 为什么是数组、queryFn 的 signal 怎么用、queryClient 谁在管。这一章把三件套讲透，让"突然请求多发一次"或"invalidate 没生效"的问题不再黑魔法。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P1 历史与哲学 + 写过任意 fetch 库</span>
+          <span><strong>主要来源</strong> tanstack.com/query/latest/docs/framework/react/guides/query-keys + query-functions + tkdodo.eu/blog</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><b>queryKey 是数组</b>：第一段命名空间，后面是依赖 —— <code>['users']</code> / <code>['users', userId]</code> / <code>['users', { filter, page }]</code>。模糊匹配是数组的核心能力。</li>
+          <li><b>queryKey 必须可序列化</b>：TanStack Query 内部用稳定 hash（自动按 key 排序 object）当 cache map 索引；不可序列化的引用（class instance / 函数 / Symbol）不能放进 queryKey。</li>
+          <li><b>queryFn 接受 context</b>：<code>(context: QueryFunctionContext) =&gt; Promise&lt;TData&gt;</code>，context 含 <code>{ queryKey, signal, meta, pageParam }</code>。<code>signal</code> 是 v5 自带的 AbortSignal。</li>
+          <li><b>signal 自动 cancel</b>：把 signal 透传给 fetch，组件卸载 / 切换 query / window blur 都会自动 abort 老请求。无需手写 AbortController。</li>
+          <li><b>queryFn 必须返回 Promise</b>：v5 严格了；返回 <code>undefined</code> 会报错。如果数据可能为空，返回 <code>null</code>。</li>
+          <li><b>queryClient 整个 app 一个</b>：通过 <code>&lt;QueryClientProvider client={queryClient}&gt;</code> 注入；每个请求 / Server Component 应该独立 new（详见 <a href="../05-rsc-bridge/02-hydration-bridge.html">P5.2</a>）。</li>
+          <li><b>queryClient 提供 imperative API</b>：<code>invalidateQueries</code> / <code>setQueryData</code> / <code>getQueryData</code> / <code>prefetchQuery</code> / <code>fetchQuery</code> / <code>ensureQueryData</code>。这些不依赖 React 渲染，可以从 event handler / WebSocket callback / Service Worker 调。</li>
+          <li><b>跨组件共享 cache</b>：同一个 queryKey 的 query，N 个组件订阅时共享一份 cache + 一次请求。这是 server state 库的标志性能力。</li>
+          <li><b>queryKey factory 模式</b>：把 queryKey 集中管理（<code>userKeys.detail(id)</code>），避免散落引用陷阱。是大型项目必备实践。</li>
+          <li><b>DevTools 必装</b>：<code>&lt;ReactQueryDevtools /&gt;</code> 显示所有 query / cache 状态 / 发出请求 / refetch 触发。本地开发必开。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>queryKey · 为什么是数组</h3>
+
+        <p>SWR 用字符串 key（<code>useSWR('/api/users/1')</code>），TanStack Query 用数组（<code>useQuery({ queryKey: ['users', 1] })</code>）。这个差异不是风格之争，是<strong>能力不同</strong>。</p>
+
+        <p>看一段典型场景。Page A 显示 user list，Page B 显示 user 1 detail，Page C 显示 user 1 的 posts。用户在 Page C 修改了 user 1 的 name，期望：</p>
+        <ul>
+          <li>Page B（user 1 detail）刷新</li>
+          <li>Page A（user list）刷新</li>
+          <li>Page C（user 1 posts）不需要刷新（不依赖 name）</li>
+        </ul>
+
+        <p>用 SWR 字符串 key：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 必须分别 mutate 每个相关 URL
+mutate('/api/users');
+mutate('/api/users/1');
+// 加 filter / pagination 时变得 fragile</code></pre>
+        </div>
+
+        <p>用 TanStack Query 数组 key：</p>
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 模糊匹配 ['users'] 命中所有 ['users', ...]
+queryClient.invalidateQueries({ queryKey: ['users'] });
+// 自动失效：
+//   ['users']
+//   ['users', 'list', { filter: 'active' }]
+//   ['users', 'detail', 1]
+//   ['users', 'detail', 2]
+// 不失效：
+//   ['posts', 'by-user', 1]  ← Page C 的 posts 不受影响</code></pre>
+        </div>
+
+        <p>核心机制：TanStack Query 的 invalidate 是<strong>前缀匹配</strong>。<code>['users']</code> 是任何 <code>['users', ...]</code> 的前缀。这是 server state 实战中最常用的 cache 操作 —— "我改了 user，所有跟 user 有关的 cache 都该刷"。</p>
+
+        <h3>queryKey 内部是怎么变成 cache 索引的</h3>
+
+        <p>TanStack Query 内部用一个 <strong>queryKeyHashFn</strong>（默认实现：稳定排序 + JSON.stringify），把 queryKey 转成字符串当 map 索引：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 默认 hash 函数（简化版）
+function hashKey(queryKey) {
+  return JSON.stringify(queryKey, (_, val) =&gt; {
+    if (val &amp;&amp; typeof val === 'object' &amp;&amp; !Array.isArray(val)) {
+      // 关键：object 的 key 自动按字典序排序
+      return Object.keys(val).sort().reduce((acc, k) =&gt; ({ ...acc, [k]: val[k] }), {});
+    }
+    return val;
+  });
+}
+
+// 这两个 queryKey 内部 hash 相同：
+['users', { page: 1, filter: 'active' }]
+['users', { filter: 'active', page: 1 }]
+// → 都映射到同一 cache entry</code></pre>
+        </div>
+
+        <p>这个细节解决了一个常见坑：<strong>用户传 object 时 key 顺序不一样不会被当成不同 query</strong>。但反过来，object 引用稳定性仍然重要（详见陷阱章）。</p>
+
+        <h3>queryKey 必须可序列化</h3>
+
+        <p>JSON.stringify 能处理的：string / number / boolean / null / array / plain object（含嵌套）。不能处理的：</p>
+
+        <ul>
+          <li><code>undefined</code> 在数组里会变 <code>null</code>，在 object 里直接消失 → 推荐避免</li>
+          <li><code>Date</code> 会被 toISOString → 通常 OK 但要意识到</li>
+          <li>函数 / Symbol → 直接消失 → 不要放</li>
+          <li>class instance（<code>new Date()</code> 之外的）→ 只 stringify 自身可枚举属性，prototype 链丢失</li>
+          <li>循环引用 → 直接报错</li>
+        </ul>
+
+        <p>实战经验：<strong>queryKey 里只放原始值 + plain object + array</strong>。复杂对象先序列化成 ID。</p>
+
+        <h3>queryFn · signal 自动 cancel</h3>
+
+        <p>TanStack Query v5 默认给 queryFn 注入 AbortSignal。把它透传给 fetch，组件卸载 / 切换 query 自动 abort：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">useQuery({
+  queryKey: ['user', id],
+  queryFn: async ({ signal }) =&gt; {
+    const r = await fetch(`/api/users/${id}`, { signal });
+    if (!r.ok) throw new Error('Failed');
+    return r.json();
+  },
+});
+
+// 当下面任一发生时，signal.aborted 变 true：
+// - 组件卸载
+// - id 变化（旧 query 被 cancel，新 query 启动）
+// - 显式 queryClient.cancelQueries({ queryKey: ['user', id] })</code></pre>
+        </div>
+
+        <p>对比手写 useEffect+fetch 的繁琐：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// useEffect 版本
+useEffect(() =&gt; {
+  const ctrl = new AbortController();
+  fetch(`/api/users/${id}`, { signal: ctrl.signal })
+    .then(r =&gt; r.json())
+    .then(data =&gt; setData(data))
+    .catch(e =&gt; { if (e.name !== 'AbortError') setError(e); });
+  return () =&gt; ctrl.abort();
+}, [id]);
+
+// TanStack Query 版本（一行 signal 解决）
+queryFn: ({ signal }) =&gt; fetch(`/api/users/${id}`, { signal }).then(r =&gt; r.json())</code></pre>
+        </div>
+
+        <p>底层：TanStack Query 在每个 query lifecycle 创建 AbortController；query 离开 active 状态时调 <code>controller.abort()</code>，触发 fetch 内部的 reject + cleanup。</p>
+
+        <h3>queryFn · 错误必须 throw</h3>
+
+        <p>TanStack Query 区分 success / error 是通过 promise resolved / rejected。<strong>fetch 拿到 4xx / 5xx 不会自动 reject</strong>（这是 fetch API 的特性，HTTP 错误码仍然是 resolved promise）。所以必须手动 throw：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ 错：404 / 500 不会触发 useQuery 的 error 状态
+queryFn: () =&gt; fetch('/api/users').then(r =&gt; r.json())
+
+// ✅ 正：检查 r.ok 后 throw
+queryFn: async () =&gt; {
+  const r = await fetch('/api/users');
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+// ✅ 用 axios（自动 throw 4xx/5xx）
+queryFn: () =&gt; axios.get('/api/users').then(r =&gt; r.data)</code></pre>
+        </div>
+
+        <p>这个坑非常常见。如果 query 一直显示 success 但 data 是错误体，多半是 queryFn 没 throw。</p>
+
+        <h3>queryClient · 整个 app 一个 + provider 注入</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/Providers.tsx
+'use client';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
+import { useState } from 'react';
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  // ⚠️ useState 包装确保每次 render 不重新 new
+  const [queryClient] = useState(() =&gt; new QueryClient({
+    defaultOptions: {
+      queries: {
+        staleTime: 60 * 1000,           // 默认 1 分钟
+        retry: 1,                        // 失败重试 1 次
+        refetchOnWindowFocus: false,    // 关闭 focus 自动 refetch
+      },
+    },
+  }));
+  return (
+    &lt;QueryClientProvider client={queryClient}&gt;
+      {children}
+      &lt;ReactQueryDevtools initialIsOpen={false} /&gt;
+    &lt;/QueryClientProvider&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>关键点：</p>
+        <ul>
+          <li><strong>用 <code>useState(() =&gt; new QueryClient())</code></strong>，不要直接 <code>const client = new QueryClient()</code>。后者每次 render 都创建新 client，会丢 cache</li>
+          <li><strong>defaultOptions</strong> 在 client 层设全局默认；每个 query 可以 override</li>
+          <li>在 Next.js App Router 下需要标 <code>'use client'</code>；Server-side prefetch 用法见 <a href="../05-rsc-bridge/02-hydration-bridge.html">P5.2</a></li>
+        </ul>
+
+        <h3>queryClient · imperative API 全谱</h3>
+
+        <p>queryClient 不只是被 useQuery 隐式用。它本身是<strong>一等公民</strong>，提供 imperative API：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>API</th>
+              <th>用途</th>
+              <th>典型场景</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>invalidateQueries({ queryKey })</code></td>
+              <td>标记为 stale，订阅者激活时 refetch</td>
+              <td>mutation 成功后</td>
+            </tr>
+            <tr>
+              <td><code>refetchQueries({ queryKey })</code></td>
+              <td>立即 refetch（无视 stale 状态）</td>
+              <td>用户点 refresh 按钮</td>
+            </tr>
+            <tr>
+              <td><code>setQueryData(queryKey, updater)</code></td>
+              <td>直接改 cache（同步）</td>
+              <td>mutation 成功后乐观写入 / WebSocket 推送</td>
+            </tr>
+            <tr>
+              <td><code>getQueryData(queryKey)</code></td>
+              <td>读 cache（同步）</td>
+              <td>检查数据存在 / 派生计算</td>
+            </tr>
+            <tr>
+              <td><code>prefetchQuery({ queryKey, queryFn })</code></td>
+              <td>预热 cache，不订阅</td>
+              <td>路由 hover prefetch</td>
+            </tr>
+            <tr>
+              <td><code>fetchQuery({ queryKey, queryFn })</code></td>
+              <td>拿 promise（不进 cache 失败 throw）</td>
+              <td>router loader 集成</td>
+            </tr>
+            <tr>
+              <td><code>ensureQueryData({ queryKey, queryFn })</code></td>
+              <td>cache 有就返回，没有就 fetch + cache</td>
+              <td>组件 mount 前确保数据在</td>
+            </tr>
+            <tr>
+              <td><code>cancelQueries({ queryKey })</code></td>
+              <td>取消 in-flight 请求</td>
+              <td>乐观更新前避免 race</td>
+            </tr>
+            <tr>
+              <td><code>removeQueries({ queryKey })</code></td>
+              <td>从 cache 移除</td>
+              <td>logout 清空所有 user 数据</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>跨组件共享 cache · dedup 机制</h3>
+
+        <p>5 个组件同时挂载，全部用 <code>queryKey: ['user', 1]</code> —— 只发一次请求。原理：</p>
+
+        <ol>
+          <li>每个 useQuery 在 mount 时<strong>订阅</strong>对应 cache entry</li>
+          <li>第一个订阅者发现 cache 不存在或 stale → 触发 queryFn</li>
+          <li>queryFn 还在 in-flight 时第 2-5 个订阅者接入 → 看到 isPending=true，等待同一 promise</li>
+          <li>promise resolve → 5 个订阅者同时拿到 data</li>
+        </ol>
+
+        <p>这是 server state 库的标志性能力。useState + useEffect 写法做不到这点（除非把数据上提到 context，但又有新坑）。</p>
+
+        <h3>queryKey factory 模式</h3>
+
+        <p>大型项目里 queryKey 散落各处会出问题：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 反模式：queryKey 散落，typo 难找
+function UserList() {
+  useQuery({ queryKey: ['users'], queryFn: api.getUsers });
+}
+function UserDetail({ id }) {
+  useQuery({ queryKey: ['user', id], queryFn: () =&gt; api.getUser(id) });
+  // 注意：上面 'users' 复数，下面 'user' 单数 → invalidate ['users'] 不会失效 detail
+}
+
+// 用 factory 模式集中管理
+// queries/users.ts
+export const userKeys = {
+  all: ['users'] as const,
+  lists: () =&gt; [...userKeys.all, 'list'] as const,
+  list: (filters: UserFilters) =&gt; [...userKeys.lists(), filters] as const,
+  details: () =&gt; [...userKeys.all, 'detail'] as const,
+  detail: (id: string) =&gt; [...userKeys.details(), id] as const,
+};
+
+// 使用
+useQuery({ queryKey: userKeys.list({ active: true }), queryFn: ... });
+useQuery({ queryKey: userKeys.detail(id), queryFn: () =&gt; api.getUser(id) });
+
+// invalidate 全部 user 相关
+queryClient.invalidateQueries({ queryKey: userKeys.all });
+
+// 只 invalidate user list
+queryClient.invalidateQueries({ queryKey: userKeys.lists() });
+
+// 只 invalidate 某个 detail
+queryClient.invalidateQueries({ queryKey: userKeys.detail(id) });</code></pre>
+        </div>
+
+        <p>好处：</p>
+        <ul>
+          <li>queryKey 形状集中（命名空间一致）</li>
+          <li>TS 类型推导（<code>as const</code> 让 invalidate 时类型更精准）</li>
+          <li>分层 invalidate（all / lists / detail 三档）</li>
+          <li>refactor 改 key 形状只改 factory，调用方不动</li>
+        </ul>
+
+        <p>这个模式的最佳参考是 TkDodo 的 <a href="https://tkdodo.eu/blog/effective-react-query-keys" target="_blank" rel="noopener">"Effective React Query Keys"</a> 博客。社区有个开源库 <code>@lukemorales/query-key-factory</code> 包装了这个模式。</p>
+
+        <h3>DevTools · 必装</h3>
+
+        <p>TanStack Query DevTools 是<strong>调试 server state 的关键工具</strong>。本地必开：</p>
+
+        <ul>
+          <li>看所有活跃 query 的 queryKey + 状态</li>
+          <li>看 cache entry 的 data + dataUpdatedAt</li>
+          <li>看 query 是 fresh / stale / inactive / fetching</li>
+          <li>手动触发 refetch / invalidate / setQueryData</li>
+          <li>看每次 refetch 的触发原因（mount / focus / interval / manual）</li>
+        </ul>
+
+        <p>很多疑问（"为什么我看到旧数据"、"为什么 invalidate 没效果"、"为什么发了两次请求"）打开 DevTools 5 秒就有答案。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 设计一个完整的 todos queryKey 体系</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// queries/todos.ts
+export const todoKeys = {
+  all: ['todos'] as const,
+  lists: () =&gt; [...todoKeys.all, 'list'] as const,
+  list: (filter: 'all' | 'active' | 'done') =&gt; [...todoKeys.lists(), filter] as const,
+  details: () =&gt; [...todoKeys.all, 'detail'] as const,
+  detail: (id: string) =&gt; [...todoKeys.details(), id] as const,
+  // 派生数据 query：todo 数量统计
+  stats: () =&gt; [...todoKeys.all, 'stats'] as const,
+};
+
+// 使用
+function TodoList({ filter }: { filter: 'all' | 'active' | 'done' }) {
+  const { data } = useQuery({
+    queryKey: todoKeys.list(filter),
+    queryFn: ({ signal }) =&gt; fetch(`/api/todos?filter=${filter}`, { signal }).then(r =&gt; r.json()),
+  });
+  // ...
+}
+
+function TodoDetail({ id }: { id: string }) {
+  const { data } = useQuery({
+    queryKey: todoKeys.detail(id),
+    queryFn: ({ signal }) =&gt; fetch(`/api/todos/${id}`, { signal }).then(r =&gt; r.json()),
+  });
+}
+
+// 添加 todo 后失效 list（不影响 detail）
+const { mutate } = useMutation({
+  mutationFn: api.addTodo,
+  onSuccess: () =&gt; {
+    queryClient.invalidateQueries({ queryKey: todoKeys.lists() });
+    queryClient.invalidateQueries({ queryKey: todoKeys.stats() });
+  },
+});
+
+// 编辑 todo 后失效该 detail + lists
+const { mutate: edit } = useMutation({
+  mutationFn: api.editTodo,
+  onSuccess: (_, variables) =&gt; {
+    queryClient.invalidateQueries({ queryKey: todoKeys.detail(variables.id) });
+    queryClient.invalidateQueries({ queryKey: todoKeys.lists() });
+  },
+});
+
+// logout 时清空所有 todos
+function logout() {
+  queryClient.removeQueries({ queryKey: todoKeys.all });
+}</code></pre>
+        </div>
+
+        <h3>场景 2 · WebSocket 推送数据进 cache</h3>
+
+        <p>WebSocket / SSE 推送的数据进 query cache，让所有订阅者同时更新：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function useNotificationsSocket() {
+  const queryClient = useQueryClient();
+
+  useEffect(() =&gt; {
+    const ws = new WebSocket('wss://api.example.com/notifications');
+    ws.onmessage = (event) =&gt; {
+      const notification = JSON.parse(event.data);
+      // 直接写进 cache，所有用 notificationKeys.list() 的组件自动 re-render
+      queryClient.setQueryData(notificationKeys.list(), (old: Notification[] = []) =&gt; [
+        notification,
+        ...old,
+      ]);
+    };
+    return () =&gt; ws.close();
+  }, [queryClient]);
+}</code></pre>
+        </div>
+
+        <h3>场景 3 · 路由 hover prefetch</h3>
+
+        <p>用户 hover 链接时预热数据：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function UserListItem({ user }: { user: User }) {
+  const queryClient = useQueryClient();
+
+  function prefetchDetail() {
+    queryClient.prefetchQuery({
+      queryKey: userKeys.detail(user.id),
+      queryFn: ({ signal }) =&gt; api.getUser(user.id, { signal }),
+      staleTime: 30 * 1000,  // prefetch 的数据 30 秒内 fresh
+    });
+  }
+
+  return (
+    &lt;Link href={`/users/${user.id}`} onMouseEnter={prefetchDetail} onFocus={prefetchDetail}&gt;
+      {user.name}
+    &lt;/Link&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>用户点进 detail 页面时数据已经在 cache，瞬间显示。这是 TanStack Query 比 SWR 更好用的场景之一（SWR 没有结构化的 prefetch API）。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · queryClient 完整配置</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/Providers.tsx
+'use client';
+import { QueryClient, QueryClientProvider, MutationCache, QueryCache } from '@tanstack/react-query';
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
+import { useState } from 'react';
+import { toast } from 'sonner';
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  const [queryClient] = useState(() =&gt; new QueryClient({
+    defaultOptions: {
+      queries: {
+        staleTime: 60 * 1000,
+        gcTime: 5 * 60 * 1000,
+        retry: (failureCount, error: any) =&gt; {
+          // 4xx 不重试
+          if (error?.status &gt;= 400 &amp;&amp; error?.status &lt; 500) return false;
+          return failureCount &lt; 3;
+        },
+        refetchOnWindowFocus: false,
+        refetchOnReconnect: true,
+      },
+      mutations: {
+        retry: 1,
+      },
+    },
+    queryCache: new QueryCache({
+      onError: (error: any, query) =&gt; {
+        // 全局 error 处理
+        if (query.meta?.errorMessage) toast.error(query.meta.errorMessage as string);
+        else toast.error(`Query failed: ${error.message}`);
+      },
+    }),
+    mutationCache: new MutationCache({
+      onError: (error: any) =&gt; toast.error(`Mutation failed: ${error.message}`),
+    }),
+  }));
+  return (
+    &lt;QueryClientProvider client={queryClient}&gt;
+      {children}
+      &lt;ReactQueryDevtools initialIsOpen={false} buttonPosition="bottom-right" /&gt;
+    &lt;/QueryClientProvider&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · 自定义 hook 包装 query</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// hooks/useUser.ts
+import { useQuery } from '@tanstack/react-query';
+import { userKeys } from '@/queries/users';
+
+export function useUser(id: string) {
+  return useQuery({
+    queryKey: userKeys.detail(id),
+    queryFn: ({ signal }) =&gt; fetch(`/api/users/${id}`, { signal }).then(r =&gt; {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json() as Promise&lt;User&gt;;
+    }),
+    staleTime: 60 * 1000,
+    meta: { errorMessage: 'Failed to load user' },  // 给全局 error handler 用
+  });
+}
+
+// 调用方
+function UserAvatar({ id }: { id: string }) {
+  const { data: user, isPending } = useUser(id);
+  if (isPending) return &lt;Skeleton /&gt;;
+  return &lt;img src={user?.avatar} alt={user?.name} /&gt;;
+}</code></pre>
+        </div>
+
+        <p>包装的好处：</p>
+        <ul>
+          <li>调用方不必关心 queryKey 形状</li>
+          <li>统一处理 staleTime / retry / error</li>
+          <li>类型推导集中</li>
+          <li>测试时 mock 更容易（mock api.getUser 即可）</li>
+        </ul>
+
+        <h3>代码 3 · meta 字段携带元信息</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// query 上挂 meta
+useQuery({
+  queryKey: userKeys.detail(id),
+  queryFn: ...,
+  meta: {
+    errorMessage: 'Failed to load user',
+    requiresAuth: true,
+    auditCategory: 'user-data',
+  },
+});
+
+// 在全局 onError 里读 meta
+queryCache: new QueryCache({
+  onError: (error, query) =&gt; {
+    if (query.meta?.requiresAuth &amp;&amp; error.status === 401) {
+      router.push('/login');
+    }
+  },
+});</code></pre>
+        </div>
+
+        <h3>代码 4 · setQueryData 类型安全</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// setQueryData 的 updater 函数会拿到正确类型（如果 factory 用 as const）
+queryClient.setQueryData(userKeys.detail(id), (old: User | undefined) =&gt; {
+  if (!old) return old;
+  return { ...old, name: 'New Name' };
+});
+
+// 推荐 helper：immer-style
+import { produce } from 'immer';
+
+queryClient.setQueryData(userKeys.detail(id), (old: User | undefined) =&gt;
+  old &amp;&amp; produce(old, draft =&gt; { draft.name = 'New Name'; })
+);</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>queryKey 用了不稳定引用</b> —— 最常见死循环根源。<code>useQuery({ queryKey: ['users', { filter: { active: true } }] })</code> 内部 object 每次 render 新引用 → query 被识别为新的 → 持续 refetch。修复：把 filter 提到 useState / 用 useMemo 稳定</li>
+          <li><b>queryKey 缺少依赖</b> —— <code>queryKey: ['user'], queryFn: () =&gt; api.getUser(id)</code> id 在闭包里。id 变化时 queryKey 不变 → 仍命中旧 cache。修复：<code>queryKey: ['user', id]</code></li>
+          <li><b>queryFn 闭包过期变量</b> —— queryFn 在 query 第一次创建时被记住，闭包里的 props / state 是当时的值。queryKey 变化才会重新创建 queryFn。把变量放进 queryKey 才能让闭包正确更新</li>
+          <li><b>queryFn 不 throw 4xx/5xx</b> —— fetch 不自动 reject HTTP 错误码。手动检查 r.ok 后 throw，或用 axios。否则 useQuery 永远 success 但 data 是错误体</li>
+          <li><b>queryFn 返回 undefined</b> —— v5 严格了，<code>return undefined</code> 报错。如果可能空，返回 <code>null</code></li>
+          <li><b>每次 render new QueryClient</b> —— <code>const client = new QueryClient()</code> 在组件内每次 render 都创建新 client → cache 全丢。用 <code>useState(() =&gt; new QueryClient())</code></li>
+          <li><b>queryKey 大小写不一致</b> —— <code>['users']</code> 和 <code>['Users']</code> 是不同 cache。用 factory 模式集中管理避免</li>
+          <li><b>queryKey 单复数混用</b> —— <code>['user']</code> 和 <code>['users']</code> 是不同 cache。invalidate <code>['users']</code> 不会命中 <code>['user', id]</code></li>
+          <li><b>不装 DevTools</b> —— 调试 server state 没有 DevTools 等于盲调。本地必开</li>
+          <li><b>queryKey 里放函数 / class instance</b> —— 不可序列化，会被 JSON.stringify 吃掉。queryKey 只放原始值 + plain object</li>
+          <li><b>queryClient 跨请求复用</b> —— 在 Server Component 里全局 new 一个 queryClient 会跨请求污染。每请求独立 new。详见 <a href="../05-rsc-bridge/02-hydration-bridge.html">P5.2</a></li>
+          <li><b>setQueryData 直接 mutate cache</b> —— TanStack Query 内部用 structural sharing 比对前后引用决定是否触发 re-render。直接 mutate（<code>oldData.name = 'X'</code>）会破坏引用比对。要返回新对象</li>
+          <li><b>把 invalidateQueries 当 setQueryData 用</b> —— invalidate 只标 stale 等下次激活 refetch，不会立即更新。要立即写新值用 setQueryData 或 refetchQueries</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/guides/query-keys" target="_blank" rel="noopener">TanStack Query · Query Keys</a> · 官方 queryKey 设计指南</li>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/guides/query-functions" target="_blank" rel="noopener">TanStack Query · Query Functions</a> · queryFn 完整签名</li>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/reference/QueryClient" target="_blank" rel="noopener">TanStack Query · QueryClient API Reference</a> · imperative API 完整列表</li>
+          <li><a href="https://tkdodo.eu/blog/effective-react-query-keys" target="_blank" rel="noopener">TkDodo · Effective React Query Keys</a> · queryKey factory 模式权威博客</li>
+          <li><a href="https://tkdodo.eu/blog/inside-react-query" target="_blank" rel="noopener">TkDodo · Inside React Query</a> · 内部实现讲解</li>
+          <li><a href="https://github.com/lukemorales/query-key-factory" target="_blank" rel="noopener">@lukemorales/query-key-factory</a> · queryKey factory 开源库</li>
+          <li><a href="02-stale-while-revalidate.html">本主题 P2.2 · stale-while-revalidate</a> · 紧接的状态机</li>
+          <li><a href="../05-rsc-bridge/02-hydration-bridge.html">本主题 P5.2 · hydration 桥</a> · queryClient 跨请求隔离</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../01-overview/02-philosophy.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P1.2 · server state 设计哲学</span>
+          </a>
+          <a class="next" href="02-stale-while-revalidate.html">
+            <span class="label">下一章 →</span>
+            <span class="title">P2.2 · stale-while-revalidate + staleTime</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

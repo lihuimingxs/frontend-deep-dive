@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Suspense + prefetch + streaming · P4.2 · TanStack Query / SWR 深度学习</title>
+    <meta name="description" content="useSuspenseQuery 三件套（v5 一等公民）+ queryClient direct API + prefetch（hover 预热 / router loader 集成）+ streamedQuery（LLM 流式）。这是 P5 RSC 共存章的前置 —— 理解 queryClient 不一定要被 hook 调用，dehydrate 才能想清楚。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23ff4154'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EQ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>TanStack Query / SWR 深度学习</span><span class="site-title-badge" style="background: #ff4154; color: #fff">Q</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · 高级查询模式</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-dependent-paginated-infinite.html">01 · dependent / paginated / infinite</a></li>
+          <li><a href="02-suspense-prefetch-streaming.html" class="active">02 · Suspense + prefetch + streaming</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TanStack Query</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · 高级模式</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Suspense + prefetch + streaming</span>
+        </nav>
+        <h1>Suspense mode + queryClient direct API + prefetch + streaming</h1>
+        <p class="lead">
+          v5 把 useSuspenseQuery 三件套提到一等公民。这一章讲清 useQuery 与 useSuspenseQuery 的选择、queryClient direct API（不依赖 hook 调用 query）、hover prefetch / router loader 集成、streamedQuery（LLM 流式）。这些是 P5 RSC 共存章的前置。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P3 useQuery 全谱 + 了解 React 18+ Suspense / ErrorBoundary</span>
+          <span><strong>主要来源</strong> tanstack.com/query/latest/docs/framework/react/guides/suspense + prefetching + advanced-ssr</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><b>v5 useSuspenseQuery 三件套</b>（一等公民）：<code>useSuspenseQuery</code> / <code>useSuspenseInfiniteQuery</code> / <code>useSuspenseQueries</code>。永远 throw promise（pending）/ throw error；data 永远不是 undefined。</li>
+          <li><b>useQuery vs useSuspenseQuery</b>：前者组件自己处理 loading/error；后者把控制权交给上层 Suspense + ErrorBoundary。Suspense 模式更声明式但限制更多。</li>
+          <li><b>useSuspenseQuery 不能用 enabled: false</b>：Suspense 没办法 throw 一个不存在的 promise。需要条件触发的 query 仍用 useQuery。</li>
+          <li><b>queryClient 不一定要被 hook 调用</b>：<code>prefetchQuery</code> / <code>fetchQuery</code> / <code>ensureQueryData</code> 是 imperative API，可以从 router loader / event handler / WebSocket 调。</li>
+          <li><b>3 个 imperative fetch API 区别</b>：<code>prefetchQuery</code>（不返回 data，进 cache）/ <code>fetchQuery</code>（返回 promise，进 cache 失败 throw）/ <code>ensureQueryData</code>（cache 有就返回，没有就 fetch）。</li>
+          <li><b>hover prefetch</b>：用户 hover 链接时调 prefetchQuery 预热下一页 → 点进去瞬间显示。TanStack Query 比 SWR 强项之一。</li>
+          <li><b>router loader 集成</b>（React Router v7 / TanStack Router）：在 loader 里 ensureQueryData，组件用 useSuspenseQuery 直接读 cache。是"路由数据驱动"模式。</li>
+          <li><b>streamedQuery</b>（v5 新）：支持 SSE / chunked 流式响应。边收边累加进 cache。和 Vercel AI SDK useChat 哲学接近。</li>
+          <li><b>RSC 时代 prefetch / dehydrate 是桥接关键</b>：server-side prefetch → 序列化进 RSC payload → client hydrate。详见 <a href="../05-rsc-bridge/02-hydration-bridge.html">P5.2</a>。</li>
+          <li><b>Suspense 边界要包合理</b>：太粗（整页一个 Suspense）失去并发渲染好处；太细（每个 query 一个）UX 闪烁。一般按"内容区块"分段。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Suspense 模式 · 把 loading/error 上提</h3>
+
+        <p>传统 useQuery 让组件自己处理三态：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function User({ id }: { id: string }) {
+  const { data, isPending, isError } = useQuery({...});
+  if (isPending) return &lt;Loading /&gt;;
+  if (isError) return &lt;Error /&gt;;
+  return &lt;div&gt;{data.name}&lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <p>useSuspenseQuery 把控制权交给上层：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function User({ id }: { id: string }) {
+  const { data } = useSuspenseQuery({
+    queryKey: ['user', id],
+    queryFn: () =&gt; api.getUser(id),
+  });
+  // 这里 data 类型是 User（不是 User | undefined）
+  // pending 时会 throw promise → 上层 Suspense 接住
+  // error 时会 throw error → 上层 ErrorBoundary 接住
+  return &lt;div&gt;{data.name}&lt;/div&gt;;
+}
+
+function App() {
+  return (
+    &lt;ErrorBoundary fallback={&lt;Error /&gt;}&gt;
+      &lt;Suspense fallback={&lt;Loading /&gt;}&gt;
+        &lt;User id="1" /&gt;
+      &lt;/Suspense&gt;
+    &lt;/ErrorBoundary&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>对比：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>useQuery</th>
+              <th>useSuspenseQuery</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>data 类型</td>
+              <td>T | undefined</td>
+              <td>T（已 narrow）</td>
+            </tr>
+            <tr>
+              <td>loading 处理</td>
+              <td>组件内 isPending</td>
+              <td>父级 Suspense fallback</td>
+            </tr>
+            <tr>
+              <td>error 处理</td>
+              <td>组件内 isError</td>
+              <td>父级 ErrorBoundary</td>
+            </tr>
+            <tr>
+              <td>enabled: false</td>
+              <td>支持</td>
+              <td>不支持</td>
+            </tr>
+            <tr>
+              <td>placeholderData</td>
+              <td>支持</td>
+              <td>不支持</td>
+            </tr>
+            <tr>
+              <td>条件触发 query</td>
+              <td>方便（enabled）</td>
+              <td>不方便</td>
+            </tr>
+            <tr>
+              <td>声明式程度</td>
+              <td>低</td>
+              <td>高</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>选择：</p>
+        <ul>
+          <li>组件需要细粒度控制 loading（骨架样式 / 部分加载）→ useQuery</li>
+          <li>整页或区块统一 loading + error → useSuspenseQuery</li>
+          <li>条件 query / 用户操作触发 → useQuery（用 enabled）</li>
+          <li>路由级别 query（页面打开就要） → useSuspenseQuery（配 router loader 更顺）</li>
+        </ul>
+
+        <h3>Suspense 模式的限制</h3>
+
+        <p><b>限制 1 · 不能用 enabled: false</b></p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ 这不工作
+useSuspenseQuery({
+  queryKey: ['user', userId],
+  queryFn: ...,
+  enabled: !!userId,  // 不允许
+});
+
+// ✅ 父级判断
+function UserContainer() {
+  if (!userId) return &lt;Empty /&gt;;
+  return (
+    &lt;Suspense fallback={&lt;Loading /&gt;}&gt;
+      &lt;User id={userId} /&gt;
+    &lt;/Suspense&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p><b>限制 2 · 不能用 placeholderData</b></p>
+
+        <p>Suspense 模式下没有 isPlaceholderData 概念。要"切页不闪烁"用 useQuery + keepPreviousData。</p>
+
+        <p><b>限制 3 · waterfall 风险</b></p>
+
+        <p>多个 useSuspenseQuery 在同组件可能串行（一个 throw promise 后下一个还没开始）。修复：用 useSuspenseQueries 并发；或用 prefetch 先并发触发。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ 可能 waterfall
+function Dashboard() {
+  const { data: user } = useSuspenseQuery({...});
+  const { data: posts } = useSuspenseQuery({...});  // user 没拿到这里不会跑
+  return ...;
+}
+
+// ✅ 并发
+function Dashboard() {
+  const [user, posts] = useSuspenseQueries({
+    queries: [
+      { queryKey: ['user'], queryFn: ... },
+      { queryKey: ['posts'], queryFn: ... },
+    ],
+  });
+  return ...;
+}</code></pre>
+        </div>
+
+        <h3>queryClient direct API · 3 个 imperative fetch</h3>
+
+        <p>不是所有场景都要从 hook 触发 query。queryClient 提供 imperative API：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>API</th>
+              <th>返回</th>
+              <th>cache 行为</th>
+              <th>失败行为</th>
+              <th>典型场景</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>prefetchQuery</code></td>
+              <td>Promise&lt;void&gt;</td>
+              <td>进 cache</td>
+              <td>静默吞错</td>
+              <td>预热（hover / 路由 idle）</td>
+            </tr>
+            <tr>
+              <td><code>fetchQuery</code></td>
+              <td>Promise&lt;TData&gt;</td>
+              <td>进 cache</td>
+              <td>throw error</td>
+              <td>router loader 拿数据</td>
+            </tr>
+            <tr>
+              <td><code>ensureQueryData</code></td>
+              <td>Promise&lt;TData&gt;</td>
+              <td>有 cache 直接返回，否则 fetch + 进 cache</td>
+              <td>throw error</td>
+              <td>组件 mount 前确保数据在</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>区别：</p>
+        <ul>
+          <li><b>prefetchQuery</b>：fire-and-forget，不需要 await 结果。失败也不影响主流程</li>
+          <li><b>fetchQuery</b>：要拿到结果用，比如 router loader</li>
+          <li><b>ensureQueryData</b>：cache 友好版本的 fetchQuery，避免重复 fetch</li>
+        </ul>
+
+        <h3>hover prefetch · 标杆模式</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function UserListItem({ user }: { user: User }) {
+  const queryClient = useQueryClient();
+
+  function prefetch() {
+    queryClient.prefetchQuery({
+      queryKey: ['user', user.id],
+      queryFn: () =&gt; api.getUser(user.id),
+      staleTime: 30 * 1000,  // prefetch 的数据 30 秒内 fresh
+    });
+  }
+
+  return (
+    &lt;Link
+      href={`/users/${user.id}`}
+      onMouseEnter={prefetch}
+      onFocus={prefetch}
+    &gt;
+      {user.name}
+    &lt;/Link&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>用户 hover 100ms+ 才点击 → 点击时数据已 fetch 完 → 详情页瞬间显示。这是 TanStack Query 比 SWR 杀手锏的功能之一（SWR 没结构化 prefetch API）。</p>
+
+        <h3>router loader 集成 · TanStack Router / React Router v7</h3>
+
+        <p>TanStack Router 自带 loader 概念，配合 ensureQueryData：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// router 路由定义
+const userRoute = createRoute({
+  path: '/users/$id',
+  loader: ({ params }) =&gt; queryClient.ensureQueryData({
+    queryKey: ['user', params.id],
+    queryFn: () =&gt; api.getUser(params.id),
+  }),
+  component: UserPage,
+});
+
+// 组件直接 useSuspenseQuery 读 cache（已经在了）
+function UserPage() {
+  const { id } = userRoute.useParams();
+  const { data } = useSuspenseQuery({
+    queryKey: ['user', id],
+    queryFn: () =&gt; api.getUser(id),
+  });
+  return &lt;div&gt;{data.name}&lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <p>好处：</p>
+        <ul>
+          <li>路由切换前数据已经在 fetch（不等组件 mount）</li>
+          <li>组件用 useSuspenseQuery 时 cache 已经命中（无 loading）</li>
+          <li>错误在 loader 阶段就抛出（不进 component），路由层处理</li>
+        </ul>
+
+        <p>React Router v7 也支持类似模式（loaders）。详见各路由库文档。</p>
+
+        <h3>streamedQuery · v5 流式响应支持</h3>
+
+        <p>v5 新增 streamedQuery 实验性 helper，支持 SSE / chunked 流：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { streamedQuery, useQuery } from '@tanstack/react-query';
+
+// streamFn 返回一个 AsyncIterable
+async function* fetchChatStream(prompt: string) {
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    body: JSON.stringify({ prompt }),
+  });
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    yield decoder.decode(value);
+  }
+}
+
+function ChatBox() {
+  const [prompt, setPrompt] = useState('');
+  const { data, isFetching } = useQuery({
+    queryKey: ['chat', prompt],
+    queryFn: streamedQuery({
+      streamFn: ({ pageParam }) =&gt; fetchChatStream(prompt),
+    }),
+    enabled: !!prompt,
+  });
+  // data 是数组 —— 每个 chunk 是一个元素
+  const fullText = data?.join('') ?? '';
+  return &lt;div&gt;{fullText}{isFetching &amp;&amp; '▍'}&lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <p>原理：streamFn 是 async generator，每 yield 一次 TanStack Query 把 chunk 累加进 cache。组件订阅 cache → 每次 chunk 来都 re-render。</p>
+
+        <p>这个模式和 Vercel AI SDK 的 useChat 哲学接近 —— LLM 流式响应在 client cache 里增量更新。详见待写 AI SDK 主题（双向链）。</p>
+
+        <h3>Suspense 边界放在哪</h3>
+
+        <p>Suspense 边界粒度影响 UX：</p>
+
+        <ul>
+          <li><b>整页一个 Suspense</b>：等所有 query 完成才显示。简单但慢</li>
+          <li><b>每 query 一个 Suspense</b>：闪烁严重</li>
+          <li><b>按内容区块分段</b>（推荐）：navigation / main / sidebar 各一个 Suspense；快的先显示，慢的等</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function Dashboard() {
+  return (
+    &lt;Layout&gt;
+      &lt;Suspense fallback={&lt;NavSkeleton /&gt;}&gt;&lt;Nav /&gt;&lt;/Suspense&gt;
+      &lt;Suspense fallback={&lt;MainSkeleton /&gt;}&gt;&lt;MainContent /&gt;&lt;/Suspense&gt;
+      &lt;Suspense fallback={&lt;SidebarSkeleton /&gt;}&gt;&lt;Sidebar /&gt;&lt;/Suspense&gt;
+    &lt;/Layout&gt;
+  );
+}
+// Nav / MainContent / Sidebar 各自 useSuspenseQuery
+// 三段独立流式显示，快的先出</code></pre>
+        </div>
+
+        <p>这与 Next.js App Router 的 loading.tsx + 嵌套 Suspense 心智一致。详见 <a href="../../next/03-rsc-streaming/index.html">Next.js P3 RSC 与流式</a>。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 完整 useSuspenseQuery dashboard</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function App() {
+  return (
+    &lt;ErrorBoundary FallbackComponent={ErrorPage}&gt;
+      &lt;Suspense fallback={&lt;FullPageLoading /&gt;}&gt;
+        &lt;Dashboard /&gt;
+      &lt;/Suspense&gt;
+    &lt;/ErrorBoundary&gt;
+  );
+}
+
+function Dashboard() {
+  // 整体并发拉
+  const [user, stats, notifications] = useSuspenseQueries({
+    queries: [
+      { queryKey: ['current-user'], queryFn: api.getCurrentUser },
+      { queryKey: ['stats'], queryFn: api.getStats },
+      { queryKey: ['notifications'], queryFn: api.getNotifications },
+    ],
+  });
+
+  return (
+    &lt;Layout user={user.data}&gt;
+      &lt;StatsCard stats={stats.data} /&gt;
+      &lt;NotificationList items={notifications.data} /&gt;
+    &lt;/Layout&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>场景 2 · hover prefetch 链接</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 自定义 hook 封装
+function usePrefetchUser() {
+  const queryClient = useQueryClient();
+  return useCallback((id: string) =&gt; {
+    queryClient.prefetchQuery({
+      queryKey: ['user', id],
+      queryFn: () =&gt; api.getUser(id),
+      staleTime: 30 * 1000,
+    });
+  }, [queryClient]);
+}
+
+// 使用
+function UserListItem({ user }: { user: User }) {
+  const prefetch = usePrefetchUser();
+  return (
+    &lt;Link
+      href={`/users/${user.id}`}
+      onMouseEnter={() =&gt; prefetch(user.id)}
+      onFocus={() =&gt; prefetch(user.id)}
+    &gt;
+      {user.name}
+    &lt;/Link&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>场景 3 · LLM 流式响应（streamedQuery）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 使用 OpenAI 风格的 SSE
+async function* streamChat(messages: Message[]): AsyncIterable&lt;string&gt; {
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    body: JSON.stringify({ messages }),
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!res.ok || !res.body) throw new Error('stream failed');
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // 简化：按 SSE 'data: ...\n\n' 分块
+    const lines = buffer.split('\n\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const json = line.slice(6);
+        if (json === '[DONE]') return;
+        const parsed = JSON.parse(json);
+        const content = parsed.choices?.[0]?.delta?.content;
+        if (content) yield content;
+      }
+    }
+  }
+}
+
+function Chat({ messages }: { messages: Message[] }) {
+  const { data: chunks = [], isFetching } = useQuery({
+    queryKey: ['chat', messages],
+    queryFn: streamedQuery({
+      streamFn: () =&gt; streamChat(messages),
+    }),
+    enabled: messages.length &gt; 0,
+  });
+  const text = chunks.join('');
+  return (
+    &lt;div&gt;
+      &lt;ReactMarkdown&gt;{text}&lt;/ReactMarkdown&gt;
+      {isFetching &amp;&amp; &lt;span className="cursor"&gt;▍&lt;/span&gt;}
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>场景 4 · TanStack Router loader 集成</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { createRoute } from '@tanstack/react-router';
+
+// 路由定义带 loader
+export const userRoute = createRoute({
+  getParentRoute: () =&gt; rootRoute,
+  path: '/users/$id',
+  loader: async ({ params, context }) =&gt; {
+    // context.queryClient 是 router 上下文里的 queryClient
+    return context.queryClient.ensureQueryData({
+      queryKey: ['user', params.id],
+      queryFn: () =&gt; api.getUser(params.id),
+    });
+  },
+  component: UserPage,
+  errorComponent: UserError,
+  pendingComponent: UserLoading,
+});
+
+function UserPage() {
+  const { id } = userRoute.useParams();
+  // 数据保证已经在 cache（loader 已 ensure）
+  const { data } = useSuspenseQuery({
+    queryKey: ['user', id],
+    queryFn: () =&gt; api.getUser(id),
+  });
+  return &lt;div&gt;{data.name}&lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 全局 ErrorBoundary + Suspense 组合</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { ErrorBoundary } from 'react-error-boundary';
+import { Suspense } from 'react';
+
+function QueryErrorBoundary({ children, fallback }: { children: React.ReactNode; fallback: React.ReactNode }) {
+  // 包装 ErrorBoundary 让 query 错误能 reset 重试
+  const queryClient = useQueryClient();
+  return (
+    &lt;ErrorBoundary
+      fallbackRender={({ error, resetErrorBoundary }) =&gt; (
+        &lt;div&gt;
+          &lt;p&gt;Error: {error.message}&lt;/p&gt;
+          &lt;button onClick={() =&gt; {
+            queryClient.resetQueries();  // 重置错误的 query
+            resetErrorBoundary();
+          }}&gt;Retry&lt;/button&gt;
+        &lt;/div&gt;
+      )}
+    &gt;
+      &lt;Suspense fallback={fallback}&gt;{children}&lt;/Suspense&gt;
+    &lt;/ErrorBoundary&gt;
+  );
+}
+
+// 使用
+&lt;QueryErrorBoundary fallback={&lt;Loading /&gt;}&gt;
+  &lt;UserDashboard /&gt;
+&lt;/QueryErrorBoundary&gt;</code></pre>
+        </div>
+
+        <h3>代码 2 · 用 throwOnError 控制 useQuery 也走 Suspense 风格</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// useQuery 也可以让错误冒泡到 ErrorBoundary（不用 useSuspenseQuery）
+const { data, isPending } = useQuery({
+  queryKey: ['user', id],
+  queryFn: ...,
+  throwOnError: true,  // error 时 throw 让 ErrorBoundary 接住
+  // throwOnError: (error) =&gt; error.status &gt;= 500,  // 只 throw 5xx
+});</code></pre>
+        </div>
+
+        <h3>代码 3 · 主动 reset query（错误后重试）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function ErrorFallback({ error, resetErrorBoundary }: any) {
+  const queryClient = useQueryClient();
+  return (
+    &lt;&gt;
+      &lt;p&gt;Failed: {error.message}&lt;/p&gt;
+      &lt;button onClick={() =&gt; {
+        // 重置所有失败 query 的状态
+        queryClient.resetQueries();
+        resetErrorBoundary();
+      }}&gt;Retry All&lt;/button&gt;
+      &lt;button onClick={() =&gt; {
+        // 只重置某个 key
+        queryClient.resetQueries({ queryKey: ['users'] });
+        resetErrorBoundary();
+      }}&gt;Retry Users&lt;/button&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 4 · prefetch 进 staleTime 控制</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 默认 prefetch 进 cache 但 staleTime 是 0 → 立刻 stale → 用户点进去时再 refetch
+queryClient.prefetchQuery({ queryKey: ['user', id], queryFn: ... });
+
+// 推荐：prefetch 时给个 staleTime 让 cache 一段时间内 fresh
+queryClient.prefetchQuery({
+  queryKey: ['user', id],
+  queryFn: ...,
+  staleTime: 30 * 1000,  // prefetch 数据 30 秒内 fresh，期间不 refetch
+});
+
+// 或全局调 staleTime 默认（推荐做法）
+new QueryClient({
+  defaultOptions: { queries: { staleTime: 60 * 1000 } },
+});</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>useSuspenseQuery 没包 Suspense</b> —— pending 时 throw promise 没人接住，整个 React tree 崩溃。任何 useSuspenseQuery 都必须有父级 Suspense</li>
+          <li><b>useSuspenseQuery 用 enabled: false</b> —— 不允许。条件 query 用 useQuery + enabled</li>
+          <li><b>多个 useSuspenseQuery 串联触发 waterfall</b> —— 第一个 throw promise 后第二个还没开始。改用 useSuspenseQueries 或 prefetch</li>
+          <li><b>prefetchQuery 没传 staleTime</b> —— prefetch 数据立刻 stale，用户点进去仍然 refetch，prefetch 失去价值</li>
+          <li><b>把 prefetchQuery 当 fetchQuery 用 await 它的 data</b> —— prefetchQuery 返回 Promise&lt;void&gt;，没有 data。要用 fetchQuery / ensureQueryData</li>
+          <li><b>Suspense 边界太粗（整页一个）</b> —— 等所有 query 完才显示，慢且影响 LCP。按内容块分段</li>
+          <li><b>Suspense 边界太细（每个 query 一个）</b> —— 闪烁严重；并发渲染好处用不上</li>
+          <li><b>ErrorBoundary 没 reset 机制</b> —— 错误后用户卡住没法重试。结合 queryClient.resetQueries + resetErrorBoundary</li>
+          <li><b>throwOnError 全开</b> —— 业务错误（404 not found）也走 ErrorBoundary，UX 差。throwOnError 写成函数只 throw 致命错误</li>
+          <li><b>streamedQuery 没处理 abort</b> —— 用户离开页面 stream 还在跑。streamFn 接 signal 透传给 fetch</li>
+          <li><b>router loader 用 fetchQuery 而不是 ensureQueryData</b> —— fetchQuery 每次都发请求；ensureQueryData 命中 cache 不发。常驻路由用 ensureQueryData 更高效</li>
+          <li><b>把 Suspense 当 loading 替代</b> —— Suspense 是声明式，不能动态控制（"再等 1 秒"）。要细粒度控制仍用 useQuery isPending</li>
+          <li><b>Suspense 嵌套层级过深</b> —— 6 层嵌套 Suspense + ErrorBoundary 很难 debug。保持 2-3 层够用</li>
+          <li><b>useSuspenseQueries 的 combine 触发 throw 时机</b> —— combine 接收的 results 仍可能含 isLoading；要确保所有都 success 才用 data</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/guides/suspense" target="_blank" rel="noopener">TanStack Query · Suspense</a></li>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/guides/prefetching" target="_blank" rel="noopener">TanStack Query · Prefetching</a></li>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/reference/useSuspenseQuery" target="_blank" rel="noopener">useSuspenseQuery API</a></li>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/reference/streamedQuery" target="_blank" rel="noopener">streamedQuery</a> · v5 流式响应</li>
+          <li><a href="https://tanstack.com/router/latest/docs/framework/react/guide/data-loading" target="_blank" rel="noopener">TanStack Router · Data Loading</a> · loader 模式</li>
+          <li><a href="../../react/05-concurrent/02-suspense.html">React 主题 P5.2 · Suspense</a></li>
+          <li><a href="../../react/05-concurrent/04-error-boundary.html">React 主题 P5.4 · Error Boundary</a></li>
+          <li><a href="../05-rsc-bridge/02-hydration-bridge.html">本主题 P5.2 · hydration 桥</a> · server prefetch + client hydrate</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-dependent-paginated-infinite.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P4.1 · dependent / paginated / infinite</span>
+          </a>
+          <a class="next" href="../05-rsc-bridge/01-rsc-coexistence.html">
+            <span class="label">下一章 →</span>
+            <span class="title">P5.1 · RSC 时代还该用吗</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

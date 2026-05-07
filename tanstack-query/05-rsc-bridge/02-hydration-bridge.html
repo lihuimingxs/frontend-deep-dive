@@ -1,0 +1,844 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>hydration 桥 + use(promise) + Server Actions 协作 · P5.2 · TanStack Query / SWR 深度学习</title>
+    <meta name="description" content="RSC 与 TanStack Query 共存的具体姿势。这一章讲清 dehydrate + HydrationBoundary 完整 setup（每请求独立 new QueryClient + Provider 写法 + Next.js App Router 集成）+ use(promise) 与 useSuspenseQuery 的关系 + Server Actions 配 useMutation 的双向 invalidate（server cache + client cache 同步）。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23ff4154'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EQ%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>TanStack Query / SWR 深度学习</span><span class="site-title-badge" style="background: #ff4154; color: #fff">Q</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · RSC 共存 ⭐</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-rsc-coexistence.html">01 · RSC 时代还该用吗</a></li>
+          <li><a href="02-hydration-bridge.html" class="active">02 · hydration 桥 + use(promise) + Server Actions</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">TanStack Query</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · RSC 共存</a><span class="breadcrumb-sep">/</span>
+          <span>02 · hydration 桥 + use(promise) + Server Actions</span>
+        </nav>
+        <h1>hydration 桥 + use(promise) + Server Actions 协作</h1>
+        <p class="lead">
+          P5.1 讲了 TanStack Query 与 RSC 的边界，这一章讲具体姿势。dehydrate + HydrationBoundary 是首屏数据从 server 桥到 client cache 的标准模式；use(promise) 与 useSuspenseQuery 关系厘清；mutation 调 Server Action 时 server cache + client cache 怎么双向同步。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P5.1 决策矩阵 + 读过 <a href="../../next/04-server-actions/01-server-actions.html">Next.js P4.1 Server Actions</a> + <a href="../../next/05-caching/index.html">Next.js P5 缓存</a></span>
+          <span><strong>主要来源</strong> tanstack.com/query/latest/docs/framework/react/guides/advanced-ssr + nextjs.org/docs 关于 third-party libraries with hydration 的官方说明</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><b>hydration 桥的本质</b>：server-side prefetch 数据 → 序列化进 RSC payload → client 反序列化进 queryClient.cache。首屏不发请求 + 客户端导航后仍能复用 cache。</li>
+          <li><b>4 个组件协作</b>：<b>(1) Provider 包 QueryClient</b>（client component） / <b>(2) 每请求 new QueryClient</b>（server-side） / <b>(3) prefetchQuery 进 cache</b>（server-side） / <b>(4) HydrationBoundary 接收 dehydrate state</b>（包客户端组件）。</li>
+          <li><strong>每请求独立 new QueryClient 是关键</strong>：跨请求复用会让用户 A 的 cache 泄漏给用户 B。Next.js 推荐写法是用 React 的 <code>cache()</code> helper 包 <code>getQueryClient</code>。</li>
+          <li><b>dehydrate</b>：把 queryClient 当前 cache 序列化成可 JSON 化的对象（含 queryKey + data + dataUpdatedAt + error）。</li>
+          <li><b>HydrationBoundary</b>：包在 Client Component 外层；在 client 端把 dehydrate state 反序列化进 queryClient.cache。</li>
+          <li><b>use(promise) 与 useSuspenseQuery 的关系</b>：use 是 React 19 底层 API（消费 promise 时 throw promise 给 Suspense）；useSuspenseQuery 在底层用类似机制实现 + 加了 cache lifecycle。两者不冲突但分工不同。</li>
+          <li><b>不要直接用 use(promise) 当 cache library</b>：每次 render 创建新 promise → 每次都 fetch。只有 RSC server-side 创建的 promise 才能被 client use 安全消费（基于 Promise referential equality）。</li>
+          <li><b>useMutation 调 Server Action</b>：mutationFn 直接调 <code>'use server'</code> 函数；onSuccess 双向 invalidate（revalidatePath 让 server cache 失效 + queryClient.invalidateQueries 让 client cache 失效）。</li>
+          <li><b>两层 cache 同步是 RSC 时代新挑战</b>：server-side cache（'use cache' / Data Cache）+ client-side cache（queryClient）独立存在；某个数据变了要确保两层都失效。</li>
+          <li><b>典型陷阱</b>：忘了每请求 new QueryClient；prefetch 但没 dehydrate；HydrationBoundary 没正确包；client 拿到 RSC 创建的 promise 后用 use 但 RSC 又重 render → promise 引用变。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>桥接的目标</h3>
+
+        <p>RSC + TanStack Query 共存想达成的体验：</p>
+
+        <ol>
+          <li>用户进 page A → server-side fetch users（直接 server-render HTML，零 client loading）</li>
+          <li>HTML 里同时嵌入 dehydrate state（users 数据序列化）</li>
+          <li>client hydrate 时 → 把 dehydrate state 写入 queryClient.cache</li>
+          <li>page A 上的 Client Component 用 useQuery(['users']) → 直接命中 cache，不再发请求</li>
+          <li>用户切到 page B → users cache 在 inactive 状态保留</li>
+          <li>用户切回 page A → cache 命中，立刻显示（stale-while-revalidate 后台刷）</li>
+        </ol>
+
+        <p>对比"纯 RSC"路径：每次进 page A 都 server-render 一次，无客户端 cache。</p>
+        <p>对比"纯 TanStack Query"路径：第一次进有 client loading；server-side render 内容缺失 SEO 差。</p>
+
+        <h3>4 个组件协作</h3>
+
+        <p><b>组件 1 · QueryClientProvider（Client Component）</b></p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/Providers.tsx
+'use client';
+import { QueryClient, QueryClientProvider, isServer } from '@tanstack/react-query';
+import { useState } from 'react';
+
+function makeQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        // 关键：staleTime &gt; 0 防止 hydrate 后立刻 refetch
+        staleTime: 60 * 1000,
+      },
+    },
+  });
+}
+
+let browserQueryClient: QueryClient | undefined;
+
+function getQueryClient() {
+  if (isServer) {
+    // server: 永远 new（每次 SSR / RSC 都是新的）
+    return makeQueryClient();
+  }
+  // browser: 单例
+  if (!browserQueryClient) browserQueryClient = makeQueryClient();
+  return browserQueryClient;
+}
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  // useState 包确保每次 render 不重新调 getQueryClient
+  const queryClient = getQueryClient();
+  return &lt;QueryClientProvider client={queryClient}&gt;{children}&lt;/QueryClientProvider&gt;;
+}</code></pre>
+        </div>
+
+        <p>关键细节：</p>
+        <ul>
+          <li><strong>browser 是单例</strong>（一个 tab 一个 QueryClient）</li>
+          <li><strong>server 每次 new</strong>（避免跨请求污染）</li>
+          <li>用 <code>isServer</code> 区分（来自 @tanstack/react-query）</li>
+          <li>browserQueryClient 用 module-level 变量，不放 useState 里（不需要响应组件 lifecycle）</li>
+        </ul>
+
+        <p><b>组件 2 · server-side prefetch + dehydrate</b></p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/users/page.tsx (Server Component)
+import { dehydrate, HydrationBoundary, QueryClient } from '@tanstack/react-query';
+import UserList from './UserList';  // Client Component
+
+export default async function UsersPage() {
+  // 每请求独立 new
+  const queryClient = new QueryClient();
+
+  // server-side prefetch
+  await queryClient.prefetchQuery({
+    queryKey: ['users'],
+    queryFn: () =&gt; fetch('http://api.example.com/users').then(r =&gt; r.json()),
+  });
+
+  return (
+    &lt;HydrationBoundary state={dehydrate(queryClient)}&gt;
+      &lt;UserList /&gt;
+    &lt;/HydrationBoundary&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p><b>组件 3 · Client Component 读 cache</b></p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/users/UserList.tsx
+'use client';
+import { useQuery } from '@tanstack/react-query';
+
+export default function UserList() {
+  const { data: users } = useQuery({
+    queryKey: ['users'],
+    queryFn: () =&gt; fetch('/api/users').then(r =&gt; r.json()),
+    // queryFn 必须传，因为 cache 失效后 client 仍要能 refetch
+    // 但首次 render 命中 server prefetch 的 cache，不会调 queryFn
+  });
+  return &lt;ul&gt;{users?.map(u =&gt; &lt;li key={u.id}&gt;{u.name}&lt;/li&gt;)}&lt;/ul&gt;;
+}</code></pre>
+        </div>
+
+        <p>整个流程：</p>
+        <ol>
+          <li>server: <code>new QueryClient</code> + prefetch users + dehydrate → 序列化进 React payload</li>
+          <li>HydrationBoundary 在 server 端 render 一段含 dehydrate state 的标记</li>
+          <li>client: hydrate 时读到 dehydrate state → 写入 browser 的 queryClient</li>
+          <li>UserList 的 useQuery → cache 命中 → 直接 return data</li>
+          <li>切走再切回 → cache 仍在（stale-while-revalidate）</li>
+        </ol>
+
+        <h3>每请求 new QueryClient · 跨请求隔离</h3>
+
+        <p>错误写法：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ 全局 new → 跨请求复用 → 用户 A 的 cache 给用户 B 看到
+const queryClient = new QueryClient();
+
+export default async function UsersPage() {
+  await queryClient.prefetchQuery({...});
+  return ...;
+}</code></pre>
+        </div>
+
+        <p>这是<strong>严重 bug</strong>。Server Component 在 server 长期运行（同一 process 处理多请求），全局变量会被并发请求共享。结果：</p>
+        <ul>
+          <li>请求 1（用户 A）prefetch user-a 数据进 cache</li>
+          <li>请求 2（用户 B）来到同 page → cache 命中 → 看到用户 A 的数据</li>
+          <li>泄漏！</li>
+        </ul>
+
+        <p>正确写法：每次 new。性能担心？new 一个 QueryClient 是廉价操作（只是几个 Map 初始化），不必担心。</p>
+
+        <p>更好的写法（用 React 的 cache helper 在同请求内复用）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { cache } from 'react';
+import { QueryClient } from '@tanstack/react-query';
+
+// React cache 是 per-request 缓存（同请求内多次调用复用，跨请求新建）
+export const getQueryClient = cache(() =&gt; new QueryClient());
+
+// 同一请求多个 Server Component 调 getQueryClient 拿到同一个
+// 不同请求各自独立</code></pre>
+        </div>
+
+        <h3>dehydrate 序列化什么</h3>
+
+        <p>dehydrate(queryClient) 返回一个对象：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">{
+  mutations: [],  // 通常 server 不 prefetch mutation
+  queries: [
+    {
+      queryKey: ['users'],
+      queryHash: '["users"]',
+      state: {
+        data: [{ id: 1, name: 'A' }, ...],
+        dataUpdatedAt: 1731972000000,
+        error: null,
+        status: 'success',
+        // ...
+      },
+    },
+    // 所有 prefetched query
+  ],
+}</code></pre>
+        </div>
+
+        <p>这个对象会被 React 序列化进 RSC payload（JSON.stringify），然后 client 端反序列化。所以：</p>
+        <ul>
+          <li>data 必须可 JSON 化（无函数 / Symbol / class 实例）</li>
+          <li>error 也要可序列化（Error 对象的 message / name 会保留，stack trace 通常丢）</li>
+          <li>大 cache 会让 RSC payload 膨胀，影响首屏 TTFB</li>
+        </ul>
+
+        <h3>HydrationBoundary 的工作</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// HydrationBoundary 简化实现
+'use client';
+function HydrationBoundary({ state, children }: { state: DehydratedState; children: React.ReactNode }) {
+  const queryClient = useQueryClient();
+  // hydrate 把 state 写进 client queryClient
+  hydrate(queryClient, state);
+  return &lt;&gt;{children}&lt;/&gt;;
+}</code></pre>
+        </div>
+
+        <p>之后子组件的 useQuery 命中 cache。</p>
+
+        <p>HydrationBoundary 可以嵌套：父级 prefetch 一些通用数据，子级再 prefetch 自己的，client 端各自 hydrate。</p>
+
+        <h3>use(promise) 与 useSuspenseQuery 的关系</h3>
+
+        <p>React 19 引入 <code>use(promise)</code> API：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { use } from 'react';
+
+function User({ promise }: { promise: Promise&lt;User&gt; }) {
+  // pending 时 throw promise（Suspense 接住）
+  // resolved 后返回 value
+  const user = use(promise);
+  return &lt;div&gt;{user.name}&lt;/div&gt;;
+}
+
+// 父级
+&lt;Suspense fallback={&lt;Loading /&gt;}&gt;
+  &lt;User promise={fetchUserPromise} /&gt;
+&lt;/Suspense&gt;</code></pre>
+        </div>
+
+        <p>看起来类似 useSuspenseQuery，但<strong>关键差异</strong>：</p>
+
+        <ul>
+          <li><b>use 没有 cache</b>：每次 render 用同一 promise 引用 → 复用结果（基于 Promise referential equality）；引用变了 → 重新 fetch</li>
+          <li><b>useSuspenseQuery 有完整 query lifecycle</b>：cache + invalidate + refetch + lifecycle hook</li>
+          <li><b>use 可以在条件 / 循环里用</b>（不像 hook）</li>
+          <li><b>useSuspenseQuery 限制更多</b>（不能 enabled: false / placeholderData）</li>
+        </ul>
+
+        <h3>RSC 创建 promise + Client use 消费的标准模式</h3>
+
+        <p>这是 React 19 + RSC 的核心模式：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/posts/page.tsx (Server Component)
+import { Suspense } from 'react';
+import ClientPosts from './ClientPosts';
+
+export default function PostsPage() {
+  // 启动 fetch，promise 通过 props 传给 Client Component
+  const postsPromise = fetch('/api/posts').then(r =&gt; r.json());
+  return (
+    &lt;Suspense fallback={&lt;Loading /&gt;}&gt;
+      &lt;ClientPosts postsPromise={postsPromise} /&gt;
+    &lt;/Suspense&gt;
+  );
+}
+
+// app/posts/ClientPosts.tsx
+'use client';
+import { use } from 'react';
+
+export default function ClientPosts({ postsPromise }: { postsPromise: Promise&lt;Post[]&gt; }) {
+  const posts = use(postsPromise);
+  return &lt;ul&gt;{posts.map(p =&gt; &lt;li key={p.id}&gt;{p.title}&lt;/li&gt;)}&lt;/ul&gt;;
+}</code></pre>
+        </div>
+
+        <p>这个模式适合<strong>简单场景</strong>：server 启动 fetch + client 流式消费 + 不需要 cache / refetch / invalidate。</p>
+
+        <p>不适合：需要 cache / refetch / mutation 的场景。那些用 useSuspenseQuery 配 hydration 桥。</p>
+
+        <h3>不要直接用 use(promise) 当 cache library</h3>
+
+        <p>常见错误：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ 反模式：每次 render 创建新 promise
+'use client';
+function User({ id }: { id: string }) {
+  const promise = fetch(`/api/users/${id}`).then(r =&gt; r.json());  // 每次 render 新 promise
+  const user = use(promise);  // 每次都重新 fetch
+  return &lt;div&gt;{user.name}&lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <p>修复方案：</p>
+        <ul>
+          <li><b>方案 A</b>：promise 由 Server Component 创建（如上面"标准模式"）</li>
+          <li><b>方案 B</b>：用 useSuspenseQuery（自带 cache）</li>
+          <li><b>方案 C</b>：把 promise 缓存到 useState 或 useRef（罕见）</li>
+        </ul>
+
+        <h3>useMutation + Server Action 协作</h3>
+
+        <p>典型场景：客户端组件想用乐观更新，但 server 数据变更要走 Server Action（比 Route Handler 更顺）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/_actions/todos.ts
+'use server';
+import { revalidatePath, revalidateTag } from 'next/cache';
+
+export async function addTodoAction(text: string) {
+  await db.todos.create({ data: { text } });
+  revalidateTag('todos');  // 让 server cache（'use cache' / next: { tags }）失效
+  return { success: true };
+}
+
+// app/_components/AddTodo.tsx
+'use client';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { addTodoAction } from '@/app/_actions/todos';
+
+export function AddTodo() {
+  const queryClient = useQueryClient();
+  const { mutate, isPending } = useMutation({
+    mutationFn: addTodoAction,  // 直接调 Server Action
+    onMutate: async (text) =&gt; {
+      // 4 步乐观更新 client cache
+      await queryClient.cancelQueries({ queryKey: ['todos'] });
+      const prev = queryClient.getQueryData(['todos']);
+      queryClient.setQueryData(['todos'], (old: any[] = []) =&gt; [...old, { id: 'temp', text, done: false }]);
+      return { prev };
+    },
+    onError: (_e, _v, ctx) =&gt; ctx &amp;&amp; queryClient.setQueryData(['todos'], ctx.prev),
+    onSettled: () =&gt; {
+      // 双向 invalidate：server cache 由 Server Action 内的 revalidateTag 处理
+      // client cache 由这里 invalidate
+      queryClient.invalidateQueries({ queryKey: ['todos'] });
+    },
+  });
+  // ...
+}</code></pre>
+        </div>
+
+        <p>双向同步：</p>
+        <ul>
+          <li>server cache 失效：Server Action 内 <code>revalidatePath</code> / <code>revalidateTag</code> / <code>updateTag</code></li>
+          <li>client cache 失效：useMutation 的 onSettled 里 <code>queryClient.invalidateQueries</code></li>
+        </ul>
+
+        <p>两者都要做。少一个会导致：</p>
+        <ul>
+          <li>只 server invalidate：client cache 仍是旧；用户切走再回来才看到新</li>
+          <li>只 client invalidate：client refetch 拿到的还是 server 旧 cache</li>
+        </ul>
+
+        <h3>两层 cache 同步的细节</h3>
+
+        <p>实战中两层 cache 同步是 RSC 时代<strong>新挑战</strong>。常见复杂场景：</p>
+
+        <p><b>场景 A · 第三方 push 通知</b>：WebSocket 推送数据 → client setQueryData。但 server cache 还是旧的，下次 SSR 仍渲染旧数据。</p>
+        <ul>
+          <li>解决：用 router.refresh() 让 RSC 重新跑（间接刷新 server cache）</li>
+        </ul>
+
+        <p><b>场景 B · client mutation 后 navigation</b>：mutation 改了 todos → invalidate client cache → 用户跳到新页面 → 这页的 server-render 用了旧 server cache。</p>
+        <ul>
+          <li>解决：mutation 内 revalidatePath 或 revalidateTag；client onSuccess 后 router.refresh()</li>
+        </ul>
+
+        <p>详细 server-side cache 机制见 <a href="../../next/05-caching/index.html">Next.js P5 缓存系统</a>。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 标准 dashboard hydration 桥 setup</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/layout.tsx
+import { Providers } from './Providers';
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    &lt;html lang="zh-CN"&gt;
+      &lt;body&gt;
+        &lt;Providers&gt;{children}&lt;/Providers&gt;
+      &lt;/body&gt;
+    &lt;/html&gt;
+  );
+}
+
+// app/Providers.tsx (见前面 setup)
+// app/queryClient.ts
+import { cache } from 'react';
+import { QueryClient } from '@tanstack/react-query';
+export const getQueryClient = cache(() =&gt; new QueryClient({
+  defaultOptions: { queries: { staleTime: 60 * 1000 } },
+}));
+
+// app/dashboard/page.tsx (Server Component)
+import { dehydrate, HydrationBoundary } from '@tanstack/react-query';
+import { getQueryClient } from '@/app/queryClient';
+import DashboardClient from './DashboardClient';
+
+export default async function DashboardPage() {
+  const queryClient = getQueryClient();
+  // 并发 prefetch 多个 query
+  await Promise.all([
+    queryClient.prefetchQuery({ queryKey: ['user'], queryFn: api.getCurrentUser }),
+    queryClient.prefetchQuery({ queryKey: ['stats'], queryFn: api.getStats }),
+    queryClient.prefetchQuery({ queryKey: ['notifications'], queryFn: api.getNotifications }),
+  ]);
+
+  return (
+    &lt;HydrationBoundary state={dehydrate(queryClient)}&gt;
+      &lt;DashboardClient /&gt;
+    &lt;/HydrationBoundary&gt;
+  );
+}
+
+// app/dashboard/DashboardClient.tsx
+'use client';
+import { useQuery } from '@tanstack/react-query';
+
+export default function DashboardClient() {
+  const { data: user } = useQuery({ queryKey: ['user'], queryFn: api.getCurrentUser });
+  const { data: stats } = useQuery({ queryKey: ['stats'], queryFn: api.getStats });
+  // 命中 cache，无 loading
+  // 切走再回 cache 仍在
+  // ...
+}</code></pre>
+        </div>
+
+        <h3>场景 2 · prefetchInfiniteQuery for infinite scroll</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/feed/page.tsx (Server Component)
+export default async function FeedPage() {
+  const queryClient = getQueryClient();
+  await queryClient.prefetchInfiniteQuery({
+    queryKey: ['feed'],
+    queryFn: ({ pageParam }) =&gt; api.getFeed({ cursor: pageParam }),
+    initialPageParam: null,
+    pages: 1,  // server-side 只 prefetch 第一页
+    getNextPageParam: (last) =&gt; last.nextCursor,
+  });
+  return (
+    &lt;HydrationBoundary state={dehydrate(queryClient)}&gt;
+      &lt;FeedClient /&gt;
+    &lt;/HydrationBoundary&gt;
+  );
+}
+
+// app/feed/FeedClient.tsx
+'use client';
+export default function FeedClient() {
+  const { data, fetchNextPage, hasNextPage } = useInfiniteQuery({
+    queryKey: ['feed'],
+    queryFn: ({ pageParam }) =&gt; api.getFeed({ cursor: pageParam }),
+    initialPageParam: null,
+    getNextPageParam: (last) =&gt; last.nextCursor,
+  });
+  // 第一页命中 server prefetch；后续 fetchNextPage client-side
+  // ...
+}</code></pre>
+        </div>
+
+        <h3>场景 3 · use(promise) 简单流式（不用 TanStack Query）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/posts/page.tsx (Server Component)
+import { Suspense } from 'react';
+import ClientPosts from './ClientPosts';
+
+export default function PostsPage() {
+  // 启动 fetch（不 await）
+  const postsPromise = fetch('/api/posts').then(r =&gt; r.json());
+  return (
+    &lt;&gt;
+      &lt;h1&gt;Posts&lt;/h1&gt;  {/* 立即 render */}
+      &lt;Suspense fallback={&lt;Loading /&gt;}&gt;
+        &lt;ClientPosts postsPromise={postsPromise} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}
+
+// app/posts/ClientPosts.tsx
+'use client';
+import { use } from 'react';
+export default function ClientPosts({ postsPromise }: { postsPromise: Promise&lt;Post[]&gt; }) {
+  const posts = use(postsPromise);
+  return &lt;ul&gt;{posts.map(p =&gt; &lt;li key={p.id}&gt;{p.title}&lt;/li&gt;)}&lt;/ul&gt;;
+}</code></pre>
+        </div>
+
+        <p>简单 + 流式：server 启动 fetch → React 18+ 的 streaming SSR 把这段挂起 → fetch 完成时 stream chunk 给 client → use(promise) resolve → 渲染。</p>
+
+        <p>不需要 cache / mutation / refetch 时这是最简单方案。需要的话仍走 TanStack Query。</p>
+
+        <h3>场景 4 · 完整 mutation + Server Action 双向同步</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/_actions/todos.ts
+'use server';
+import { revalidateTag } from 'next/cache';
+import { auth } from '@/lib/auth';
+
+export async function addTodo(text: string) {
+  const session = await auth();
+  if (!session) throw new Error('Unauthorized');
+  await db.todos.create({ data: { text, userId: session.userId } });
+  revalidateTag(`todos-${session.userId}`);  // server cache 失效
+}
+
+export async function deleteTodo(id: string) {
+  const session = await auth();
+  if (!session) throw new Error('Unauthorized');
+  await db.todos.delete({ where: { id, userId: session.userId } });
+  revalidateTag(`todos-${session.userId}`);
+}
+
+// app/todos/page.tsx (RSC)
+export default async function TodosPage() {
+  const session = await auth();
+  const queryClient = getQueryClient();
+  await queryClient.prefetchQuery({
+    queryKey: ['todos', session.userId],
+    queryFn: () =&gt; fetch(`/api/todos?userId=${session.userId}`, {
+      next: { tags: [`todos-${session.userId}`] }  // 配合 Server Action 的 revalidateTag
+    }).then(r =&gt; r.json()),
+  });
+  return (
+    &lt;HydrationBoundary state={dehydrate(queryClient)}&gt;
+      &lt;TodoListClient userId={session.userId} /&gt;
+    &lt;/HydrationBoundary&gt;
+  );
+}
+
+// app/todos/TodoListClient.tsx
+'use client';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { addTodo, deleteTodo } from '@/app/_actions/todos';
+
+export default function TodoListClient({ userId }: { userId: string }) {
+  const queryClient = useQueryClient();
+  const { data: todos = [] } = useQuery({
+    queryKey: ['todos', userId],
+    queryFn: () =&gt; fetch(`/api/todos?userId=${userId}`).then(r =&gt; r.json()),
+  });
+
+  const addMutation = useMutation({
+    mutationFn: addTodo,
+    onMutate: async (text) =&gt; {
+      await queryClient.cancelQueries({ queryKey: ['todos', userId] });
+      const prev = queryClient.getQueryData(['todos', userId]);
+      queryClient.setQueryData(['todos', userId], (old: any[] = []) =&gt; [
+        ...old, { id: `temp-${Date.now()}`, text, done: false }
+      ]);
+      return { prev };
+    },
+    onError: (_e, _v, ctx) =&gt; ctx &amp;&amp; queryClient.setQueryData(['todos', userId], ctx.prev),
+    onSettled: () =&gt; queryClient.invalidateQueries({ queryKey: ['todos', userId] }),
+    // 注意：Server Action 内已 revalidateTag → server cache 失效
+    // 这里 invalidateQueries → client cache 失效
+    // 双向同步完成
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteTodo,
+    onMutate: async (id) =&gt; {
+      await queryClient.cancelQueries({ queryKey: ['todos', userId] });
+      const prev = queryClient.getQueryData(['todos', userId]);
+      queryClient.setQueryData(['todos', userId], (old: any[] = []) =&gt; old.filter(t =&gt; t.id !== id));
+      return { prev };
+    },
+    onError: (_e, _v, ctx) =&gt; ctx &amp;&amp; queryClient.setQueryData(['todos', userId], ctx.prev),
+    onSettled: () =&gt; queryClient.invalidateQueries({ queryKey: ['todos', userId] }),
+  });
+
+  // ...
+}</code></pre>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · Providers 完整模板</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/Providers.tsx
+'use client';
+import { QueryClient, QueryClientProvider, isServer } from '@tanstack/react-query';
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
+
+function makeQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        staleTime: 60 * 1000,
+        retry: (failureCount, error: any) =&gt; {
+          if (error?.status &gt;= 400 &amp;&amp; error?.status &lt; 500) return false;
+          return failureCount &lt; 3;
+        },
+      },
+    },
+  });
+}
+
+let browserQueryClient: QueryClient | undefined;
+
+function getQueryClient() {
+  if (isServer) return makeQueryClient();
+  if (!browserQueryClient) browserQueryClient = makeQueryClient();
+  return browserQueryClient;
+}
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  const queryClient = getQueryClient();
+  return (
+    &lt;QueryClientProvider client={queryClient}&gt;
+      {children}
+      {!isServer &amp;&amp; &lt;ReactQueryDevtools initialIsOpen={false} /&gt;}
+    &lt;/QueryClientProvider&gt;
+  );
+}
+
+// app/queryClient.ts (server-side helper)
+import 'server-only';
+import { cache } from 'react';
+import { QueryClient } from '@tanstack/react-query';
+
+export const getServerQueryClient = cache(() =&gt; new QueryClient({
+  defaultOptions: { queries: { staleTime: 60 * 1000 } },
+}));</code></pre>
+        </div>
+
+        <h3>代码 2 · Streamed RSC + use(promise) 流式渲染</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 用 use(promise) 实现"快内容先显示 + 慢内容流式补"
+// app/page.tsx (RSC)
+export default function Home() {
+  const fastDataPromise = fetch('/api/fast').then(r =&gt; r.json());
+  const slowDataPromise = fetch('/api/slow').then(r =&gt; r.json());
+
+  return (
+    &lt;&gt;
+      &lt;Suspense fallback={&lt;FastSkeleton /&gt;}&gt;
+        &lt;FastSection promise={fastDataPromise} /&gt;
+      &lt;/Suspense&gt;
+      &lt;Suspense fallback={&lt;SlowSkeleton /&gt;}&gt;
+        &lt;SlowSection promise={slowDataPromise} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/&gt;
+  );
+}
+
+// app/_components/FastSection.tsx
+'use client';
+import { use } from 'react';
+export function FastSection({ promise }: { promise: Promise&lt;any&gt; }) {
+  const data = use(promise);
+  return &lt;div&gt;{data.title}&lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <h3>代码 3 · LLM 流式 + TanStack Query</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/_actions/chat.ts (Server Action)
+'use server';
+export async function* streamChat(prompt: string) {
+  // server-side stream from OpenAI / Claude
+  const res = await fetch('https://api.example.com/chat', {
+    method: 'POST',
+    body: JSON.stringify({ prompt }),
+  });
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    yield decoder.decode(value);
+  }
+}
+
+// app/_components/Chat.tsx
+'use client';
+import { useQuery, streamedQuery } from '@tanstack/react-query';
+import { streamChat } from '@/app/_actions/chat';
+
+export function Chat({ prompt }: { prompt: string }) {
+  const { data: chunks = [], isFetching } = useQuery({
+    queryKey: ['chat', prompt],
+    queryFn: streamedQuery({ streamFn: () =&gt; streamChat(prompt) }),
+    enabled: !!prompt,
+  });
+  return &lt;div&gt;{chunks.join('')}{isFetching &amp;&amp; '▍'}&lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <h3>代码 4 · router.refresh() 让 RSC 重跑</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use client';
+import { useRouter } from 'next/navigation';
+
+export function MyComponent() {
+  const router = useRouter();
+  const queryClient = useQueryClient();
+
+  const { mutate } = useMutation({
+    mutationFn: api.editPost,
+    onSuccess: () =&gt; {
+      queryClient.invalidateQueries({ queryKey: ['posts'] });
+      router.refresh();  // 让 RSC 重新跑（拿 server 真实新数据）
+    },
+  });
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>跨请求复用 QueryClient</b> —— 全局 new 一个 → 用户 A 的 cache 给用户 B 看到。<strong>严重 bug + 隐私问题</strong>。每请求 new + 用 React cache helper</li>
+          <li><b>Server Component 里直接用 useQuery</b> —— Server Component 不支持 hooks。要么用 server-side prefetch + dehydrate，要么改 Client Component</li>
+          <li><b>prefetch 但没 dehydrate / HydrationBoundary</b> —— prefetch 进了 server 端 queryClient cache，但没桥到 client → client 仍要重发请求</li>
+          <li><b>HydrationBoundary 包错位置</b> —— 必须包在用 useQuery 的 Client Component 外。包错（如包整 layout）反而行为异常</li>
+          <li><b>server prefetch 的 query 没传 queryFn</b> —— prefetchQuery 必须传 queryFn 才能拿到数据。client 端的 useQuery 也必须传（否则 cache 失效后 client 不能 refetch）</li>
+          <li><b>staleTime 设 0 让 hydrate 后立刻 refetch</b> —— 默认 staleTime 0 → cache hydrate 进来立刻 stale → client mount 立刻 refetch。预期行为但可能不希望。设 staleTime &gt; 0</li>
+          <li><b>每次 render 创建 promise 给 use 消费</b> —— 每次 render 新 promise → 每次都 fetch。promise 应该由 RSC 创建（Server Component 内）</li>
+          <li><b>use 在 Server Component 里用</b> —— use 是 Client API（也能在 RSC 用某些场景但限制多）。一般用法是 Client Component 内 use server 创建的 promise</li>
+          <li><b>Server Action 内忘了 revalidate</b> —— server cache 不失效；下次 SSR 仍渲染旧数据；client cache 失效但 SSR 又给旧的</li>
+          <li><b>useMutation 调 Server Action 后只 client invalidate</b> —— 如果 Server Action 内没 revalidate，server cache 未失效。两边都要做</li>
+          <li><b>WebSocket setQueryData 后没 router.refresh</b> —— client cache 更新但 server cache 仍旧；用户切 page 再回（走 server-render）会拿旧数据</li>
+          <li><b>dehydrate 数据太大</b> —— 大 cache 进 RSC payload 影响 TTFB。只 prefetch 必要的数据；不要 prefetch 整个 dashboard 所有 query</li>
+          <li><b>Server Action 抛错没处理</b> —— useMutation 拿到的 error 是 Server Action 抛的；注意业务错误用 return（不 throw）让 useMutation 走 onSuccess</li>
+          <li><b>ensureQueryData 而不是 prefetchQuery</b> —— ensureQueryData 在 server 也能用，命中 cache 不发 → 适合预热但<strong>请求间不复用</strong>（每请求 new client cache）</li>
+          <li><b>把 useSuspenseQuery 换成 use(promise)</b> —— 失去 cache + lifecycle。详见 P5.1</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/guides/advanced-ssr" target="_blank" rel="noopener">TanStack Query · Advanced SSR</a> · hydration 桥官方权威</li>
+          <li><a href="https://tanstack.com/query/latest/docs/framework/react/guides/ssr" target="_blank" rel="noopener">TanStack Query · SSR Guide</a></li>
+          <li><a href="https://nextjs.org/docs/app/guides/migrating/from-vite" target="_blank" rel="noopener">Next.js · Third-party libraries with hydration</a></li>
+          <li><a href="https://react.dev/reference/react/use" target="_blank" rel="noopener">React Docs · use API</a></li>
+          <li><a href="https://github.com/TkDodo/blog/blob/main/content/posts/the-react-query-context.mdx" target="_blank" rel="noopener">TkDodo · React Query and React Context (App Router)</a></li>
+          <li><a href="../../next/03-rsc-streaming/index.html">Next.js 主题 P3 · RSC 与流式</a></li>
+          <li><a href="../../next/04-server-actions/01-server-actions.html">Next.js 主题 P4.1 · Server Actions</a></li>
+          <li><a href="../../next/05-caching/index.html">Next.js 主题 P5 · 缓存系统</a></li>
+          <li><a href="../../react/06-modern/02-actions.html">React 主题 P6.2 · Actions（含 use API）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-rsc-coexistence.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P5.1 · RSC 时代还该用吗</span>
+          </a>
+          <a class="next" href="../06-swr-peers/01-swr-and-peers.html">
+            <span class="label">下一章 →</span>
+            <span class="title">P6.1 · SWR + 同代人横评</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
