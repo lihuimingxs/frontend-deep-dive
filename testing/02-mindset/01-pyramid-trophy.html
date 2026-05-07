@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>测试金字塔 vs 测试奖杯 · P2.1 · 测试工具深度学习</title>
+    <meta name="description" content="测试金字塔（Mike Cohn 2003）vs 测试奖杯（Kent C. Dodds 2018）。两种心智模型对各层占比的不同判断 + 测试梯形反模式 + 2026 实测分布参考 + 组件测试模糊单元/集成边界。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2334a853'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ET%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>测试工具深度学习</span><span class="site-title-badge" style="background: oklch(0.6 0.17 150); color: #fff">Test</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · 测试心智</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-pyramid-trophy.html" class="active">01 · 测试金字塔 vs 测试奖杯</a></li>
+          <li><a href="02-behavior-not-implementation.html">02 · 测行为不测实现</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">测试工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · 测试心智</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 测试金字塔 vs 测试奖杯</span>
+        </nav>
+        <h1>测试金字塔 vs 测试奖杯</h1>
+        <p class="lead">
+          每个层级的测试该写多少？传统答案是<strong>测试金字塔</strong>（Mike Cohn 2003：单元最多 → 集成中等 → e2e 最少）。Kent C. Dodds 2018 提出<strong>测试奖杯</strong>反对：单元便宜但价值低，集成测试才是性价比最高层。本章讲清这两个模型的差异、什么时候用哪个、以及组件测试如何模糊"单元 vs 集成"的边界。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~20 分钟</span>
+          <span><strong>前置</strong> P1（测试工具是谁）</span>
+          <span><strong>主要来源</strong> Kent C. Dodds blog / Martin Fowler bliki / Mike Cohn 2009 书</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>测试金字塔（Mike Cohn 2003）—— 单元 70%（快、稳定、隔离）/ 集成 20% / e2e 10%。强调"快 + 稳定 + 隔离"，反对 e2e 太多。</li>
+          <li>Kent Dodds 测试奖杯（2018）—— Static（TS / lint）/ Unit / <strong>Integration（最大肚子，50%+）</strong> / E2E。论点：单元便宜但价值低，集成测试是性价比最高层。</li>
+          <li>两者不矛盾——金字塔是"测试速度模型"，奖杯是"测试价值模型"。前者按"快慢稳定"分层，后者按"用户价值"分层。</li>
+          <li>2026 实测分布参考——单元 30% / 集成 50% / e2e 15% / 视觉 5%。整体接近奖杯模型。</li>
+          <li>测试梯形反模式——"e2e 太多 unit 太少"（Cypress everything）。常见于团队把"覆盖端到端用户路径"等同于"全部用 e2e 写"。</li>
+          <li>静态层（TypeScript / ESLint）是奖杯模型新增——把"类型 + lint"算作测试的一种。这层投入小、收益大，但被传统金字塔忽略。</li>
+          <li>组件测试模糊"单元 vs 集成"边界——一个 React 组件用 Testing Library + MSW 测，本身就跨多层（组件 + state + 网络），它属于哪层？答案：不重要，<strong>价值高于分类</strong>。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>测试金字塔的起源（Mike Cohn 2003）</h3>
+        <p>2003 年敏捷开发倡导者 Mike Cohn 在《Succeeding with Agile》一书中提出测试金字塔模型。当时的背景：自动化测试还在普及，很多团队在"全部用 e2e 测"或"完全不写测试"两个极端。Cohn 的金字塔是中间路线：</p>
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">         /\
+        /e2\          ← 慢、贵、flaky → 数量少（5-10%）
+       /----\
+      /  集 成 \      ← 中等速度 + 价值 → 中等数量（20-30%）
+     /--------\
+    /  单 元    \    ← 快、便宜、稳定 → 数量最多（60-70%）
+   /------------\
+  / Static (无)   \  ← 当时不被算作测试</code></pre>
+        </div>
+
+        <p>核心论点：</p>
+        <ul>
+          <li>单元测试快（毫秒级）、隔离（无依赖）、稳定（无 flaky）→ 应该最多</li>
+          <li>e2e 慢（秒到分钟）、贵（要起整套环境）、flaky（网络/时序）→ 应该最少</li>
+          <li>集成测试介于中间，作为"两边的桥"</li>
+        </ul>
+
+        <p>这个模型在 2003-2018 年是行业共识。它解决了"全部 e2e"反模式（CI 跑半天、经常红）和"无测试"问题。但它有一个隐藏假设：单元测试都是高价值的——这个假设在 React / 组件化开发普及后开始动摇。</p>
+
+        <h3>Kent C. Dodds 的反思（2016-2018）</h3>
+        <p>Kent C. Dodds（前 Testing Library 作者，前 PayPal 工程师）在 2016 年写一系列 blog 反思测试金字塔。他观察到 React 团队常见的 4 类问题：</p>
+
+        <ol>
+          <li>团队按金字塔分配测试投入，60% 写单元测试 → 大量单元测试覆盖了实现细节而非用户价值</li>
+          <li>组件重构时 60% 单元测试全破，重写测试比重写组件还累</li>
+          <li>"100% 单元覆盖率"不能保证用户路径不出 bug</li>
+          <li>真正给用户带来信心的测试（"能登录、能下单、能付款"）反而被压缩到 10% e2e 层</li>
+        </ol>
+
+        <p>2018 年他发表 <em>Write tests. Not too many. Mostly integration.</em> 提出测试奖杯模型：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">     /\
+    /e2\         ← 关键用户路径（10-15%）
+   /----\
+  / 集 成 \      ← 最大肚子（50%+）—— 多组件 + state + 网络
+ /--------\
+ \  单 元 /     ← 工具函数、纯逻辑（20-30%）
+  \------/
+   \    /
+    \  /
+   Static       ← TypeScript + ESLint + Prettier（成本低收益大）</code></pre>
+        </div>
+
+        <p>关键变化：</p>
+
+        <ul>
+          <li>奖杯肚子最大（集成）——而不是金字塔的"单元最多"</li>
+          <li>新增 Static 层——TypeScript / lint / 类型测试也是测试</li>
+          <li>e2e 不是越少越好——关键路径要覆盖，10-15% 是合理比例</li>
+          <li>形状是"奖杯"而不是"金字塔"——下窄是因为单元不应该最多</li>
+        </ul>
+
+        <p>Kent 的核心论点：</p>
+
+        <blockquote style="border-left: 3px solid var(--accent); padding-left: 16px; margin: 16px 0; color: var(--text-muted)">
+          The more your tests resemble the way your software is used, the more confidence they can give you.
+          <br>—— Kent C. Dodds, 2018
+        </blockquote>
+
+        <p>翻译：测试越像软件被使用的方式，给你的信心就越多。这句话是 Testing Library + 测试奖杯 + "测行为不测实现"三个概念的共同根。</p>
+
+        <h3>金字塔 vs 奖杯：不是对立而是不同视角</h3>
+
+        <p>很多人把这两个模型当作对立，但其实它们衡量的是不同维度：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>测试金字塔</th>
+              <th>测试奖杯</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>核心维度</td>
+              <td>速度 / 成本 / 稳定性</td>
+              <td>价值 / 信心</td>
+            </tr>
+            <tr>
+              <td>反对什么</td>
+              <td>"全 e2e"（慢 + flaky）</td>
+              <td>"全单元"（覆盖实现不覆盖价值）</td>
+            </tr>
+            <tr>
+              <td>主推什么层</td>
+              <td>单元（最多）</td>
+              <td>集成（最多）</td>
+            </tr>
+            <tr>
+              <td>静态层</td>
+              <td>不计</td>
+              <td>计（TS / lint）</td>
+            </tr>
+            <tr>
+              <td>历史时期</td>
+              <td>2003-2018 主流</td>
+              <td>2018+ 主流（特别是 React 生态）</td>
+            </tr>
+            <tr>
+              <td>典型适用</td>
+              <td>后端 / 算法 / 系统服务</td>
+              <td>前端 / 组件化 / 用户应用</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>实际项目应该同时考虑两个维度：</p>
+
+        <ul>
+          <li>单元层：写"高价值 + 隔离"的——纯函数、算法、复杂逻辑（金字塔速度优势 + 奖杯价值要求）</li>
+          <li>集成层：写"多组件协作"——这是奖杯主张的肚子层，价值最高</li>
+          <li>e2e 层：写"关键用户路径"——5-10 个核心场景就够（不要"覆盖所有"）</li>
+          <li>静态层：用 TypeScript + ESLint 把"低价值类型/格式问题"在编译期消除</li>
+        </ul>
+
+        <h3>2026 实测分布参考</h3>
+
+        <p>根据真实开源 / 商业项目调查（Vite / Astro / shadcn / Vercel 内部数据），现代 React 项目典型分布：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>层</th>
+              <th>占比</th>
+              <th>工具</th>
+              <th>覆盖什么</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>静态</td>
+              <td>—（不算 case 数）</td>
+              <td>TypeScript / ESLint / Prettier</td>
+              <td>类型 / 格式 / lint 规则</td>
+            </tr>
+            <tr>
+              <td>单元</td>
+              <td>25-35%</td>
+              <td>Vitest + assert</td>
+              <td>纯函数 / utility / 算法 / 复杂业务逻辑</td>
+            </tr>
+            <tr>
+              <td>集成</td>
+              <td>45-55%</td>
+              <td>Vitest + Testing Library + MSW + happy-dom</td>
+              <td>组件 + state + 网络 + 多组件协作</td>
+            </tr>
+            <tr>
+              <td>E2E</td>
+              <td>10-15%</td>
+              <td>Playwright（真浏览器）</td>
+              <td>关键用户路径（登录 / 下单 / 付款 / 导出）</td>
+            </tr>
+            <tr>
+              <td>视觉</td>
+              <td>3-5%</td>
+              <td>Chromatic / Playwright snapshot</td>
+              <td>UI 视觉回归</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>这个分布印证了奖杯模型——集成层占近一半，是最大投入。如果你的项目分布严重偏离（如 70% 单元 + 5% 集成 + 25% e2e），通常是测试策略有问题。</p>
+
+        <h3>测试梯形反模式</h3>
+
+        <p>测试梯形不是新模型，是常见反模式——团队把"覆盖端到端用户路径"等同于"全部用 e2e 写"：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">    /----------\
+   /     e2e      \    ← 50%+ 大量 Cypress 测试
+  /--------------\
+ /     集  成      \  ← 30%
+ \--------------/
+  \     单  元    /   ← 5-10% 几乎不写
+   \------------/</code></pre>
+        </div>
+
+        <p>常见症状：</p>
+        <ul>
+          <li>"我们用 Cypress 测一切"——CI 时间 30-60 分钟</li>
+          <li>flaky 严重——每次 PR 重跑 2-3 次才过</li>
+          <li>新人不敢写测试——e2e 写起来太麻烦，干脆不写</li>
+          <li>组件重构后大批 e2e 用例破——因为它们测了 UI 细节</li>
+        </ul>
+
+        <p>根因：团队没有意识到"覆盖用户路径"和"工具选择"是两件事。集成测试可以覆盖大部分用户路径（用 Testing Library 测组件 + MSW mock 网络），不需要真浏览器。e2e 应该只覆盖那些"必须真浏览器才能验证的 5-10 个关键路径"。</p>
+
+        <h3>组件测试模糊单元 / 集成边界</h3>
+
+        <p>2024-2026 年 Vitest browser mode + Playwright Component Testing 的兴起，让"组件测试"难以归类：</p>
+
+        <p>典型组件测试：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 这个测试属于哪层？
+test('login form submits and redirects', async () =&gt; {
+  // 渲染组件（单元？）
+  render(&lt;LoginForm /&gt;);
+
+  // 用户操作（集成？）
+  await userEvent.type(screen.getByLabelText('Username'), 'alice');
+  await userEvent.click(screen.getByRole('button'));
+
+  // mock 网络（集成？）
+  // server.listen(...) handlers 已配
+  // 然后断言跳转（e2e？）
+  expect(await screen.findByText('Welcome')).toBeInTheDocument();
+});</code></pre>
+        </div>
+
+        <p>它跨了：组件渲染（单元）+ state 管理（集成）+ 网络 mock（集成）+ 用户事件（e2e 风格）+ 路由跳转断言（e2e 风格）。</p>
+
+        <p>答案：不要试图归类。Kent Dodds 自己也说："分类只是工具，不是目的。能给你信心的测试就是好测试，不论它叫什么。"</p>
+
+        <p>2026 年的现实趋势是分类标签弱化，分布从离散三层（unit / integration / e2e）变成连续光谱：</p>
+
+        <ul>
+          <li>纯函数测试（最快、最便宜）</li>
+          <li>组件测试 in jsdom（快、易写）</li>
+          <li>组件测试 in browser mode（慢一点、CSS 准确）</li>
+          <li>页面测试 in Playwright（多组件 + 路由）</li>
+          <li>真 e2e（多页面 + 后端集成）</li>
+        </ul>
+
+        <p>每个项目按这个光谱选合适的层，不需要严格对应"金字塔"或"奖杯"。</p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 关键洞见：模型是工具，不是教条</div>
+          <p>金字塔模型解决"全 e2e 反模式"，奖杯模型解决"全单元反模式"。两者都是对当时主流问题的回应，不是绝对真理。2026 年的合理做法是：理解两个模型的核心论点，根据项目特征调整每层比例，不要把 60-70% 单元（金字塔）或 50% 集成（奖杯）当作硬指标。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · React SaaS 项目的测试预算分配</h3>
+          <p><strong>背景</strong>：3 人小团队，做 B2B SaaS。前期阶段，决定测试栈占多少时间。</p>
+          <p><strong>建议预算</strong>：</p>
+          <ul>
+            <li>静态层（TypeScript + ESLint + Prettier）—— 项目第 1 周搭好，后续零维护</li>
+            <li>单元层（30%）—— 复杂业务逻辑（计费 / 权限 / 数据转换）</li>
+            <li>集成层（55%）—— 主要组件用 Testing Library + MSW 测；这是最大投入</li>
+            <li>e2e 层（10%）—— 5 个关键路径：登录 / 创建项目 / 邀请用户 / 升级套餐 / 导出</li>
+            <li>视觉层（5%）—— 仅核心 UI（Button / Input / Card）跑 Chromatic</li>
+          </ul>
+          <p>这套接近奖杯模型，符合 React 项目特征。预期：CI 5-8 分钟内完成，给团队足够信心。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · Node 后端 lib 的测试策略</h3>
+          <p><strong>背景</strong>：开源 Node lib（如 utility 库 / SDK），无 UI 组件。</p>
+          <p><strong>建议预算</strong>：</p>
+          <ul>
+            <li>静态层 —— TypeScript</li>
+            <li>单元层（70%）—— 大量纯函数测试（这是金字塔典型）</li>
+            <li>集成层（25%）—— 测多个函数协作 + 简单 mock</li>
+            <li>e2e 层（5%）—— 仅 smoke test（"装上能跑"）</li>
+          </ul>
+          <p>这套接近金字塔模型，符合 Node lib 特征。后端 lib 没有"用户路径"概念，单元层占大头是合理的。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · 已有"全 Cypress" 项目的瘦身</h3>
+          <p><strong>背景</strong>：3 年的 React 项目，200 个 Cypress e2e 测试，0 单元测试。CI 跑 45 分钟，经常 flaky。</p>
+          <p><strong>诊断</strong>：典型测试梯形反模式。Cypress 测试覆盖了大量"组件交互 + 表单验证 + 状态切换"——这些应该是<strong>集成层</strong>而非 e2e 层的工作。</p>
+          <p><strong>瘦身策略</strong>（6 个月渐进）：</p>
+          <ul>
+            <li>识别 Cypress 用例 → 哪些是真 e2e（多页面 + 后端集成），哪些是组件交互（应该迁集成）</li>
+            <li>新增组件交互测试用 Vitest + Testing Library + MSW 写</li>
+            <li>把 Cypress 用例瘦身到 10-15 个真正的 e2e（关键路径）</li>
+            <li>大部分组件交互重写为 Testing Library 集成测试（速度提升 10x+）</li>
+            <li>预期：CI 45 分钟 → 5-8 分钟，flaky 大幅降低</li>
+          </ul>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">单元层 · 纯函数测试</span>
+          <pre class="code"><code class="lang-js">// utils/calculate-tax.ts
+import { describe, test, expect } from 'vitest';
+import { calculateTax } from './calculate-tax';
+
+describe('calculateTax', () =&gt; {
+  test('applies 10% tax for US orders', () =&gt; {
+    expect(calculateTax({ country: 'US', amount: 100 })).toBe(10);
+  });
+
+  test('returns 0 for tax-exempt categories', () =&gt; {
+    expect(calculateTax({ country: 'US', amount: 100, category: 'food' })).toBe(0);
+  });
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">集成层 · 组件 + state + 网络（奖杯肚子）</span>
+          <pre class="code"><code class="lang-js">// LoginForm.test.tsx
+import { describe, test, expect } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { http, HttpResponse } from 'msw';
+import { setupServer } from 'msw/node';
+import LoginForm from './LoginForm';
+
+const server = setupServer(
+  http.post('/api/login', () =&gt; HttpResponse.json({ user: { name: 'Alice' } }))
+);
+beforeAll(() =&gt; server.listen());
+afterAll(() =&gt; server.close());
+
+test('user can log in successfully', async () =&gt; {
+  render(&lt;LoginForm /&gt;);
+  await userEvent.type(screen.getByLabelText('Username'), 'alice');
+  await userEvent.type(screen.getByLabelText('Password'), 'secret');
+  await userEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+  expect(await screen.findByText('Welcome, Alice')).toBeInTheDocument();
+});
+
+test('shows error on invalid credentials', async () =&gt; {
+  server.use(
+    http.post('/api/login', () =&gt; HttpResponse.json({ error: 'Invalid' }, { status: 401 }))
+  );
+  render(&lt;LoginForm /&gt;);
+  await userEvent.type(screen.getByLabelText('Username'), 'bad');
+  await userEvent.type(screen.getByLabelText('Password'), 'bad');
+  await userEvent.click(screen.getByRole('button'));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Invalid credentials');
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">E2E 层 · 真浏览器 + 多页面</span>
+          <pre class="code"><code class="lang-js">// e2e/checkout.spec.ts
+import { test, expect } from '@playwright/test';
+
+test('user can complete checkout flow', async ({ page }) =&gt; {
+  // 真后端 + 真浏览器（不 mock 网络）
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByLabel('Username').fill('test-user');
+  await page.getByLabel('Password').fill('test-password');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+
+  // 跨页面操作
+  await page.goto('/products/123');
+  await page.getByRole('button', { name: 'Add to cart' }).click();
+  await page.goto('/checkout');
+  await page.getByRole('button', { name: 'Complete purchase' }).click();
+
+  // 验证关键路径完整
+  await expect(page).toHaveURL(/\/order-confirmed/);
+  await expect(page.getByText(/Order #\d+/)).toBeVisible();
+});</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 把"覆盖率"当作分布指标</div>
+          <p>很多团队定 "100% 单元覆盖率"目标，按金字塔分配 70% 时间在单元。结果：覆盖率达标但用户路径仍频繁出 bug。覆盖率 ≠ 测试质量。在测试奖杯下，集成层 50% 投入比 70% 单元覆盖率更能给信心。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 把测试梯形包装成 "Cypress everything"</div>
+          <p>"我们用 Cypress 测一切，因为它最像用户" —— Cypress 是工具，不是策略。测组件交互应该用集成层（Testing Library + MSW），快 10x 且稳定。Cypress 应该只测"必须真浏览器才能验证"的关键路径。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 把"Static 层"忽略不算</div>
+          <p>团队按金字塔分配测试时间，TypeScript / ESLint 不被算作测试。结果：本来类型系统能在编译期消除的 bug，到运行时 + 单元测试才发现。Static 层是"最便宜的测试"——开 strict TS + 严格 lint 几乎零成本。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 给单元测试"补"集成层缺失的覆盖</div>
+          <p>看到集成测试缺失，就在单元层加一堆"模拟集成"的测试（用 mock 模拟所有依赖然后断言调用次数）。这不是集成测试，是测实现细节（详见 P2.2）。集成测试应该真渲染组件 + 真 state + mock 网络层，不是模拟一切。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 组件测试占比 0</div>
+          <p>团队只写工具函数单元测试 + Cypress e2e，组件层完全没测试。一旦组件层 bug，单元测试发现不了，e2e 又慢。组件测试是 React/Vue 项目最重要的层——不写组件测试相当于放弃 50% 的奖杯肚子。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://kentcdodds.com/blog/the-testing-trophy-and-testing-classifications" target="_blank" rel="noopener">Kent C. Dodds · The Testing Trophy（2018-2021 演化）</a></li>
+          <li><a href="https://kentcdodds.com/blog/write-tests" target="_blank" rel="noopener">Kent C. Dodds · Write tests. Not too many. Mostly integration.</a></li>
+          <li><a href="https://martinfowler.com/articles/practical-test-pyramid.html" target="_blank" rel="noopener">Martin Fowler · The Practical Test Pyramid</a></li>
+          <li><a href="https://martinfowler.com/bliki/TestPyramid.html" target="_blank" rel="noopener">Martin Fowler · TestPyramid（金字塔历史考据）</a></li>
+          <li><a href="https://www.amazon.com/Succeeding-Agile-Software-Development-Using/dp/0321579364" target="_blank" rel="noopener">Mike Cohn · Succeeding with Agile（金字塔原书 2009）</a></li>
+          <li><a href="../01-overview/02-landscape.html">P1.2 · 同代人横评（前一阶段）</a></li>
+          <li><a href="02-behavior-not-implementation.html">P2.2 · 测行为不测实现（下一章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../01-overview/02-landscape.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P1.2 · 同代人横评</span>
+          </a>
+          <a class="next" href="02-behavior-not-implementation.html">
+            <span class="label">下一章 →</span>
+            <span class="title">02 · 测行为不测实现</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

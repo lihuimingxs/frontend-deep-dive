@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>测行为不测实现 · P2.2 · 测试工具深度学习</title>
+    <meta name="description" content="Kent C. Dodds 2016 年提出的「测行为不测实现」哲学。Testing Library 的设计基础。implementation detail trap 反模式列表 + 8 段对比代码 + Enzyme 退场根因。这一章是测试质量的根基。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2334a853'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ET%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>测试工具深度学习</span><span class="site-title-badge" style="background: oklch(0.6 0.17 150); color: #fff">Test</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · 测试心智</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-pyramid-trophy.html">01 · 测试金字塔 vs 测试奖杯</a></li>
+          <li><a href="02-behavior-not-implementation.html" class="active">02 · 测行为不测实现</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">测试工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · 测试心智</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 测行为不测实现</span>
+        </nav>
+        <h1>测行为不测实现</h1>
+        <p class="lead">
+          这一章是测试质量的根基。Kent C. Dodds 2016 年提出"<strong>测试越像软件被使用的方式，给的信心越多</strong>"——这句话是 Testing Library 的设计基础，也是 Enzyme 退场的根因。本章用 8 段对比代码讲清楚什么是"测实现细节"，为什么这种测试经不起重构，以及如何写出"重构友好"的测试。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P2.1（测试金字塔 vs 奖杯）</span>
+          <span><strong>主要来源</strong> Kent C. Dodds blog（Testing Implementation Details, 2018）</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>核心原则——测试应该反映用户体验，不应该反映内部实现。重构组件内部不应该破坏测试；改用户可见行为才应该破坏测试。</li>
+          <li>Kent Dodds 2018 原文一句话——"The more your tests resemble the way your software is used, the more confidence they can give you"。这是 Testing Library / 奖杯模型 / 测行为不测实现 三者共同的根。</li>
+          <li>什么是 implementation detail（实现细节）—— 用户感知不到的东西：组件内部 state 名字、useEffect 跑了几次、私有函数被调用、组件树形状、CSS class 名（除非是公开 API）。</li>
+          <li>什么是 user-visible behavior（用户行为）—— 用户能看到 / 操作的：accessibility role、显示文字、表单输入、按钮点击、URL 变化、错误提示。</li>
+          <li>Enzyme 为什么死了——shallow rendering 让"测内部"变得太容易（cwrapper.state() / wrapper.instance().method() / wrapper.find('.btn-primary')）。React 18 改变内部结构后，Enzyme 测试大量破，团队意识到根本问题不是 Enzyme 适配 React 18，而是测试代码已经"被实现细节锁定"。</li>
+          <li>Testing Library 的查询优先级——<strong>getByRole &gt; getByLabelText &gt; getByText &gt; getByTestId</strong>。前几个是用户视角；getByTestId 是最后退路（用户感知不到 data-testid）。</li>
+          <li>userEvent vs fireEvent—— userEvent 模拟真实用户操作链（click 触发 mouseover→mousedown→mouseup→click 完整序列）；fireEvent 是底层 DOM 事件。始终优先 userEvent。</li>
+          <li>不是绝对——少数场景可以测实现细节（性能关键的 hook 内部状态、复杂状态机的中间态）。但这是例外，需要明确理由。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>什么是 implementation detail</h3>
+
+        <p>判断一段代码是不是"实现细节"，有个简单的测试：<em>如果我把这段代码改写成等价但完全不同的实现，用户能感知到差异吗？</em></p>
+
+        <p>例子：</p>
+        <ul>
+          <li>组件内部叫 <code>useState</code> 还是 <code>useReducer</code> —— 用户感知不到 → 实现细节</li>
+          <li>useEffect 跑 1 次还是 2 次（结果一样）—— 用户感知不到 → 实现细节</li>
+          <li>按钮的 className 是 <code>btn-primary</code> 还是 <code>button-primary</code> —— 用户感知不到 → 实现细节</li>
+          <li>表单提交后跳转 <code>/dashboard</code> —— 用户能看到 URL 变化 → 用户行为</li>
+          <li>"Welcome, Alice" 文字显示 —— 用户能看到 → 用户行为</li>
+          <li>提交错误密码报"Invalid credentials" —— 用户能看到 → 用户行为</li>
+        </ul>
+
+        <p>这个判断标准叫"用户视角"。它和 React 内部的"声明式渲染"哲学高度一致——React 鼓励"描述结果"（声明式），Testing Library 鼓励"测试结果"（用户视角）。</p>
+
+        <h3>Kent Dodds 2018 原文核心观点</h3>
+
+        <p>Kent 在 <em>Testing Implementation Details</em> 一文中给出两类失败模式：</p>
+
+        <ol>
+          <li><strong>False negatives（误报失败）</strong>—— 用户行为没变，但因为内部实现变了，测试破。重构成本高。</li>
+          <li><strong>False positives（误报成功）</strong>—— 用户行为破了，但内部实现没变，测试通过。bug 漏到生产。</li>
+        </ol>
+
+        <p>测实现细节的测试容易出现 false negatives（重构破测试）<em>同时</em>容易出现 false positives（用户体验坏了测试不报）。这是双输。</p>
+
+        <p>测行为的测试反过来：</p>
+        <ul>
+          <li>重构内部不破测试 → 重构友好</li>
+          <li>用户体验坏了立即破测试 → 真正的安全网</li>
+        </ul>
+
+        <p>这就是为什么 Kent 说"测试越像用户使用方式，给的信心越多"——它在两个维度都更优。</p>
+
+        <h3>Testing Library 的查询优先级</h3>
+
+        <p>Testing Library 提供多种 query API，按"用户感知度"分优先级：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>优先级</th>
+              <th>Query</th>
+              <th>用户视角对应</th>
+              <th>例</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1（最高）</td>
+              <td>getByRole</td>
+              <td>accessibility tree（屏幕阅读器视角）</td>
+              <td><code>getByRole('button', { name: 'Sign in' })</code></td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td>getByLabelText</td>
+              <td>表单 label（视觉关联）</td>
+              <td><code>getByLabelText('Username')</code></td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>getByPlaceholderText</td>
+              <td>输入框占位文字</td>
+              <td><code>getByPlaceholderText('Enter email')</code></td>
+            </tr>
+            <tr>
+              <td>4</td>
+              <td>getByText</td>
+              <td>用户能看到的文字</td>
+              <td><code>getByText('Welcome, Alice')</code></td>
+            </tr>
+            <tr>
+              <td>5</td>
+              <td>getByDisplayValue</td>
+              <td>表单当前值</td>
+              <td><code>getByDisplayValue('alice')</code></td>
+            </tr>
+            <tr>
+              <td>6</td>
+              <td>getByAltText</td>
+              <td>图片 alt 文本</td>
+              <td><code>getByAltText('Profile picture')</code></td>
+            </tr>
+            <tr>
+              <td>7</td>
+              <td>getByTitle</td>
+              <td>悬停 title</td>
+              <td><code>getByTitle('Click to edit')</code></td>
+            </tr>
+            <tr>
+              <td>8（最后退路）</td>
+              <td>getByTestId</td>
+              <td>—（用户感知不到）</td>
+              <td><code>getByTestId('user-card-123')</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>规则：从优先级 1 开始尝试，找不到才降级。<code>getByTestId</code> 是最后退路——只在前 7 种都不可行时才用（如复杂图表无法用 role 选中）。</p>
+
+        <p>背后逻辑：accessibility role 是浏览器 / 屏幕阅读器看到组件的方式。测试用 <code>getByRole</code> 等于"从用户视角找元素"——视觉用户和屏幕阅读器用户都能感知。</p>
+
+        <h3>userEvent vs fireEvent</h3>
+
+        <p>Testing Library 提供两套事件触发 API：</p>
+
+        <p>fireEvent（底层）：</p>
+        <ul>
+          <li>直接派发 DOM 事件（<code>fireEvent.click(button)</code>）</li>
+          <li>只触发一个事件（如 click）</li>
+          <li>不模拟真实用户行为序列</li>
+          <li>速度快，但不能 catch 复杂交互 bug</li>
+        </ul>
+
+        <p>userEvent（推荐）：</p>
+        <ul>
+          <li>模拟真实用户操作链（点击触发 <code>mouseover → mousedown → focus → mouseup → click</code> 完整序列）</li>
+          <li>异步（必须 <code>await userEvent.click(...)</code>）</li>
+          <li>包含真实键盘行为（<code>userEvent.type(input, 'hello')</code> 一个字一个字 type）</li>
+          <li>能 catch 大量"用 fireEvent 跑过但用真实用户操作不工作"的 bug</li>
+        </ul>
+
+        <p>规则：<strong>始终优先 userEvent</strong>。除非有明确性能需求或测试本质就是底层事件，否则不用 fireEvent。</p>
+
+        <h3>Enzyme 为什么死了：根因不是 React 18</h3>
+
+        <p>表面看 Enzyme 死于"React 18 不兼容"——内部 Fiber 结构变了，Enzyme 适配跟不上。但更深层原因是：Enzyme 的 API 设计鼓励测实现细节。</p>
+
+        <p>Enzyme 提供的能力：</p>
+        <ul>
+          <li><code>wrapper.state()</code> —— 读组件 state 名字（实现细节）</li>
+          <li><code>wrapper.instance()</code> —— 拿到组件实例直接调方法（实现细节）</li>
+          <li><code>wrapper.setState({...})</code> —— 直接改 state（实现细节）</li>
+          <li><code>wrapper.find('.btn-primary')</code> —— 按 className 查找（实现细节）</li>
+          <li><code>wrapper.shallow()</code> —— 只渲染当前组件不渲染子组件（实现细节）</li>
+        </ul>
+
+        <p>这些 API 让"测内部"变得过于容易。Enzyme 项目的测试代码平均 60-80% 在测实现细节——这是 Kent Dodds 长期批评的。</p>
+
+        <p>当 React 18 改变内部 Fiber 结构后，本来"测实现细节"的测试大量破。团队两个选择：</p>
+
+        <ol>
+          <li>修补 Enzyme 适配 React 18 —— 但社区维护团队跟不上</li>
+          <li>意识到根本问题是测试代码已经被实现细节锁定 —— 重写到 Testing Library</li>
+        </ol>
+
+        <p>大多数团队在 2020-2022 年选了路 2。Enzyme 不是被"技术问题"杀死，是被"测试哲学共识"杀死。详见 <a href="../01-overview/01-history.html">P1.1</a>。</p>
+
+        <h3>不是绝对：少数场景可以测实现</h3>
+
+        <p>"测行为不测实现"是主导原则不是绝对教条。少数场景测实现是合理的：</p>
+
+        <ul>
+          <li>性能关键的 hook —— 测 useMemo / useCallback 缓存命中（内部行为，但影响性能）</li>
+          <li>复杂状态机 —— XState 等状态机库的内部 state 转换（虽然内部，但是状态机的核心契约）</li>
+          <li>开源 lib 公开 API —— 如果某个内部状态是公开 API 的一部分，那它就是用户行为</li>
+          <li>性能 benchmark 测试 —— 测渲染次数、effect 跑几次（避免无效重渲染）</li>
+        </ul>
+
+        <p>判断标准：测这个细节的动机是什么？如果动机是"这个细节影响用户体验"（性能 / 状态机契约），合理。如果动机是"方便测覆盖率"或"懒得搭真实用户场景"，不合理。</p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 关键洞见：测试是给重构的安全网</div>
+          <p>测试存在的价值是让你敢改代码。如果重构组件内部就破一片测试，测试就不是安全网而是阻碍。"测行为不测实现"的本质是让测试成为真正的安全网——内部怎么写都行，只要外部行为不变测试就过；外部行为变了立即报警。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 老 Enzyme 项目重写到 Testing Library</h3>
+          <p><strong>背景</strong>：500 个 Enzyme 测试，团队意识到要迁 Testing Library。</p>
+          <p><strong>策略</strong>：</p>
+          <ul>
+            <li>不要尝试"逐字翻译"——很多 Enzyme 测试是测实现细节，没有 Testing Library 等价</li>
+            <li>把测试按"测什么"分类：测用户行为（保留逻辑迁移）/ 测实现细节（删除或重写为用户行为）/ 重复的测试（删除）</li>
+            <li>典型项目重写后测试数量减少 30-50%（删除冗余 + 删除测实现细节）</li>
+            <li>覆盖率可能略降但测试质量提升——重构组件不再大批破测试</li>
+            <li>预期人力：500 个测试约 4-8 周</li>
+          </ul>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · 新人加入团队 Testing Library 培训</h3>
+          <p><strong>背景</strong>：3 人团队招了 1 个新人，他过去用 Enzyme。怎么让他快速适应 Testing Library 思维？</p>
+          <p><strong>建议</strong>：</p>
+          <ul>
+            <li>第 1 周：让新人读 Kent Dodds 的 <em>Testing Implementation Details</em> 原文</li>
+            <li>第 2 周：让新人把现有 5-10 个 Enzyme 风格测试（如果有）改写到 Testing Library，code review 重点关注"是否在测用户行为"</li>
+            <li>第 3 周起：他写新测试时 review 时关注两个反模式信号——"用 className 查找"和"测组件 state"。出现就退回让重写</li>
+            <li>建立团队习惯：PR review 时所有测试代码自动检查"是否测了实现细节"</li>
+          </ul>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · 重构 React 组件内部 state 管理</h3>
+          <p><strong>背景</strong>：把组件从 useState 重构到 useReducer + Context。</p>
+          <p><strong>预期</strong>：</p>
+          <ul>
+            <li>测行为的测试 —— 0 个测试需要改（因为外部行为不变）</li>
+            <li>测实现的测试 —— 大批测试破，需要逐个修</li>
+          </ul>
+          <p>这是判断测试质量的好机会——重构后破的测试越多，说明之前测了越多实现细节。如果 0 测试破，说明测试质量很好；如果 50% 测试破，说明该重写测试代码了。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <p>同一个组件的测试，Enzyme 风格 vs Testing Library 风格对比：</p>
+
+        <div class="code-block">
+          <span class="code-label">❌ Enzyme 风格 · 测实现细节</span>
+          <pre class="code"><code class="lang-js">import { shallow } from 'enzyme';
+import LoginForm from './LoginForm';
+
+test('login form', () =&gt; {
+  const wrapper = shallow(&lt;LoginForm /&gt;);
+
+  // ❌ 测内部 state 名字
+  expect(wrapper.state('username')).toBe('');
+
+  // ❌ 测组件 instance 方法
+  wrapper.instance().handleSubmit({ preventDefault: () =&gt; {} });
+
+  // ❌ 测 className（实现细节）
+  expect(wrapper.find('.btn-primary').exists()).toBe(true);
+
+  // ❌ 测组件树形状
+  expect(wrapper.children().length).toBe(3);
+
+  // ❌ 直接改 state
+  wrapper.setState({ username: 'alice' });
+  expect(wrapper.find('input').prop('value')).toBe('alice');
+});
+
+// 重构警报：以下任意一个改动都会破这个测试
+// - 把 state 从 useState 改 useReducer
+// - 把 .btn-primary 类名改成 .button-primary
+// - 把 handleSubmit 改名 onSubmit
+// - 在 form 里加一个新的子元素</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">✅ Testing Library 风格 · 测用户行为</span>
+          <pre class="code"><code class="lang-js">import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import LoginForm from './LoginForm';
+
+test('user can fill form and submit', async () =&gt; {
+  const onSubmit = vi.fn();
+  render(&lt;LoginForm onSubmit={onSubmit} /&gt;);
+
+  // ✅ 按 accessibility role 找
+  const usernameInput = screen.getByLabelText('Username');
+  const passwordInput = screen.getByLabelText('Password');
+  const submitBtn = screen.getByRole('button', { name: 'Sign in' });
+
+  // ✅ 用真实用户操作
+  await userEvent.type(usernameInput, 'alice');
+  await userEvent.type(passwordInput, 'secret');
+  await userEvent.click(submitBtn);
+
+  // ✅ 断言用户能看到 / 测到的契约
+  expect(onSubmit).toHaveBeenCalledWith({ username: 'alice', password: 'secret' });
+});
+
+// 重构友好：以下改动都不会破这个测试
+// - 内部从 useState 改 useReducer
+// - className 改名
+// - 内部 handler 改名
+// - 加新子元素（不影响外部 API）</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">❌ 错的查询：用 className</span>
+          <pre class="code"><code class="lang-js">// ❌ 用 className（实现细节）
+const button = container.querySelector('.btn-primary');
+
+// ❌ 用 nth-child（实现细节）
+const firstItem = container.querySelector('li:nth-child(1)');
+
+// ❌ 用 testid 当首选（应该最后退路）
+const submitBtn = screen.getByTestId('submit-button');</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">✅ 对的查询：用 accessibility</span>
+          <pre class="code"><code class="lang-js">// ✅ 按 role
+const button = screen.getByRole('button', { name: 'Sign in' });
+
+// ✅ 按 label
+const usernameInput = screen.getByLabelText('Username');
+
+// ✅ 按 list 中的文字
+const items = screen.getAllByRole('listitem');
+expect(items[0]).toHaveTextContent('First item');</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">❌ fireEvent · 不模拟真实用户</span>
+          <pre class="code"><code class="lang-js">import { fireEvent } from '@testing-library/react';
+
+fireEvent.click(button);
+// ❌ 只触发 click 事件，不模拟 mousedown/focus/etc
+
+fireEvent.change(input, { target: { value: 'hello' } });
+// ❌ 直接设 input.value，跳过键盘事件序列
+// 真实用户 type 会触发 input/change，每个字一个事件</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">✅ userEvent · 模拟真实用户</span>
+          <pre class="code"><code class="lang-js">import userEvent from '@testing-library/user-event';
+
+await userEvent.click(button);
+// ✅ 触发完整事件序列：mouseover → mousedown → focus → mouseup → click
+
+await userEvent.type(input, 'hello');
+// ✅ 一个字一个字 type，触发每个字的 keydown/input/change
+
+await userEvent.tab();
+// ✅ 模拟键盘 Tab 切换焦点
+
+await userEvent.keyboard('{Enter}');
+// ✅ 模拟键盘按 Enter</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">❌ 测异步用 setTimeout</span>
+          <pre class="code"><code class="lang-js">test('shows result after fetch', async () =&gt; {
+  render(&lt;UserCard /&gt;);
+
+  // ❌ 硬等
+  await new Promise((r) =&gt; setTimeout(r, 1000));
+
+  expect(screen.getByText('Alice')).toBeInTheDocument();
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">✅ 测异步用 findBy / waitFor</span>
+          <pre class="code"><code class="lang-js">test('shows result after fetch', async () =&gt; {
+  render(&lt;UserCard /&gt;);
+
+  // ✅ findBy 自动等出现（默认 1s 超时）
+  expect(await screen.findByText('Alice')).toBeInTheDocument();
+
+  // ✅ 复杂条件用 waitFor
+  await waitFor(() =&gt; {
+    expect(screen.getByRole('alert')).toHaveTextContent(/error/i);
+  });
+});</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 把 data-testid 当首选</div>
+          <p>"我懒得想 role / label，直接用 testid 最快"——这违背 Testing Library 设计哲学。data-testid 是用户感知不到的标签，等于"测实现细节"。data-testid 是最后退路，前 7 种 query 都不可行才用。如果你发现自己大量用 testid，反思组件的 accessibility 是否做得够好（按钮没有 role / 输入没有 label）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 用 mock 模拟一切，然后断言调用</div>
+          <p>典型反模式：mock 整个组件树 + 模拟所有 hook + 断言"useState 被调用 N 次"。这是把单元测试当 Enzyme 用的极端形态。结果是测试本身比组件还复杂，重构组件内部就大批破。正确做法：渲染真实组件 + 模拟外部边界（网络 / API / Date.now），不模拟内部。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 测渲染次数</div>
+          <p><code>expect(renderCount).toBe(2)</code> 这种测试看似在防"无效重渲染"，实际是测实现细节——React 内部优化可能让组件渲染次数变化（自动 batch / Suspense / Concurrent 等），但用户体验不变。除非真的是性能关键路径，否则不要测渲染次数。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 测 useEffect 跑了几次</div>
+          <p>类似陷阱 3。useEffect 跑几次是 React 的内部决定（StrictMode / dev 模式可能跑 2 次），用户感知不到。如果你想测"side effect 发生了"，应该测 side effect 的结果（API 被调 / 数据变化），不是 effect 本身的次数。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 把"重构破测试"看成测试的功劳</div>
+          <p>"我重构组件后 30 个测试破了——还好有这些测试 catch 了！"——错。如果重构组件内部就破 30 个测试，这些测试是阻碍而非保护。它们没 catch 任何 bug（用户行为没变），只是消耗你的时间。理想测试是：外部行为不变重构 → 0 测试破；外部行为变了 → 立刻一片测试破。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://kentcdodds.com/blog/testing-implementation-details" target="_blank" rel="noopener">Kent C. Dodds · Testing Implementation Details（2018 原文）</a></li>
+          <li><a href="https://kentcdodds.com/blog/avoid-the-test-user" target="_blank" rel="noopener">Kent C. Dodds · Avoid the Test User</a></li>
+          <li><a href="https://testing-library.com/docs/queries/about/#priority" target="_blank" rel="noopener">Testing Library · Query 优先级官方</a></li>
+          <li><a href="https://testing-library.com/docs/user-event/intro/" target="_blank" rel="noopener">Testing Library · userEvent 文档</a></li>
+          <li><a href="https://testing-library.com/docs/guiding-principles/" target="_blank" rel="noopener">Testing Library · Guiding Principles</a></li>
+          <li><a href="https://github.com/enzymejs/enzyme/issues/2429" target="_blank" rel="noopener">Enzyme 官方维护停滞声明</a></li>
+          <li><a href="01-pyramid-trophy.html">P2.1 · 测试金字塔 vs 奖杯（前一章）</a></li>
+          <li><a href="../04-dom-testing/01-testing-library.html">P4.1 · Testing Library 设计哲学（详细，下下章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-pyramid-trophy.html">
+            <span class="label">← 上一章</span>
+            <span class="title">01 · 测试金字塔 vs 奖杯</span>
+          </a>
+          <a class="next" href="../03-vitest-unit/index.html">
+            <span class="label">下一阶段 →</span>
+            <span class="title">P3 · Vitest + 单元测试</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
