@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CLI v4 + Visual Builder + components.json · P5.1 · shadcn/ui + Radix 深度学习</title>
+    <meta name="description" content="shadcn CLI v4 深度解析。命令（init / add / diff / build / create）+ 多框架 scaffold（Next.js / Vite / Laravel / React Router / Astro / TanStack Start）+ Visual Project Builder（ui.shadcn.com/create）+ components.json 配置 schema。CLI 内部工作流。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c026d3'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='14' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ESR%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>shadcn/ui + Radix 深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.18 320); color: #fff">SR</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · CLI + Registry ⭐</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-cli.html" class="active">01 · CLI v4 + Visual Builder</a></li>
+          <li><a href="02-registry.html">02 · Registry 系统 + 私有 registry</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">shadcn + Radix</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · CLI + Registry</a><span class="breadcrumb-sep">/</span>
+          <span>01 · CLI v4 + Visual Builder</span>
+        </nav>
+        <h1>CLI v4 + Visual Builder + components.json</h1>
+        <p class="lead">
+          shadcn CLI 是 shadcn 模式的核心工具。这一章把 v4 完整命令集（init / add / diff / build / create）+ 多框架 scaffold（Next.js / Vite / Laravel / React Router / Astro / TanStack Start）+ 2026 新增 Visual Project Builder + components.json 配置 schema 讲透。读完能在团队推 shadcn 工作流。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P1 项目史 + 用过 shadcn add</span>
+          <span><strong>主要来源</strong> ui.shadcn.com/docs/cli + 2026-03 changelog v4 + InfoQ Visual Builder 报道</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>shadcn CLI v4 的 5 个核心命令：<b>init</b>（起新项目 / 加 shadcn 到现有项目）/ <b>add</b>（加单个组件 / block）/ <b>diff</b>（看 upstream 改动 + 决定是否 sync）/ <b>build</b>（build 私有 registry）/ <b>create</b>（Visual Builder，开浏览器配置）。</li>
+          <li>v4 多框架 scaffold（2026-03 新）：支持 Next.js / Vite / Laravel / React Router / Astro / TanStack Start 6 个框架。每个框架自己模板（router 集成 / styling / dark mode）。<code>shadcn init</code> 自动检测项目类型或问用户。</li>
+          <li>Visual Project Builder（2026-02 推出，3 月正式 GA）：<code>shadcn create</code> 命令开浏览器到 ui.shadcn.com/create，可视化配置 framework / style / base color / 选组件 / theme，配完生成 zip 或 GitHub 仓库。</li>
+          <li>components.json 是项目级配置文件（项目根）。核心字段：<b>style</b>（default / new-york）/ <b>engine</b>（radix / base-ui，2026 新）/ <b>tailwind</b>（config 路径 + cssVariables 配置）/ <b>aliases</b>（@/ vs ~/ 等路径别名）/ <b>registries</b>（自定义 registry URL）。</li>
+          <li>CLI 内部工作流：1) 读 components.json；2) 从 registry（默认 ui.shadcn.com 或自定义）拉组件 source；3) 处理 import path 别名；4) 自动 npm install 缺失依赖；5) 写文件到 components/ui/。</li>
+          <li><b>shadcn diff</b> 是 sync upstream 改进的关键命令。show 你本地组件源码与 shadcn upstream 之间的差异。决定是否手动 merge upstream 改进（特别是 a11y 修复 / bug 修复）。</li>
+          <li>双引擎切换（2026 新）：components.json 设 <code>"engine": "radix"</code> 或 <code>"engine": "base-ui"</code>，CLI 根据这个拉对应变体。一次切换全部组件统一变化。</li>
+          <li><b>style 选项</b>：default（极简、默认）/ new-york（更精致、Vercel 风格）。两个 style 提供同样组件 API，但样式不同。一旦选定不要混用。</li>
+          <li>多框架 scaffold 让 shadcn 从"Next.js 专属"扩展为"<strong>React 项目通用</strong>"。Laravel + Inertia / TanStack Start / Astro 都是一等支持。</li>
+          <li>本章是"<strong>shadcn 工程化工作流</strong>"的核心。读完能起新 shadcn 项目 + 维护组件代码 + 同步 upstream 改进。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>5 个核心命令</h3>
+
+        <p><b>1. shadcn init</b> · 起新项目或加 shadcn 到现有项目</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">npx shadcn@latest init
+
+# CLI 问几个问题：
+# - 项目用 TypeScript 吗？(Y/n)
+# - 选 style：default / new-york
+# - 选 engine：radix（默认）/ base-ui
+# - 选 base color：zinc / slate / stone / gray / neutral
+# - CSS 变量 / Tailwind class（默认 CSS 变量）
+# - tailwind.config.{ts,js} 路径
+# - 全局 CSS 路径（默认 src/app/globals.css）
+# - 路径别名（默认 @/components / @/lib 等）
+
+# 跑完生成：
+# - components.json
+# - lib/utils.ts（cn helper）
+# - 更新 globals.css（CSS variables）
+# - 更新 tailwind.config（base 色集成）
+# - 装 deps：tailwindcss-animate / class-variance-authority / clsx / tailwind-merge / lucide-react</code></pre>
+        </div>
+
+        <p><b>2. shadcn add</b> · 加单个组件 / block / theme</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 加单个组件
+npx shadcn@latest add button
+
+# 加多个
+npx shadcn@latest add button card dialog form input
+
+# 加 block（组合）
+npx shadcn@latest add @blocks/dashboard-01
+
+# 从自定义 registry 加
+npx shadcn@latest add https://my-registry.com/registry-item.json
+
+# CLI 做：
+# 1. 读 components.json 决定 engine / aliases
+# 2. 从 registry 拉对应组件源码
+# 3. 检查依赖（registryDependencies + dependencies）
+# 4. 自动加缺失的 sub-components（如 dialog 依赖 button）
+# 5. 自动 npm install 缺失 npm 包
+# 6. 写文件到 components/ui/</code></pre>
+        </div>
+
+        <p><b>3. shadcn diff</b> · 看 upstream 改动</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 检查 button 与 upstream 差异
+npx shadcn@latest diff button
+
+# 输出（git diff 风格）：
+# --- a/components/ui/button.tsx (your local)
+# +++ b/components/ui/button.tsx (upstream)
+# @@ -10,7 +10,7 @@
+# -      'inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors',
+# +      'inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:ring-2',
+
+# 你决定是否 merge upstream 改进
+# 偶尔跑（每 1-3 月）catch a11y / bug 修复</code></pre>
+        </div>
+
+        <p><b>4. shadcn build</b> · build 私有 registry（详见 P5.2）</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 在你的 registry 项目根
+npx shadcn@latest build
+
+# 把 components/registry/ 编译为 JSON
+# 输出到 public/r/ 目录
+# 部署到 Vercel / CF Pages / 任何静态文件 server</code></pre>
+        </div>
+
+        <p><b>5. shadcn create</b> · Visual Builder</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">npx shadcn@latest create
+
+# 开浏览器到 ui.shadcn.com/create
+# 可视化配置：
+# - framework
+# - style
+# - base color
+# - theme variables（颜色 / radius / fonts）
+# - 选组件（多选）
+# - 选 blocks（多选）
+# - 项目名
+
+# 配完点 "Generate"：
+# - 生成 zip 下载
+# - 或 push 到 GitHub 仓库
+# - 含完整项目（不只是 shadcn 配置）</code></pre>
+        </div>
+
+        <h3>多框架 scaffold（2026 v4 新）</h3>
+
+        <p>v4 之前 shadcn init 主要支持 Next.js + Vite。v4 扩展到 6 个框架：</p>
+
+        <table>
+          <thead>
+            <tr><th>框架</th><th>scaffold 内容</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Next.js</td><td>App Router + dark mode（next-themes）+ Tailwind 集成 + 推荐 ESLint 配置</td></tr>
+            <tr><td>Vite</td><td>Vite + React + dark mode + Tailwind</td></tr>
+            <tr><td>Laravel</td><td>Laravel + Inertia + React + Tailwind（@laravel/inertia-react）</td></tr>
+            <tr><td>React Router</td><td>React Router v7 + Tailwind</td></tr>
+            <tr><td>Astro</td><td>Astro + React Islands + Tailwind</td></tr>
+            <tr><td>TanStack Start</td><td>TanStack Start + Tailwind + 类型安全路由</td></tr>
+          </tbody>
+        </table>
+
+        <p>每个框架的"细节差异"：</p>
+        <ul>
+          <li><b>Next.js</b>：路径别名 <code>@/</code>、global CSS 在 <code>app/globals.css</code>、'use client' 标记需要</li>
+          <li><b>Vite</b>：路径别名 <code>@/</code>（vite.config 配 alias）、global CSS 在 <code>src/index.css</code>、不需要 'use client'</li>
+          <li><b>Astro</b>：组件用在 React Islands；style 通过 .astro 文件 import</li>
+          <li><b>Laravel</b>：路径别名 <code>@/</code>（resources/js）、shadcn 与 Inertia 配合</li>
+          <li><b>TanStack Start</b>：自动适配 TanStack Router 类型</li>
+        </ul>
+
+        <h3>Visual Project Builder · ui.shadcn.com/create</h3>
+
+        <p>2026-02 推出，2026-03 正式 GA。是 shadcn 从"开发者工具"扩展为"<strong>设计师友好工具</strong>"的尝试。</p>
+
+        <p>工作流：</p>
+        <ol>
+          <li>开浏览器到 ui.shadcn.com/create（或 <code>shadcn create</code> 命令打开）</li>
+          <li>选 framework（Next.js / Vite / TanStack Start）</li>
+          <li>选 style（default / new-york）</li>
+          <li>选 engine（Radix / Base UI）</li>
+          <li>选 base color（实时预览）</li>
+          <li>调 theme variables（radius / fonts）</li>
+          <li>选要的组件（Button / Card / Dialog 等）</li>
+          <li>选 blocks（dashboard / login form 等）</li>
+          <li>"Generate" → 下载 zip 或 push GitHub</li>
+        </ol>
+
+        <p>解决的问题：</p>
+        <ul>
+          <li>新项目快速 scaffold（不用记 init 一堆问题）</li>
+          <li>预览主题颜色（实时看效果再确定）</li>
+          <li>设计师可参与（不需要懂 CLI）</li>
+        </ul>
+
+        <p>2026 仍在迭代。未来可能扩展到"组件级编辑"（拖拽改样式 → 生成代码）。</p>
+
+        <h3>components.json 完整 schema</h3>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">{
+  "$schema": "https://ui.shadcn.com/schema.json",
+
+  // shadcn 风格
+  "style": "default",  // "default" | "new-york"
+
+  // 引擎选择（2026 新）
+  "engine": "radix",  // "radix" | "base-ui"
+
+  // 是否 RSC 项目（影响生成的 'use client' 标记）
+  "rsc": true,
+
+  // TypeScript / JS
+  "tsx": true,
+
+  // Tailwind 配置
+  "tailwind": {
+    "config": "tailwind.config.ts",  // tailwind.config 路径
+    "css": "src/app/globals.css",     // 全局 CSS 路径
+    "baseColor": "zinc",              // base color
+    "cssVariables": true,             // 用 CSS variables（推荐）
+    "prefix": ""                      // 可选 utility prefix
+  },
+
+  // 路径别名（与 tsconfig paths / vite alias 对应）
+  "aliases": {
+    "components": "@/components",
+    "utils": "@/lib/utils",
+    "ui": "@/components/ui",
+    "lib": "@/lib",
+    "hooks": "@/hooks"
+  },
+
+  // 自定义 registry（可选，详见 P5.2）
+  "registries": {
+    "@my-org": {
+      "url": "https://my-registry.com/r/{name}.json",
+      "headers": {
+        "Authorization": "Bearer ${REGISTRY_TOKEN}"
+      }
+    }
+  }
+}</code></pre>
+        </div>
+
+        <p>关键字段说明：</p>
+
+        <p><b>style</b>：</p>
+        <ul>
+          <li><b>default</b>：极简、最常用、起步项目首选</li>
+          <li><b>new-york</b>：更精致（Vercel 风格）、特别表单组件视觉更优</li>
+          <li>选定后不要换（混用导致风格不一致）</li>
+        </ul>
+
+        <p><b>engine</b>（2026 新）：</p>
+        <ul>
+          <li><b>radix</b>：默认、Radix UI 引擎、组件多 + 生态成熟</li>
+          <li><b>base-ui</b>：Base UI 引擎（MUI 出品）、bundle 更小</li>
+          <li>切换后下次 add 拉对应变体</li>
+        </ul>
+
+        <p><b>rsc</b>：</p>
+        <ul>
+          <li>true：Next.js App Router 项目，shadcn 自动加 'use client' 在需要的组件</li>
+          <li>false：Vite SPA 等，不加 'use client'</li>
+        </ul>
+
+        <p><b>cssVariables</b>：</p>
+        <ul>
+          <li><b>true</b>（默认推荐）：用 CSS variables 定义 theme（详见 P6.2）</li>
+          <li>false：用 Tailwind class 直接（不灵活，不推荐）</li>
+        </ul>
+
+        <p><b>aliases</b>：影响生成代码的 import 路径。必须与 tsconfig paths 一致。</p>
+
+        <h3>CLI 内部工作流（详细）</h3>
+
+        <p>跑 <code>shadcn add button</code> 时 CLI 内部做：</p>
+
+        <ol>
+          <li><b>读 components.json</b>：决定 style / engine / rsc / aliases</li>
+          <li><b>解析 registry URL</b>：默认 <code>https://ui.shadcn.com/r/{style}/{name}.json</code>；自定义 registry 用 components.json 配置</li>
+          <li><b>fetch registry-item.json</b>：包含组件源码 + dependencies + tailwind / cssVars 配置</li>
+          <li><b>解析 registryDependencies</b>：button 依赖 Slot / cn → 自动 add 这些</li>
+          <li><b>解析 dependencies</b>：button 用 lucide-react → 检查是否已装；没装则 npm install</li>
+          <li><b>处理 import 路径</b>：把 registry 中的占位 <code>@/components</code> 替换为 components.json 配的实际别名</li>
+          <li><b>处理 'use client'</b>：rsc: true 时给需要的组件加 'use client' 标记</li>
+          <li><b>处理 engine 替换</b>：engine 是 base-ui 时拉对应变体的源码</li>
+          <li><b>写文件</b>：组件源码到 components/ui/{name}.tsx；可能还有 hooks 到 hooks/use-{name}.ts</li>
+          <li><b>更新 tailwind.config / globals.css</b>：如果组件需要新的 keyframes / CSS variables</li>
+          <li><b>输出</b>：log 哪些文件被创建 / 修改</li>
+        </ol>
+
+        <h3>shadcn diff · 同步 upstream 改进</h3>
+
+        <p>shadcn copy-paste 的代价是"<strong>不能 npm update</strong>"。但 upstream 仍在改进（a11y 修复 / bug fix / 新功能）。<code>shadcn diff</code> 帮你 catch 这些。</p>
+
+        <p>使用模式：</p>
+        <ol>
+          <li>每 1-3 月跑一次 <code>shadcn diff</code></li>
+          <li>看哪些组件有 upstream 改动</li>
+          <li>读 diff 决定是否 merge：</li>
+          <ul>
+            <li><b>a11y 修复 / bug fix</b> → 强烈建议 merge</li>
+            <li><b>新功能</b> → 看是否需要</li>
+            <li><b>样式调整</b> → 看是否符合你团队设计</li>
+            <li><b>API 变化</b> → 谨慎评估是否有 breaking change</li>
+          </ul>
+          <li>手动 copy 改动到 components/ui/{name}.tsx</li>
+          <li>git commit + 测试</li>
+        </ol>
+
+        <p>这个流程比 npm update 更费力，但完全可控。换来"组件不会被远程包破坏"的好处。</p>
+
+        <h3>选 default 还是 new-york style</h3>
+
+        <p>两个 style 都基于 Radix + Tailwind + CVA，区别在视觉 token：</p>
+
+        <ul>
+          <li><b>default</b>：圆角偏小（rounded-md / rounded-sm）、间距紧凑、颜色克制</li>
+          <li><b>new-york</b>：圆角更大（rounded-lg）、间距宽松、颜色对比强</li>
+        </ul>
+
+        <p>视觉上 new-york 更接近 Vercel.com 的设计语言。default 更通用。</p>
+
+        <p>选哪个看团队偏好。一个项目内不要混（导致风格不一致）。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 起新 React SaaS 项目</h3>
+
+        <p>2026 推荐工作流：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 选 1：用 Visual Builder（设计师友好）
+# 浏览器开 ui.shadcn.com/create
+# 配 + 下载 zip
+
+# 选 2：用 CLI 命令（开发者熟练）
+npm create vite@latest my-saas -- --template react-ts
+cd my-saas
+npm install tailwindcss @tailwindcss/vite
+
+# 配 Vite plugin（详见 Tailwind 主题 P3.2）
+# vite.config.ts 加 tailwindcss() plugin
+
+# 起 shadcn
+npx shadcn@latest init
+# 选 default / radix / zinc / cssVariables: true
+
+# 加常用组件
+npx shadcn@latest add button card dialog form input label dropdown-menu tooltip toaster
+
+# 开始写业务代码</code></pre>
+        </div>
+
+        <h3>场景 2 · 现有 Next.js 项目接 shadcn</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">cd my-existing-nextjs-app
+
+# 装 shadcn
+npx shadcn@latest init
+# 自动检测 Next.js + 现有 Tailwind 配置
+# 你确认 style / engine / base color
+
+# 加组件
+npx shadcn@latest add button
+
+# 注意：
+# - 检查 components.json 生成的 aliases 与 tsconfig paths 一致
+# - 检查 globals.css 的 CSS variables 是否覆盖你已有 theme
+# - shadcn 生成的 tailwind.config 修改可能与你已有 plugin 冲突</code></pre>
+        </div>
+
+        <h3>场景 3 · 切 default → new-york style</h3>
+
+        <p>不推荐切（混用风格差）。如果非切不可：</p>
+
+        <ol>
+          <li>更新 components.json："style": "new-york"</li>
+          <li>对每个已 add 的组件重新 add（覆盖）：<code>npx shadcn add button --overwrite</code></li>
+          <li>visual regression 测试</li>
+          <li>调整自定义样式</li>
+        </ol>
+
+        <h3>场景 4 · 维护组件库 sync upstream</h3>
+
+        <p>每季度（或更频繁）跑：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 检查所有组件的 upstream 差异
+for component in button card dialog form input; do
+  echo "=== $component ==="
+  npx shadcn@latest diff $component
+done
+
+# 或检查全部
+npx shadcn@latest diff
+
+# 决定 merge 哪些改进
+# 手动 copy 到 components/ui/
+# git commit + 测试</code></pre>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 完整 components.json（生产）</h3>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "new-york",
+  "engine": "radix",
+  "rsc": true,
+  "tsx": true,
+  "tailwind": {
+    "config": "tailwind.config.ts",
+    "css": "app/globals.css",
+    "baseColor": "zinc",
+    "cssVariables": true,
+    "prefix": ""
+  },
+  "aliases": {
+    "components": "@/components",
+    "utils": "@/lib/utils",
+    "ui": "@/components/ui",
+    "lib": "@/lib",
+    "hooks": "@/hooks"
+  },
+  "registries": {
+    "@acme": {
+      "url": "https://shadcn.acme.dev/r/{name}.json",
+      "headers": {
+        "Authorization": "Bearer ${ACME_REGISTRY_TOKEN}"
+      }
+    }
+  }
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · 切换引擎（Radix → Base UI）</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 1. 修改 components.json
+# "engine": "base-ui"
+
+# 2. 重新 add 所有组件（覆盖现有）
+npx shadcn@latest add --all --overwrite
+
+# 3. 装 Base UI
+# Radix 卸载（手动）：
+npm uninstall radix-ui
+# Base UI 自动装（CLI add 时）
+
+# 4. 跑测试
+npm run test
+npm run build
+
+# 5. visual regression（Playwright snapshot 推荐）</code></pre>
+        </div>
+
+        <h3>代码 3 · CLI 自动化（CI 集成）</h3>
+
+        <div class="code-block">
+          <span class="code-label">yaml</span>
+          <pre class="code"><code class="lang-yaml"># .github/workflows/sync-shadcn.yml
+# 每月自动跑 shadcn diff，PR 提示 upstream 改进
+
+name: Sync shadcn upstream
+on:
+  schedule:
+    - cron: '0 0 1 * *'  # 每月 1 号
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+      - run: npm install
+      - run: |
+          OUTPUT=$(npx shadcn@latest diff)
+          if [[ -n "$OUTPUT" ]]; then
+            echo "$OUTPUT" &gt; diff-output.txt
+            # 创建 issue 通知
+          fi
+      - uses: peter-evans/create-issue-from-file@v4
+        with:
+          title: "shadcn upstream changes detected"
+          content-filepath: diff-output.txt</code></pre>
+        </div>
+
+        <h3>代码 4 · 用环境变量控制 registry</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># .env
+ACME_REGISTRY_TOKEN=secret_token_here
+
+# components.json registries 用 ${ACME_REGISTRY_TOKEN}
+# CLI 自动从 .env 读
+
+# 加私有 registry 组件
+npx shadcn@latest add @acme/payment-form</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>aliases 与 tsconfig paths 不一致</b> —— 生成代码 import 失败。修一个忘了改另一个</li>
+          <li><b>shadcn add 后忘了 commit components.json</b> —— 团队其他成员 add 时配置不一致</li>
+          <li><b>cssVariables: false 然后想用 theme</b> —— 不灵活。改 cssVariables: true</li>
+          <li><b>style 选定后想换</b> —— 切换需要重新 add 所有组件 + visual regression。从一开始选定</li>
+          <li><b>engine 切换不重新 add 组件</b> —— 老 Radix 组件代码与 Base UI 心智混合，bug 满天飞</li>
+          <li><b>没装 lucide-react 但 add 用 icon 的组件</b> —— CLI 自动装；但用其他 icon 库（heroicons）要手动改</li>
+          <li><b>shadcn diff 改动多不知道哪些重要</b> —— 优先 merge a11y / 安全相关；其他评估</li>
+          <li><b>用第三方 v0.dev / Subframe 输出 shadcn 代码不跑 init</b> —— components.json 没建，代码与项目 alias 不一致</li>
+          <li><b>Visual Builder 生成的项目缺自己的依赖</b> —— Visual Builder 提供基础 scaffold，团队的特殊依赖（数据库 / auth）要手动加</li>
+          <li><b>Next.js App Router 项目设 rsc: false</b> —— 'use client' 标记不会自动加，组件用了 hooks 后报错</li>
+          <li><b>勿动 tailwind.config 的 shadcn 自动生成段</b> —— 注释 "// Generated by shadcn" 段，shadcn add 时会更新</li>
+          <li><b>CLI 失败 retry 把组件源码搞乱</b> —— 跑前 git commit 干净状态，失败 git checkout 恢复</li>
+          <li><b>用旧版本 CLI（v3）</b> —— 一些 v4 命令不可用。<code>npm i -g shadcn@latest</code></li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://ui.shadcn.com/docs/cli" target="_blank" rel="noopener">shadcn CLI 文档</a></li>
+          <li><a href="https://ui.shadcn.com/docs/changelog/2026-03-cli-v4" target="_blank" rel="noopener">CLI v4 公告（2026-03）</a></li>
+          <li><a href="https://ui.shadcn.com/docs/components-json" target="_blank" rel="noopener">components.json schema</a></li>
+          <li><a href="https://ui.shadcn.com/create" target="_blank" rel="noopener">Visual Project Builder</a> · 浏览器配置</li>
+          <li><a href="https://www.infoq.com/news/2026/02/shadcn-ui-builder/" target="_blank" rel="noopener">InfoQ · Visual Builder 报道</a></li>
+          <li><a href="../02-registry.html">本主题 P5.2 · Registry 系统</a> · 自建 registry / monorepo 共享</li>
+          <li><a href="../../tailwind/index.html">Tailwind 主题</a> · 与 Tailwind 集成</li>
+          <li><a href="../../next/index.html">Next.js 主题</a> · Next.js + shadcn 工作流</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

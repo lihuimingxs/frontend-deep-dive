@@ -1,0 +1,820 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Form 完整工作流（RHF + Zod + shadcn Form）· P6.1 · shadcn/ui + Radix 深度学习</title>
+    <meta name="description" content="React 表单完整工作流：react-hook-form（state）+ Zod（schema 校验）+ shadcn Form（wrapper）三方协同。完整 flow（Zod schema → z.infer 类型 → useForm + zodResolver → render → onSubmit）+ 与 Server Actions 集成 + useFieldArray 动态字段 + 多步表单 + file upload。2026 React 表单事实标准。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c026d3'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='14' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ESR%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>shadcn/ui + Radix 深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.18 320); color: #fff">SR</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · 工程实践</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-form-workflow.html" class="active">01 · Form 完整工作流</a></li>
+          <li><a href="02-theme-integration.html">02 · Theme 集成</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">shadcn + Radix</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · 工程实践</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Form 完整工作流</span>
+        </nav>
+        <h1>Form 完整工作流（RHF + Zod + shadcn Form）</h1>
+        <p class="lead">
+          React 表单 2026 事实标准：<strong>react-hook-form + Zod + shadcn Form</strong> 三方协同。这一章把三方角色、典型 flow、与 Server Actions 集成、动态字段（useFieldArray）、多步表单、file upload 全讲透。读完能搭生产级表单。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P4 表单组件 + react-hook-form 基础</span>
+          <span><strong>主要来源</strong> ui.shadcn.com/docs/components/form + react-hook-form docs + zod docs + 真实生产案例</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>2026 React 表单事实标准是 <strong>react-hook-form (RHF) + Zod + shadcn Form</strong> 三方组合：<b>RHF</b> 管表单 state（uncontrolled-first 性能极好）/ <b>Zod</b> 定义 schema 校验（TypeScript-first）/ <b>shadcn Form</b> 把 RHF + Radix 控件 + a11y 包成 wrapper。</li>
+          <li>shadcn Form 组件链 <strong>7 个</strong>：<b>Form</b>（FormProvider）/ <b>FormField</b>（单字段 controller + a11y id）/ <b>FormItem</b>（容器）/ <b>FormLabel</b>（label，自动绑 input）/ <b>FormControl</b>（input 容器，传 a11y props 给 child）/ <b>FormDescription</b>（辅助说明）/ <b>FormMessage</b>（错误消息）。</li>
+          <li>典型 flow 5 步：1) 定义 Zod schema（含校验规则）→ 2) 用 z.infer 推导 TypeScript 类型 → 3) RHF useForm + zodResolver → 4) shadcn Form 组件 render → 5) onSubmit 处理。</li>
+          <li>与 Server Actions 配合：用 useFormStatus / useActionState（详见 Next.js P4.1）+ <strong>客户端 Zod 校验 + 服务端 Zod 再校验</strong>（双层防御）+ 错误消息流回 client。这是 2026 全栈表单的事实标准。</li>
+          <li>动态字段用 <strong>useFieldArray</strong>：数组字段（动态添加 todo / 多个邮箱）。提供 fields / append / remove / move 等操作。</li>
+          <li>多步表单：用 RHF + 受控 state 管当前步骤；不要用全局 state。每步 submit 只更新 state 不实际提交，最后一步 submit 全部数据。</li>
+          <li>File upload：FormData multipart + 与 Server Actions 配合。小文件直接走 Action（&lt;1MB），大文件用 presigned URL（详见 Next.js P4.1）。</li>
+          <li>表单 a11y：shadcn Form 自动处理 label 绑 input、aria-describedby 指向描述、aria-invalid 错误状态、错误消息自动 announce 给屏幕阅读器。</li>
+          <li>与 Combobox / Select / DatePicker 等复杂控件集成：用 RHF 的 Controller（FormField 内部已用），把 onChange / onBlur / value 转给受控组件。</li>
+          <li>本章是 shadcn 项目<strong>最常踩坑的部分</strong>。读完不再用 useState 自己写 form state、不再 typeof formData.email === 'string' 这样校验。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>三方角色</h3>
+
+        <p><b>react-hook-form</b>（RHF）：</p>
+        <ul>
+          <li>2019 起的 React 表单状态库</li>
+          <li>uncontrolled-first（用 ref 而非 useState，性能极好）</li>
+          <li>API 简洁（useForm / register / handleSubmit）</li>
+          <li>与各种校验库集成（zod / yup / valibot / 自定义）</li>
+        </ul>
+
+        <p><b>Zod</b>：</p>
+        <ul>
+          <li>TypeScript-first schema 校验库</li>
+          <li>z.string() / z.number() / z.object() 等定义 schema</li>
+          <li><code>z.infer&lt;typeof schema&gt;</code> 自动推导 TypeScript 类型</li>
+          <li>与 RHF 通过 <code>zodResolver</code> 集成</li>
+        </ul>
+
+        <p><b>shadcn Form</b>：</p>
+        <ul>
+          <li>把 RHF + shadcn 控件 + a11y 包成 wrapper</li>
+          <li>不是新概念，是工程整合</li>
+          <li><code>npx shadcn add form</code> 安装</li>
+        </ul>
+
+        <h3>shadcn Form 组件链</h3>
+
+        <p>看一个最简登录表单（用 shadcn Form）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use client';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { useForm } from 'react-hook-form';
+import * as z from 'zod';
+
+import { Button } from '@/components/ui/button';
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from '@/components/ui/form';
+import { Input } from '@/components/ui/input';
+
+// 1. 定义 Zod schema
+const formSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+});
+
+// 2. z.infer 推导类型
+type FormValues = z.infer&lt;typeof formSchema&gt;;
+
+export function LoginForm() {
+  // 3. useForm + zodResolver
+  const form = useForm&lt;FormValues&gt;({
+    resolver: zodResolver(formSchema),
+    defaultValues: {
+      email: '',
+      password: '',
+    },
+  });
+
+  // 5. onSubmit
+  function onSubmit(values: FormValues) {
+    // 类型安全：values.email / values.password 都是 string
+    console.log(values);
+  }
+
+  // 4. render
+  return (
+    &lt;Form {...form}&gt;
+      &lt;form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4"&gt;
+        &lt;FormField
+          control={form.control}
+          name="email"
+          render={({ field }) =&gt; (
+            &lt;FormItem&gt;
+              &lt;FormLabel&gt;Email&lt;/FormLabel&gt;
+              &lt;FormControl&gt;
+                &lt;Input placeholder="me@example.com" {...field} /&gt;
+              &lt;/FormControl&gt;
+              &lt;FormDescription&gt;
+                We'll never share your email.
+              &lt;/FormDescription&gt;
+              &lt;FormMessage /&gt;
+            &lt;/FormItem&gt;
+          )}
+        /&gt;
+        &lt;FormField
+          control={form.control}
+          name="password"
+          render={({ field }) =&gt; (
+            &lt;FormItem&gt;
+              &lt;FormLabel&gt;Password&lt;/FormLabel&gt;
+              &lt;FormControl&gt;
+                &lt;Input type="password" {...field} /&gt;
+              &lt;/FormControl&gt;
+              &lt;FormMessage /&gt;
+            &lt;/FormItem&gt;
+          )}
+        /&gt;
+        &lt;Button type="submit" disabled={form.formState.isSubmitting}&gt;
+          {form.formState.isSubmitting ? 'Logging in...' : 'Log in'}
+        &lt;/Button&gt;
+      &lt;/form&gt;
+    &lt;/Form&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>关键点：</p>
+        <ul>
+          <li><code>&lt;Form {...form}&gt;</code> 用 spread 传 RHF context（FormProvider）</li>
+          <li><code>&lt;FormField name="email"&gt;</code> 自动绑定到 schema 的 email 字段（TypeScript 自动检查 name 必须是 schema 字段）</li>
+          <li><code>render={({ field }) =&gt; ...}</code> 暴露 RHF 的 field（含 onChange / onBlur / value / ref / name）</li>
+          <li><code>&lt;Input {...field} /&gt;</code> 把 field props 传给 input → 受控集成</li>
+          <li><code>&lt;FormMessage /&gt;</code> 自动显示当前字段错误消息（来自 Zod 校验）</li>
+          <li>整个表单 a11y 完整（label 绑 input / aria-describedby / aria-invalid 等 shadcn Form 自动处理）</li>
+        </ul>
+
+        <h3>shadcn Form 内部 a11y 自动化</h3>
+
+        <p>shadcn Form 自动处理的 a11y：</p>
+
+        <ol>
+          <li><b>FormLabel ↔ FormControl 自动绑定</b>：<br>FormLabel 用 <code>for={fieldId}</code>、FormControl 内 input 自动设 <code>id={fieldId}</code>。点击 label 自动 focus input。</li>
+          <li><b>FormDescription</b>：<br>自动 <code>id={fieldId}-description</code>，FormControl 内 input 自动 <code>aria-describedby={fieldId}-description</code>。屏幕阅读器读 input 时同时读 description。</li>
+          <li><b>FormMessage（错误消息）</b>：<br>自动 <code>id={fieldId}-error</code>，FormControl 内 input 自动 <code>aria-describedby={fieldId}-error</code>。错误消息出现时立即被屏幕阅读器读出。</li>
+          <li><b>aria-invalid</b>：<br>错误状态时 input 自动 <code>aria-invalid="true"</code>。屏幕阅读器读出"invalid entry"。</li>
+        </ol>
+
+        <p>如果自己写 form（不用 shadcn Form）几乎一定漏 1-2 条。</p>
+
+        <h3>Zod 校验进阶</h3>
+
+        <p>Zod 的常用 schema：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">import * as z from 'zod';
+
+// 字符串
+z.string()
+  .min(1, 'Required')
+  .max(100, 'Too long')
+  .email('Invalid email')
+  .url('Invalid URL')
+  .regex(/^[a-z]+$/, 'Only lowercase letters');
+
+// 数字
+z.number()
+  .int()
+  .positive()
+  .min(0)
+  .max(100);
+
+// 布尔
+z.boolean();
+
+// 枚举
+z.enum(['admin', 'user', 'guest']);
+
+// 对象
+z.object({
+  name: z.string(),
+  age: z.number(),
+});
+
+// 数组
+z.array(z.string()).min(1, 'At least one tag');
+
+// 可选
+z.string().optional();
+
+// nullable
+z.string().nullable();
+
+// 联合
+z.union([z.string(), z.number()]);
+
+// 自定义
+z.string().refine((val) =&gt; val.endsWith('.com'), {
+  message: 'Must end with .com',
+});
+
+// 依赖其他字段
+z.object({
+  password: z.string(),
+  confirmPassword: z.string(),
+}).refine((data) =&gt; data.password === data.confirmPassword, {
+  message: "Passwords don't match",
+  path: ['confirmPassword'],  // 错误显示在哪个字段
+});
+
+// transform（解析时转换）
+z.string().transform((val) =&gt; val.trim().toLowerCase());
+
+// async refine（异步校验，比如检查 username 是否已存在）
+z.string().refine(async (val) =&gt; {
+  const exists = await checkUsernameExists(val);
+  return !exists;
+}, { message: 'Username already taken' });</code></pre>
+        </div>
+
+        <p>z.infer 推导类型：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">const schema = z.object({
+  email: z.string().email(),
+  age: z.number().int(),
+  role: z.enum(['admin', 'user']),
+});
+
+type User = z.infer&lt;typeof schema&gt;;
+// type User = {
+//   email: string;
+//   age: number;
+//   role: 'admin' | 'user';
+// }</code></pre>
+        </div>
+
+        <h3>与 Server Actions 集成</h3>
+
+        <p>2026 React 表单 + Server Actions 的标准模式（详见 <a href="../../next/04-server-actions/01-server-actions.html">Next.js P4.1</a>）：</p>
+
+        <ol>
+          <li>客户端用 RHF + Zod 即时校验（提升 UX）</li>
+          <li>提交时调 Server Action</li>
+          <li>Server Action 内用<strong>同一个 Zod schema</strong>再校验（双层防御）</li>
+          <li>Server Action 错误流回 client（用 return 不 throw）</li>
+          <li>客户端展示错误（FormMessage 或 toast）</li>
+        </ol>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">// schemas/contact.ts（客户端 + 服务端共享）
+import * as z from 'zod';
+
+export const contactSchema = z.object({
+  email: z.string().email(),
+  message: z.string().min(10).max(1000),
+});
+
+export type ContactFormValues = z.infer&lt;typeof contactSchema&gt;;</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">// app/_actions/contact.ts
+'use server';
+import { contactSchema } from '@/schemas/contact';
+
+type State = { errors?: Record&lt;string, string[]&gt;; success?: boolean };
+
+export async function submitContact(prev: State, formData: FormData): Promise&lt;State&gt; {
+  const parsed = contactSchema.safeParse({
+    email: formData.get('email'),
+    message: formData.get('message'),
+  });
+
+  if (!parsed.success) {
+    return { errors: parsed.error.flatten().fieldErrors };
+  }
+
+  await db.contacts.create({ data: parsed.data });
+  return { success: true };
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/_components/ContactForm.tsx
+'use client';
+import { useActionState } from 'react';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { useForm } from 'react-hook-form';
+import { contactSchema, type ContactFormValues } from '@/schemas/contact';
+import { submitContact } from '@/app/_actions/contact';
+
+export function ContactForm() {
+  const [serverState, formAction, isPending] = useActionState(submitContact, {});
+
+  const form = useForm&lt;ContactFormValues&gt;({
+    resolver: zodResolver(contactSchema),
+    defaultValues: { email: '', message: '' },
+  });
+
+  // 客户端校验后调 server action
+  function onSubmit(values: ContactFormValues) {
+    const formData = new FormData();
+    formData.append('email', values.email);
+    formData.append('message', values.message);
+    formAction(formData);  // 触发 useActionState
+  }
+
+  return (
+    &lt;Form {...form}&gt;
+      &lt;form onSubmit={form.handleSubmit(onSubmit)}&gt;
+        &lt;FormField name="email" /* ... */ /&gt;
+        &lt;FormField name="message" /* ... */ /&gt;
+        &lt;Button disabled={isPending}&gt;{isPending ? 'Sending...' : 'Send'}&lt;/Button&gt;
+        {serverState.success &amp;&amp; &lt;p&gt;Sent!&lt;/p&gt;}
+      &lt;/form&gt;
+    &lt;/Form&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>动态字段 useFieldArray</h3>
+
+        <p>数组字段（动态 todo / 多个邮箱）用 useFieldArray：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use client';
+import { useFieldArray, useForm } from 'react-hook-form';
+import * as z from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
+
+const schema = z.object({
+  emails: z.array(z.object({
+    address: z.string().email(),
+  })).min(1, 'At least one email'),
+});
+
+export function MultiEmailForm() {
+  const form = useForm({
+    resolver: zodResolver(schema),
+    defaultValues: { emails: [{ address: '' }] },
+  });
+
+  const { fields, append, remove, move } = useFieldArray({
+    control: form.control,
+    name: 'emails',
+  });
+
+  return (
+    &lt;Form {...form}&gt;
+      &lt;form onSubmit={form.handleSubmit((data) =&gt; console.log(data))}&gt;
+        {fields.map((field, index) =&gt; (
+          &lt;div key={field.id}&gt;  {/* field.id 稳定 key（必须） */}
+            &lt;FormField
+              name={`emails.${index}.address`}  {/* 嵌套字段名 */}
+              control={form.control}
+              render={({ field }) =&gt; (
+                &lt;FormItem&gt;
+                  &lt;FormLabel&gt;Email {index + 1}&lt;/FormLabel&gt;
+                  &lt;FormControl&gt;
+                    &lt;Input {...field} /&gt;
+                  &lt;/FormControl&gt;
+                  &lt;FormMessage /&gt;
+                &lt;/FormItem&gt;
+              )}
+            /&gt;
+            &lt;Button type="button" onClick={() =&gt; remove(index)}&gt;Remove&lt;/Button&gt;
+          &lt;/div&gt;
+        ))}
+        &lt;Button type="button" onClick={() =&gt; append({ address: '' })}&gt;Add email&lt;/Button&gt;
+        &lt;Button type="submit"&gt;Submit&lt;/Button&gt;
+      &lt;/form&gt;
+    &lt;/Form&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>关键点：</p>
+        <ul>
+          <li><code>field.id</code> 是 RHF 提供的稳定 key（不用 index）</li>
+          <li>嵌套字段名 <code>emails.${index}.address</code></li>
+          <li>append / remove / move 等方法操作数组</li>
+          <li>Zod schema 用 z.array 描述</li>
+        </ul>
+
+        <h3>多步表单（multi-step form）</h3>
+
+        <p>3 步注册表单：</p>
+
+        <ol>
+          <li>第 1 步：基本信息（姓名 / 邮箱）</li>
+          <li>第 2 步：账户安全（密码 / 安全问题）</li>
+          <li>第 3 步：偏好（语言 / 通知）</li>
+          <li>最后一步 submit 提交全部数据</li>
+        </ol>
+
+        <p>策略：</p>
+        <ul>
+          <li>用 RHF 单 useForm 管所有字段（不分多个 useForm）</li>
+          <li>用 useState 管当前步骤索引</li>
+          <li>每步显示对应字段</li>
+          <li>"Next"按钮只校验当前步字段（用 trigger）；"Back"无校验</li>
+          <li>最后一步 submit 才真实提交</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function MultiStepForm() {
+  const [step, setStep] = useState(0);
+  const form = useForm({
+    resolver: zodResolver(fullSchema),
+    defaultValues: { name: '', email: '', password: '', language: 'en' },
+  });
+
+  const stepFields = [
+    ['name', 'email'],          // step 0
+    ['password'],               // step 1
+    ['language'],               // step 2
+  ];
+
+  async function handleNext() {
+    const valid = await form.trigger(stepFields[step]);  // 仅校验当前步
+    if (valid) setStep((s) =&gt; s + 1);
+  }
+
+  return (
+    &lt;Form {...form}&gt;
+      &lt;form onSubmit={form.handleSubmit(onSubmit)}&gt;
+        {step === 0 &amp;&amp; &lt;StepBasicInfo /&gt;}
+        {step === 1 &amp;&amp; &lt;StepSecurity /&gt;}
+        {step === 2 &amp;&amp; &lt;StepPreferences /&gt;}
+
+        &lt;div className="flex gap-2"&gt;
+          {step &gt; 0 &amp;&amp; &lt;Button onClick={() =&gt; setStep(s =&gt; s - 1)}&gt;Back&lt;/Button&gt;}
+          {step &lt; 2 &amp;&amp; &lt;Button onClick={handleNext}&gt;Next&lt;/Button&gt;}
+          {step === 2 &amp;&amp; &lt;Button type="submit"&gt;Submit&lt;/Button&gt;}
+        &lt;/div&gt;
+      &lt;/form&gt;
+    &lt;/Form&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>File upload</h3>
+
+        <p>小文件（&lt;1MB）走 Server Action multipart：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// schema 接受 File 类型
+const schema = z.object({
+  avatar: z.instanceof(File).refine(
+    (file) =&gt; file.size &lt; 1_000_000,
+    'File must be less than 1MB'
+  ),
+});
+
+function AvatarUpload() {
+  const form = useForm({ resolver: zodResolver(schema) });
+
+  function onSubmit(values) {
+    const formData = new FormData();
+    formData.append('avatar', values.avatar);
+    formAction(formData);
+  }
+
+  return (
+    &lt;Form {...form}&gt;
+      &lt;form onSubmit={form.handleSubmit(onSubmit)}&gt;
+        &lt;FormField
+          name="avatar"
+          render={({ field: { onChange, value, ...field } }) =&gt; (
+            &lt;FormItem&gt;
+              &lt;FormLabel&gt;Avatar&lt;/FormLabel&gt;
+              &lt;FormControl&gt;
+                &lt;Input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) =&gt; onChange(e.target.files?.[0])}
+                  {...field}
+                /&gt;
+              &lt;/FormControl&gt;
+              &lt;FormMessage /&gt;
+            &lt;/FormItem&gt;
+          )}
+        /&gt;
+        &lt;Button type="submit"&gt;Upload&lt;/Button&gt;
+      &lt;/form&gt;
+    &lt;/Form&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>大文件用 presigned URL（详见 <a href="../../next/04-server-actions/01-server-actions.html">Next.js P4.1</a>）：</p>
+        <ol>
+          <li>客户端先调 Server Action 获取 presigned URL</li>
+          <li>客户端 PUT 文件到 S3 / CF R2 等</li>
+          <li>客户端调 Server Action 通知"上传完成 + 文件 URL"</li>
+          <li>不通过 Next.js server（节省带宽）</li>
+        </ol>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 完整 Todo CRUD（详见 Next.js P4.1）</h3>
+
+        <p>已在 Next.js P4.1 详细讲过。本章不重复，链回。</p>
+
+        <h3>场景 2 · 设置页（多字段 + 异步校验）</h3>
+
+        <p>用户名修改：要在客户端校验长度 + 服务端检查是否已存在。</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">const schema = z.object({
+  username: z.string().min(3).max(20).regex(/^[a-z0-9_]+$/),
+});
+
+// 服务端 schema 加异步校验
+const serverSchema = schema.extend({
+  username: schema.shape.username.refine(
+    async (val) =&gt; !(await db.users.exists({ username: val })),
+    { message: 'Username already taken' },
+  ),
+});</code></pre>
+        </div>
+
+        <h3>场景 3 · 复杂表单（含 Combobox + DatePicker + file）</h3>
+
+        <p>每个复杂控件用 RHF Controller / FormField 集成：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">&lt;FormField
+  name="country"
+  control={form.control}
+  render={({ field }) =&gt; (
+    &lt;FormItem&gt;
+      &lt;FormLabel&gt;Country&lt;/FormLabel&gt;
+      &lt;Combobox
+        value={field.value}
+        onChange={field.onChange}
+      /&gt;
+      &lt;FormMessage /&gt;
+    &lt;/FormItem&gt;
+  )}
+/&gt;
+
+&lt;FormField
+  name="birthdate"
+  control={form.control}
+  render={({ field }) =&gt; (
+    &lt;FormItem&gt;
+      &lt;FormLabel&gt;Birthdate&lt;/FormLabel&gt;
+      &lt;DatePicker
+        date={field.value}
+        onSelect={field.onChange}
+      /&gt;
+      &lt;FormMessage /&gt;
+    &lt;/FormItem&gt;
+  )}
+/&gt;</code></pre>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 完整登录表单（含 Server Action）</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">// schemas/auth.ts
+import * as z from 'zod';
+
+export const loginSchema = z.object({
+  email: z.string().email('Invalid email'),
+  password: z.string().min(8, 'Min 8 characters'),
+});
+export type LoginFormValues = z.infer&lt;typeof loginSchema&gt;;
+
+// app/_actions/auth.ts
+'use server';
+import { loginSchema } from '@/schemas/auth';
+import { redirect } from 'next/navigation';
+
+export async function login(prev: any, formData: FormData) {
+  const parsed = loginSchema.safeParse({
+    email: formData.get('email'),
+    password: formData.get('password'),
+  });
+  if (!parsed.success) return { errors: parsed.error.flatten().fieldErrors };
+
+  const user = await authenticate(parsed.data.email, parsed.data.password);
+  if (!user) return { errors: { _form: ['Invalid credentials'] } };
+
+  await createSession(user.id);
+  redirect('/dashboard');
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/_components/LoginForm.tsx
+'use client';
+import { useActionState } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { loginSchema, type LoginFormValues } from '@/schemas/auth';
+import { login } from '@/app/_actions/auth';
+import {
+  Form, FormControl, FormField, FormItem, FormLabel, FormMessage,
+} from '@/components/ui/form';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+
+export function LoginForm() {
+  const [serverState, formAction, isPending] = useActionState(login, {});
+
+  const form = useForm&lt;LoginFormValues&gt;({
+    resolver: zodResolver(loginSchema),
+    defaultValues: { email: '', password: '' },
+  });
+
+  return (
+    &lt;Form {...form}&gt;
+      &lt;form action={formAction} className="space-y-4"&gt;
+        &lt;FormField
+          control={form.control}
+          name="email"
+          render={({ field }) =&gt; (
+            &lt;FormItem&gt;
+              &lt;FormLabel&gt;Email&lt;/FormLabel&gt;
+              &lt;FormControl&gt;
+                &lt;Input type="email" {...field} /&gt;
+              &lt;/FormControl&gt;
+              &lt;FormMessage /&gt;
+            &lt;/FormItem&gt;
+          )}
+        /&gt;
+        &lt;FormField
+          control={form.control}
+          name="password"
+          render={({ field }) =&gt; (
+            &lt;FormItem&gt;
+              &lt;FormLabel&gt;Password&lt;/FormLabel&gt;
+              &lt;FormControl&gt;
+                &lt;Input type="password" {...field} /&gt;
+              &lt;/FormControl&gt;
+              &lt;FormMessage /&gt;
+            &lt;/FormItem&gt;
+          )}
+        /&gt;
+        {serverState.errors?._form &amp;&amp; (
+          &lt;p className="text-sm text-red-500"&gt;{serverState.errors._form[0]}&lt;/p&gt;
+        )}
+        &lt;Button type="submit" disabled={isPending} className="w-full"&gt;
+          {isPending ? 'Logging in...' : 'Log in'}
+        &lt;/Button&gt;
+      &lt;/form&gt;
+    &lt;/Form&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · 表单 + DatePicker + Combobox</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">const profileSchema = z.object({
+  name: z.string().min(1),
+  birthdate: z.date(),
+  country: z.string().min(1),
+});
+
+function ProfileForm() {
+  const form = useForm({
+    resolver: zodResolver(profileSchema),
+    defaultValues: { name: '', birthdate: new Date(), country: '' },
+  });
+
+  return (
+    &lt;Form {...form}&gt;
+      &lt;form onSubmit={form.handleSubmit(...)}&gt;
+        &lt;FormField name="name" render={...} /&gt;
+        &lt;FormField
+          control={form.control}
+          name="birthdate"
+          render={({ field }) =&gt; (
+            &lt;FormItem className="flex flex-col"&gt;
+              &lt;FormLabel&gt;Date of birth&lt;/FormLabel&gt;
+              &lt;Popover&gt;
+                &lt;PopoverTrigger asChild&gt;
+                  &lt;FormControl&gt;
+                    &lt;Button variant="outline" className={cn('justify-start', !field.value &amp;&amp; 'text-muted-foreground')}&gt;
+                      {field.value ? format(field.value, 'PPP') : 'Pick a date'}
+                    &lt;/Button&gt;
+                  &lt;/FormControl&gt;
+                &lt;/PopoverTrigger&gt;
+                &lt;PopoverContent className="w-auto p-0"&gt;
+                  &lt;Calendar mode="single" selected={field.value} onSelect={field.onChange} /&gt;
+                &lt;/PopoverContent&gt;
+              &lt;/Popover&gt;
+              &lt;FormMessage /&gt;
+            &lt;/FormItem&gt;
+          )}
+        /&gt;
+        {/* Combobox 类似（详见 P4.1 代码） */}
+      &lt;/form&gt;
+    &lt;/Form&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 3 · useFieldArray 完整示例（动态 emails）</h3>
+
+        <p>已在上文给出。</p>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>用 useState 自己管 form state</b> —— 性能差 + 没有 a11y。用 RHF</li>
+          <li><b>不用 zodResolver 而是手写校验</b> —— 类型不安全 + 校验逻辑分散。用 Zod schema</li>
+          <li><b>客户端校验后不在服务端再校验</b> —— 攻击者可绕过客户端。<strong>必须双层 Zod 校验</strong></li>
+          <li><b>FormField name 拼错</b> —— TypeScript 不报错（FormField name 是 string）。RHF 8+ 用 generic 推导让 name 类型安全</li>
+          <li><b>useFieldArray key 用 index 不用 field.id</b> —— React 重新渲染时 key 变，state 丢失。用 field.id</li>
+          <li><b>多步表单 next 按钮直接进步骤不校验</b> —— 用 form.trigger(fieldsForCurrentStep) 校验当前步</li>
+          <li><b>file input 用 register 而不是 Controller</b> —— file input 的 value 不能直接受控（浏览器限制）。用 Controller + onChange={(e) =&gt; field.onChange(e.target.files?.[0])}</li>
+          <li><b>refine 异步校验阻塞 UI</b> —— async refine 慢时表单 lag。用 onBlur 触发 / debounce</li>
+          <li><b>Zod schema 客户端 + 服务端不同步</b> —— 维护两份。共享 schema 文件 (schemas/contact.ts)</li>
+          <li><b>用 controlled input 但没传 onChange</b> —— React 报 warning。FormField render 解构 field 的 onChange / value 传给 input</li>
+          <li><b>defaultValues 不写</b> —— useForm 没初始值，input 从 undefined 变 "" 时 React 报 controlled/uncontrolled 切换 warning</li>
+          <li><b>FormMessage 不显示错误</b> —— 检查 zodResolver 是否正确传入；检查 FormField name 是否匹配 schema 字段</li>
+          <li><b>Server Action redirect 在 try/catch 内</b> —— redirect 用 throw 实现，try 会吃掉。redirect 放 try 之外</li>
+          <li><b>用 Server Action 但客户端没用 useActionState</b> —— pending state / 错误 handling 自己管，繁琐。用 useActionState</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://ui.shadcn.com/docs/components/form" target="_blank" rel="noopener">shadcn Form 文档</a></li>
+          <li><a href="https://react-hook-form.com/" target="_blank" rel="noopener">react-hook-form 文档</a></li>
+          <li><a href="https://zod.dev/" target="_blank" rel="noopener">Zod 文档</a></li>
+          <li><a href="https://github.com/react-hook-form/resolvers" target="_blank" rel="noopener">@hookform/resolvers</a> · 各种校验库 resolver</li>
+          <li><a href="../../next/04-server-actions/01-server-actions.html">Next.js 主题 P4.1 · Server Actions</a> · 配合 RHF</li>
+          <li><a href="../04-form/01-form-components.html">本主题 P4.1 · 表单组件</a> · Combobox / DatePicker 等</li>
+          <li><a href="../02-philosophy/02-controlled-aschild.html">本主题 P2.2 · 受控/asChild</a> · FormField 的 Controller 内部</li>
+          <li><a href="../02-theme-integration.html">本主题 P6.2 · Theme 集成</a> · 配 Form 看完整工程</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

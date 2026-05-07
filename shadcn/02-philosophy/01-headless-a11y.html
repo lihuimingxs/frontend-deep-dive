@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Headless + WAI-ARIA a11y 标准 · P2.1 · shadcn/ui + Radix 深度学习</title>
+    <meta name="description" content="Radix headless 哲学 + WAI-ARIA APG 标准深度解析。Radix 不是发明 a11y、是把 W3C 标准做到位。Dialog 的 8 条 a11y 规则（focus 移到 Dialog / ESC 关闭 / Tab 循环 / aria-modal/labelledby/describedby）+ Combobox 的 12 条 a11y 规则（aria-activedescendant 而非真 focus、aria-expanded/controls）。回答「为什么手写 Dialog 几乎一定漏 a11y」。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c026d3'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='14' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ESR%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>shadcn/ui + Radix 深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.18 320); color: #fff">SR</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · Radix 哲学</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-headless-a11y.html" class="active">01 · Headless + WAI-ARIA a11y</a></li>
+          <li><a href="02-controlled-aschild.html">02 · 受控/asChild/Compound</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">shadcn + Radix</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · Radix 哲学</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Headless + WAI-ARIA a11y 标准</span>
+        </nav>
+        <h1>Headless + WAI-ARIA a11y 标准</h1>
+        <p class="lead">
+          Radix 的核心赌注：<strong>不是发明 a11y、是把 W3C WAI-ARIA APG 标准做到位</strong>。这一章把 Dialog / Combobox 两个最复杂 widget 的完整 a11y 标准摊开讲透 —— 让读者看到为什么自己手写组件几乎一定漏 a11y、为什么 Radix 这套投入是工程精华。读完不再觉得 a11y 是"加几个 aria-* 属性"那么简单。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P1 项目史 + 写过 React 组件</span>
+          <span><strong>主要来源</strong> WAI-ARIA APG (W3C) + radix-ui.com docs + Pedro Duarte / a11y 专家公开演讲</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Headless 定义</strong>：组件提供"行为 + 状态 + a11y"，<strong>不提供样式</strong>。用户用 Tailwind / CSS 写样式。与 styled 库（Mantine / MUI）反义。</li>
+          <li><strong>WAI-ARIA APG（Authoring Practices Guide）</strong>：W3C 维护的"组件 a11y 标准"权威文档。定义每种 widget（Dialog / Combobox / Tab / Menu）的<strong>键盘交互 / aria-* 属性 / focus 管理</strong>规范。Radix 严格按 APG 实现，不发明。</li>
+          <li><strong>Dialog 的 a11y 标准</strong>有 8 条核心规则：1) 打开 focus 移到 Dialog 内；2) 关闭 focus 回到触发元素；3) ESC 关闭；4) Tab 在 Dialog 内循环（focus trap）；5) aria-modal="true"；6) aria-labelledby 指向 title；7) aria-describedby 指向 description；8) 屏幕阅读器读出 "dialog [title]"。</li>
+          <li><strong>Combobox 的 a11y 标准</strong>更复杂（12 条核心规则）：键盘导航 ↓↑ Enter ESC、aria-expanded / aria-controls / aria-activedescendant（不是真 focus）、屏幕阅读器实时读出可用选项数、选中后清空策略等。</li>
+          <li><strong>a11y 为什么难手写</strong>：标准复杂（每种 widget 几十条规则）/ 不同浏览器 / screen reader 行为差异（NVDA vs JAWS vs VoiceOver）/ 边角情况多（嵌套 dialog / modal 之上 popover / 表单中 combobox）/ 测试难（要真用 screen reader）。</li>
+          <li><strong>Radix 怎么把这些做到位</strong>：每个 primitive 有专门 a11y test suite / 用 NVDA / JAWS / VoiceOver 实测 / 跟踪 WAI-ARIA spec 更新 / 团队成员含 a11y 专家。</li>
+          <li><strong>aria-activedescendant vs roving tabindex</strong>：Combobox / Listbox 用前者（不真 focus 选项，避免输入框失焦）；Menu / Toolbar 用后者（真 focus，Tab 跳到下一控件）。这是 W3C APG 规定的两种 focus 模式。</li>
+          <li><strong>Focus management</strong>是 a11y 最难的部分：Dialog 打开 focus 哪个元素？ESC 关闭后 focus 回哪？嵌套 dialog 怎么处理？Tooltip 不应该抢 focus 但要读出。这些 Radix 都按 APG 处理。</li>
+          <li><strong>Screen reader 测试</strong>是 a11y 验证的金标准。NVDA（Windows，免费）/ JAWS（Windows，商业）/ VoiceOver（macOS/iOS）/ TalkBack（Android）。Radix 用 NVDA + VoiceOver 至少测两套。</li>
+          <li>本章建立"<strong>Radix 不是发明 a11y、是把 W3C 标准做到位</strong>"的心智。让读者看到 a11y 复杂度后自然信任 Radix 不再尝试自己写。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Headless 是什么 · 与 Styled 对比</h3>
+
+        <p>Headless 库提供：</p>
+        <ul>
+          <li>组件的<strong>行为</strong>（点击展开 / 键盘导航 / focus 管理）</li>
+          <li>组件的<strong>状态</strong>（open / value / focused 等）</li>
+          <li>组件的<strong>a11y 属性</strong>（role / aria-* / data-*）</li>
+        </ul>
+
+        <p>Headless 库<strong>不</strong>提供：</p>
+        <ul>
+          <li>颜色 / 间距 / 字号 / 阴影 等样式</li>
+          <li>主题 / 暗色模式系统（用户自己加）</li>
+          <li>动画（用户自己用 CSS / framer-motion）</li>
+        </ul>
+
+        <p>对比 styled 库：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// Headless（Radix）
+&lt;Dialog.Root&gt;
+  &lt;Dialog.Trigger&gt;Open&lt;/Dialog.Trigger&gt;
+  &lt;Dialog.Portal&gt;
+    &lt;Dialog.Overlay className="fixed inset-0 bg-black/50" /&gt;
+    &lt;Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white p-6 rounded-lg"&gt;
+      &lt;Dialog.Title className="text-lg font-semibold"&gt;Confirm&lt;/Dialog.Title&gt;
+      &lt;Dialog.Description&gt;Are you sure?&lt;/Dialog.Description&gt;
+    &lt;/Dialog.Content&gt;
+  &lt;/Dialog.Portal&gt;
+&lt;/Dialog.Root&gt;
+{/* Radix 提供：行为 + 状态 + a11y；用户提供 className */}
+
+// Styled（Mantine）
+&lt;Modal opened={opened} onClose={close} title="Confirm" centered size="md"&gt;
+  &lt;p&gt;Are you sure?&lt;/p&gt;
+&lt;/Modal&gt;
+{/* Mantine 提供：行为 + 状态 + a11y + 样式；用户传 props 调样式 */}</code></pre>
+        </div>
+
+        <p>哪个好？看场景：</p>
+        <ul>
+          <li>Tailwind 项目 + 想要完整定制 → Headless（Radix）</li>
+          <li>不要 Tailwind + 想开箱即用 → Styled（Mantine）</li>
+        </ul>
+
+        <h3>WAI-ARIA APG · W3C 权威文档</h3>
+
+        <p>WAI-ARIA Authoring Practices Guide（APG）是 W3C 维护的<strong>组件 a11y 实现指南</strong>。完整 URL：<a href="https://www.w3.org/WAI/ARIA/apg/" target="_blank" rel="noopener">w3.org/WAI/ARIA/apg/</a>。</p>
+
+        <p>APG 包含的内容：</p>
+        <ul>
+          <li>每种常见 widget 的"<strong>设计模式</strong>"（design pattern）</li>
+          <li>每个模式的<strong>键盘交互</strong>规范</li>
+          <li>每个模式的 <strong>aria-* 属性</strong>使用规范</li>
+          <li>每个模式的 <strong>focus 管理</strong>规范</li>
+          <li>每个模式的<strong>实际可工作示例</strong>（含完整代码）</li>
+        </ul>
+
+        <p>覆盖的 widgets：</p>
+        <ul>
+          <li><b>Disclosure</b>（折叠面板）</li>
+          <li><b>Dialog (Modal)</b>（模态框）</li>
+          <li><b>Alert / Alert Dialog</b>（警告 / 强制确认）</li>
+          <li><b>Tabs</b>（标签页）</li>
+          <li><b>Accordion</b>（手风琴）</li>
+          <li><b>Combobox</b>（输入 + 自动完成）</li>
+          <li><b>Listbox</b>（列表选择）</li>
+          <li><b>Menu / Menubar</b>（菜单）</li>
+          <li><b>Tooltip</b>（提示气泡）</li>
+          <li><b>Slider / Spin Button</b></li>
+          <li><b>Switch / Checkbox / Radio Group</b></li>
+          <li><b>Tree</b>（树形列表）</li>
+          <li><b>Grid / Treegrid</b>（网格 / 树形网格）</li>
+          <li><b>Date Picker</b></li>
+          <li>更多...</li>
+        </ul>
+
+        <p>Radix 的 30+ primitives 一一对应 APG widgets。这是 Radix "<strong>不是发明、是实现标准</strong>"的具体表现。</p>
+
+        <h3>Dialog 的 8 条 a11y 规则（详细）</h3>
+
+        <p>WAI-ARIA APG 对 Dialog（Modal）规定的核心规则：</p>
+
+        <p><b>规则 1 · Focus 移到 Dialog 内</b>：</p>
+        <ul>
+          <li>Dialog 打开时，focus 必须从触发按钮转移到 Dialog 内某个可 focus 元素</li>
+          <li>默认 focus 第一个可 focus 元素（通常是关闭按钮或第一个 input）</li>
+          <li>开发者可显式指定（Radix 用 <code>onOpenAutoFocus</code> 自定义）</li>
+          <li>错误：Dialog 打开但 focus 仍在触发按钮 → 屏幕阅读器用户感知不到 Dialog</li>
+        </ul>
+
+        <p><b>规则 2 · ESC 关闭</b>：</p>
+        <ul>
+          <li>用户按 ESC 必须关闭 Dialog</li>
+          <li>Radix 自动监听 ESC keydown</li>
+          <li>嵌套 Dialog 时只关最上层（一次 ESC 关一层）</li>
+        </ul>
+
+        <p><b>规则 3 · Focus Trap</b>：</p>
+        <ul>
+          <li>Dialog 打开时，Tab 键必须在 Dialog 内循环</li>
+          <li>到 Dialog 最后一个可 focus 元素时，Tab 跳回第一个</li>
+          <li>Shift+Tab 反向循环</li>
+          <li>不能 Tab 出 Dialog 到背景元素</li>
+          <li>Radix 用内部 focus trap 实现</li>
+        </ul>
+
+        <p><b>规则 4 · 关闭后 focus 回触发元素</b>：</p>
+        <ul>
+          <li>Dialog 关闭后，focus 必须回到打开它的按钮</li>
+          <li>这让屏幕阅读器用户知道"回到了原页面"</li>
+          <li>Radix 自动处理</li>
+        </ul>
+
+        <p><b>规则 5 · aria-modal="true"</b>：</p>
+        <ul>
+          <li>Dialog 容器加 aria-modal="true"</li>
+          <li>告诉屏幕阅读器"这是模态对话框、外面内容暂时不可访问"</li>
+          <li>Radix 自动加</li>
+        </ul>
+
+        <p><b>规则 6 · aria-labelledby 指向 title</b>：</p>
+        <ul>
+          <li>Dialog 容器加 aria-labelledby="dialog-title-id"</li>
+          <li>title 元素加 id="dialog-title-id"</li>
+          <li>屏幕阅读器读出 dialog 时同时读 title</li>
+          <li>Radix 用 Compound Components 自动关联（Dialog.Title 自动给 id 并关联到 Dialog.Content 的 aria-labelledby）</li>
+        </ul>
+
+        <p><b>规则 7 · aria-describedby 指向 description</b>（可选）：</p>
+        <ul>
+          <li>类似 aria-labelledby 但指向 description（详细说明）</li>
+          <li>Radix Dialog.Description 自动关联</li>
+        </ul>
+
+        <p><b>规则 8 · 屏幕阅读器读出 "dialog [title]"</b>：</p>
+        <ul>
+          <li>所有以上规则到位后，屏幕阅读器（NVDA / JAWS / VoiceOver）会自动读出 "dialog [title]" 提示用户</li>
+          <li>这是 a11y 完整的标志</li>
+        </ul>
+
+        <p>这 8 条规则 Radix 自动实现，用户写 <code>&lt;Dialog.Root&gt;</code> 不需要操心。但<strong>自己手写 Dialog 几乎一定漏其中几条</strong>（特别是 focus trap + 关闭后 focus 回触发）。</p>
+
+        <h3>Combobox 的 12 条 a11y 规则（更复杂）</h3>
+
+        <p>Combobox 是最复杂的 widget。WAI-ARIA APG 规定的核心规则：</p>
+
+        <p><b>结构</b>：</p>
+        <ul>
+          <li>1) input 元素 + 触发按钮（可选）+ listbox（选项列表）</li>
+          <li>2) input role="combobox"</li>
+          <li>3) listbox role="listbox"</li>
+          <li>4) 选项 role="option"</li>
+        </ul>
+
+        <p><b>状态属性</b>：</p>
+        <ul>
+          <li>5) input aria-expanded（listbox 是否展开）</li>
+          <li>6) input aria-controls（指向 listbox id）</li>
+          <li>7) input aria-activedescendant（指向当前高亮选项 id）</li>
+        </ul>
+
+        <p><b>键盘交互</b>：</p>
+        <ul>
+          <li>8) ↓ ↑ 导航选项（Home 跳第一个、End 跳最后一个）</li>
+          <li>9) Enter 选中当前高亮选项</li>
+          <li>10) ESC 关闭 listbox（保留 input 内容）+ ESC 再次清空 input</li>
+          <li>11) Tab 关闭 listbox + 移动到下一控件</li>
+        </ul>
+
+        <p><b>屏幕阅读器</b>：</p>
+        <ul>
+          <li>12) 实时读出 "X options available"（选项数）</li>
+          <li>读出当前高亮选项的 label + position（"3 of 10"）</li>
+          <li>读出选中状态（"selected"）</li>
+        </ul>
+
+        <p><b>关键设计：aria-activedescendant 而非真 focus</b>：</p>
+        <ul>
+          <li>用户在 input 输入时，焦点应该<strong>停在 input</strong>（继续输入）</li>
+          <li>但 ↓ ↑ 应该"高亮"选项</li>
+          <li>解决方案：用 aria-activedescendant 让屏幕阅读器知道"虚拟 focus"在哪</li>
+          <li>真 DOM focus 仍在 input</li>
+          <li>这是 W3C APG 规定的 Combobox / Listbox focus 模式</li>
+        </ul>
+
+        <p>对比 Menu / Toolbar 用<strong>roving tabindex</strong>（真 focus 跳）：</p>
+        <ul>
+          <li>菜单项之间用 ↓ ↑ 真 focus 跳转</li>
+          <li>非当前 focus 项 tabindex="-1"</li>
+          <li>Tab 跳出整个菜单到下一控件</li>
+        </ul>
+
+        <p>这两种模式选哪个由 widget 类型决定，不是用户选。Radix（和 cmdk）按 APG 用对应模式。</p>
+
+        <h3>a11y 为什么难手写 · 4 个根因</h3>
+
+        <p><b>1. 标准复杂</b>：</p>
+        <ul>
+          <li>每种 widget 几十条规则</li>
+          <li>规则之间互相依赖（Dialog 的 focus trap 依赖 Tab 监听）</li>
+          <li>边角情况多（嵌套 dialog 怎么处理 focus？modal 之上 popover 怎么处理 ESC？）</li>
+        </ul>
+
+        <p><b>2. 不同浏览器 / screen reader 行为差异</b>：</p>
+        <ul>
+          <li>aria-modal 在 NVDA + Chrome 工作完美</li>
+          <li>JAWS + IE11 行为略有差异（IE11 已退场，但 JAWS 自身有 quirks）</li>
+          <li>VoiceOver 在 Safari 与 Chrome 有微妙差异</li>
+          <li>TalkBack（Android）与桌面 screen reader 不一样</li>
+        </ul>
+
+        <p><b>3. 测试难</b>：</p>
+        <ul>
+          <li>需要真用 NVDA / JAWS / VoiceOver 听屏幕阅读器</li>
+          <li>需要键盘 only 测试（拔鼠标）</li>
+          <li>自动化测试只能 catch aria-* 属性是否存在，不能 catch 行为正确</li>
+          <li>Playwright / Cypress 等 E2E 工具对 a11y 测试有限</li>
+        </ul>
+
+        <p><b>4. 工程优先级</b>：</p>
+        <ul>
+          <li>大多数团队"a11y 是最后做的事"</li>
+          <li>没有专职 a11y 工程师</li>
+          <li>无 a11y 测试 CI</li>
+          <li>结果：自己手写组件几乎一定漏 a11y</li>
+        </ul>
+
+        <p>Radix 的解法："<strong>把 a11y 内置到组件，让用户不需要懂</strong>"。这是 Radix 最大的工程价值。</p>
+
+        <h3>Radix 怎么把 a11y 做到位 · 4 个工程实践</h3>
+
+        <p><b>1. 每个 primitive 有专门 a11y test suite</b>：</p>
+        <ul>
+          <li>测试 keyboard interaction（按键 + 检查焦点 / aria-* 状态）</li>
+          <li>测试 aria-* 属性（render 后 DOM 检查）</li>
+          <li>测试边角情况（嵌套 / 错误状态 / 异步加载）</li>
+        </ul>
+
+        <p><b>2. 用真 screen reader 测</b>：</p>
+        <ul>
+          <li>NVDA + Chrome（Windows）</li>
+          <li>VoiceOver + Safari（macOS / iOS）</li>
+          <li>JAWS（商业，主要企业用户）</li>
+          <li>每次大改动手动测一遍</li>
+        </ul>
+
+        <p><b>3. 跟踪 WAI-ARIA spec 更新</b>：</p>
+        <ul>
+          <li>W3C 偶尔更新 APG（新 widget / 现有 widget 改进）</li>
+          <li>Radix 团队跟踪并更新对应 primitive</li>
+        </ul>
+
+        <p><b>4. 团队成员含 a11y 专家</b>：</p>
+        <ul>
+          <li>Pedro Duarte 自己是 a11y 专家</li>
+          <li>WorkOS 给 Radix 的全职岗位让团队能投入 a11y</li>
+        </ul>
+
+        <p>这是为什么 Radix 在 a11y 完整度上断层式领先同代竞品。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 团队不懂 a11y，要做出 a11y 完整的应用</h3>
+
+        <p>用 Radix（通过 shadcn）。Radix 把 a11y 内置，用户不需要懂细节就能写出 a11y 完整组件。</p>
+
+        <p>但仍要做的：</p>
+        <ul>
+          <li>用 NVDA / VoiceOver 偶尔实测（catch 自己加的内容是否破坏 a11y）</li>
+          <li>用 axe-core / Lighthouse 自动 a11y audit</li>
+          <li>表单加 aria-label / 描述（Radix 不能替你写文字）</li>
+          <li>图片加 alt（Radix 与图片无关）</li>
+        </ul>
+
+        <h3>场景 2 · 法律要求 a11y 合规（ADA / EAA）</h3>
+
+        <p>美国 ADA / 欧盟 EAA 等法律要求 web 应用 a11y 合规。这种项目：</p>
+        <ul>
+          <li>必须用 a11y 完整的 UI 库（Radix 是首选）</li>
+          <li>必须做 a11y 审计（雇 a11y 顾问 / 用 axe-core）</li>
+          <li>必须做 screen reader 测试</li>
+          <li>不能用 a11y 不全的库（手写组件 + Headless UI 早期版本等）</li>
+        </ul>
+
+        <h3>场景 3 · 为什么不直接 import @radix-ui/react-* 用</h3>
+
+        <p>可以直接用 Radix Primitives，不通过 shadcn。这是合理选择：</p>
+        <ul>
+          <li>团队有自己设计语言（不接受 shadcn 默认）</li>
+          <li>大型企业自建 design system</li>
+          <li>组件库作者基于 Radix 出新库</li>
+        </ul>
+
+        <p>shadcn 只是"Radix + Tailwind + CVA 的模板"，不是必须。理解这点，shadcn vs 直接用 Radix 的决策才清晰。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 自己手写 Dialog（漏 a11y）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ 自己手写（漏多条 a11y 规则）
+function MyDialog({ open, onClose, children }) {
+  if (!open) return null;
+  return (
+    &lt;div className="fixed inset-0 bg-black/50 flex items-center justify-center"&gt;
+      &lt;div className="bg-white p-6 rounded-lg"&gt;
+        &lt;button onClick={onClose}&gt;X&lt;/button&gt;
+        {children}
+      &lt;/div&gt;
+    &lt;/div&gt;
+  );
+}
+
+// 漏的 a11y：
+// ❌ focus 没移到 Dialog（屏幕阅读器读不出 Dialog 打开）
+// ❌ 没有 focus trap（Tab 跳到背景）
+// ❌ 关闭后 focus 不回触发按钮
+// ❌ ESC 不关闭
+// ❌ 没有 aria-modal / aria-labelledby / aria-describedby
+// ❌ 屏幕阅读器读不出 "dialog"
+// ❌ 没有 scroll lock（背景仍可滚）
+// ❌ 没有 portal（z-index 战争）</code></pre>
+        </div>
+
+        <h3>代码 2 · Radix Dialog（a11y 完整）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ✅ Radix（自动处理所有 a11y）
+import { Dialog } from 'radix-ui';
+
+function MyDialog() {
+  return (
+    &lt;Dialog.Root&gt;
+      &lt;Dialog.Trigger asChild&gt;
+        &lt;button&gt;Open&lt;/button&gt;
+      &lt;/Dialog.Trigger&gt;
+      &lt;Dialog.Portal&gt;
+        &lt;Dialog.Overlay className="fixed inset-0 bg-black/50" /&gt;
+        &lt;Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white p-6 rounded-lg"&gt;
+          &lt;Dialog.Title&gt;Confirm&lt;/Dialog.Title&gt;
+          &lt;Dialog.Description&gt;Are you sure?&lt;/Dialog.Description&gt;
+          &lt;Dialog.Close&gt;Cancel&lt;/Dialog.Close&gt;
+        &lt;/Dialog.Content&gt;
+      &lt;/Dialog.Portal&gt;
+    &lt;/Dialog.Root&gt;
+  );
+}
+
+// Radix 自动处理：
+// ✅ 打开 focus 移到 Dialog
+// ✅ Focus trap（Tab 在 Dialog 内循环）
+// ✅ 关闭后 focus 回触发按钮
+// ✅ ESC 关闭
+// ✅ aria-modal="true"
+// ✅ aria-labelledby 指向 Dialog.Title
+// ✅ aria-describedby 指向 Dialog.Description
+// ✅ Portal 渲染到 body 末尾
+// ✅ scroll lock（body overflow: hidden）
+// ✅ 屏幕阅读器读出 "dialog Confirm"</code></pre>
+        </div>
+
+        <h3>代码 3 · 用 axe-core 自动 a11y audit</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 安装
+npm i -D @axe-core/react axe-playwright
+
+# 在开发模式启用
+# main.tsx
+import React from 'react';
+if (process.env.NODE_ENV === 'development') {
+  import('@axe-core/react').then(({ default: axe }) =&gt; {
+    axe(React, ReactDOM, 1000);
+  });
+}
+
+# 控制台会输出 a11y 问题</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">// Playwright 测试 a11y
+import { test, expect } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
+
+test('homepage has no accessibility violations', async ({ page }) =&gt; {
+  await page.goto('/');
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});</code></pre>
+        </div>
+
+        <h3>代码 4 · 用 NVDA / VoiceOver 测试（步骤）</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">macOS · VoiceOver
+1. Cmd + F5 启动 VoiceOver
+2. 用 Tab 键导航
+3. 听 VO 读出每个元素
+4. 验证：Dialog 打开时读 "dialog [title]"
+5. ESC 关闭，听 VO 读 "back to [trigger button]"
+6. Cmd + F5 关闭 VoiceOver
+
+Windows · NVDA（免费）
+1. 装 https://www.nvaccess.org/download/
+2. 启动 NVDA
+3. 用 Tab / 方向键导航
+4. 验证 Dialog / Combobox 等组件读出正确
+
+测试要点：
+- 拔鼠标用纯键盘
+- 听屏幕阅读器读什么（不只是看视觉）
+- 验证 ESC / 方向键 / Tab / Enter 行为</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>认为"加几个 aria-* 就是 a11y"</b> —— 错。aria-* 是其中一部分，focus 管理 / 键盘交互 / 屏幕阅读器测试同样重要</li>
+          <li><b>自己手写 Dialog / Combobox</b> —— 几乎一定漏 a11y。用 Radix（即使不用 shadcn 也至少用 Radix）</li>
+          <li><b>用 axe-core 通过就以为 a11y 完整</b> —— axe 只能 catch 静态 aria-* 问题，不能 catch focus 管理 / 键盘交互。要真用 NVDA / VoiceOver 测</li>
+          <li><b>不真用 screen reader 测</b> —— 自动化测试有限。a11y 是"用户体验"，必须真听</li>
+          <li><b>aria-hidden 滥用</b> —— aria-hidden="true" 让屏幕阅读器跳过元素。用错位置（覆盖整个 main）让整页对屏幕阅读器消失</li>
+          <li><b>tabindex="-1" 用在错的元素</b> —— -1 让元素可被 .focus() 但不被 Tab 触达。用错让键盘用户无法到达交互元素</li>
+          <li><b>Tooltip 在 disabled button 上</b> —— disabled button 不触发 hover/focus，Tooltip 不会出现。包一层 div 解决</li>
+          <li><b>嵌套 Dialog 不处理 focus</b> —— Radix 自动处理（最上层 Dialog 关后 focus 回中层），自己写易错</li>
+          <li><b>"Combobox 用不到 a11y，反正大家用鼠标"</b> —— 错。键盘用户 + screen reader 用户都需要 Combobox a11y。法律风险</li>
+          <li><b>aria-label / aria-labelledby 写错文本</b> —— "Submit" 比 "Click here" 好。要描述<strong>动作</strong>，不要描述<strong>位置</strong></li>
+          <li><b>Radix Dialog 没用 Dialog.Title 而用 div</b> —— 失去 aria-labelledby 自动关联。必须用 Dialog.Title 或显式设 aria-labelledby</li>
+          <li><b>"我们项目不需要 a11y，没残障用户"</b> —— 错。键盘用户 / 临时受伤 / 屏幕反光 / 嘈杂环境也需要 a11y。是普世可用性</li>
+          <li><b>用 onClick 不监听 keydown</b> —— button 元素 React onClick 自动处理键盘 Enter / Space。但 div 加 onClick 不触发键盘</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://www.w3.org/WAI/ARIA/apg/" target="_blank" rel="noopener">WAI-ARIA APG (W3C)</a> · 组件 a11y 标准权威文档</li>
+          <li><a href="https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/" target="_blank" rel="noopener">APG · Dialog (Modal)</a> · Dialog 完整规范</li>
+          <li><a href="https://www.w3.org/WAI/ARIA/apg/patterns/combobox/" target="_blank" rel="noopener">APG · Combobox</a> · Combobox 完整规范</li>
+          <li><a href="https://www.radix-ui.com/primitives/docs/overview/accessibility" target="_blank" rel="noopener">Radix · Accessibility</a> · Radix a11y 实现说明</li>
+          <li><a href="https://www.deque.com/axe/" target="_blank" rel="noopener">axe-core</a> · a11y 自动审计工具</li>
+          <li><a href="https://www.nvaccess.org/download/" target="_blank" rel="noopener">NVDA</a> · Windows 免费屏幕阅读器</li>
+          <li><a href="https://support.apple.com/guide/voiceover/welcome/mac" target="_blank" rel="noopener">VoiceOver</a> · macOS 屏幕阅读器</li>
+          <li><a href="../02-controlled-aschild.html">本主题 P2.2 · 受控/asChild/Compound Components</a> · Radix API 设计</li>
+          <li><a href="../03-overlay/01-overlay-components.html">本主题 P3.1 · 浮层组件深度</a> · Dialog / Popover 实战</li>
+          <li><a href="../04-form/01-form-components.html">本主题 P4.1 · 表单组件深度</a> · Combobox 实战</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

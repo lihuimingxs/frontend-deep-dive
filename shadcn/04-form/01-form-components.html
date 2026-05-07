@@ -1,0 +1,693 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>表单组件全谱 · P4.1 · shadcn/ui + Radix 深度学习</title>
+    <meta name="description" content="表单组件深度解析。Checkbox / RadioGroup / Switch / Slider / Select / Combobox 全谱。重点 Combobox（最难的 widget）+ shadcn 用 cmdk 而非 Radix（Radix 没有 Combobox primitive）+ aria-activedescendant 而非真 focus 的设计动机 + Listbox a11y 标准 + 异步加载 + Multi-select。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c026d3'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='14' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ESR%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>shadcn/ui + Radix 深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.18 320); color: #fff">SR</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · 表单组件深度</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-form-components.html" class="active">01 · 表单组件全谱</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">shadcn + Radix</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · 表单组件深度</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 表单组件全谱</span>
+        </nav>
+        <h1>表单组件全谱</h1>
+        <p class="lead">
+          表单 widget 比浮层更难（状态多、a11y 严格、与表单系统集成）。这一章把简单控件（Checkbox / RadioGroup / Switch / Slider）+ 复杂控件（Select / Combobox）讲透，重点 Combobox（最难的 widget）+ shadcn 用 cmdk 而非 Radix 的工程权衡。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P2 + P3 + 写过 React 表单</span>
+          <span><strong>主要来源</strong> radix-ui.com docs + cmdk.paco.me + WAI-ARIA APG Combobox/Listbox</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>表单控件分两类：<b>简单</b>（Checkbox / RadioGroup / Switch / Slider / Toggle）和 <b>复杂</b>（Select / Combobox / Listbox）。简单控件 a11y 直接（与原生类似）；复杂控件 a11y 严格（特别是 Combobox）。</li>
+          <li><b>Checkbox</b> 关键特性：indeterminate state（"半选"，用于"全选"按钮逻辑）、aria-checked。Radix Checkbox 把原生 input + label 包装为更易样式化的组件。</li>
+          <li><b>RadioGroup</b>：单选互斥、键盘 ← → 在选项间导航（不用 Tab）、aria-checked。Radix 自动处理 roving tabindex。</li>
+          <li><b>Switch</b>：与 Checkbox 类似但视觉是 toggle（拉杆）、role="switch" 而非 "checkbox"。屏幕阅读器读出 "on/off" 而非 "checked/unchecked"。</li>
+          <li><b>Slider</b>：单值 / 范围（多 thumb）、键盘 ← → ↑ ↓ Home End、aria-valuemin / aria-valuemax / aria-valuenow。Radix Slider 处理触摸 / 键盘 / 鼠标三种交互。</li>
+          <li><b>Select</b>：下拉选择、单选、与原生 <code>&lt;select&gt;</code> 类似 a11y。Radix Select 自定义视觉但保留原生 a11y 行为。</li>
+          <li><b>Combobox</b> 是<strong>最难的 widget</strong>：输入 + 自动完成 + 选项列表 + 选中标签（可清除）。与 Select 区别：Select 是固定选项列表、Combobox 输入框过滤。</li>
+          <li><b>Radix 没有 Combobox primitive</b>（!）。shadcn 用 <strong>cmdk</strong>（Pkmn / Linear 团队开源）作为 Combobox 基础。这是工程权衡 —— Combobox 复杂度高，Radix 团队优先做基础 primitives；cmdk 提供完整 Listbox a11y。</li>
+          <li><b>aria-activedescendant 而非真 focus</b>：Combobox 的关键 a11y 设计 —— 用户在 input 输入时焦点应停在 input、↓ ↑ 应"虚拟高亮"选项。aria-activedescendant 指向当前高亮项；真 DOM focus 仍在 input。</li>
+          <li>本章实战：完整 Combobox（异步加载 + multi-select + 与 react-hook-form 集成）。读完能写出 a11y 完整的 Combobox 而不是从 0 手写。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>简单控件 · Checkbox</h3>
+
+        <p>Radix Checkbox 把原生 <code>&lt;input type="checkbox"&gt;</code> 包装为可深度样式化的组件。关键能力：</p>
+
+        <ul>
+          <li><b>indeterminate state</b>："半选"状态（用于"全选"按钮的"部分子项选中"显示）</li>
+          <li><b>aria-checked</b>：true / false / "mixed"（indeterminate 时）</li>
+          <li><b>data-state</b>：checked / unchecked / indeterminate（用于 CSS）</li>
+          <li><b>受控/非受控</b>：checked + onCheckedChange / defaultChecked</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { Checkbox } from 'radix-ui';
+
+// 基础
+&lt;Checkbox.Root className="..."&gt;
+  &lt;Checkbox.Indicator&gt;
+    &lt;CheckIcon /&gt;
+  &lt;/Checkbox.Indicator&gt;
+&lt;/Checkbox.Root&gt;
+
+// indeterminate 状态（"全选"按钮）
+const [allChecked, setAllChecked] = useState&lt;boolean | 'indeterminate'&gt;('indeterminate');
+
+&lt;Checkbox.Root checked={allChecked} onCheckedChange={(checked) =&gt; setAllChecked(checked)}&gt;
+  &lt;Checkbox.Indicator&gt;
+    {allChecked === 'indeterminate' ? &lt;MinusIcon /&gt; : &lt;CheckIcon /&gt;}
+  &lt;/Checkbox.Indicator&gt;
+&lt;/Checkbox.Root&gt;</code></pre>
+        </div>
+
+        <h3>简单控件 · RadioGroup</h3>
+
+        <p>互斥单选。a11y 关键：键盘 ← → 在选项间导航（不用 Tab，因为 Tab 跳出整个 group）。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { RadioGroup } from 'radix-ui';
+
+&lt;RadioGroup.Root defaultValue="email" name="contact-method" className="flex flex-col gap-2"&gt;
+  &lt;label className="flex items-center gap-2"&gt;
+    &lt;RadioGroup.Item value="email" id="r-email" className="..."&gt;
+      &lt;RadioGroup.Indicator className="..." /&gt;
+    &lt;/RadioGroup.Item&gt;
+    &lt;span&gt;Email&lt;/span&gt;
+  &lt;/label&gt;
+  &lt;label className="flex items-center gap-2"&gt;
+    &lt;RadioGroup.Item value="phone" id="r-phone"&gt;
+      &lt;RadioGroup.Indicator /&gt;
+    &lt;/RadioGroup.Item&gt;
+    &lt;span&gt;Phone&lt;/span&gt;
+  &lt;/label&gt;
+&lt;/RadioGroup.Root&gt;
+
+{/*
+  Radix 自动处理：
+  - 键盘 ← → 在 radio 间导航
+  - 选中项 tabindex="0"，未选 tabindex="-1"（roving tabindex）
+  - aria-checked
+  - 互斥（选一个其他自动取消）
+*/}</code></pre>
+        </div>
+
+        <h3>简单控件 · Switch</h3>
+
+        <p>视觉是拉杆，语义是 on/off。与 Checkbox 的区别：</p>
+
+        <ul>
+          <li><b>role="switch"</b>（不是 "checkbox"）</li>
+          <li>屏幕阅读器读 "on/off" 不是 "checked/unchecked"</li>
+          <li>不支持 indeterminate state</li>
+          <li>更适合"立即生效的开关"（不需要 submit）</li>
+        </ul>
+
+        <p>什么时候用 Switch / Checkbox：</p>
+        <ul>
+          <li>表单中"同意条款" → Checkbox（要 submit 才生效）</li>
+          <li>设置页"启用通知" → Switch（立即生效）</li>
+          <li>列表"选中要操作的项" → Checkbox</li>
+        </ul>
+
+        <h3>简单控件 · Slider</h3>
+
+        <p>Radix Slider 是最复杂的简单控件。处理三种交互：</p>
+
+        <ul>
+          <li><b>鼠标拖拽</b>：mousedown / mousemove / mouseup</li>
+          <li><b>触摸拖拽</b>：touchstart / touchmove / touchend</li>
+          <li><b>键盘</b>：← → ↑ ↓（加 Shift 大步）+ Home / End（最小/最大）+ PageUp / PageDown</li>
+        </ul>
+
+        <p>a11y：</p>
+        <ul>
+          <li>aria-valuemin / aria-valuemax / aria-valuenow</li>
+          <li>屏幕阅读器读出"slider, 50, min 0, max 100"</li>
+          <li>用户键盘调整值</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { Slider } from 'radix-ui';
+
+// 单值
+&lt;Slider.Root defaultValue={[50]} max={100} step={1}&gt;
+  &lt;Slider.Track&gt;
+    &lt;Slider.Range /&gt;
+  &lt;/Slider.Track&gt;
+  &lt;Slider.Thumb /&gt;
+&lt;/Slider.Root&gt;
+
+// 范围（两个 thumb）
+&lt;Slider.Root defaultValue={[20, 80]} max={100} step={1}&gt;
+  &lt;Slider.Track&gt;
+    &lt;Slider.Range /&gt;  {/* 自动覆盖两 thumb 之间 */}
+  &lt;/Slider.Track&gt;
+  &lt;Slider.Thumb /&gt;  {/* thumb 1 */}
+  &lt;Slider.Thumb /&gt;  {/* thumb 2 */}
+&lt;/Slider.Root&gt;</code></pre>
+        </div>
+
+        <h3>复杂控件 · Select</h3>
+
+        <p>Radix Select 是"自定义视觉的下拉选择"。对比原生 <code>&lt;select&gt;</code>：</p>
+
+        <table>
+          <thead>
+            <tr><th>能力</th><th>原生 &lt;select&gt;</th><th>Radix Select</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>样式定制</td><td>有限（浏览器决定）</td><td>完全自由</td></tr>
+            <tr><td>搜索过滤</td><td>无（要用 Combobox）</td><td>无（同）</td></tr>
+            <tr><td>选项内自定义内容</td><td>有限</td><td>完全自由（图片 / icon / 多行）</td></tr>
+            <tr><td>键盘导航</td><td>原生</td><td>模拟原生</td></tr>
+            <tr><td>a11y</td><td>原生</td><td>模拟原生（用 listbox role）</td></tr>
+            <tr><td>移动端体验</td><td>原生（iOS / Android 各自 UI）</td><td>统一</td></tr>
+          </tbody>
+        </table>
+
+        <p>什么时候用 Select / Combobox：</p>
+        <ul>
+          <li>选项 &lt; 20 + 不需要搜索 → Radix Select（简单）</li>
+          <li>选项 20+ 或需要搜索 → Combobox（cmdk）</li>
+          <li>需要原生移动端 UI → 原生 <code>&lt;select&gt;</code>（特别移动端 web）</li>
+        </ul>
+
+        <h3>复杂控件 · Combobox（最难的 widget）</h3>
+
+        <p>Combobox = 输入框 + 自动完成 + 选项列表。例子：</p>
+        <ul>
+          <li>Notion @ 提及（输入用户名筛选）</li>
+          <li>Linear 命令面板（⌘K + 搜索）</li>
+          <li>Stripe 国家选择（输入"China"筛选）</li>
+          <li>GitHub 仓库 / 用户搜索</li>
+        </ul>
+
+        <p>WAI-ARIA APG 对 Combobox 的规范（详见 P2.1）：</p>
+        <ul>
+          <li>input role="combobox"</li>
+          <li>listbox role="listbox"</li>
+          <li>选项 role="option"</li>
+          <li>input aria-expanded（listbox 是否展开）</li>
+          <li>input aria-controls（指向 listbox id）</li>
+          <li>input aria-activedescendant（指向当前高亮选项 id）</li>
+          <li>键盘 ↓↑ Enter ESC Tab 全套</li>
+          <li>实时屏幕阅读器读出选项数 + 当前高亮</li>
+        </ul>
+
+        <h3>shadcn 为什么用 cmdk · Radix 没有 Combobox</h3>
+
+        <p>2026 年 Radix 仍没有 Combobox primitive。原因：</p>
+
+        <ul>
+          <li>Combobox 复杂度极高（a11y 12+ 条规则、异步加载、multi-select 等多种变体）</li>
+          <li>Radix 团队优先做基础 primitives</li>
+          <li>市场已有 cmdk 等专门库</li>
+        </ul>
+
+        <p><strong>cmdk</strong> 由 Pkmn / Linear 团队的 emil_kowalski 等开源。原本是 Linear 内部"⌘K 命令面板"的实现，后来开源。</p>
+
+        <p>cmdk 的核心特点：</p>
+        <ul>
+          <li>提供 Listbox a11y 完整实现（aria-activedescendant 等）</li>
+          <li>支持过滤（默认基于 Levenshtein distance + Fuzzy）</li>
+          <li>支持 group / separator</li>
+          <li>支持 async items</li>
+          <li>API 类似 Compound Components（与 Radix 风格一致）</li>
+        </ul>
+
+        <p>shadcn 把 cmdk 包装为 Command 组件 + 在它基础上做 Combobox / 命令面板：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">npx shadcn add command
+npx shadcn add combobox</code></pre>
+        </div>
+
+        <p>shadcn Combobox 的内部结构（简化）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// shadcn 的 Combobox = Popover（浮层）+ Command（搜索 listbox）
+import * as React from 'react';
+import { Check, ChevronsUpDown } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { cn } from '@/lib/utils';
+
+const frameworks = [
+  { value: 'next.js', label: 'Next.js' },
+  { value: 'sveltekit', label: 'SvelteKit' },
+  { value: 'astro', label: 'Astro' },
+  { value: 'remix', label: 'React Router (Remix)' },
+];
+
+export function ComboboxFramework() {
+  const [open, setOpen] = React.useState(false);
+  const [value, setValue] = React.useState('');
+
+  return (
+    &lt;Popover open={open} onOpenChange={setOpen}&gt;
+      &lt;PopoverTrigger asChild&gt;
+        &lt;Button variant="outline" role="combobox" aria-expanded={open} className="w-[200px] justify-between"&gt;
+          {value
+            ? frameworks.find((f) =&gt; f.value === value)?.label
+            : 'Select framework...'}
+          &lt;ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" /&gt;
+        &lt;/Button&gt;
+      &lt;/PopoverTrigger&gt;
+      &lt;PopoverContent className="w-[200px] p-0"&gt;
+        &lt;Command&gt;
+          &lt;CommandInput placeholder="Search framework..." /&gt;
+          &lt;CommandList&gt;
+            &lt;CommandEmpty&gt;No framework found.&lt;/CommandEmpty&gt;
+            &lt;CommandGroup&gt;
+              {frameworks.map((framework) =&gt; (
+                &lt;CommandItem
+                  key={framework.value}
+                  value={framework.value}
+                  onSelect={(currentValue) =&gt; {
+                    setValue(currentValue === value ? '' : currentValue);
+                    setOpen(false);
+                  }}
+                &gt;
+                  &lt;Check className={cn('mr-2 h-4 w-4', value === framework.value ? 'opacity-100' : 'opacity-0')} /&gt;
+                  {framework.label}
+                &lt;/CommandItem&gt;
+              ))}
+            &lt;/CommandGroup&gt;
+          &lt;/CommandList&gt;
+        &lt;/Command&gt;
+      &lt;/PopoverContent&gt;
+    &lt;/Popover&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>关键点：</p>
+        <ul>
+          <li>Popover 提供浮层 + 智能定位</li>
+          <li>Command 提供 Listbox a11y + 过滤</li>
+          <li>shadcn 用 Tailwind class 添加视觉</li>
+          <li>整个组件 a11y 完整（基于 cmdk）</li>
+        </ul>
+
+        <h3>aria-activedescendant 而非真 focus · 设计动机</h3>
+
+        <p>Combobox 的关键 a11y 设计（详见 P2.1）。再深入讲：</p>
+
+        <p><b>问题</b>：用户在 input 输入"j"，listbox 显示 "JavaScript / Java / jQuery"。</p>
+        <ul>
+          <li>用户按 ↓，期望"高亮"第一项</li>
+          <li>但<strong>真 focus 不能跳到选项</strong>（input 失焦后用户继续输入字符就到选项里去了）</li>
+          <li>需要"虚拟 focus"概念</li>
+        </ul>
+
+        <p><b>解决</b>：aria-activedescendant：</p>
+        <ul>
+          <li>真 DOM focus 始终在 input</li>
+          <li>input aria-activedescendant 指向当前"虚拟高亮"选项 id</li>
+          <li>屏幕阅读器读 aria-activedescendant 指向的元素 → 用户感知"高亮在 JavaScript"</li>
+          <li>用户继续输入 → 字符进 input（不进选项）</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;input
+  type="text"
+  role="combobox"
+  aria-expanded="true"
+  aria-controls="listbox-1"
+  aria-activedescendant="opt-2"
+  /&gt;
+
+&lt;ul role="listbox" id="listbox-1"&gt;
+  &lt;li role="option" id="opt-1"&gt;JavaScript&lt;/li&gt;
+  &lt;li role="option" id="opt-2" aria-selected="true"&gt;Java&lt;/li&gt;  &lt;!-- 高亮 --&gt;
+  &lt;li role="option" id="opt-3"&gt;jQuery&lt;/li&gt;
+&lt;/ul&gt;</code></pre>
+        </div>
+
+        <p>真 DOM focus 在 input。屏幕阅读器读 input aria-activedescendant 指向的 opt-2 → "Java, 2 of 3, list with 3 items"。用户体验上"焦点"在 Java，但物理 focus 仍在 input。</p>
+
+        <p>对比 Menu / Toolbar 用 <strong>roving tabindex</strong>（真 focus 跳，详见 P2.1）。两种模式由 W3C APG 规定，不是用户选。</p>
+
+        <h3>Multi-select Combobox</h3>
+
+        <p>选中多个值。常见模式：input 上方显示"标签"（可清除）。</p>
+
+        <p>挑战：</p>
+        <ul>
+          <li>选中后 listbox 是否关闭？（通常不关，让用户选下一个）</li>
+          <li>键盘删除标签？（Backspace 在空 input 时删最后一个）</li>
+          <li>aria-selected 状态</li>
+          <li>选中项视觉与未选中区分</li>
+        </ul>
+
+        <p>shadcn 没有官方 Multi-select 组件，但 registry 里有社区实现 + cmdk 自带 multi-select 模式。</p>
+
+        <h3>异步加载 Combobox</h3>
+
+        <p>选项数量大或需要 server 搜索（如 GitHub 用户）：</p>
+
+        <ul>
+          <li>用户输入 → debounce 300ms → 发请求</li>
+          <li>请求过程显示 loading（"Searching..."）</li>
+          <li>结果回来更新 listbox</li>
+          <li>用户继续输入 → 取消上次请求 + 新请求</li>
+        </ul>
+
+        <p>关键 a11y：屏幕阅读器读出 "Loading..." / 加载完后 "X options available"。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function AsyncCombobox() {
+  const [search, setSearch] = useState('');
+  const [debounced] = useDebounce(search, 300);
+  const { data, isLoading } = useQuery({
+    queryKey: ['users', debounced],
+    queryFn: () =&gt; searchUsers(debounced),
+    enabled: debounced.length &gt; 0,
+  });
+
+  return (
+    &lt;Command shouldFilter={false}&gt;  {/* 关闭 cmdk 自带过滤，server 端过滤 */}
+      &lt;CommandInput placeholder="Search users..." onValueChange={setSearch} /&gt;
+      &lt;CommandList&gt;
+        {isLoading &amp;&amp; &lt;CommandEmpty&gt;Searching...&lt;/CommandEmpty&gt;}
+        {!isLoading &amp;&amp; data?.length === 0 &amp;&amp; &lt;CommandEmpty&gt;No users found&lt;/CommandEmpty&gt;}
+        {data?.map((user) =&gt; (
+          &lt;CommandItem key={user.id} onSelect={() =&gt; selectUser(user)}&gt;
+            {user.name}
+          &lt;/CommandItem&gt;
+        ))}
+      &lt;/CommandList&gt;
+    &lt;/Command&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · "全选" Checkbox 联动子项</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function TodoList({ todos }) {
+  const [selected, setSelected] = useState&lt;string[]&gt;([]);
+
+  const allSelected = selected.length === todos.length;
+  const noneSelected = selected.length === 0;
+  const someSelected = !allSelected &amp;&amp; !noneSelected;
+
+  return (
+    &lt;&gt;
+      &lt;label&gt;
+        &lt;Checkbox.Root
+          checked={allSelected ? true : someSelected ? 'indeterminate' : false}
+          onCheckedChange={(checked) =&gt; {
+            setSelected(checked ? todos.map(t =&gt; t.id) : []);
+          }}
+        &gt;
+          &lt;Checkbox.Indicator&gt;
+            {allSelected ? &lt;CheckIcon /&gt; : someSelected ? &lt;MinusIcon /&gt; : null}
+          &lt;/Checkbox.Indicator&gt;
+        &lt;/Checkbox.Root&gt;
+        Select all
+      &lt;/label&gt;
+      {todos.map((todo) =&gt; (
+        &lt;label key={todo.id}&gt;
+          &lt;Checkbox.Root
+            checked={selected.includes(todo.id)}
+            onCheckedChange={(checked) =&gt; {
+              setSelected(checked
+                ? [...selected, todo.id]
+                : selected.filter(id =&gt; id !== todo.id));
+            }}
+          &gt;
+            &lt;Checkbox.Indicator&gt;&lt;CheckIcon /&gt;&lt;/Checkbox.Indicator&gt;
+          &lt;/Checkbox.Root&gt;
+          {todo.text}
+        &lt;/label&gt;
+      ))}
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>场景 2 · 国家 Combobox（含 emoji 旗子）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function CountryCombobox() {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState('');
+
+  return (
+    &lt;Popover open={open} onOpenChange={setOpen}&gt;
+      &lt;PopoverTrigger asChild&gt;
+        &lt;Button variant="outline" role="combobox"&gt;
+          {value
+            ? `${countries.find(c =&gt; c.code === value)?.flag} ${countries.find(c =&gt; c.code === value)?.name}`
+            : 'Select country...'}
+        &lt;/Button&gt;
+      &lt;/PopoverTrigger&gt;
+      &lt;PopoverContent className="w-[300px] p-0"&gt;
+        &lt;Command&gt;
+          &lt;CommandInput placeholder="Search country..." /&gt;
+          &lt;CommandList&gt;
+            &lt;CommandEmpty&gt;No country found.&lt;/CommandEmpty&gt;
+            {countries.map((country) =&gt; (
+              &lt;CommandItem
+                key={country.code}
+                value={country.name}  {/* 用 name 过滤 */}
+                onSelect={() =&gt; {
+                  setValue(country.code);
+                  setOpen(false);
+                }}
+              &gt;
+                {country.flag} {country.name}
+              &lt;/CommandItem&gt;
+            ))}
+          &lt;/CommandList&gt;
+        &lt;/Command&gt;
+      &lt;/PopoverContent&gt;
+    &lt;/Popover&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>场景 3 · GitHub 用户搜索（异步）</h3>
+
+        <p>详见上文"异步加载 Combobox"代码。</p>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · Slider 完整（单值 + 范围）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// shadcn Slider（基于 Radix）
+import { Slider } from '@/components/ui/slider';
+
+function PriceFilter() {
+  const [range, setRange] = useState([0, 1000]);
+
+  return (
+    &lt;div&gt;
+      &lt;label&gt;Price range: ${range[0]} - ${range[1]}&lt;/label&gt;
+      &lt;Slider
+        value={range}
+        onValueChange={setRange}
+        max={1000}
+        step={10}
+        className="mt-2"
+      /&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · Multi-select Combobox</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function TagsCombobox() {
+  const [open, setOpen] = useState(false);
+  const [selectedTags, setSelectedTags] = useState&lt;string[]&gt;([]);
+
+  function toggleTag(tag: string) {
+    setSelectedTags((prev) =&gt;
+      prev.includes(tag) ? prev.filter(t =&gt; t !== tag) : [...prev, tag]
+    );
+  }
+
+  return (
+    &lt;Popover open={open} onOpenChange={setOpen}&gt;
+      &lt;PopoverTrigger asChild&gt;
+        &lt;Button variant="outline"&gt;
+          {selectedTags.length === 0
+            ? 'Select tags...'
+            : `${selectedTags.length} tag(s) selected`}
+        &lt;/Button&gt;
+      &lt;/PopoverTrigger&gt;
+      &lt;PopoverContent className="w-[300px] p-0"&gt;
+        &lt;Command&gt;
+          &lt;CommandInput placeholder="Search tags..." /&gt;
+          &lt;CommandList&gt;
+            &lt;CommandEmpty&gt;No tags found.&lt;/CommandEmpty&gt;
+            {availableTags.map((tag) =&gt; (
+              &lt;CommandItem
+                key={tag}
+                value={tag}
+                onSelect={() =&gt; toggleTag(tag)}
+              &gt;
+                &lt;Check className={cn('mr-2 h-4 w-4', selectedTags.includes(tag) ? 'opacity-100' : 'opacity-0')} /&gt;
+                {tag}
+              &lt;/CommandItem&gt;
+            ))}
+          &lt;/CommandList&gt;
+        &lt;/Command&gt;
+      &lt;/PopoverContent&gt;
+    &lt;/Popover&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 3 · cmdk 命令面板（⌘K）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function CommandPalette() {
+  const [open, setOpen] = useState(false);
+
+  // ⌘K 监听
+  useEffect(() =&gt; {
+    const down = (e: KeyboardEvent) =&gt; {
+      if ((e.metaKey || e.ctrlKey) &amp;&amp; e.key === 'k') {
+        e.preventDefault();
+        setOpen((open) =&gt; !open);
+      }
+    };
+    document.addEventListener('keydown', down);
+    return () =&gt; document.removeEventListener('keydown', down);
+  }, []);
+
+  return (
+    &lt;CommandDialog open={open} onOpenChange={setOpen}&gt;
+      &lt;CommandInput placeholder="Type a command or search..." /&gt;
+      &lt;CommandList&gt;
+        &lt;CommandEmpty&gt;No results found.&lt;/CommandEmpty&gt;
+        &lt;CommandGroup heading="Suggestions"&gt;
+          &lt;CommandItem onSelect={() =&gt; router.push('/dashboard')}&gt;
+            &lt;LayoutDashboardIcon className="mr-2 h-4 w-4" /&gt;
+            Dashboard
+          &lt;/CommandItem&gt;
+          &lt;CommandItem onSelect={() =&gt; router.push('/settings')}&gt;
+            &lt;SettingsIcon className="mr-2 h-4 w-4" /&gt;
+            Settings
+          &lt;/CommandItem&gt;
+        &lt;/CommandGroup&gt;
+        &lt;CommandSeparator /&gt;
+        &lt;CommandGroup heading="Recent"&gt;
+          {recentItems.map((item) =&gt; (
+            &lt;CommandItem key={item.id}&gt;{item.title}&lt;/CommandItem&gt;
+          ))}
+        &lt;/CommandGroup&gt;
+      &lt;/CommandList&gt;
+    &lt;/CommandDialog&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>用 Radix Combobox</b> —— 不存在。Combobox 用 cmdk（详见本章）</li>
+          <li><b>Combobox 用 真 focus 跳选项</b> —— 错。用 aria-activedescendant 虚拟焦点（详见 P2.1）</li>
+          <li><b>Multi-select Combobox 选中后关闭 listbox</b> —— 通常不关（让用户继续选）。选完后用户主动关</li>
+          <li><b>异步 Combobox 不 debounce</b> —— 每次输入字符都发请求，server 压力大。debounce 300ms</li>
+          <li><b>异步 Combobox 不取消上次请求</b> —— 慢请求晚到覆盖快请求新结果。用 AbortController / TanStack Query 自动取消</li>
+          <li><b>cmdk shouldFilter 没关，但用 server 端过滤</b> —— 双重过滤导致结果错。<code>&lt;Command shouldFilter={false}&gt;</code></li>
+          <li><b>Slider value 是 number 不是 number[]</b> —— Radix Slider 始终用数组（即使单值）。<code>value={[50]}</code> 不是 <code>value={50}</code></li>
+          <li><b>Checkbox indeterminate state 写错</b> —— TypeScript 类型是 <code>boolean | 'indeterminate'</code>，三种状态。不是 boolean</li>
+          <li><b>Switch 用在表单 submit 场景</b> —— 应该 Checkbox（"立即生效"是 Switch 的语义）</li>
+          <li><b>Select 选项过多（&gt; 50）</b> —— 用户找不到。改用 Combobox 加搜索</li>
+          <li><b>RadioGroup 用 Tab 切换选项</b> —— 错。Tab 跳出 group，← → 在选项间切。这是 W3C APG 规定</li>
+          <li><b>Combobox label 没绑 input</b> —— 屏幕阅读器读不出"什么 combobox"。用 <code>&lt;label htmlFor="..."&gt;</code> 或包 <code>&lt;label&gt;</code></li>
+          <li><b>Combobox aria-expanded 没设</b> —— 用 shadcn Combobox 自动设；自己写易漏</li>
+          <li><b>Combobox 选项数 0 时不提示</b> —— 用 CommandEmpty / 显式"No results"</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://www.radix-ui.com/primitives/docs/components/checkbox" target="_blank" rel="noopener">Radix · Checkbox</a></li>
+          <li><a href="https://www.radix-ui.com/primitives/docs/components/radio-group" target="_blank" rel="noopener">Radix · RadioGroup</a></li>
+          <li><a href="https://www.radix-ui.com/primitives/docs/components/switch" target="_blank" rel="noopener">Radix · Switch</a></li>
+          <li><a href="https://www.radix-ui.com/primitives/docs/components/slider" target="_blank" rel="noopener">Radix · Slider</a></li>
+          <li><a href="https://www.radix-ui.com/primitives/docs/components/select" target="_blank" rel="noopener">Radix · Select</a></li>
+          <li><a href="https://cmdk.paco.me/" target="_blank" rel="noopener">cmdk 文档</a></li>
+          <li><a href="https://ui.shadcn.com/docs/components/combobox" target="_blank" rel="noopener">shadcn · Combobox</a></li>
+          <li><a href="https://www.w3.org/WAI/ARIA/apg/patterns/combobox/" target="_blank" rel="noopener">W3C APG · Combobox</a></li>
+          <li><a href="../03-overlay/01-overlay-components.html">本主题 P3.1 · 浮层组件</a> · Combobox 内部用 Popover</li>
+          <li><a href="../06-engineering/01-form-workflow.html">本主题 P6.1 · Form 工作流</a> · Combobox 与 react-hook-form 集成</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

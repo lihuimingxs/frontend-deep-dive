@@ -1,0 +1,689 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>受控/asChild/Compound Components · P2.2 · shadcn/ui + Radix 深度学习</title>
+    <meta name="description" content="Radix 组件 API 设计深度解析。受控/非受控双模式（open/onOpenChange vs defaultOpen）+ asChild + Slot（把组件 props/className/ref 转给传入的 children，与任意自定义组件无缝集成）+ Compound Components（子组件通过 context 共享状态，不需要 prop drilling）+ API 设计 4 条原则（Mirror HTML / Forward refs / Pass through props / Type safe）。读完看 shadcn 组件源码每行设计意图。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c026d3'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='14' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ESR%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>shadcn/ui + Radix 深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.18 320); color: #fff">SR</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · Radix 哲学</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-headless-a11y.html">01 · Headless + WAI-ARIA a11y</a></li>
+          <li><a href="02-controlled-aschild.html" class="active">02 · 受控/asChild/Compound</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">shadcn + Radix</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · Radix 哲学</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 受控/asChild/Compound Components</span>
+        </nav>
+        <h1>受控/asChild/Compound Components</h1>
+        <p class="lead">
+          Radix 组件 API 是 React 工程精华。这一章把<strong>受控/非受控双模式</strong>、<strong>asChild + Slot</strong>、<strong>Compound Components</strong>、<strong>API 设计 4 条原则</strong>讲透。读完能看懂 shadcn 组件源码每一行的设计意图，也能写出符合 Radix 风格的自定义组件。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P2.1 Headless + a11y + React Hooks 基础</span>
+          <span><strong>主要来源</strong> radix-ui.com docs + Radix 源码 + Pedro Duarte 演讲</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Radix 组件几乎都同时支持<strong>受控</strong>（open + onOpenChange）和<strong>非受控</strong>（defaultOpen）。简单场景非受控、需要外部控制 / 与表单联动用受控。这是 React 受控/非受控最佳实践的标杆实现。</li>
+          <li><b>asChild</b> 是 Radix 核心创新 —— 让组件不渲染自己的 DOM 元素，把行为（onClick / aria-* / data-state）转给传入的 children。配合 Radix Slot 实现。</li>
+          <li><b>Slot</b> 是 Radix 的工具组件 —— 把 className / props / ref 合并到 children 上。<code>&lt;Dialog.Trigger asChild&gt;&lt;Button&gt;Open&lt;/Button&gt;&lt;/Dialog.Trigger&gt;</code> 让 Dialog.Trigger 不渲染 button，把 onClick 等转给 Button。</li>
+          <li><b>Compound Components</b>（复合组件）：组件由多个子组件组成，<strong>通过 React context 共享状态</strong>。<code>&lt;Dialog.Root&gt;&lt;Dialog.Trigger /&gt;&lt;Dialog.Content /&gt;&lt;/Dialog.Root&gt;</code> 模式 —— 子组件不需要 prop drilling，自动通信。</li>
+          <li>Compound Components 与 prop drilling / render props / 大 props 对象的对比：Compound 让 API 灵活、子组件位置任意、context 共享状态。</li>
+          <li>Radix API 设计的 <strong>4 条原则</strong>：1) <b>Mirror 原生 HTML</b>（用 button / input 等真原生元素）；2) <b>Forward refs</b>（所有 primitive 用 React.forwardRef）；3) <b>Pass through props</b>（不消耗的 props 全部 spread 给底层 DOM）；4) <b>Type safe</b>（完整 TypeScript 推导）。</li>
+          <li>asChild 的<strong>类型安全</strong>：通过 React.ElementType 泛型 + 与 children type 推导让 TS 自动推断"作为什么元素"的 props。</li>
+          <li>受控模式的 <strong>状态提升</strong>：当多个父级 state 需要联动 Dialog 状态（form 验证 + Dialog 打开），用受控让父级管 state。Radix 把这种灵活性内置在每个 primitive。</li>
+          <li>Compound Components 的 <strong>子组件位置</strong>：可以在 Root 任何位置（甚至嵌套深层），通过 context 自动找到父级。这与"子组件必须直接相邻"的"Composition" 风格不同。</li>
+          <li>本章是 <strong>看 shadcn 源码必备</strong>。读完打开任何 shadcn 组件源码（components/ui/dialog.tsx 等）能看懂每一行 forwardRef / Slot / className spread / type 设计的用意。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>受控 vs 非受控双模式</h3>
+
+        <p>Radix 几乎所有 primitive 同时支持两种模式：</p>
+
+        <p><b>非受控（默认）</b> —— 组件自己管 state：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 非受控：用 defaultOpen
+&lt;Dialog.Root defaultOpen={false}&gt;
+  &lt;Dialog.Trigger&gt;Open&lt;/Dialog.Trigger&gt;
+  &lt;Dialog.Content&gt;...&lt;/Dialog.Content&gt;
+&lt;/Dialog.Root&gt;
+
+// Dialog.Root 内部 useState 管 open 状态
+// 用户不需要自己 setState，Trigger / Content 自动协调</code></pre>
+        </div>
+
+        <p><b>受控</b> —— 用户管 state：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 受控：用 open + onOpenChange
+const [open, setOpen] = useState(false);
+
+&lt;Dialog.Root open={open} onOpenChange={setOpen}&gt;
+  &lt;Dialog.Trigger&gt;Open&lt;/Dialog.Trigger&gt;
+  &lt;Dialog.Content&gt;
+    ...
+    &lt;Button onClick={() =&gt; setOpen(false)}&gt;Close&lt;/Button&gt;
+  &lt;/Dialog.Content&gt;
+&lt;/Dialog.Root&gt;
+
+// 用户管 open state
+// 可以从外部设 setOpen(true) 打开</code></pre>
+        </div>
+
+        <p>选哪个：</p>
+        <ul>
+          <li><b>非受控</b>（首选）：简单场景，组件自己管 state，少代码</li>
+          <li><b>受控</b>：1) 外部需要控制（form 提交后关闭）；2) 多个组件联动（form 验证 + Dialog 显示错误）；3) 测试时需要直接设状态</li>
+        </ul>
+
+        <p>这套 API 是 React 受控/非受控最佳实践的标杆。同时支持两种模式让 API 灵活。</p>
+
+        <p><b>实现机制</b>（Radix 内部）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// Radix 内部用 useControllableState hook
+function useControllableState({ prop, defaultProp, onChange }) {
+  const [uncontrolledValue, setUncontrolledValue] = useState(defaultProp);
+  const isControlled = prop !== undefined;
+  const value = isControlled ? prop : uncontrolledValue;
+
+  const setValue = (next) =&gt; {
+    if (!isControlled) setUncontrolledValue(next);
+    onChange?.(next);
+  };
+
+  return [value, setValue];
+}
+
+// Dialog.Root 内部使用
+function DialogRoot({ open, defaultOpen, onOpenChange, children }) {
+  const [isOpen, setIsOpen] = useControllableState({
+    prop: open,
+    defaultProp: defaultOpen ?? false,
+    onChange: onOpenChange,
+  });
+  // ... 把 isOpen / setIsOpen 通过 context 传给子组件
+}</code></pre>
+        </div>
+
+        <p>这个 hook 模式可以直接复用到自己的组件设计。Radix 提供 <code>@radix-ui/react-use-controllable-state</code>（统一包后是 <code>radix-ui/internal</code> 子路径）。</p>
+
+        <h3>asChild + Slot · 把行为转给子元素</h3>
+
+        <p>asChild 是 Radix 解决"如何让 Trigger 不渲染自己的 button、用我提供的 Button 组件"的方案。</p>
+
+        <p>没有 asChild 时：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ 默认行为：Dialog.Trigger 渲染自己的 button
+&lt;Dialog.Trigger&gt;Open&lt;/Dialog.Trigger&gt;
+// 渲染：&lt;button data-state="closed" aria-haspopup="dialog" onClick={...}&gt;Open&lt;/button&gt;
+
+// 但我有自己的 Button 组件 with Tailwind class + variants
+// 怎么办？嵌套？
+&lt;Dialog.Trigger&gt;
+  &lt;Button variant="primary"&gt;Open&lt;/Button&gt;
+&lt;/Dialog.Trigger&gt;
+// 渲染：&lt;button&gt;&lt;button&gt;Open&lt;/button&gt;&lt;/button&gt;
+// ❌ 嵌套 button 是无效 HTML</code></pre>
+        </div>
+
+        <p>asChild 解决：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ✅ 用 asChild
+&lt;Dialog.Trigger asChild&gt;
+  &lt;Button variant="primary"&gt;Open&lt;/Button&gt;
+&lt;/Dialog.Trigger&gt;
+
+// 渲染：&lt;button class="bg-blue-500 ..."  // Button 的 class
+//                  data-state="closed"   // Trigger 注入的 data
+//                  aria-haspopup="dialog" // Trigger 注入的 aria
+//                  onClick={...}         // Trigger 的 click handler
+//                  {...buttonProps}&gt;
+//             Open
+//          &lt;/button&gt;</code></pre>
+        </div>
+
+        <p>asChild 的实现用 Radix Slot 工具组件：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// Radix 内部 Trigger 实现（简化）
+import { Slot } from 'radix-ui';
+
+const Trigger = React.forwardRef(({ asChild, ...props }, ref) =&gt; {
+  const Comp = asChild ? Slot : 'button';
+  return (
+    &lt;Comp
+      ref={ref}
+      data-state={isOpen ? 'open' : 'closed'}
+      aria-haspopup="dialog"
+      aria-expanded={isOpen}
+      onClick={handleClick}
+      {...props}
+    /&gt;
+  );
+});</code></pre>
+        </div>
+
+        <p>Slot 内部做的事：把 props 合并到 children 的 ref + props 上。关键代码（简化）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function Slot({ children, ...slotProps }, slotRef) {
+  if (!React.isValidElement(children)) return null;
+
+  // 合并 ref
+  const composedRef = composeRefs(slotRef, children.ref);
+
+  // 合并 props
+  const mergedProps = {
+    ...children.props,
+    ...slotProps,
+    // 特殊处理 onClick / onKeyDown 等事件（链式调用）
+    onClick: composeEventHandlers(slotProps.onClick, children.props.onClick),
+    // 特殊处理 className（合并）
+    className: cn(slotProps.className, children.props.className),
+    // 特殊处理 style（合并）
+    style: { ...slotProps.style, ...children.props.style },
+    ref: composedRef,
+  };
+
+  return React.cloneElement(children, mergedProps);
+}</code></pre>
+        </div>
+
+        <p>asChild 的应用场景：</p>
+        <ul>
+          <li>Trigger 用自定义 Button 组件</li>
+          <li>Link 用 Next.js Link / React Router NavLink</li>
+          <li>Dialog.Close 用任意自定义按钮</li>
+          <li>shadcn 几乎所有组件支持 asChild（继承 Radix）</li>
+        </ul>
+
+        <h3>Compound Components · context 共享状态</h3>
+
+        <p>Compound Components 是 React 设计模式 —— 组件由多个子组件组成，<strong>共享 context</strong>，不需要 props 传递。</p>
+
+        <p>看 Dialog 的结构：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">&lt;Dialog.Root open={isOpen} onOpenChange={setIsOpen}&gt;
+  &lt;Dialog.Trigger&gt;Open&lt;/Dialog.Trigger&gt;
+  &lt;Dialog.Portal&gt;
+    &lt;Dialog.Overlay /&gt;
+    &lt;Dialog.Content&gt;
+      &lt;Dialog.Title&gt;Confirm&lt;/Dialog.Title&gt;
+      &lt;Dialog.Description&gt;Are you sure?&lt;/Dialog.Description&gt;
+      &lt;Dialog.Close&gt;Cancel&lt;/Dialog.Close&gt;
+    &lt;/Dialog.Content&gt;
+  &lt;/Dialog.Portal&gt;
+&lt;/Dialog.Root&gt;</code></pre>
+        </div>
+
+        <p>关键点：Trigger / Content / Title / Close 之间没有显式 prop 传递。它们怎么知道彼此的状态（open 状态、aria 关联）？通过 React context。</p>
+
+        <p>Radix 内部（简化）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">const DialogContext = React.createContext&lt;{
+  open: boolean;
+  onOpenChange: (open: boolean) =&gt; void;
+  titleId: string;
+  descriptionId: string;
+}&gt;(null!);
+
+function DialogRoot({ children, open, defaultOpen, onOpenChange }) {
+  const [isOpen, setIsOpen] = useControllableState({
+    prop: open,
+    defaultProp: defaultOpen ?? false,
+    onChange: onOpenChange,
+  });
+
+  // 自动生成稳定 id（用于 aria 关联）
+  const titleId = React.useId();
+  const descriptionId = React.useId();
+
+  return (
+    &lt;DialogContext.Provider value={{ open: isOpen, onOpenChange: setIsOpen, titleId, descriptionId }}&gt;
+      {children}
+    &lt;/DialogContext.Provider&gt;
+  );
+}
+
+function DialogTrigger({ asChild, ...props }) {
+  const ctx = React.useContext(DialogContext);
+  const Comp = asChild ? Slot : 'button';
+  return (
+    &lt;Comp
+      data-state={ctx.open ? 'open' : 'closed'}
+      aria-haspopup="dialog"
+      aria-expanded={ctx.open}
+      aria-controls={ctx.contentId}
+      onClick={() =&gt; ctx.onOpenChange(true)}
+      {...props}
+    /&gt;
+  );
+}
+
+function DialogTitle({ children, ...props }) {
+  const ctx = React.useContext(DialogContext);
+  return &lt;h2 id={ctx.titleId} {...props}&gt;{children}&lt;/h2&gt;;
+}
+
+function DialogContent({ children, ...props }) {
+  const ctx = React.useContext(DialogContext);
+  if (!ctx.open) return null;
+  return (
+    &lt;div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={ctx.titleId}
+      aria-describedby={ctx.descriptionId}
+      {...props}
+    &gt;
+      {children}
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>关键点：</p>
+        <ul>
+          <li>Title 自动用 <code>useId()</code> 生成稳定 id（SSR/CSR 一致）</li>
+          <li>Content 自动 aria-labelledby 指向 Title</li>
+          <li>Trigger 自动 data-state / aria-expanded / aria-controls</li>
+          <li>整个机制对用户透明</li>
+        </ul>
+
+        <p>Compound Components vs 其他模式对比：</p>
+
+        <table>
+          <thead>
+            <tr><th>模式</th><th>API</th><th>子组件灵活度</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Compound</td><td><code>&lt;Dialog.Root&gt;&lt;Dialog.Trigger /&gt;&lt;Dialog.Content /&gt;&lt;/Dialog.Root&gt;</code></td><td>高（任意位置）</td></tr>
+            <tr><td>Big props</td><td><code>&lt;Dialog trigger={...} content={...} /&gt;</code></td><td>低（固定位置）</td></tr>
+            <tr><td>Render props</td><td><code>&lt;Dialog&gt;{({ open }) =&gt; ...}&lt;/Dialog&gt;</code></td><td>中</td></tr>
+            <tr><td>Hooks-based</td><td><code>const { triggerProps, contentProps } = useDialog()</code></td><td>高但繁琐</td></tr>
+          </tbody>
+        </table>
+
+        <p>Compound 是 Radix 选择，原因：</p>
+        <ul>
+          <li>子组件位置任意（嵌套深层也行）</li>
+          <li>API 直观（与 HTML 类似）</li>
+          <li>TypeScript 推导自然</li>
+          <li>与 React 19 RSC 兼容好</li>
+        </ul>
+
+        <h3>API 设计的 4 条原则</h3>
+
+        <p>Radix（和 shadcn）组件遵循的 4 条原则：</p>
+
+        <p><b>1. Mirror 原生 HTML</b></p>
+
+        <p>尽可能用真原生元素。Trigger 默认渲染 <code>button</code>、Content 默认渲染 <code>div</code>。</p>
+
+        <ul>
+          <li>原生元素自带 a11y（button 可 focus / 触发 keyboard）</li>
+          <li>asChild 让用户切到自定义元素（仍保持 a11y）</li>
+          <li>不发明新元素</li>
+        </ul>
+
+        <p><b>2. Forward refs</b></p>
+
+        <p>所有 primitive 用 <code>React.forwardRef</code> 包装：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">const DialogContent = React.forwardRef&lt;
+  HTMLDivElement,
+  React.ComponentPropsWithoutRef&lt;'div'&gt;
+&gt;((props, ref) =&gt; {
+  return &lt;div ref={ref} {...props} /&gt;;
+});
+DialogContent.displayName = 'DialogContent';</code></pre>
+        </div>
+
+        <p>让用户能 .focus() / .scrollIntoView() / 用 useImperativeHandle 暴露方法。</p>
+
+        <p>注意：React 19+ 不再需要 forwardRef（ref 自动作为 prop），但 Radix 当前版本仍兼容老 React 18，所以仍用 forwardRef。React 19 完全适配后会迁移。</p>
+
+        <p><b>3. Pass through props</b></p>
+
+        <p>不消耗的 props 全部 spread 给底层 DOM：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">const DialogContent = React.forwardRef((props, ref) =&gt; {
+  const { children, ...rest } = props;  // 不解构 className / style 等
+  return &lt;div ref={ref} {...rest}&gt;{children}&lt;/div&gt;;
+});
+
+// 用户写 &lt;DialogContent className="..." style="..." data-test-id="..."&gt;
+// 这些都自动 spread 到 div</code></pre>
+        </div>
+
+        <p>这让 Radix 组件与任意 className / style / data-* / 事件 handler 兼容。</p>
+
+        <p><b>4. Type safe</b></p>
+
+        <p>完整 TypeScript 推导：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// Radix 类型
+type DialogContentProps = React.ComponentPropsWithoutRef&lt;'div'&gt;;
+
+// 用户写：
+&lt;Dialog.Content className="..." onClick={...} /&gt;
+// className: string ✅
+// onClick: (e: MouseEvent&lt;HTMLDivElement&gt;) =&gt; void ✅
+// 拼错或类型错 → TS 报错</code></pre>
+        </div>
+
+        <p>asChild + Slot 的类型推导更复杂（要根据 children type 推断），Radix 提供完整泛型支持。</p>
+
+        <h3>useId · 稳定 id 生成（aria 关联必备）</h3>
+
+        <p>Radix 组件常需要稳定 id（aria-labelledby / aria-controls）。React 18+ 提供 <code>useId()</code> hook：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function DialogRoot({ children }) {
+  const titleId = React.useId();   // ":r0:" / ":r1:" 等稳定 id
+  const descriptionId = React.useId();
+  // SSR 输出 ":r0:"，client hydration 用同样 ":r0:"
+  // 不会出现 SSR / CSR mismatch
+}</code></pre>
+        </div>
+
+        <p>没有 useId 之前要自己 useState + 随机数（容易 hydration mismatch）。useId 是 React 18 给 a11y 库的核心支持。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 自己写组件库基于 Radix</h3>
+
+        <p>团队自建组件库，基于 Radix Primitives：</p>
+
+        <ol>
+          <li>用 Compound Components 模式</li>
+          <li>用 forwardRef 包所有组件</li>
+          <li>支持 asChild（用 Slot）</li>
+          <li>支持受控/非受控双模式（用 useControllableState）</li>
+          <li>用 useId 生成 a11y id</li>
+        </ol>
+
+        <p>这套模式让你的组件 API 风格与 Radix 一致 → 团队学习成本低 + 与 shadcn 兼容。</p>
+
+        <h3>场景 2 · Form 中 Dialog 受控</h3>
+
+        <p>表单提交后关闭 Dialog：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function ContactForm() {
+  const [open, setOpen] = useState(false);
+
+  async function handleSubmit(data) {
+    await submitContact(data);
+    setOpen(false);  // 提交后关闭
+    toast.success('Sent!');
+  }
+
+  return (
+    &lt;Dialog.Root open={open} onOpenChange={setOpen}&gt;
+      &lt;Dialog.Trigger&gt;Contact us&lt;/Dialog.Trigger&gt;
+      &lt;Dialog.Content&gt;
+        &lt;ContactForm onSubmit={handleSubmit} /&gt;
+      &lt;/Dialog.Content&gt;
+    &lt;/Dialog.Root&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>场景 3 · asChild 与 Next.js Link</h3>
+
+        <p>DropdownMenu 项作为路由跳转：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import Link from 'next/link';
+import { DropdownMenu } from 'radix-ui';
+
+&lt;DropdownMenu.Item asChild&gt;
+  &lt;Link href="/profile"&gt;Profile&lt;/Link&gt;
+&lt;/DropdownMenu.Item&gt;
+
+// 渲染：&lt;a href="/profile" class="..." data-orientation="vertical" role="menuitem"&gt;Profile&lt;/a&gt;
+// 既是 Next.js Link（client navigation）又是 Radix MenuItem（a11y）</code></pre>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 自己写 Compound Component</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// MyAccordion.tsx · 自己实现 Compound Component
+import * as React from 'react';
+
+const AccordionContext = React.createContext&lt;{
+  openItems: string[];
+  toggle: (id: string) =&gt; void;
+}&gt;(null!);
+
+function AccordionRoot({ children, defaultOpen = [] }: { children: React.ReactNode; defaultOpen?: string[] }) {
+  const [openItems, setOpenItems] = React.useState(defaultOpen);
+  const toggle = (id: string) =&gt; {
+    setOpenItems((prev) =&gt; prev.includes(id) ? prev.filter(x =&gt; x !== id) : [...prev, id]);
+  };
+  return (
+    &lt;AccordionContext.Provider value={{ openItems, toggle }}&gt;
+      &lt;div&gt;{children}&lt;/div&gt;
+    &lt;/AccordionContext.Provider&gt;
+  );
+}
+
+function AccordionItem({ id, children }: { id: string; children: React.ReactNode }) {
+  return &lt;ItemContext.Provider value={{ id }}&gt;{children}&lt;/ItemContext.Provider&gt;;
+}
+
+const ItemContext = React.createContext&lt;{ id: string }&gt;(null!);
+
+function AccordionTrigger({ children }: { children: React.ReactNode }) {
+  const root = React.useContext(AccordionContext);
+  const item = React.useContext(ItemContext);
+  const isOpen = root.openItems.includes(item.id);
+  return (
+    &lt;button
+      onClick={() =&gt; root.toggle(item.id)}
+      aria-expanded={isOpen}
+      aria-controls={`accordion-content-${item.id}`}
+    &gt;
+      {children}
+    &lt;/button&gt;
+  );
+}
+
+function AccordionContent({ children }: { children: React.ReactNode }) {
+  const root = React.useContext(AccordionContext);
+  const item = React.useContext(ItemContext);
+  const isOpen = root.openItems.includes(item.id);
+  if (!isOpen) return null;
+  return &lt;div id={`accordion-content-${item.id}`} role="region"&gt;{children}&lt;/div&gt;;
+}
+
+// 导出 Compound API
+export const Accordion = {
+  Root: AccordionRoot,
+  Item: AccordionItem,
+  Trigger: AccordionTrigger,
+  Content: AccordionContent,
+};
+
+// 用法
+&lt;Accordion.Root defaultOpen={['1']}&gt;
+  &lt;Accordion.Item id="1"&gt;
+    &lt;Accordion.Trigger&gt;Section 1&lt;/Accordion.Trigger&gt;
+    &lt;Accordion.Content&gt;Content 1&lt;/Accordion.Content&gt;
+  &lt;/Accordion.Item&gt;
+&lt;/Accordion.Root&gt;</code></pre>
+        </div>
+
+        <h3>代码 2 · 自己写 useControllableState</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import * as React from 'react';
+
+export function useControllableState&lt;T&gt;({
+  prop,
+  defaultProp,
+  onChange,
+}: {
+  prop: T | undefined;
+  defaultProp: T;
+  onChange?: (value: T) =&gt; void;
+}): [T, (value: T) =&gt; void] {
+  const [uncontrolledValue, setUncontrolledValue] = React.useState(defaultProp);
+  const isControlled = prop !== undefined;
+  const value = isControlled ? prop! : uncontrolledValue;
+  const onChangeRef = React.useRef(onChange);
+  React.useEffect(() =&gt; { onChangeRef.current = onChange; });
+
+  const setValue = React.useCallback((next: T) =&gt; {
+    if (!isControlled) setUncontrolledValue(next);
+    onChangeRef.current?.(next);
+  }, [isControlled]);
+
+  return [value, setValue];
+}
+
+// 使用
+function MyDialog({ open, defaultOpen = false, onOpenChange }) {
+  const [isOpen, setIsOpen] = useControllableState({
+    prop: open,
+    defaultProp: defaultOpen,
+    onChange: onOpenChange,
+  });
+  // ... 现在组件同时支持受控/非受控
+}</code></pre>
+        </div>
+
+        <h3>代码 3 · asChild 在自定义组件实现</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import * as React from 'react';
+import { Slot } from 'radix-ui';
+
+interface ButtonProps extends React.ButtonHTMLAttributes&lt;HTMLButtonElement&gt; {
+  asChild?: boolean;
+}
+
+const Button = React.forwardRef&lt;HTMLButtonElement, ButtonProps&gt;(
+  ({ asChild, className, ...props }, ref) =&gt; {
+    const Comp = asChild ? Slot : 'button';
+    return (
+      &lt;Comp
+        ref={ref}
+        className={cn('px-4 py-2 bg-blue-500 text-white rounded', className)}
+        {...props}
+      /&gt;
+    );
+  }
+);
+
+// 用法 1：普通 button
+&lt;Button onClick={...}&gt;Click&lt;/Button&gt;
+
+// 用法 2：作为 link
+&lt;Button asChild&gt;
+  &lt;a href="https://example.com"&gt;Visit&lt;/a&gt;
+&lt;/Button&gt;
+// 渲染：&lt;a href="..." class="px-4 py-2 bg-blue-500 ..."&gt;Visit&lt;/a&gt;</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>asChild 用了多个 children</b> —— Slot 只接受单个 React element，多个 children 报错。包一层 Fragment 不行（要单个真元素）</li>
+          <li><b>asChild children 不是 React element</b> —— children 是字符串 / null 时 Slot 报错。必须是 React element</li>
+          <li><b>同时用 open 和 defaultOpen</b> —— 受控模式忽略 defaultOpen。要么传 open + onOpenChange、要么传 defaultOpen，不要混</li>
+          <li><b>受控但忘了 onOpenChange</b> —— Dialog 永远不能关（用户点关闭按钮 setOpen 不被触发）</li>
+          <li><b>onClick handler 写错位置</b> —— asChild 时 onClick 写在 Trigger 上（被 Slot 合并到 child），写在 child Button 上（被 Slot props 覆盖，看 composeEventHandlers 链式行为）</li>
+          <li><b>用 React.cloneElement 自己实现 asChild</b> —— 不如用 Radix Slot（处理 ref / 事件链 / className 合并）。装 <code>radix-ui</code> 就有</li>
+          <li><b>Compound Components 子组件不在 Root 内</b> —— context 找不到，运行时崩。Trigger / Content 必须包在 Root 内</li>
+          <li><b>useId 在 SSR / CSR 不一致</b> —— 用了 React 17 老版本（没有 useId）。升 React 18+ 解决</li>
+          <li><b>forwardRef 忘了 displayName</b> —— React DevTools 显示 "Anonymous"。补 <code>Component.displayName = '...'</code></li>
+          <li><b>Pass through props 时解构了 className</b> —— <code>const &#123; className, ...rest &#125; = props</code> 然后只用 rest，丢失 className。要么 cn 合并、要么不解构</li>
+          <li><b>认为 asChild 会改变组件 a11y</b> —— 不会。Radix 把 a11y attributes 合并到 child（asChild 后 child 仍有 aria-haspopup 等）</li>
+          <li><b>把 Compound Components 当 namespace 用</b> —— Dialog.Root / Dialog.Trigger 等是 export，不是 namespace。可以单独 import</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://www.radix-ui.com/primitives/docs/utilities/slot" target="_blank" rel="noopener">Radix · Slot 文档</a></li>
+          <li><a href="https://github.com/radix-ui/primitives/tree/main/packages/react/use-controllable-state" target="_blank" rel="noopener">Radix · useControllableState 源码</a></li>
+          <li><a href="https://kentcdodds.com/blog/compound-components-with-react-hooks" target="_blank" rel="noopener">Kent C. Dodds · Compound Components</a> · React 模式经典文章</li>
+          <li><a href="https://react.dev/reference/react/useId" target="_blank" rel="noopener">React · useId</a></li>
+          <li><a href="https://react.dev/reference/react/forwardRef" target="_blank" rel="noopener">React · forwardRef</a></li>
+          <li><a href="../01-headless-a11y.html">本主题 P2.1 · Headless + a11y</a> · 配 API 设计看哲学</li>
+          <li><a href="../03-overlay/01-overlay-components.html">本主题 P3.1 · 浮层组件深度</a> · 应用 Compound 模式</li>
+          <li><a href="../../tailwind/06-component-patterns/01-cva-cn-merge.html">Tailwind 主题 P6.1 · CVA + cn</a> · 与 asChild 配合</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

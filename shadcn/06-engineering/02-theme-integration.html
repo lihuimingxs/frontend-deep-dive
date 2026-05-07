@@ -1,0 +1,824 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Theme + 暗色 + 多品牌 + Tailwind v4 · P6.2 · shadcn/ui + Radix 深度学习</title>
+    <meta name="description" content="shadcn theme 系统深度解析。默认 token（--background / --foreground / --primary / --muted / --accent / --destructive 等）+ next-themes class 策略 + shadcn theme builder 可视化选色 + 多品牌 white-label CSS variables 切换 + Tailwind v4 @theme 集成。完整 globals.css 模板。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c026d3'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='14' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ESR%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>shadcn/ui + Radix 深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.18 320); color: #fff">SR</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · 工程实践</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-form-workflow.html">01 · Form 完整工作流</a></li>
+          <li><a href="02-theme-integration.html" class="active">02 · Theme 集成</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">shadcn + Radix</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · 工程实践</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Theme + 暗色 + 多品牌 + Tailwind v4</span>
+        </nav>
+        <h1>Theme + 暗色 + 多品牌 + Tailwind v4 集成</h1>
+        <p class="lead">
+          shadcn 默认 token 系统 + next-themes class 策略 + shadcn theme builder 可视化选色 + 多品牌 CSS variables + Tailwind v4 @theme 集成。这一章把 globals.css 完整模板讲清，让你团队能自定义主题、支持暗色、支持多品牌、与 Tailwind v4 工作流契合。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> Tailwind P5.1 / P3.2 + P6.1 表单</span>
+          <span><strong>主要来源</strong> ui.shadcn.com/docs/theming + next-themes README + Tailwind v4 docs</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>shadcn 默认 token 系统用 <strong>HSL 颜色空间</strong> + <strong>CSS variables</strong>。核心 token：<b>--background / --foreground</b>（页面底色 / 主文字）/ <b>--primary / --primary-foreground</b>（主色 / 主色上的文字）/ <b>--secondary / --muted / --accent / --destructive</b>（其他语义色）。每个 token 在 <code>:root</code>（亮色）和 <code>.dark</code>（暗色）各定义一次。</li>
+          <li>shadcn token 与 Tailwind utility 自动对应：<code>bg-background</code> / <code>text-foreground</code> / <code>bg-primary</code> / <code>text-primary-foreground</code> 等。这套语义化 utility 让组件代码不需要 dark: 前缀（自动跟随主题）。</li>
+          <li>暗色模式用 next-themes（class 策略）+ shadcn 默认 .dark 选择器。next-themes 处理 SSR FOUC（首屏不闪烁）+ localStorage 持久化 + 系统切换跟随。</li>
+          <li>shadcn theme builder（ui.shadcn.com/themes）：可视化选色 + 实时预览 + 生成 CSS variables。用户复制生成的 CSS 替换 globals.css 即换主题。也可以选 12 个预设 theme（zinc / slate / stone / red / orange / yellow / green / blue / violet 等）。</li>
+          <li>多品牌（white-label）：在 root 用 <code>.theme-{brand}</code> class 切换不同 CSS variables。同一组件代码不变，自动跟随当前 theme。详见 <a href="../../tailwind/07-ecosystem-decision/02-decision-tree.html">Tailwind P7.2</a>。</li>
+          <li>Tailwind v4 @theme 集成：v4 把 token 移到 CSS（@theme {}），shadcn v4 CLI 自动适配。<code>@theme inline</code> 让 shadcn token 与 v4 token 命名空间统一。</li>
+          <li>shadcn 默认用 <strong>HSL</strong>（h s% l% 三个空格分隔），不是 OKLCH（与 Tailwind v4 默认 OKLCH 不同）。这是历史原因；shadcn v4 也支持 OKLCH，用户选。</li>
+          <li>token 命名分两类：<b>语义化</b>（primary / destructive，应用级、跟随品牌）/ <b>原色 scale</b>（zinc-500 / red-500，原始颜色）。shadcn 用语义化层；Tailwind 默认 utility 是原色。两者可共存。</li>
+          <li>radius 集中管理：<code>--radius</code> 是 shadcn 圆角基准（默认 0.5rem = rounded-md）。shadcn 组件用 <code>rounded-[var(--radius)]</code> 跟随。改 radius 一处生效全组件。</li>
+          <li>本章是 shadcn 项目<strong>实战收束</strong>。读完能写 globals.css、配 next-themes、用 theme builder、做多品牌 white-label、与 Tailwind v4 完整集成。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>shadcn 默认 token 系统</h3>
+
+        <p>shadcn init 时生成的 globals.css（默认 zinc base color）：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@layer base {
+  :root {
+    /* 页面底色 + 主文字 */
+    --background: 0 0% 100%;            /* white */
+    --foreground: 240 10% 3.9%;         /* near black */
+
+    /* 卡片 */
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+
+    /* 浮层（popover / dropdown） */
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+
+    /* 主色（按钮 / 链接） */
+    --primary: 240 5.9% 10%;            /* dark gray */
+    --primary-foreground: 0 0% 98%;
+
+    /* 次要色（次要按钮 / 标签） */
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+
+    /* 静音 / 辅助 */
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+
+    /* 强调 */
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+
+    /* 危险 */
+    --destructive: 0 84.2% 60.2%;       /* red */
+    --destructive-foreground: 0 0% 98%;
+
+    /* 边框 / input / ring */
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 240 5.9% 10%;
+
+    /* radius */
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 5.9% 10%;
+
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 240 4.9% 83.9%;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground; }
+}</code></pre>
+        </div>
+
+        <p>关键点：</p>
+        <ul>
+          <li><b>HSL 格式</b>：<code>240 10% 3.9%</code>（不是 <code>hsl(240, 10%, 3.9%)</code>）—— 让 Tailwind 通过 <code>hsl(var(--primary) / 0.5)</code> 加 opacity</li>
+          <li><b>不带单位</b>：<code>240 10% 3.9%</code>，用时 <code>hsl(var(--primary))</code></li>
+          <li>每个语义色配 <code>-foreground</code>（在该色背景上的文字色）</li>
+          <li>:root 是亮色、.dark 是暗色（class 策略）</li>
+        </ul>
+
+        <h3>token 与 Tailwind utility 自动对应</h3>
+
+        <p>tailwind.config（v3）或 @theme（v4）配置 utility ↔ CSS variable 映射：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">// tailwind.config.ts (v3 风格)
+export default {
+  theme: {
+    extend: {
+      colors: {
+        background: 'hsl(var(--background))',
+        foreground: 'hsl(var(--foreground))',
+        primary: {
+          DEFAULT: 'hsl(var(--primary))',
+          foreground: 'hsl(var(--primary-foreground))',
+        },
+        secondary: {
+          DEFAULT: 'hsl(var(--secondary))',
+          foreground: 'hsl(var(--secondary-foreground))',
+        },
+        // ... 其他
+      },
+      borderRadius: {
+        lg: 'var(--radius)',
+        md: 'calc(var(--radius) - 2px)',
+        sm: 'calc(var(--radius) - 4px)',
+      },
+    },
+  },
+};</code></pre>
+        </div>
+
+        <p>v4 用 @theme：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* Tailwind v4 · globals.css */
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  /* ... */
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}</code></pre>
+        </div>
+
+        <p>关键 <code>@theme inline</code>：让 token 直接映射到现有 CSS variable，不重新定义。这与 v4 默认 @theme（替代 tailwind.config）兼容。</p>
+
+        <p>用户写组件用语义化 utility：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 不用 dark: 前缀，自动跟随主题
+&lt;div className="bg-background text-foreground"&gt;
+  &lt;Button className="bg-primary text-primary-foreground"&gt;OK&lt;/Button&gt;
+  &lt;Button variant="destructive"&gt;Delete&lt;/Button&gt;  {/* shadcn Button 内部用 destructive token */}
+&lt;/div&gt;</code></pre>
+        </div>
+
+        <p>对比传统 dark: 写法（重复）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 老写法（不推荐）
+&lt;div className="bg-white dark:bg-gray-900 text-gray-900 dark:text-white"&gt;
+  &lt;Button className="bg-blue-500 dark:bg-blue-400 text-white"&gt;OK&lt;/Button&gt;
+&lt;/div&gt;</code></pre>
+        </div>
+
+        <p>shadcn 语义色让<strong>组件代码不需要懂亮色 / 暗色</strong>，由 CSS variables 切换。</p>
+
+        <h3>next-themes 集成</h3>
+
+        <p>已在 Tailwind P5.1 详细讲过。这里补充 shadcn 特定细节：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/_components/ThemeProvider.tsx
+'use client';
+import { ThemeProvider as NextThemesProvider } from 'next-themes';
+
+export function ThemeProvider({ children, ...props }) {
+  return &lt;NextThemesProvider {...props}&gt;{children}&lt;/NextThemesProvider&gt;;
+}
+
+// app/layout.tsx (RSC)
+import { ThemeProvider } from './_components/ThemeProvider';
+
+export default function RootLayout({ children }) {
+  return (
+    &lt;html lang="en" suppressHydrationWarning&gt;
+      &lt;body&gt;
+        &lt;ThemeProvider
+          attribute="class"           {/* 给 root 加 .dark class */}
+          defaultTheme="system"        {/* 默认跟随系统 */}
+          enableSystem
+          disableTransitionOnChange    {/* 切换时禁用 transition 防闪烁 */}
+        &gt;
+          {children}
+        &lt;/ThemeProvider&gt;
+      &lt;/body&gt;
+    &lt;/html&gt;
+  );
+}
+
+// 用 useTheme
+'use client';
+import { useTheme } from 'next-themes';
+
+export function ThemeToggle() {
+  const { theme, setTheme } = useTheme();
+  return (
+    &lt;Button onClick={() =&gt; setTheme(theme === 'dark' ? 'light' : 'dark')}&gt;
+      {theme === 'dark' ? '🌙' : '☀️'}
+    &lt;/Button&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>关键 <code>suppressHydrationWarning</code>：next-themes 在 client 改 root class（亮 → 暗），SSR 输出与 CSR 不一致。这个 React 属性告诉 React "我知道这里 mismatch，别警告"。</p>
+
+        <h3>shadcn theme builder · 可视化选色</h3>
+
+        <p>访问 <a href="https://ui.shadcn.com/themes" target="_blank" rel="noopener">ui.shadcn.com/themes</a>。</p>
+
+        <p>功能：</p>
+        <ul>
+          <li><b>预设 12 个 theme</b>：zinc（默认）/ slate / stone / red / orange / yellow / green / blue / violet 等</li>
+          <li><b>选 base color</b>：调主色调（影响 primary / secondary / muted 等）</li>
+          <li><b>选 radius</b>：0 / 0.3rem / 0.5rem / 0.75rem / 1rem</li>
+          <li><b>实时预览</b>：右侧组件预览（Card / Button / Form 等）</li>
+          <li><b>生成 CSS</b>：复制 :root + .dark 的 CSS variables 替换你的 globals.css</li>
+        </ul>
+
+        <p>这是 shadcn 设计师 / 非工程师友好工具。设计师可以在 theme builder 里调，最后 copy CSS 给工程师。</p>
+
+        <h3>多品牌（white-label）</h3>
+
+        <p>详见 Tailwind P7.2。shadcn 实现方式：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@layer base {
+  :root {
+    /* 默认（zinc base） */
+    --background: 0 0% 100%;
+    --primary: 240 5.9% 10%;
+    /* ... */
+  }
+
+  .theme-acme {
+    --primary: 348 83% 47%;  /* Acme 红 */
+    --primary-foreground: 0 0% 100%;
+  }
+
+  .theme-globex {
+    --primary: 142 71% 45%;  /* Globex 绿 */
+    --primary-foreground: 0 0% 100%;
+  }
+
+  .theme-initech {
+    --primary: 263 70% 50%;  /* Initech 紫 */
+    --primary-foreground: 0 0% 100%;
+  }
+
+  /* 暗色变体 */
+  .theme-acme.dark {
+    --primary: 348 83% 60%;
+  }
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/[tenantId]/layout.tsx (Next.js)
+async function TenantLayout({ children, params }) {
+  const tenant = await getTenant(params.tenantId);
+  return (
+    &lt;div className={`theme-${tenant.id}`}&gt;
+      {children}
+    &lt;/div&gt;
+  );
+}
+
+// 用户访问 /acme → .theme-acme 应用 → primary 是红色
+// 用户访问 /globex → .theme-globex 应用 → primary 是绿色</code></pre>
+        </div>
+
+        <h3>Tailwind v4 集成</h3>
+
+        <p>v4 项目用 @theme（详见 <a href="../../tailwind/03-engine-config/02-css-first-config.html">Tailwind P3.2</a>）。shadcn v4 CLI 自动生成 v4 兼容的 globals.css：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* Tailwind v4 + shadcn · globals.css */
+@import "tailwindcss";
+@plugin "tailwindcss-animate";
+
+@custom-variant dark (&amp;:where(.dark, .dark *));
+
+:root {
+  --background: 0 0% 100%;
+  --foreground: 240 10% 3.9%;
+  --primary: 240 5.9% 10%;
+  --primary-foreground: 0 0% 98%;
+  /* ... */
+  --radius: 0.5rem;
+}
+
+.dark {
+  --background: 240 10% 3.9%;
+  --foreground: 0 0% 98%;
+  --primary: 0 0% 98%;
+  --primary-foreground: 240 5.9% 10%;
+  /* ... */
+}
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  /* ... */
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  body {
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
+}</code></pre>
+        </div>
+
+        <p>关键 <code>@theme inline</code>：</p>
+        <ul>
+          <li>v4 的 @theme 会注册自定义属性（@property）让 transition 工作</li>
+          <li>但 shadcn 的 token 已经是 CSS variables，不需要 @property 注册</li>
+          <li>@theme inline 让 token 不被注册、直接映射到现有 variable</li>
+          <li>这是 shadcn v4 适配 Tailwind v4 的关键</li>
+        </ul>
+
+        <h3>HSL vs OKLCH</h3>
+
+        <p>shadcn 默认用 HSL，Tailwind v4 默认 OKLCH。两者可共存：</p>
+
+        <ul>
+          <li><b>shadcn token</b>：用 HSL（历史原因 + 配 alpha 简单）</li>
+          <li><b>Tailwind 默认调色板</b>：v4 改 OKLCH（更现代）</li>
+          <li>用户写 <code>bg-primary</code>（shadcn token）→ HSL；用 <code>bg-blue-500</code>（Tailwind 默认）→ OKLCH</li>
+        </ul>
+
+        <p>shadcn v4+ 也支持 OKLCH base：CLI init 时选 "OKLCH"，生成的 globals.css 用 oklch() 而非 hsl()。</p>
+
+        <p>选哪个：</p>
+        <ul>
+          <li>团队对 OKLCH 不熟 → HSL（默认）</li>
+          <li>团队已熟悉 OKLCH 视觉语言 → OKLCH（更现代 + perceptually uniform）</li>
+        </ul>
+
+        <h3>radius 集中管理</h3>
+
+        <p>shadcn 用 <code>--radius</code> 作为基准（默认 0.5rem），其他 radius 派生：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">:root { --radius: 0.5rem; }
+
+@theme inline {
+  --radius-lg: var(--radius);              /* 0.5rem */
+  --radius-md: calc(var(--radius) - 2px);  /* ~0.375rem */
+  --radius-sm: calc(var(--radius) - 4px);  /* ~0.25rem */
+}</code></pre>
+        </div>
+
+        <p>组件用 <code>rounded-md</code> / <code>rounded-lg</code> / <code>rounded-sm</code>，跟随 --radius。改 --radius 一处全 shadcn 组件视觉变化。</p>
+
+        <p>theme builder 提供 5 个 radius 选项（0 / 0.3 / 0.5 / 0.75 / 1rem），用户调整。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 自定义品牌色</h3>
+
+        <p>步骤：</p>
+        <ol>
+          <li>开 ui.shadcn.com/themes</li>
+          <li>选 base color（如 violet）</li>
+          <li>调 radius（如 0.75rem）</li>
+          <li>预览组件</li>
+          <li>复制生成的 CSS</li>
+          <li>替换项目 globals.css 的 :root + .dark 段</li>
+        </ol>
+
+        <p>或手动改 globals.css：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">:root {
+  --primary: 263 70% 50%;  /* 你的品牌紫 */
+  --primary-foreground: 0 0% 100%;
+}
+
+.dark {
+  --primary: 263 70% 60%;  /* 暗色微调 */
+}</code></pre>
+        </div>
+
+        <h3>场景 2 · 加自定义 token</h3>
+
+        <p>需要 brand-secondary / brand-accent 等额外 token：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* globals.css */
+:root {
+  /* shadcn 默认 token */
+  --background: 0 0% 100%;
+  /* ... */
+
+  /* 自定义品牌 token */
+  --brand-yellow: 48 96% 53%;
+  --brand-yellow-foreground: 240 5.9% 10%;
+  --gradient-from: 263 70% 50%;
+  --gradient-to: 348 83% 60%;
+}
+
+.dark {
+  --brand-yellow: 48 96% 60%;
+  /* ... */
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* @theme 注册 utility */
+@theme inline {
+  --color-brand-yellow: hsl(var(--brand-yellow));
+  --color-brand-yellow-foreground: hsl(var(--brand-yellow-foreground));
+  --color-gradient-from: hsl(var(--gradient-from));
+  --color-gradient-to: hsl(var(--gradient-to));
+}</code></pre>
+        </div>
+
+        <p>用：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">&lt;div className="bg-brand-yellow text-brand-yellow-foreground"&gt;
+  Promo banner
+&lt;/div&gt;
+
+&lt;div className="bg-gradient-to-r from-gradient-from to-gradient-to"&gt;
+  ...
+&lt;/div&gt;</code></pre>
+        </div>
+
+        <h3>场景 3 · 多品牌切换 + 暗色</h3>
+
+        <p>SaaS 平台多客户 white-label + 各自支持暗色：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">:root {
+  --primary: 240 5.9% 10%;  /* 默认 */
+}
+
+.dark {
+  --primary: 0 0% 98%;
+}
+
+/* Acme 品牌 */
+.theme-acme {
+  --primary: 348 83% 47%;
+  --primary-foreground: 0 0% 100%;
+}
+
+.theme-acme.dark {
+  --primary: 348 83% 60%;
+}
+
+/* Globex 品牌 */
+.theme-globex {
+  --primary: 142 71% 45%;
+  --primary-foreground: 0 0% 100%;
+}
+
+.theme-globex.dark {
+  --primary: 142 71% 55%;
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 用户访问 acme.app.com（暗色模式）
+&lt;html className="theme-acme dark"&gt;
+  ...
+&lt;/html&gt;
+{/* primary 是红色暗色版（348 83% 60%） */}</code></pre>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 完整 globals.css（生产）</h3>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">@import "tailwindcss";
+@plugin "tailwindcss-animate";
+
+@custom-variant dark (&amp;:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    /* 页面 */
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+
+    /* 卡片 */
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+
+    /* 浮层 */
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+
+    /* 主色 */
+    --primary: 263 70% 50%;
+    --primary-foreground: 0 0% 100%;
+
+    /* 次要 */
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+
+    /* 静音 */
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+
+    /* 强调 */
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+
+    /* 危险 */
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+
+    /* 边框 */
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 263 70% 50%;
+
+    /* radius */
+    --radius: 0.75rem;
+
+    /* 自定义品牌 token */
+    --brand-gradient-from: 263 70% 50%;
+    --brand-gradient-to: 348 83% 60%;
+  }
+
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 263 70% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 263 70% 60%;
+  }
+}
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+
+  --color-brand-gradient-from: hsl(var(--brand-gradient-from));
+  --color-brand-gradient-to: hsl(var(--brand-gradient-to));
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+@layer base {
+  * { border-color: hsl(var(--border)); }
+  body {
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · 完整 next-themes setup</h3>
+
+        <p>已在上文给出。</p>
+
+        <h3>代码 3 · ThemeToggle 含 system 选项</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use client';
+import { Moon, Sun, Monitor } from 'lucide-react';
+import { useTheme } from 'next-themes';
+import { useEffect, useState } from 'react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { Button } from '@/components/ui/button';
+
+export function ThemeToggle() {
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() =&gt; setMounted(true), []);
+  if (!mounted) return null;  // 防 SSR mismatch
+
+  return (
+    &lt;DropdownMenu&gt;
+      &lt;DropdownMenuTrigger asChild&gt;
+        &lt;Button variant="ghost" size="icon"&gt;
+          &lt;Sun className="h-5 w-5 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" /&gt;
+          &lt;Moon className="absolute h-5 w-5 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" /&gt;
+          &lt;span className="sr-only"&gt;Toggle theme&lt;/span&gt;
+        &lt;/Button&gt;
+      &lt;/DropdownMenuTrigger&gt;
+      &lt;DropdownMenuContent align="end"&gt;
+        &lt;DropdownMenuItem onClick={() =&gt; setTheme('light')}&gt;
+          &lt;Sun className="mr-2 h-4 w-4" /&gt;
+          Light
+        &lt;/DropdownMenuItem&gt;
+        &lt;DropdownMenuItem onClick={() =&gt; setTheme('dark')}&gt;
+          &lt;Moon className="mr-2 h-4 w-4" /&gt;
+          Dark
+        &lt;/DropdownMenuItem&gt;
+        &lt;DropdownMenuItem onClick={() =&gt; setTheme('system')}&gt;
+          &lt;Monitor className="mr-2 h-4 w-4" /&gt;
+          System
+        &lt;/DropdownMenuItem&gt;
+      &lt;/DropdownMenuContent&gt;
+    &lt;/DropdownMenu&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 4 · 多品牌动态切换 (Next.js middleware)</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// middleware.ts
+import { NextRequest, NextResponse } from 'next/server';
+
+export function middleware(req: NextRequest) {
+  const host = req.headers.get('host') || '';
+  const subdomain = host.split('.')[0];
+  const tenant = ['acme', 'globex', 'initech'].includes(subdomain) ? subdomain : 'default';
+
+  const res = NextResponse.next();
+  res.headers.set('x-tenant', tenant);
+  return res;
+}
+
+// app/layout.tsx
+import { headers } from 'next/headers';
+
+export default async function RootLayout({ children }) {
+  const tenant = (await headers()).get('x-tenant') || 'default';
+  const themeClass = tenant !== 'default' ? `theme-${tenant}` : '';
+
+  return (
+    &lt;html className={themeClass} suppressHydrationWarning&gt;
+      &lt;body&gt;
+        &lt;ThemeProvider attribute="class" defaultTheme="system" enableSystem&gt;
+          {children}
+        &lt;/ThemeProvider&gt;
+      &lt;/body&gt;
+    &lt;/html&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>html 上没加 suppressHydrationWarning</b> —— next-themes 在 client 改 root class，与 SSR 输出不一致。React 报 hydration mismatch warning</li>
+          <li><b>用 dark: 前缀写组件而不用语义色</b> —— 重复 + 难维护。改用 bg-primary / text-foreground 等语义 utility</li>
+          <li><b>shadcn 用 HSL 但你写 OKLCH 值</b> —— hsl(...) 解析失败 → 颜色不显示。要么全 HSL、要么用 oklch() 函数</li>
+          <li><b>HSL 写法带括号</b> —— shadcn 期望 <code>240 10% 3.9%</code>（空格分隔），不是 <code>hsl(240, 10%, 3.9%)</code>。后者在 hsl(var(--x) / 0.5) 中不工作</li>
+          <li><b>多品牌不用 .theme-x class 而 build 多套 CSS</b> —— bundle 大 + 切换需要重新加载。用 CSS variables + class 切换</li>
+          <li><b>Tailwind v4 项目用老 tailwind.config.ts</b> —— 兼容但不推荐。用 @theme inline（详见上文）</li>
+          <li><b>--radius 改了但组件圆角不变</b> —— 检查 @theme inline 是否定义了 --radius-lg / md / sm 派生</li>
+          <li><b>暗色切换时页面闪一下</b> —— next-themes 加 disableTransitionOnChange；或 <code>* { transition: none !important }</code> 在 .changing-theme class 内</li>
+          <li><b>theme builder 生成的 CSS 与项目不兼容</b> —— v3 / v4 格式不同。手动调或重新跑 shadcn init</li>
+          <li><b>自定义 token 不生效</b> —— 检查 @theme inline 是否注册 --color-{name} 映射</li>
+          <li><b>shadcn 组件用 hardcoded 颜色不用 token</b> —— 不该。组件源码内部都用 token（bg-primary）；自己改要保持</li>
+          <li><b>--primary 与 --ring 不一致</b> —— shadcn 默认 --ring 跟随 --primary（focus 状态用 primary 色）。改 primary 时也改 ring</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://ui.shadcn.com/docs/theming" target="_blank" rel="noopener">shadcn Theming</a></li>
+          <li><a href="https://ui.shadcn.com/themes" target="_blank" rel="noopener">shadcn Theme Builder</a></li>
+          <li><a href="https://github.com/pacocoursey/next-themes" target="_blank" rel="noopener">next-themes</a></li>
+          <li><a href="../../tailwind/05-responsive-variants/01-responsive-dark.html">Tailwind P5.1 · 响应式 + 暗色</a></li>
+          <li><a href="../../tailwind/03-engine-config/02-css-first-config.html">Tailwind P3.2 · CSS-first 配置</a> · v4 @theme</li>
+          <li><a href="../../tailwind/07-ecosystem-decision/02-decision-tree.html">Tailwind P7.2 · 决策树</a> · 多品牌</li>
+          <li><a href="../05-cli-registry/02-registry.html">本主题 P5.2 · Registry</a> · theme 作为 registry item</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

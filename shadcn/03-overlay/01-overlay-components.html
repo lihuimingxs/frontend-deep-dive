@@ -1,0 +1,651 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>浮层组件全谱 · P3.1 · shadcn/ui + Radix 深度学习</title>
+    <meta name="description" content="Radix 浮层组件深度解析。Dialog / Popover / DropdownMenu / Tooltip / HoverCard / ContextMenu 全谱 + 6 个核心技术（Floating UI 智能定位 / Portal / Focus Trap / Scroll Lock / ESC + 点外关闭 / 浏览器原生 popover API）。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c026d3'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='14' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ESR%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>shadcn/ui + Radix 深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.18 320); color: #fff">SR</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · 浮层组件深度</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-overlay-components.html" class="active">01 · 浮层组件全谱</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">shadcn + Radix</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · 浮层组件深度</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 浮层组件全谱</span>
+        </nav>
+        <h1>浮层组件全谱</h1>
+        <p class="lead">
+          浮层组件是 Radix 内部最复杂的部分 —— Dialog / Popover / DropdownMenu / Tooltip / HoverCard / ContextMenu 全谱配 6 个核心技术（Floating UI 智能定位 / Portal / Focus Trap / Scroll Lock / ESC 关闭 / 浏览器原生 popover API）。这一章把每个组件 + 每项技术讲清，让你看到"自己手写浮层为什么总有 bug"。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P2 Radix 哲学 + WAI-ARIA a11y</span>
+          <span><strong>主要来源</strong> radix-ui.com docs + Floating UI docs + WAI-ARIA APG</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>浮层组件家族按"<strong>语义 + a11y 行为</strong>"分 6 类：<b>Dialog</b>（modal、阻塞、focus trap）/ <b>Popover</b>（非阻塞、点外关闭、智能定位）/ <b>DropdownMenu</b>（菜单语义、roving tabindex）/ <b>Tooltip</b>（hover/focus 触发、有延迟、aria-describedby）/ <b>HoverCard</b>（类似 Tooltip 但内容丰富）/ <b>ContextMenu</b>（右键触发）。</li>
+          <li><strong>核心技术 1 · Floating UI</strong>（前身 popper.js）：浮层定位库、自动避开视口边缘、翻转方向、collision detection、arrow 定位。Radix 内部用 @floating-ui/react。</li>
+          <li><strong>核心技术 2 · Portal</strong>：把浮层 DOM 渲染到 <code>document.body</code> 末尾（不是组件树原位置）。解决 z-index 战争、不被父级 overflow / transform 影响。</li>
+          <li><strong>核心技术 3 · Focus Trap</strong>：Dialog 打开时 Tab 在 Dialog 内循环，不跑到背景。关闭时 focus 回到触发元素。Radix 用内置 focus trap（不依赖 react-focus-lock）。</li>
+          <li><strong>核心技术 4 · Scroll Lock</strong>：Dialog 打开时禁止 body scroll。处理 iOS Safari 的橡皮筋问题 + scrollbar gutter（防止 layout shift）。</li>
+          <li><strong>核心技术 5 · ESC + 点外关闭</strong>：全局 keydown 监听 ESC、全局 click 监听判断点击是否在浮层外。<strong>嵌套时只关最上层</strong>（Radix 自动处理 stack）。</li>
+          <li><strong>核心技术 6 · 浏览器原生 popover API</strong>：HTML <code>&lt;dialog&gt;</code> + <code>popover</code> attribute（2024+ 浏览器支持）。Radix 暂不全切（兼容性 + 行为差异），2026-2027 可能切。</li>
+          <li><strong>动画</strong>：Radix 用 <code>data-state="open"/"closed"</code> 属性 + Tailwind <code>animate-in</code> / <code>animate-out</code> 实现。配合 CSS animation 或 framer-motion。</li>
+          <li><strong>Tooltip 与 disabled button</strong>：disabled button 不触发 hover，Tooltip 不会出现。要包一层 div 解决。这是常见 bug。</li>
+          <li><strong>嵌套 Dialog / Modal 之上的 Popover</strong>：z-index + focus + ESC 处理需要谨慎。Radix 自动处理但用户要懂规则（每个浮层独立 stack）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>浮层组件家族 · 6 类语义差异</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>组件</th>
+              <th>触发</th>
+              <th>阻塞</th>
+              <th>关闭方式</th>
+              <th>a11y role</th>
+              <th>典型用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Dialog</td><td>click button</td><td>是（focus trap + scroll lock）</td><td>ESC / Close button</td><td>dialog</td><td>表单 / 重要信息确认</td></tr>
+            <tr><td>AlertDialog</td><td>click button</td><td>是</td><td>必须明确 yes/no</td><td>alertdialog</td><td>"确定删除"等</td></tr>
+            <tr><td>Popover</td><td>click button</td><td>否（点外关闭）</td><td>ESC / 点外</td><td>dialog（generic）</td><td>设置面板 / 表单子部分</td></tr>
+            <tr><td>DropdownMenu</td><td>click button</td><td>否</td><td>ESC / 点外 / 选项 click</td><td>menu / menuitem</td><td>"More" 按钮菜单</td></tr>
+            <tr><td>Tooltip</td><td>hover / focus</td><td>否</td><td>移开 / blur</td><td>tooltip</td><td>提示文字</td></tr>
+            <tr><td>HoverCard</td><td>hover</td><td>否</td><td>移开</td><td>无（generic）</td><td>用户头像悬停信息卡</td></tr>
+            <tr><td>ContextMenu</td><td>右键</td><td>否</td><td>ESC / 点外 / 选项 click</td><td>menu / menuitem</td><td>"右键复制"等</td></tr>
+          </tbody>
+        </table>
+
+        <p>选哪个不是看视觉，是看 <strong>语义</strong>：</p>
+        <ul>
+          <li>需要"用户必须看到 + 不能后台操作其他"→ Dialog（阻塞）</li>
+          <li>需要"打开一段时间但不阻塞"→ Popover</li>
+          <li>"列出选项让选一个"→ DropdownMenu</li>
+          <li>"提示一句话"→ Tooltip</li>
+          <li>"hover 显示丰富内容"→ HoverCard</li>
+          <li>"右键菜单"→ ContextMenu</li>
+        </ul>
+
+        <h3>核心技术 1 · Floating UI 智能定位</h3>
+
+        <p>Floating UI（前身 popper.js）解决"浮层定位"的复杂问题：</p>
+
+        <ul>
+          <li><b>基础定位</b>：浮层位于触发元素旁边（top / bottom / left / right + start / center / end）</li>
+          <li><b>避开视口边缘</b>：触发元素在视口边缘，浮层应该翻转到反方向（"top"翻转为"bottom"）</li>
+          <li><b>collision detection</b>：浮层与视口边界碰撞时调整位置</li>
+          <li><b>arrow 定位</b>：箭头始终指向触发元素中心</li>
+          <li><b>动态位置更新</b>：触发元素移动 / scroll / resize 时浮层跟随</li>
+        </ul>
+
+        <p>Radix 内部用 <code>@floating-ui/react</code>。用户用 Radix 不需要直接接触 Floating UI，但定制时要懂：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// Radix Popover 配置定位
+&lt;Popover.Content
+  side="top"          // top / bottom / left / right
+  sideOffset={4}      // 距离触发元素 4px
+  align="center"      // start / center / end
+  alignOffset={0}
+  avoidCollisions={true}      // 自动避开视口边缘（默认 true）
+  collisionPadding={8}        // 视口边缘 padding
+  sticky="partial"            // 触发元素 scroll 出视口时浮层是否跟随
+&gt;
+  ...
+&lt;/Popover.Content&gt;</code></pre>
+        </div>
+
+        <p>实际行为：</p>
+        <ul>
+          <li>用户在视口顶部点击触发，<code>side="top"</code> → 自动翻转为 <code>side="bottom"</code>（避开顶部）</li>
+          <li>箭头自动跟随翻转</li>
+          <li>视口 resize → 浮层重新计算位置</li>
+        </ul>
+
+        <h3>核心技术 2 · Portal 解决 z-index 战争</h3>
+
+        <p>不用 Portal 的问题：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ 不用 Portal：浮层在父级 DOM 内
+&lt;div className="overflow-hidden"&gt;
+  &lt;Popover&gt;
+    &lt;PopoverContent&gt;弹出内容&lt;/PopoverContent&gt;
+  &lt;/Popover&gt;
+&lt;/div&gt;
+// 父级 overflow-hidden 会裁切弹出内容！</code></pre>
+        </div>
+
+        <p>用 Portal：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ✅ Radix Popover 默认用 Portal
+&lt;Popover.Root&gt;
+  &lt;Popover.Trigger&gt;Open&lt;/Popover.Trigger&gt;
+  &lt;Popover.Portal&gt;  {/* 渲染到 document.body 末尾 */}
+    &lt;Popover.Content&gt;弹出内容&lt;/Popover.Content&gt;
+  &lt;/Popover.Portal&gt;
+&lt;/Popover.Root&gt;
+// 不被父级 overflow / transform 影响</code></pre>
+        </div>
+
+        <p>Portal 解决的问题：</p>
+        <ul>
+          <li>父级 <code>overflow: hidden</code> 不裁切浮层</li>
+          <li>父级 <code>transform: ...</code> 不创建新 stacking context（z-index 失效）</li>
+          <li>z-index 战争（浮层不需要"竞赛"高 z-index）</li>
+        </ul>
+
+        <p>Portal 的代价：</p>
+        <ul>
+          <li>浮层 DOM 不在组件树原位置（DevTools 检查时跳到 body 末尾）</li>
+          <li>事件冒泡仍按 React 树（Portal 内事件 bubble 到原位置父级）</li>
+          <li>SSR 时需要客户端 hydration 完成才能 portal（Radix 内置处理）</li>
+        </ul>
+
+        <h3>核心技术 3 · Focus Trap</h3>
+
+        <p>Focus Trap 是 Dialog 关键 a11y。规则（详见 P2.1）：</p>
+
+        <ul>
+          <li>Dialog 打开 → focus 移到 Dialog 内某个可 focus 元素</li>
+          <li>Tab → 在 Dialog 内循环（最后元素后跳第一）</li>
+          <li>Shift+Tab → 反向循环</li>
+          <li>关闭 → focus 回到触发元素</li>
+        </ul>
+
+        <p>Radix 内部 focus trap 实现（简化）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function FocusTrap({ children, isOpen }) {
+  const containerRef = useRef&lt;HTMLDivElement&gt;(null);
+  const previousFocusRef = useRef&lt;HTMLElement | null&gt;(null);
+
+  useEffect(() =&gt; {
+    if (!isOpen) return;
+
+    // 1. 记住当前 focus（关闭后回去）
+    previousFocusRef.current = document.activeElement as HTMLElement;
+
+    // 2. focus 第一个可 focus 元素
+    const firstFocusable = getFirstFocusable(containerRef.current);
+    firstFocusable?.focus();
+
+    // 3. 监听 Tab 实现循环
+    const handleKeyDown = (e: KeyboardEvent) =&gt; {
+      if (e.key !== 'Tab') return;
+      const focusables = getFocusables(containerRef.current);
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+
+      if (e.shiftKey &amp;&amp; document.activeElement === first) {
+        e.preventDefault();
+        last?.focus();
+      } else if (!e.shiftKey &amp;&amp; document.activeElement === last) {
+        e.preventDefault();
+        first?.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () =&gt; {
+      document.removeEventListener('keydown', handleKeyDown);
+      // 4. 关闭时 focus 回原元素
+      previousFocusRef.current?.focus();
+    };
+  }, [isOpen]);
+
+  return &lt;div ref={containerRef}&gt;{children}&lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <p>边角情况：</p>
+        <ul>
+          <li>Dialog 内动态添加可 focus 元素（异步加载）→ 重新计算 focusables</li>
+          <li>Dialog 内 input 用 IME 输入时 → 不要 trap 拦 ESC</li>
+          <li>嵌套 Dialog → 只 trap 最上层（Radix 自动处理 stack）</li>
+        </ul>
+
+        <h3>核心技术 4 · Scroll Lock</h3>
+
+        <p>Dialog 打开时禁止 body 滚动。两种方法：</p>
+
+        <p><b>方法 1 · overflow: hidden（最常见）</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-javascript">// Dialog 打开
+document.body.style.overflow = 'hidden';
+
+// 关闭
+document.body.style.overflow = '';</code></pre>
+        </div>
+
+        <p>问题：滚动条消失会导致 layout shift（页面"跳一下"）。</p>
+
+        <p><b>方法 2 · 加 padding-right 补偿 scrollbar 宽度</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-javascript">// 测量 scrollbar 宽度
+const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+
+// Dialog 打开
+document.body.style.overflow = 'hidden';
+document.body.style.paddingRight = `${scrollbarWidth}px`;  // 补偿
+// 关闭恢复</code></pre>
+        </div>
+
+        <p><b>方法 3 · CSS scrollbar-gutter（现代）</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">html {
+  scrollbar-gutter: stable;  /* 始终保留 scrollbar 空间 */
+}</code></pre>
+        </div>
+
+        <p>Radix 综合处理：用 padding-right 补偿（兼容老浏览器）+ overflow: hidden。还要处理 iOS Safari 橡皮筋（needs <code>position: fixed</code> + <code>top: -scrollY</code>）。</p>
+
+        <h3>核心技术 5 · ESC + 点外关闭</h3>
+
+        <p>Popover / DropdownMenu 等非阻塞浮层需要"<strong>点击浮层外关闭</strong>"。</p>
+
+        <p>Radix 实现：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function useClickOutside(ref, isOpen, onClose) {
+  useEffect(() =&gt; {
+    if (!isOpen) return;
+
+    const handleClick = (e: MouseEvent) =&gt; {
+      if (ref.current &amp;&amp; !ref.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+
+    // 用 capture phase 确保不被冒泡阻止
+    document.addEventListener('pointerdown', handleClick, true);
+    return () =&gt; document.removeEventListener('pointerdown', handleClick, true);
+  }, [ref, isOpen, onClose]);
+}</code></pre>
+        </div>
+
+        <p>边角情况：</p>
+        <ul>
+          <li>触发元素在浮层外 → 点击触发元素不应关闭（Radix 处理）</li>
+          <li>嵌套浮层 → 只关最内层（按 stack 顺序）</li>
+          <li>Trigger 是 Dialog 内的按钮 → Dialog 关闭时 Popover 也关</li>
+          <li>浮层内 click 不应关闭（Radix 检查 e.target 是否在 contentRef 内）</li>
+        </ul>
+
+        <h3>核心技术 6 · 浏览器原生 popover API</h3>
+
+        <p>2024 年起浏览器主流支持原生 popover API：</p>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 原生 popover（2024+） --&gt;
+&lt;button popovertarget="my-popover"&gt;Open&lt;/button&gt;
+&lt;div id="my-popover" popover&gt;
+  This is a popover
+&lt;/div&gt;
+&lt;!-- 浏览器自动处理：定位、显示/隐藏、ESC 关闭、点外关闭 --&gt;</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 原生 dialog（2022+） --&gt;
+&lt;dialog id="my-dialog"&gt;
+  &lt;p&gt;Modal content&lt;/p&gt;
+  &lt;button&gt;Close&lt;/button&gt;
+&lt;/dialog&gt;
+
+&lt;script&gt;
+  document.getElementById('my-dialog').showModal();  // 打开
+  // ESC 自动关闭、focus trap 自动处理
+&lt;/script&gt;</code></pre>
+        </div>
+
+        <p>原生 API 的优势：</p>
+        <ul>
+          <li>浏览器内置 a11y / 焦点 / 关闭逻辑</li>
+          <li>无 JS 开销</li>
+          <li>tab 自动 trap</li>
+        </ul>
+
+        <p>原生 API 的限制：</p>
+        <ul>
+          <li>定位不灵活（不像 Floating UI 智能避开边缘）</li>
+          <li>动画支持有限</li>
+          <li>跨浏览器行为有微妙差异</li>
+          <li>不能完整覆盖 React 受控/非受控模式</li>
+        </ul>
+
+        <p>Radix 暂时不全切原生 API。可能在 2026-2027 年逐步采用（保留 Radix API 不变，内部改用原生）。</p>
+
+        <h3>动画 · data-state + Tailwind animate-*</h3>
+
+        <p>Radix 用 <code>data-state="open"/"closed"</code> 属性配合 CSS animation：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">&lt;Dialog.Content className="
+  fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2
+  bg-white p-6 rounded-lg
+  data-[state=open]:animate-in
+  data-[state=open]:fade-in-0
+  data-[state=open]:zoom-in-95
+  data-[state=closed]:animate-out
+  data-[state=closed]:fade-out-0
+  data-[state=closed]:zoom-out-95
+  duration-200
+"&gt;
+  ...
+&lt;/Dialog.Content&gt;</code></pre>
+        </div>
+
+        <p>关键点：</p>
+        <ul>
+          <li><code>data-state</code> 属性由 Radix 自动注入</li>
+          <li>shadcn 用 <code>tailwindcss-animate</code> plugin 提供 animate-in / fade-in 等 utility</li>
+          <li>Radix 在动画结束后才真正卸载 DOM（用 <code>animation-end</code> 监听）</li>
+          <li>用 framer-motion 替代 CSS 动画也支持（用 AnimatePresence + 受控模式）</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · Dialog 表单（提交后关闭）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function ContactDialog() {
+  const [open, setOpen] = useState(false);
+
+  async function handleSubmit(data: FormData) {
+    await sendContact(data);
+    setOpen(false);
+    toast.success('Sent!');
+  }
+
+  return (
+    &lt;Dialog.Root open={open} onOpenChange={setOpen}&gt;
+      &lt;Dialog.Trigger asChild&gt;
+        &lt;Button&gt;Contact us&lt;/Button&gt;
+      &lt;/Dialog.Trigger&gt;
+      &lt;Dialog.Portal&gt;
+        &lt;Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=open]:fade-in-0" /&gt;
+        &lt;Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white p-6 rounded-lg w-full max-w-md"&gt;
+          &lt;Dialog.Title className="text-lg font-semibold"&gt;Contact&lt;/Dialog.Title&gt;
+          &lt;Dialog.Description className="text-sm text-gray-500"&gt;
+            We'll respond in 24 hours.
+          &lt;/Dialog.Description&gt;
+          &lt;form action={handleSubmit} className="mt-4"&gt;
+            &lt;input name="email" type="email" required /&gt;
+            &lt;textarea name="message" required /&gt;
+            &lt;Button type="submit"&gt;Send&lt;/Button&gt;
+          &lt;/form&gt;
+        &lt;/Dialog.Content&gt;
+      &lt;/Dialog.Portal&gt;
+    &lt;/Dialog.Root&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>场景 2 · Tooltip 在 disabled button</h3>
+
+        <p>常见陷阱：disabled button 不触发 hover/focus，Tooltip 不显示。</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ Tooltip 不显示
+&lt;Tooltip.Root&gt;
+  &lt;Tooltip.Trigger asChild&gt;
+    &lt;Button disabled&gt;Submit&lt;/Button&gt;
+  &lt;/Tooltip.Trigger&gt;
+  &lt;Tooltip.Content&gt;Required fields missing&lt;/Tooltip.Content&gt;
+&lt;/Tooltip.Root&gt;
+
+// ✅ 包一层 div 解决
+&lt;Tooltip.Root&gt;
+  &lt;Tooltip.Trigger asChild&gt;
+    &lt;span tabIndex={0}&gt;
+      &lt;Button disabled&gt;Submit&lt;/Button&gt;
+    &lt;/span&gt;
+  &lt;/Tooltip.Trigger&gt;
+  &lt;Tooltip.Content&gt;Required fields missing&lt;/Tooltip.Content&gt;
+&lt;/Tooltip.Root&gt;</code></pre>
+        </div>
+
+        <h3>场景 3 · DropdownMenu 嵌套子菜单</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">&lt;DropdownMenu.Root&gt;
+  &lt;DropdownMenu.Trigger&gt;Options&lt;/DropdownMenu.Trigger&gt;
+  &lt;DropdownMenu.Portal&gt;
+    &lt;DropdownMenu.Content className="bg-white rounded-md shadow-lg p-1"&gt;
+      &lt;DropdownMenu.Item&gt;New&lt;/DropdownMenu.Item&gt;
+      &lt;DropdownMenu.Item&gt;Open&lt;/DropdownMenu.Item&gt;
+      &lt;DropdownMenu.Sub&gt;
+        &lt;DropdownMenu.SubTrigger&gt;Recent&lt;/DropdownMenu.SubTrigger&gt;
+        &lt;DropdownMenu.Portal&gt;
+          &lt;DropdownMenu.SubContent&gt;
+            &lt;DropdownMenu.Item&gt;file1.txt&lt;/DropdownMenu.Item&gt;
+            &lt;DropdownMenu.Item&gt;file2.txt&lt;/DropdownMenu.Item&gt;
+          &lt;/DropdownMenu.SubContent&gt;
+        &lt;/DropdownMenu.Portal&gt;
+      &lt;/DropdownMenu.Sub&gt;
+      &lt;DropdownMenu.Separator /&gt;
+      &lt;DropdownMenu.Item&gt;Quit&lt;/DropdownMenu.Item&gt;
+    &lt;/DropdownMenu.Content&gt;
+  &lt;/DropdownMenu.Portal&gt;
+&lt;/DropdownMenu.Root&gt;</code></pre>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · Popover 智能定位（避开视口边缘）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">&lt;Popover.Root&gt;
+  &lt;Popover.Trigger&gt;Help&lt;/Popover.Trigger&gt;
+  &lt;Popover.Portal&gt;
+    &lt;Popover.Content
+      side="top"               // 优先 top
+      sideOffset={4}
+      align="end"              // 右对齐
+      avoidCollisions={true}   // 视口边缘自动翻转
+      collisionPadding={8}
+      className="bg-white rounded-md shadow-lg p-4 max-w-xs"
+    &gt;
+      &lt;p&gt;Help content...&lt;/p&gt;
+      &lt;Popover.Arrow className="fill-white" /&gt;  {/* 箭头 */}
+    &lt;/Popover.Content&gt;
+  &lt;/Popover.Portal&gt;
+&lt;/Popover.Root&gt;
+{/* 用户在视口顶部点击 → 自动翻转为 bottom */}
+{/* 视口边缘 8px padding 内 → 调整位置 */}</code></pre>
+        </div>
+
+        <h3>代码 2 · Tooltip 进阶（延迟 + 位置）</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 全局 Provider 控制 tooltip 默认延迟
+&lt;Tooltip.Provider delayDuration={300} skipDelayDuration={0}&gt;
+  &lt;Tooltip.Root&gt;
+    &lt;Tooltip.Trigger asChild&gt;
+      &lt;button&gt;Hover me&lt;/button&gt;
+    &lt;/Tooltip.Trigger&gt;
+    &lt;Tooltip.Portal&gt;
+      &lt;Tooltip.Content
+        side="top"
+        sideOffset={4}
+        className="bg-gray-900 text-white text-xs px-2 py-1 rounded"
+      &gt;
+        Tooltip text
+        &lt;Tooltip.Arrow className="fill-gray-900" /&gt;
+      &lt;/Tooltip.Content&gt;
+    &lt;/Tooltip.Portal&gt;
+  &lt;/Tooltip.Root&gt;
+&lt;/Tooltip.Provider&gt;
+
+{/* delayDuration: 鼠标悬停 300ms 后显示 */}
+{/* skipDelayDuration: 用户从一个 tooltip 移到另一个时立即显示（不延迟） */}</code></pre>
+        </div>
+
+        <h3>代码 3 · 动画完整配置</h3>
+
+        <div class="code-block">
+          <span class="code-label">css</span>
+          <pre class="code"><code class="lang-css">/* tailwind.config 启用 tailwindcss-animate plugin
+   或手动定义 keyframes */
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes zoom-in-95 {
+  from { transform: scale(0.95); }
+  to { transform: scale(1); }
+}
+
+@theme {
+  --animate-in: fade-in 200ms ease-out;
+  --animate-out: fade-out 150ms ease-in;
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 用法
+&lt;Dialog.Content className="
+  data-[state=open]:animate-in
+  data-[state=open]:fade-in-0
+  data-[state=open]:zoom-in-95
+  data-[state=closed]:animate-out
+  data-[state=closed]:fade-out-0
+  data-[state=closed]:zoom-out-95
+"&gt;</code></pre>
+        </div>
+
+        <h3>代码 4 · 嵌套 Dialog 之上的 Popover</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 在 Dialog 内嵌 Popover —— Radix 自动处理 z-index + focus
+&lt;Dialog.Root&gt;
+  &lt;Dialog.Trigger&gt;Open Dialog&lt;/Dialog.Trigger&gt;
+  &lt;Dialog.Portal&gt;
+    &lt;Dialog.Overlay /&gt;
+    &lt;Dialog.Content&gt;
+      &lt;p&gt;Dialog content&lt;/p&gt;
+      &lt;Popover.Root&gt;
+        &lt;Popover.Trigger&gt;Help&lt;/Popover.Trigger&gt;
+        &lt;Popover.Portal&gt;
+          &lt;Popover.Content&gt;
+            Tooltip in Dialog
+          &lt;/Popover.Content&gt;
+        &lt;/Popover.Portal&gt;
+      &lt;/Popover.Root&gt;
+    &lt;/Dialog.Content&gt;
+  &lt;/Dialog.Portal&gt;
+&lt;/Dialog.Root&gt;
+
+{/*
+  Radix 自动：
+  - Popover 渲染在 body 末尾（z-index 高于 Dialog）
+  - ESC 关 Popover（不是 Dialog）
+  - 点外关 Popover（不是 Dialog）
+  - Tab focus 在最内层 Popover 内 trap
+  - 关 Popover 后 focus 回 Dialog 内的 Popover Trigger
+*/}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>Tooltip 在 disabled button 不显示</b> —— disabled button 不触发 hover/focus。包一层 div / span（详见场景 2）</li>
+          <li><b>Popover.Content 被父级 overflow-hidden 裁切</b> —— 必须用 Popover.Portal 包裹</li>
+          <li><b>Dialog 打开页面跳一下（layout shift）</b> —— scrollbar 消失。Radix 自动加 padding-right 补偿；如果你自己写 Dialog 别忘了</li>
+          <li><b>iOS Safari Dialog 内仍可滚动背景</b> —— Radix 处理了 iOS 橡皮筋（用 position: fixed + top: -scrollY），自己写要复杂</li>
+          <li><b>嵌套 Dialog ESC 关错层</b> —— Radix 自动处理 stack（最上层先关）。手写易错</li>
+          <li><b>动画忘了 data-[state=closed] 部分</b> —— Dialog 关闭时直接消失，没 fade-out。要写两个 state 的动画</li>
+          <li><b>用 React Portal 自己实现而不用 Radix Portal</b> —— Radix Portal 处理 SSR / hydration / 嵌套 stack 等边角情况</li>
+          <li><b>Dialog 内 Form 提交不关闭</b> —— 用受控模式 setOpen(false) 在 onSubmit 后调</li>
+          <li><b>用 z-index: 9999 解决浮层不在顶部</b> —— 错。改用 Portal（不需要竞赛 z-index）</li>
+          <li><b>Tooltip 内放复杂内容（按钮/链接）</b> —— Tooltip 是"提示"，不应放可交互内容（屏幕阅读器读不到）。用 HoverCard 替代</li>
+          <li><b>DropdownMenu 项是 Link 但 click 不跳转</b> —— 用 asChild + Next.js Link（详见 P2.2）</li>
+          <li><b>用 onPointerDownOutside / onEscapeKeyDown 想拦截关闭但没 preventDefault</b> —— 要 e.preventDefault() 阻止关闭</li>
+          <li><b>受控 Dialog 但 onOpenChange 不更新 state</b> —— Dialog 关不上。检查 onOpenChange 是否真调 setOpen</li>
+          <li><b>移动端 Dialog 全屏</b> —— Radix Dialog 不自动全屏。用 Vaul（emil_kowalski 出的 Drawer）做移动端 bottom sheet</li>
+          <li><b>嵌套 ContextMenu / DropdownMenu submenu 闪烁</b> —— Radix 处理了 hover 延迟（避免误触发），自己写易闪</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://www.radix-ui.com/primitives/docs/components/dialog" target="_blank" rel="noopener">Radix · Dialog</a></li>
+          <li><a href="https://www.radix-ui.com/primitives/docs/components/popover" target="_blank" rel="noopener">Radix · Popover</a></li>
+          <li><a href="https://www.radix-ui.com/primitives/docs/components/dropdown-menu" target="_blank" rel="noopener">Radix · DropdownMenu</a></li>
+          <li><a href="https://www.radix-ui.com/primitives/docs/components/tooltip" target="_blank" rel="noopener">Radix · Tooltip</a></li>
+          <li><a href="https://floating-ui.com/" target="_blank" rel="noopener">Floating UI 文档</a> · 浮层定位库</li>
+          <li><a href="https://developer.mozilla.org/en-US/docs/Web/API/Popover_API" target="_blank" rel="noopener">MDN · Popover API</a> · 浏览器原生</li>
+          <li><a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/dialog" target="_blank" rel="noopener">MDN · &lt;dialog&gt;</a> · 浏览器原生</li>
+          <li><a href="../../tailwind/06-component-patterns/01-cva-cn-merge.html">Tailwind 主题 P6.1 · CVA + cn</a> · 浮层组件用 CVA 管理变体</li>
+          <li><a href="../02-philosophy/02-controlled-aschild.html">本主题 P2.2 · 受控/asChild</a> · 配浮层看 API 设计</li>
+          <li><a href="../04-form/01-form-components.html">本主题 P4.1 · 表单组件深度</a> · Combobox 浮层</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

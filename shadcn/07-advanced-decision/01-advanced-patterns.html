@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>高级模式 · P7.1 · shadcn/ui + Radix 深度学习</title>
+    <meta name="description" content="shadcn 生态高级模式：TanStack Table v8（headless 表格 + shadcn DataTable 模板）+ Sonner Toast（替代 Radix Toast）+ TanStack Virtual 虚拟列表 + cmdk 命令面板（⌘K）+ Vaul Drawer（移动端 bottom sheet）+ react-resizable-panels + embla-carousel。补足基础组件不够的场景。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c026d3'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='14' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ESR%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>shadcn/ui + Radix 深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.18 320); color: #fff">SR</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P7 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · 高级 + 决策</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-advanced-patterns.html" class="active">01 · 高级模式</a></li>
+          <li><a href="02-decision-tree.html">02 · 决策树 + 2027 展望</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">shadcn + Radix</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · 高级 + 决策</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 高级模式</span>
+        </nav>
+        <h1>高级模式</h1>
+        <p class="lead">
+          基础 shadcn 组件不够的场景：大表（TanStack Table）/ Toast（Sonner）/ 虚拟列表（TanStack Virtual）/ 命令面板（cmdk）/ Drawer（Vaul）/ 可调面板（react-resizable-panels）/ Carousel（embla）。这一章把 7 个最常用高级模式讲清，让你在 shadcn 项目搭出复杂 UI。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P3 浮层 + P4 表单</span>
+          <span><strong>主要来源</strong> 各高级库官方 docs + shadcn DataTable 模板</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>shadcn 高级模式 7 个：<b>TanStack Table</b>（大表）/ <b>Sonner</b>（Toast）/ <b>TanStack Virtual</b>（虚拟列表）/ <b>cmdk</b>（命令面板）/ <b>Vaul</b>（Drawer）/ <b>react-resizable-panels</b>（可调面板）/ <b>embla-carousel</b>（Carousel）。</li>
+          <li><b>TanStack Table v8</b>（Tanner Linsley）：headless 表格状态库（与 Radix 哲学一致）。提供分页 / 排序 / 过滤 / 列调整 / 虚拟化等。shadcn 提供 DataTable 模板（用 shadcn Table DOM + TanStack Table 状态）。1300+ blocks 含 dashboard 模板基于 DataTable。</li>
+          <li><b>Sonner</b>（emil_kowalski）：替代 Radix Toast。API 更简单（<code>toast.success("Saved!")</code>）+ 多 toast 堆叠 + promise toast（loading → success / error）+ 自定义 toast。shadcn 推荐 Sonner over Radix Toast（2024 后默认）。</li>
+          <li><b>TanStack Virtual</b>：headless 虚拟化（与 Table 同生态）。大列表（10k+ 项）必备。与 Combobox / Select / Table 配合渲染百万项不卡。<b>react-virtuoso</b> 是组件式虚拟化替代方案。</li>
+          <li><b>cmdk</b>（Pkmn / Linear 团队）：命令面板（⌘K 弹窗 + 搜索 + 选项）+ 也作为 Combobox 基础（详见 P4.1）。Linear / Vercel / Raycast 等用 cmdk。</li>
+          <li><b>Vaul</b>（emil_kowalski）：移动端 bottom sheet。比 Dialog 更适合移动端（拉手柄上滑 / 下拉关）。shadcn 加 Drawer 组件基于 Vaul。</li>
+          <li><b>react-resizable-panels</b>：可调大小面板。VS Code / Linear 风格的拖拽分栏。shadcn ResizablePanelGroup 组件基于它。</li>
+          <li><b>embla-carousel</b>：carousel 库（基于 IntersectionObserver）。shadcn Carousel 组件基于它。轻量 + 性能好 + a11y 完整。</li>
+          <li>所有这些库都是 <strong>headless 或几乎 headless</strong> —— 与 shadcn / Radix 哲学一致。提供行为，用户加样式。</li>
+          <li>本章不是"完整 catalog"。选 7 个最常用 + 影响最大的高级模式。其他场景（数据可视化 / 富文本编辑器 / 视频播放器）shadcn 没标准方案，社区生态各自实现。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>TanStack Table v8 + shadcn DataTable</h3>
+
+        <p>TanStack Table 是<strong>表格状态库</strong>（不是组件库）。提供：</p>
+
+        <ul>
+          <li>分页（client / server-side）</li>
+          <li>排序（多列 / 优先级）</li>
+          <li>过滤（global / per-column / fuzzy）</li>
+          <li>列调整（resize / reorder / show-hide）</li>
+          <li>虚拟化（与 TanStack Virtual 配合）</li>
+          <li>列固定（pinning）</li>
+          <li>row selection</li>
+          <li>row expansion</li>
+          <li>分组 / 聚合</li>
+        </ul>
+
+        <p>headless 含义：不提供 DOM。用户自己写 <code>&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;</code> 等 markup，TanStack Table 提供 column / row / cell 状态。</p>
+
+        <p>shadcn 提供 <strong>DataTable 模板</strong>：用 shadcn Table（DOM） + TanStack Table（状态） + 内置分页 / 过滤 UI。CLI 加：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">npx shadcn@latest add table
+# 加基础 Table + TanStack Table 集成示例</code></pre>
+        </div>
+
+        <p>典型 DataTable 代码（简化）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use client';
+import {
+  ColumnDef,
+  flexRender,
+  getCoreRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  SortingState,
+  useReactTable,
+} from '@tanstack/react-table';
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from '@/components/ui/table';
+import { Button } from '@/components/ui/button';
+import { useState } from 'react';
+
+interface DataTableProps&lt;TData, TValue&gt; {
+  columns: ColumnDef&lt;TData, TValue&gt;[];
+  data: TData[];
+}
+
+export function DataTable&lt;TData, TValue&gt;({ columns, data }: DataTableProps&lt;TData, TValue&gt;) {
+  const [sorting, setSorting] = useState&lt;SortingState&gt;([]);
+
+  const table = useReactTable({
+    data,
+    columns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+  });
+
+  return (
+    &lt;&gt;
+      &lt;Table&gt;
+        &lt;TableHeader&gt;
+          {table.getHeaderGroups().map((headerGroup) =&gt; (
+            &lt;TableRow key={headerGroup.id}&gt;
+              {headerGroup.headers.map((header) =&gt; (
+                &lt;TableHead key={header.id}&gt;
+                  {flexRender(header.column.columnDef.header, header.getContext())}
+                &lt;/TableHead&gt;
+              ))}
+            &lt;/TableRow&gt;
+          ))}
+        &lt;/TableHeader&gt;
+        &lt;TableBody&gt;
+          {table.getRowModel().rows.map((row) =&gt; (
+            &lt;TableRow key={row.id}&gt;
+              {row.getVisibleCells().map((cell) =&gt; (
+                &lt;TableCell key={cell.id}&gt;
+                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                &lt;/TableCell&gt;
+              ))}
+            &lt;/TableRow&gt;
+          ))}
+        &lt;/TableBody&gt;
+      &lt;/Table&gt;
+
+      {/* 分页 */}
+      &lt;div className="flex items-center gap-2 mt-4"&gt;
+        &lt;Button onClick={() =&gt; table.previousPage()} disabled={!table.getCanPreviousPage()}&gt;
+          Previous
+        &lt;/Button&gt;
+        &lt;Button onClick={() =&gt; table.nextPage()} disabled={!table.getCanNextPage()}&gt;
+          Next
+        &lt;/Button&gt;
+      &lt;/div&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>用法：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 定义 columns
+type User = { id: string; name: string; email: string };
+
+const columns: ColumnDef&lt;User&gt;[] = [
+  { accessorKey: 'name', header: 'Name' },
+  { accessorKey: 'email', header: 'Email' },
+];
+
+// 用
+&lt;DataTable columns={columns} data={users} /&gt;</code></pre>
+        </div>
+
+        <h3>Sonner · 替代 Radix Toast</h3>
+
+        <p>Sonner 由 emil_kowalski（Vaul / cal.com 等核心开发者）出品。2024 年 shadcn 默认推荐 Sonner over Radix Toast。</p>
+
+        <p>原因：</p>
+        <ul>
+          <li><b>API 更简单</b>：<code>toast.success("Saved!")</code> 一行；Radix Toast 要 useState + 控制 open</li>
+          <li><b>多 toast 堆叠</b>：自动管理多个 toast 显示位置</li>
+          <li><b>promise toast</b>：<code>toast.promise(saveData(), { loading: "Saving...", success: "Saved!", error: "Failed" })</code></li>
+          <li><b>动画细腻</b>：Vercel 风格的弹出 / 滑出动画</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">npx shadcn@latest add sonner</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/layout.tsx · 加 Toaster
+import { Toaster } from '@/components/ui/sonner';
+
+export default function RootLayout({ children }) {
+  return (
+    &lt;html&gt;
+      &lt;body&gt;
+        {children}
+        &lt;Toaster /&gt;
+      &lt;/body&gt;
+    &lt;/html&gt;
+  );
+}
+
+// 任意组件用
+import { toast } from 'sonner';
+
+function SaveButton() {
+  return (
+    &lt;Button onClick={() =&gt; {
+      toast.success('Settings saved!');
+    }}&gt;Save&lt;/Button&gt;
+  );
+}
+
+// promise toast
+function UploadButton() {
+  return (
+    &lt;Button onClick={() =&gt; {
+      toast.promise(uploadFile(), {
+        loading: 'Uploading...',
+        success: 'Uploaded!',
+        error: 'Upload failed',
+      });
+    }}&gt;Upload&lt;/Button&gt;
+  );
+}
+
+// 自定义 toast
+toast(&lt;CustomToast /&gt;);
+
+// 错误 toast 含 action
+toast.error('Failed to save', {
+  action: { label: 'Retry', onClick: () =&gt; retry() },
+});</code></pre>
+        </div>
+
+        <h3>TanStack Virtual · 虚拟列表</h3>
+
+        <p>渲染 10k+ 项的列表会卡（DOM 太多）。虚拟化只渲染可视区域 + 一点 buffer，其他用占位元素撑高度。</p>
+
+        <p>TanStack Virtual 是 headless 虚拟化（与 Table 同生态）。</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">npm i @tanstack/react-virtual</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { useVirtualizer } from '@tanstack/react-virtual';
+import { useRef } from 'react';
+
+function VirtualList({ items }: { items: string[] }) {
+  const parentRef = useRef&lt;HTMLDivElement&gt;(null);
+
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () =&gt; parentRef.current,
+    estimateSize: () =&gt; 40,  // 每项预估高度
+    overscan: 5,             // 可视区上下各多渲染 5 项
+  });
+
+  return (
+    &lt;div ref={parentRef} className="h-[400px] overflow-auto"&gt;
+      &lt;div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}&gt;
+        {virtualizer.getVirtualItems().map((virtualRow) =&gt; (
+          &lt;div
+            key={virtualRow.key}
+            style={{
+              position: 'absolute',
+              top: 0, left: 0, right: 0,
+              height: virtualRow.size,
+              transform: `translateY(${virtualRow.start}px)`,
+            }}
+          &gt;
+            {items[virtualRow.index]}
+          &lt;/div&gt;
+        ))}
+      &lt;/div&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>替代方案：<strong>react-virtuoso</strong>（组件式 API，更易用但性能稍差）。</p>
+
+        <p>用 TanStack Virtual 的场景：</p>
+        <ul>
+          <li>用户列表 / 商品列表 1000+ 项</li>
+          <li>聊天历史 / 消息流</li>
+          <li>大 Combobox（10k 选项）</li>
+          <li>大 DataTable（10k 行）</li>
+        </ul>
+
+        <h3>cmdk · 命令面板</h3>
+
+        <p>已在 P4.1 详细讲过 Combobox 用法。这里讲<strong>命令面板</strong>用法（⌘K 弹窗）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use client';
+import * as React from 'react';
+import {
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+  CommandShortcut,
+} from '@/components/ui/command';
+
+export function CommandPalette() {
+  const [open, setOpen] = React.useState(false);
+
+  React.useEffect(() =&gt; {
+    const down = (e: KeyboardEvent) =&gt; {
+      if ((e.metaKey || e.ctrlKey) &amp;&amp; e.key === 'k') {
+        e.preventDefault();
+        setOpen((open) =&gt; !open);
+      }
+    };
+    document.addEventListener('keydown', down);
+    return () =&gt; document.removeEventListener('keydown', down);
+  }, []);
+
+  return (
+    &lt;&gt;
+      &lt;p className="text-sm text-muted-foreground"&gt;
+        Press &lt;kbd&gt;⌘K&lt;/kbd&gt; to open command palette
+      &lt;/p&gt;
+
+      &lt;CommandDialog open={open} onOpenChange={setOpen}&gt;
+        &lt;CommandInput placeholder="Type a command or search..." /&gt;
+        &lt;CommandList&gt;
+          &lt;CommandEmpty&gt;No results found.&lt;/CommandEmpty&gt;
+
+          &lt;CommandGroup heading="Suggestions"&gt;
+            &lt;CommandItem onSelect={() =&gt; navigate('/dashboard')}&gt;
+              &lt;LayoutDashboard className="mr-2 h-4 w-4" /&gt;
+              Dashboard
+              &lt;CommandShortcut&gt;⌘D&lt;/CommandShortcut&gt;
+            &lt;/CommandItem&gt;
+            &lt;CommandItem onSelect={() =&gt; navigate('/settings')}&gt;
+              &lt;Settings className="mr-2 h-4 w-4" /&gt;
+              Settings
+              &lt;CommandShortcut&gt;⌘,&lt;/CommandShortcut&gt;
+            &lt;/CommandItem&gt;
+          &lt;/CommandGroup&gt;
+
+          &lt;CommandSeparator /&gt;
+
+          &lt;CommandGroup heading="Recent"&gt;
+            {recentItems.map((item) =&gt; (
+              &lt;CommandItem key={item.id} onSelect={() =&gt; openItem(item.id)}&gt;
+                {item.title}
+              &lt;/CommandItem&gt;
+            ))}
+          &lt;/CommandGroup&gt;
+        &lt;/CommandList&gt;
+      &lt;/CommandDialog&gt;
+    &lt;/&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>命令面板的 a11y：</p>
+        <ul>
+          <li>cmdk 自动处理 listbox a11y（aria-activedescendant）</li>
+          <li>键盘 ↓ ↑ Enter ESC</li>
+          <li>实时屏幕阅读器读出选项数</li>
+        </ul>
+
+        <h3>Vaul · 移动端 Drawer</h3>
+
+        <p>Drawer 是移动端"bottom sheet" —— 从底部上滑的浮层。比 Dialog 更适合移动端（用户拇指可达）。</p>
+
+        <p>Vaul（也是 emil_kowalski 出品）特点：</p>
+        <ul>
+          <li>拖拽手柄上滑 / 下拉关</li>
+          <li>嵌套 drawer（drawer 内 drawer）</li>
+          <li>snap points（半屏 / 全屏 / 部分屏）</li>
+          <li>Tailwind 动画兼容</li>
+        </ul>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">npx shadcn@latest add drawer</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import {
+  Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle, DrawerTrigger,
+} from '@/components/ui/drawer';
+
+&lt;Drawer&gt;
+  &lt;DrawerTrigger&gt;Open&lt;/DrawerTrigger&gt;
+  &lt;DrawerContent&gt;
+    &lt;DrawerHeader&gt;
+      &lt;DrawerTitle&gt;Settings&lt;/DrawerTitle&gt;
+      &lt;DrawerDescription&gt;Adjust your preferences.&lt;/DrawerDescription&gt;
+    &lt;/DrawerHeader&gt;
+    &lt;div className="p-4"&gt;...&lt;/div&gt;
+  &lt;/DrawerContent&gt;
+&lt;/Drawer&gt;</code></pre>
+        </div>
+
+        <p>Drawer vs Dialog 选择：</p>
+        <ul>
+          <li>桌面 → Dialog</li>
+          <li>移动 → Drawer</li>
+          <li>响应式 → 用 useMediaQuery 切换（桌面 Dialog / 移动 Drawer）</li>
+        </ul>
+
+        <h3>react-resizable-panels · 可调面板</h3>
+
+        <p>VS Code / Linear 风格的拖拽分栏。shadcn ResizablePanelGroup 基于此：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from '@/components/ui/resizable';
+
+&lt;ResizablePanelGroup direction="horizontal"&gt;
+  &lt;ResizablePanel defaultSize={20} minSize={15}&gt;
+    Sidebar
+  &lt;/ResizablePanel&gt;
+  &lt;ResizableHandle /&gt;
+  &lt;ResizablePanel defaultSize={80}&gt;
+    &lt;ResizablePanelGroup direction="vertical"&gt;
+      &lt;ResizablePanel defaultSize={70}&gt;Main content&lt;/ResizablePanel&gt;
+      &lt;ResizableHandle /&gt;
+      &lt;ResizablePanel defaultSize={30}&gt;Bottom panel&lt;/ResizablePanel&gt;
+    &lt;/ResizablePanelGroup&gt;
+  &lt;/ResizablePanel&gt;
+&lt;/ResizablePanelGroup&gt;</code></pre>
+        </div>
+
+        <p>用户拖 ResizableHandle 调整 panel 大小。会持久化到 localStorage（autoSaveId 配置）。</p>
+
+        <h3>embla-carousel · Carousel</h3>
+
+        <p>embla 是轻量 carousel 库（基于 IntersectionObserver）。shadcn Carousel 基于它：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import {
+  Carousel,
+  CarouselContent,
+  CarouselItem,
+  CarouselNext,
+  CarouselPrevious,
+} from '@/components/ui/carousel';
+
+&lt;Carousel&gt;
+  &lt;CarouselContent&gt;
+    {images.map((img) =&gt; (
+      &lt;CarouselItem key={img.id}&gt;
+        &lt;img src={img.url} /&gt;
+      &lt;/CarouselItem&gt;
+    ))}
+  &lt;/CarouselContent&gt;
+  &lt;CarouselPrevious /&gt;
+  &lt;CarouselNext /&gt;
+&lt;/Carousel&gt;
+
+// 自动播放
+&lt;Carousel
+  opts={{ loop: true }}
+  plugins={[Autoplay({ delay: 3000 })]}
+&gt;...&lt;/Carousel&gt;</code></pre>
+        </div>
+
+        <p>embla 的优势：性能好 / 轻量 / a11y 完整 / 移动端流畅。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · Admin dashboard 用户列表</h3>
+
+        <p>10k+ 用户的 admin dashboard：</p>
+        <ul>
+          <li>DataTable（TanStack Table）+ 分页（server-side）+ 排序 + 全局搜索</li>
+          <li>列：头像 / 姓名 / 邮箱 / 角色 / 创建时间 / Actions</li>
+          <li>每行 row.getVisibleCells() 渲染</li>
+          <li>Actions 列含 DropdownMenu（编辑 / 删除等）</li>
+        </ul>
+
+        <h3>场景 2 · 命令面板（⌘K）</h3>
+
+        <p>SaaS 平台 / 编辑器普及的⌘K 模式：</p>
+        <ul>
+          <li>cmdk + CommandDialog</li>
+          <li>多个 CommandGroup（Recent / Settings / Help）</li>
+          <li>onSelect 跳路由 / 触发 action</li>
+          <li>支持搜索（cmdk 自带 fuzzy）</li>
+        </ul>
+
+        <h3>场景 3 · 响应式 Drawer / Dialog</h3>
+
+        <p>同一个组件桌面用 Dialog、移动用 Drawer：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function ResponsiveDialog({ children, ...props }) {
+  const isDesktop = useMediaQuery('(min-width: 768px)');
+
+  if (isDesktop) {
+    return (
+      &lt;Dialog {...props}&gt;
+        &lt;DialogContent&gt;{children}&lt;/DialogContent&gt;
+      &lt;/Dialog&gt;
+    );
+  }
+
+  return (
+    &lt;Drawer {...props}&gt;
+      &lt;DrawerContent&gt;{children}&lt;/DrawerContent&gt;
+    &lt;/Drawer&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 完整 DataTable（含搜索 / 列控制 / 分页）</h3>
+
+        <p>shadcn DataTable 模板见官方 docs。本章不重复完整代码（详见 ui.shadcn.com/examples/tasks）。</p>
+
+        <h3>代码 2 · Sonner promise toast</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { toast } from 'sonner';
+
+async function handleSave() {
+  toast.promise(
+    saveSettings(),
+    {
+      loading: 'Saving settings...',
+      success: (data) =&gt; `Saved! ${data.itemCount} items updated`,
+      error: (err) =&gt; `Failed: ${err.message}`,
+    }
+  );
+}
+
+// 自定义 action
+function handleDelete() {
+  toast.error('Deleted!', {
+    description: 'This action cannot be undone',
+    action: {
+      label: 'Undo',
+      onClick: () =&gt; restoreItem(),
+    },
+  });
+}</code></pre>
+        </div>
+
+        <h3>代码 3 · 虚拟化 Combobox</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">function LargeCombobox({ options }) {
+  const [search, setSearch] = useState('');
+  const filtered = options.filter((o) =&gt; o.name.includes(search));
+
+  const parentRef = useRef&lt;HTMLDivElement&gt;(null);
+  const virtualizer = useVirtualizer({
+    count: filtered.length,
+    getScrollElement: () =&gt; parentRef.current,
+    estimateSize: () =&gt; 36,
+    overscan: 10,
+  });
+
+  return (
+    &lt;Command shouldFilter={false}&gt;
+      &lt;CommandInput onValueChange={setSearch} /&gt;
+      &lt;CommandList ref={parentRef} className="h-[300px] overflow-auto"&gt;
+        &lt;div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}&gt;
+          {virtualizer.getVirtualItems().map((virtualItem) =&gt; (
+            &lt;CommandItem
+              key={virtualItem.key}
+              style={{
+                position: 'absolute',
+                top: 0, left: 0, right: 0,
+                height: virtualItem.size,
+                transform: `translateY(${virtualItem.start}px)`,
+              }}
+              value={filtered[virtualItem.index].id}
+              onSelect={() =&gt; selectOption(filtered[virtualItem.index])}
+            &gt;
+              {filtered[virtualItem.index].name}
+            &lt;/CommandItem&gt;
+          ))}
+        &lt;/div&gt;
+      &lt;/CommandList&gt;
+    &lt;/Command&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>代码 4 · 响应式 Drawer / Dialog 通用组件</h3>
+
+        <p>已在场景 3 给出。</p>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>用 TanStack Table 但自己写 table DOM</b> —— 遗漏 a11y 标签（thead / tbody / scope 等）。用 shadcn Table 组件</li>
+          <li><b>大列表不用虚拟化</b> —— 1000+ 项渲染卡。装 TanStack Virtual / react-virtuoso</li>
+          <li><b>shadcn 项目仍用 Radix Toast</b> —— 默认推荐 Sonner（API 简单 + 多 toast 堆叠）</li>
+          <li><b>cmdk shouldFilter 没关用 server 端过滤</b> —— 双重过滤导致结果错。<code>shouldFilter={false}</code></li>
+          <li><b>Vaul Drawer 在桌面强用</b> —— Drawer 是移动端 bottom sheet，桌面用 Dialog</li>
+          <li><b>useMediaQuery 在 SSR 不工作</b> —— 用 next-themes 类似的 mounted 检查 + 默认桌面/移动</li>
+          <li><b>react-resizable-panels 没设 autoSaveId</b> —— 用户调整大小不持久化，每次刷新重置</li>
+          <li><b>embla autoplay 没暂停</b> —— hover 时不暂停，用户体验差。embla autoplay plugin 配置 stopOnInteraction</li>
+          <li><b>DataTable 用 client-side 分页处理 10k+ 数据</b> —— 慢。改 server-side（manualPagination + onPaginationChange）</li>
+          <li><b>命令面板没 ⌘K 快捷键监听</b> —— 用户找不到入口。加 useEffect + keydown 监听</li>
+          <li><b>Toast 堆叠但用户看不到所有</b> —— Sonner 默认上限 3，自动 hide 老的。看 expand 选项</li>
+          <li><b>用 v0.dev / Subframe 生成 DataTable 代码不维护</b> —— 视为模板起点，要 review + 改</li>
+          <li><b>embla 加多个 plugin 顺序错</b> —— 部分 plugin 之间有依赖。看 embla docs 推荐顺序</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://tanstack.com/table" target="_blank" rel="noopener">TanStack Table 文档</a></li>
+          <li><a href="https://tanstack.com/virtual" target="_blank" rel="noopener">TanStack Virtual 文档</a></li>
+          <li><a href="https://sonner.emilkowal.ski/" target="_blank" rel="noopener">Sonner 文档</a></li>
+          <li><a href="https://cmdk.paco.me/" target="_blank" rel="noopener">cmdk 文档</a></li>
+          <li><a href="https://vaul.emilkowal.ski/" target="_blank" rel="noopener">Vaul 文档</a></li>
+          <li><a href="https://github.com/bvaughn/react-resizable-panels" target="_blank" rel="noopener">react-resizable-panels</a></li>
+          <li><a href="https://www.embla-carousel.com/" target="_blank" rel="noopener">embla-carousel 文档</a></li>
+          <li><a href="https://ui.shadcn.com/docs/components/data-table" target="_blank" rel="noopener">shadcn DataTable 模板</a></li>
+          <li><a href="../02-decision-tree.html">本主题 P7.2 · 决策树</a> · 选型决策</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

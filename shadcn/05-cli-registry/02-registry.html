@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Registry 系统 + 私有 registry · P5.2 · shadcn/ui + Radix 深度学习</title>
+    <meta name="description" content="shadcn Registry 系统深度解析。registry-item.json schema（name / type / files / dependencies / cssVars / tailwind / docs）+ 1300+ blocks（Radix + Base UI 双变体）+ 自建私有 registry（shadcn build → 部署 Vercel/CF Pages）+ monorepo 共享 design system 两种模式（包模式 vs 复制模式）。这是 shadcn 模式真正的护城河。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c026d3'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='14' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ESR%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>shadcn/ui + Radix 深度学习</span><span class="site-title-badge" style="background: oklch(0.55 0.18 320); color: #fff">SR</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · CLI + Registry ⭐</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-cli.html">01 · CLI v4 + Visual Builder</a></li>
+          <li><a href="02-registry.html" class="active">02 · Registry 系统 + 私有 registry</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">shadcn + Radix</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · CLI + Registry</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Registry 系统 + 私有 registry</span>
+        </nav>
+        <h1>Registry 系统 + 私有 registry</h1>
+        <p class="lead">
+          Registry 是 shadcn 模式真正的护城河。这一章把 registry-item.json schema、1300+ blocks 系统、自建私有 registry（团队 design system 工具链）、monorepo 共享 design system 的两种模式（包模式 vs 复制模式）讲透。读完能搭团队级 design system 工具链。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P5.1 CLI 用法</span>
+          <span><strong>主要来源</strong> ui.shadcn.com/docs/registry + 2026-02 changelog blocks + 真实生产案例</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Registry = "<strong>组件源码 + 元数据</strong>"的远程仓库。默认 registry：ui.shadcn.com（含 50+ 组件 + 1300+ blocks）。私有 registry：自建仓库 / GitHub raw / Vercel / CF Pages / S3 等任何静态文件 server。</li>
+          <li>Registry 数据格式：<strong>registry-item.json</strong>。核心字段：<b>name</b>（组件名）/ <b>type</b>（registry:ui / registry:block / registry:hook 等）/ <b>files</b>（文件列表，含 path + content + target）/ <b>dependencies</b>（npm 包）/ <b>devDependencies</b>（dev 包）/ <b>registryDependencies</b>（其他 shadcn 组件依赖）/ <b>tailwind</b>（额外 Tailwind 配置）/ <b>cssVars</b>（额外 CSS variables）/ <b>docs</b>（说明）。</li>
+          <li>Blocks（v4 + 2026-02 大扩张）：<strong>1300+ blocks</strong>，比组件大、比 page 小。例：dashboard sidebar / login form / multi-step form / pricing table。Radix 和 Base UI 双变体；CLI 根据 components.json engine 拉对应。</li>
+          <li>自建私有 registry：<code>shadcn build</code> 把本地 components/registry/ 编译为 JSON。部署到任何静态文件 server（Vercel / CF Pages / S3）。用户在 components.json 设 registry URL。这是<strong>团队私有组件库分发新模式</strong>，替代 npm pack。</li>
+          <li>monorepo 共享 design system 两种模式：<b>包模式</b>（design-system 包，import @myorg/design-system/button，一处升级）/ <b>复制模式</b>（私有 registry，每个 app shadcn add 自己复制源码，独立演化）。两种模式各有取舍。</li>
+          <li>Theme 分发：完整 design token（CSS variables）作为 registry item。用户 <code>shadcn add @theme/dark</code> 一次安装整套主题。</li>
+          <li>Registry 与 npm package 的对比：npm 是"<strong>install + 黑盒</strong>"，registry 是"<strong>copy 进项目 + 完全可见</strong>"。两者各有适用场景，不是替代关系。</li>
+          <li>2026 Registry 标准化：1300+ blocks + 双引擎让 registry 成为 React 组件库分发新事实标准。第三方 registry（v0.dev / Aceternity UI 等）也都基于 shadcn registry schema。</li>
+          <li>monorepo 包模式 vs 复制模式判断：<b>包模式</b>适合"团队规模大 + 严格设计系统 + 一处改全局生效"；<b>复制模式</b>适合"app 间需要独立演化 + 不想被一个 app 升级影响其他"。</li>
+          <li>本章是"<strong>团队级 design system 工具链</strong>"的核心。如果只用 ui.shadcn.com 默认 registry 加几个组件，没用到 registry 一半的价值。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Registry 概念</h3>
+
+        <p>Registry = "<strong>组件源码 + 元数据</strong>"的远程仓库。CLI 通过 HTTP 拉取 JSON 文件、按文件描述写组件源码到用户项目。</p>
+
+        <p>默认 registry：<code>https://ui.shadcn.com/r/{style}/{name}.json</code>。例如：</p>
+        <ul>
+          <li><code>/r/styles/default/button.json</code></li>
+          <li><code>/r/styles/new-york/dialog.json</code></li>
+          <li><code>/r/styles/default/blocks/dashboard-01.json</code></li>
+        </ul>
+
+        <p>自定义 registry URL：components.json 配置 <code>registries</code> 字段（详见 P5.1）。</p>
+
+        <h3>registry-item.json schema 完整</h3>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "button",
+  "type": "registry:ui",  // registry:ui | registry:block | registry:hook | registry:lib | registry:theme
+
+  "title": "Button",
+  "description": "Displays a button or a component that looks like a button.",
+
+  // npm 依赖
+  "dependencies": [
+    "@radix-ui/react-slot",
+    "class-variance-authority",
+    "clsx",
+    "tailwind-merge"
+  ],
+  "devDependencies": [],
+
+  // shadcn 组件依赖（CLI 自动 add 它们）
+  "registryDependencies": [],
+
+  // 文件列表
+  "files": [
+    {
+      "path": "components/ui/button.tsx",
+      "content": "import * as React from 'react';\nimport { Slot } from '@radix-ui/react-slot';\n...",
+      "type": "registry:ui",
+      "target": "components/ui/button.tsx"  // 实际写入路径（可与 path 不同）
+    }
+  ],
+
+  // 额外 Tailwind 配置（合并到用户 tailwind.config）
+  "tailwind": {
+    "config": {
+      "theme": {
+        "extend": {
+          "keyframes": {
+            "accordion-down": { /* ... */ }
+          }
+        }
+      }
+    }
+  },
+
+  // 额外 CSS variables（合并到用户 globals.css）
+  "cssVars": {
+    "light": {
+      "primary": "240 5.9% 10%"
+    },
+    "dark": {
+      "primary": "0 0% 98%"
+    }
+  },
+
+  // 说明文档（可选）
+  "docs": "https://ui.shadcn.com/docs/components/button"
+}</code></pre>
+        </div>
+
+        <p>关键字段说明：</p>
+
+        <p><b>type</b>（决定 CLI 处理方式）：</p>
+        <ul>
+          <li><b>registry:ui</b>：单个 UI 组件（Button / Card 等）</li>
+          <li><b>registry:block</b>：组合 block（dashboard / login form 等）</li>
+          <li><b>registry:hook</b>：React hook（useDebounce 等）</li>
+          <li><b>registry:lib</b>：utility 函数（cn / format-date 等）</li>
+          <li><b>registry:theme</b>：完整主题（多个 cssVars）</li>
+        </ul>
+
+        <p><b>files</b>（文件列表）：</p>
+        <ul>
+          <li><b>path</b>：文件相对路径（registry 内）</li>
+          <li><b>content</b>：文件内容（字符串）</li>
+          <li><b>target</b>：实际写入用户项目的路径（CLI 用 aliases 替换）</li>
+          <li><b>type</b>：文件类型（决定写入哪个目录）</li>
+        </ul>
+
+        <p><b>registryDependencies</b>：CLI 自动递归 add 这些。例如 dialog 依赖 button → add dialog 时自动加 button。</p>
+
+        <p><b>tailwind / cssVars</b>：CLI 自动合并到用户 tailwind.config / globals.css。例如 accordion 需要 keyframes，合并后用户的 tailwind.config 就有了。</p>
+
+        <h3>1300+ Blocks（v4 + 2026-02 扩张）</h3>
+
+        <p>Blocks 是比组件大、比 page 小的<strong>组合</strong>。例子：</p>
+
+        <ul>
+          <li><b>dashboard-01</b>：完整 dashboard 模板（侧栏 + main + 数据卡片 + 图表）</li>
+          <li><b>login-01</b>：登录页（含表单 + OAuth 按钮 + 右侧广告位）</li>
+          <li><b>signup-01</b>：注册页</li>
+          <li><b>sidebar-01 ~ 16</b>：16 种侧栏布局变体</li>
+          <li><b>multi-step-form-01</b>：多步表单</li>
+          <li><b>pricing-table-01</b>：定价表</li>
+          <li>更多...</li>
+        </ul>
+
+        <p>2026-02 起每个 block 同时有 <b>Radix</b> 和 <b>Base UI</b> 两个变体。CLI 根据 components.json engine 拉对应。</p>
+
+        <p>Blocks vs 单组件的区别：</p>
+
+        <table>
+          <thead>
+            <tr><th>维度</th><th>单组件</th><th>Block</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>粒度</td><td>小（Button / Card）</td><td>大（dashboard / login form）</td></tr>
+            <tr><td>用途</td><td>building block</td><td>页面级模板</td></tr>
+            <tr><td>add 命令</td><td><code>shadcn add button</code></td><td><code>shadcn add @blocks/dashboard-01</code></td></tr>
+            <tr><td>文件数</td><td>1-2</td><td>5-20+</td></tr>
+            <tr><td>定制方式</td><td>整个组件改</td><td>挑部分文件改</td></tr>
+          </tbody>
+        </table>
+
+        <h3>自建私有 registry · 团队 design system 工具链</h3>
+
+        <p>团队私有 design system 想分发给多个 app。传统方式：</p>
+        <ul>
+          <li><b>npm package</b>（@myorg/ui）：黑盒、升级破坏 / 不能改</li>
+          <li><b>git submodule</b>：复杂、易出 bug</li>
+          <li><b>monorepo workspace</b>：可以但不灵活（详见下文）</li>
+        </ul>
+
+        <p>shadcn registry 方式：</p>
+        <ol>
+          <li>建一个"design system 项目"（含 components/registry/ 目录）</li>
+          <li>跑 <code>shadcn build</code> 编译为 JSON（输出到 public/r/）</li>
+          <li>部署到 Vercel / CF Pages / GitHub Pages 等</li>
+          <li>用户项目 components.json 配自定义 registry URL</li>
+          <li>用户 <code>shadcn add @myorg/button</code> 拉私有组件源码</li>
+        </ol>
+
+        <p>优势：</p>
+        <ul>
+          <li>组件源码进用户项目（完全可见 / 可改）</li>
+          <li>不是 npm 包不会被 npm update 破坏</li>
+          <li>支持 auth（registry URL header 加 Authorization）</li>
+          <li>与 ui.shadcn.com 默认 registry 同等模式（团队学习成本低）</li>
+        </ul>
+
+        <h3>自建私有 registry · 完整步骤</h3>
+
+        <p><b>1. 建 registry 项目</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 初始化（基于 Next.js 模板）
+npx create-next-app@latest my-registry
+cd my-registry
+npx shadcn@latest init  # 也起 shadcn
+
+# 建 registry 目录
+mkdir -p components/registry/components
+mkdir -p public/r</code></pre>
+        </div>
+
+        <p><b>2. 写 registry source</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">my-registry/
+├── components/registry/
+│   ├── components/
+│   │   ├── payment-form.tsx
+│   │   ├── pricing-card.tsx
+│   │   └── header.tsx
+│   ├── hooks/
+│   │   └── use-debounce.ts
+│   └── lib/
+│       └── format-currency.ts
+├── registry.json  # 描述所有 items
+└── ...</code></pre>
+        </div>
+
+        <p><b>3. 写 registry.json（root 配置）</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "@myorg",
+  "homepage": "https://shadcn.myorg.com",
+  "items": [
+    {
+      "name": "payment-form",
+      "type": "registry:block",
+      "title": "Payment Form",
+      "description": "Stripe-integrated payment form",
+      "registryDependencies": ["button", "input", "label", "form"],
+      "files": [
+        {
+          "path": "components/registry/components/payment-form.tsx",
+          "type": "registry:block"
+        }
+      ],
+      "dependencies": ["@stripe/stripe-js"]
+    },
+    {
+      "name": "use-debounce",
+      "type": "registry:hook",
+      "files": [
+        {
+          "path": "components/registry/hooks/use-debounce.ts",
+          "type": "registry:hook"
+        }
+      ]
+    }
+  ]
+}</code></pre>
+        </div>
+
+        <p><b>4. Build registry</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">npx shadcn@latest build
+
+# 编译 registry.json + source 文件 → public/r/{name}.json
+# 输出：
+# public/r/payment-form.json
+# public/r/use-debounce.json
+# public/r/index.json（registry 索引）</code></pre>
+        </div>
+
+        <p><b>5. 部署</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 部署到 Vercel
+vercel deploy
+# 你的 registry URL：https://my-registry.vercel.app/r/{name}.json</code></pre>
+        </div>
+
+        <p><b>6. 用户项目配置</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// components.json
+{
+  "registries": {
+    "@myorg": {
+      "url": "https://my-registry.vercel.app/r/{name}.json"
+    }
+  }
+}</code></pre>
+        </div>
+
+        <p><b>7. 用户 add 私有组件</b>：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">npx shadcn@latest add @myorg/payment-form
+
+# CLI 从 https://my-registry.vercel.app/r/payment-form.json 拉
+# 自动 add 依赖（registryDependencies）
+# 自动装 npm 依赖（@stripe/stripe-js）
+# 写文件到 components/ 目录</code></pre>
+        </div>
+
+        <h3>带 auth 的私有 registry</h3>
+
+        <p>商业项目不希望 registry 公开。加 auth：</p>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// 用户 components.json
+{
+  "registries": {
+    "@myorg": {
+      "url": "https://my-registry.vercel.app/r/{name}.json",
+      "headers": {
+        "Authorization": "Bearer ${MYORG_REGISTRY_TOKEN}"
+      }
+    }
+  }
+}</code></pre>
+        </div>
+
+        <p>用户 .env：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">MYORG_REGISTRY_TOKEN=secret_token_here</code></pre>
+        </div>
+
+        <p>registry server 验证 token（用 Vercel Edge Function 或类似）。</p>
+
+        <h3>monorepo 共享 design system · 两种模式</h3>
+
+        <p>团队 monorepo 多 app 共享 design system，两种模式：</p>
+
+        <p><b>模式 A · 包模式（@myorg/design-system）</b></p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">monorepo/
+├── apps/
+│   ├── web/        # Next.js
+│   ├── admin/      # Vite + React
+│   └── docs/       # Astro
+├── packages/
+│   └── design-system/
+│       ├── src/
+│       │   ├── components/
+│       │   │   ├── button.tsx
+│       │   │   ├── card.tsx
+│       │   │   └── dialog.tsx
+│       │   ├── lib/utils.ts
+│       │   └── index.ts
+│       ├── package.json
+│       └── tsconfig.json
+├── package.json
+└── pnpm-workspace.yaml</code></pre>
+        </div>
+
+        <p>每个 app import：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// apps/web/app/page.tsx
+import { Button } from '@myorg/design-system/button';
+import { Card } from '@myorg/design-system/card';</code></pre>
+        </div>
+
+        <p>优势：一处升级所有 app 自动跟随。劣势：app 不能独立改样式。</p>
+
+        <p><b>模式 B · 复制模式（私有 registry）</b></p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">monorepo/
+├── apps/
+│   ├── web/        # 自己 components/ui/button.tsx
+│   ├── admin/      # 自己 components/ui/button.tsx
+│   └── docs/       # 自己 components/ui/button.tsx
+├── packages/
+│   └── design-system-registry/
+│       ├── components/registry/
+│       └── public/r/  # build 后输出</code></pre>
+        </div>
+
+        <p>每个 app shadcn add（独立）：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># apps/web 配 components.json registry URL
+# 跑：
+cd apps/web
+npx shadcn@latest add @myorg/button
+# 组件源码进 apps/web/components/ui/button.tsx
+
+# apps/admin 同样
+cd ../admin
+npx shadcn@latest add @myorg/button</code></pre>
+        </div>
+
+        <p>优势：app 间独立演化（改 web 的 button 不影响 admin）。劣势：升级 design system 需要每个 app 重新 add。</p>
+
+        <p>选哪个：</p>
+        <ul>
+          <li>团队规模 5-20 人 + 严格设计统一 → 包模式</li>
+          <li>团队 50+ 人 / 多产品线 / 不同 app 设计需求差异大 → 复制模式</li>
+          <li>极小团队（1-3 人）→ 直接 ui.shadcn.com 默认 registry，不必自建</li>
+        </ul>
+
+        <h3>Theme 作为 registry item</h3>
+
+        <p>完整 design token（颜色 / spacing / radius / fonts）可作为 registry item 分发：</p>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">{
+  "name": "theme-acme",
+  "type": "registry:theme",
+  "cssVars": {
+    "light": {
+      "background": "0 0% 100%",
+      "foreground": "240 10% 3.9%",
+      "primary": "262 83% 58%",
+      "primary-foreground": "0 0% 100%",
+      ...
+    },
+    "dark": {
+      "background": "240 10% 3.9%",
+      "foreground": "0 0% 98%",
+      "primary": "263 70% 60%",
+      ...
+    }
+  }
+}</code></pre>
+        </div>
+
+        <p>用户：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">npx shadcn@latest add @myorg/theme-acme
+# CLI 自动合并 cssVars 到 globals.css</code></pre>
+        </div>
+
+        <p>这让"<strong>切换主题</strong>"成为一个 CLI 命令的事。多品牌 white-label 用这种方式分发主题。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <h3>场景 1 · 5-20 人团队建私有 registry</h3>
+
+        <p>场景：公司有 design system 团队，几个 app 共享 button / card / form 等。</p>
+
+        <p>推荐流程：</p>
+        <ol>
+          <li>建 my-registry 仓库（next.js + shadcn 项目）</li>
+          <li>把内部组件 + theme 写到 components/registry/</li>
+          <li>shadcn build → 部署到 Vercel</li>
+          <li>各 app 配 components.json 加 registry URL</li>
+          <li>各 app shadcn add @myorg/button 拉源码</li>
+          <li>升级时：改 my-registry 仓库 → rebuild → 各 app 主动 shadcn add 同步（或 shadcn diff 看改动）</li>
+        </ol>
+
+        <h3>场景 2 · 大型企业 monorepo（50+ 人）</h3>
+
+        <p>建议<strong>复制模式</strong>。理由：</p>
+        <ul>
+          <li>不同产品线需求差异大</li>
+          <li>不同 app 独立演化（不希望一处改影响所有）</li>
+          <li>monorepo workspace 管 registry source；apps 复制源码</li>
+        </ul>
+
+        <h3>场景 3 · 用 v0.dev 输出加到自定义 registry</h3>
+
+        <p>v0.dev 是 Vercel AI 生成 shadcn 代码的工具。生成代码可以加到自己 registry：</p>
+        <ol>
+          <li>v0.dev 生成 React 组件（基于 shadcn）</li>
+          <li>copy 代码到 my-registry/components/registry/</li>
+          <li>更新 registry.json</li>
+          <li>shadcn build + 部署</li>
+          <li>团队 add @myorg/{name} 用</li>
+        </ol>
+
+        <h3>场景 4 · 多品牌 theme 分发</h3>
+
+        <p>SaaS 平台支持多客户 white-label，每客户自己的 theme：</p>
+        <ol>
+          <li>建 themes registry（每个客户一个 theme item）</li>
+          <li>用户 (动态) shadcn add @themes/customer-acme</li>
+          <li>theme 的 CSS variables 进 globals.css</li>
+          <li>自动应用</li>
+        </ol>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <h3>代码 1 · 完整 registry.json</h3>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "@acme",
+  "homepage": "https://shadcn.acme.dev",
+  "items": [
+    {
+      "name": "stripe-payment-form",
+      "type": "registry:block",
+      "title": "Stripe Payment Form",
+      "description": "Production-ready Stripe payment form with validation",
+      "registryDependencies": ["button", "input", "label", "form"],
+      "dependencies": [
+        "@stripe/stripe-js",
+        "@stripe/react-stripe-js",
+        "react-hook-form",
+        "zod",
+        "@hookform/resolvers"
+      ],
+      "files": [
+        {
+          "path": "components/blocks/stripe-payment-form.tsx",
+          "type": "registry:block"
+        },
+        {
+          "path": "lib/stripe.ts",
+          "type": "registry:lib"
+        },
+        {
+          "path": "schemas/payment.ts",
+          "type": "registry:lib"
+        }
+      ]
+    },
+    {
+      "name": "use-debounce",
+      "type": "registry:hook",
+      "files": [
+        {
+          "path": "hooks/use-debounce.ts",
+          "type": "registry:hook"
+        }
+      ]
+    },
+    {
+      "name": "format-currency",
+      "type": "registry:lib",
+      "files": [
+        {
+          "path": "lib/format-currency.ts",
+          "type": "registry:lib"
+        }
+      ]
+    },
+    {
+      "name": "theme-acme-light",
+      "type": "registry:theme",
+      "cssVars": {
+        "light": {
+          "background": "0 0% 100%",
+          "foreground": "240 10% 3.9%",
+          "primary": "262 83% 58%",
+          "secondary": "240 4.8% 95.9%"
+        }
+      }
+    }
+  ]
+}</code></pre>
+        </div>
+
+        <h3>代码 2 · build + deploy 私有 registry</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 在 my-registry 项目根
+npx shadcn@latest build
+# 输出：public/r/{name}.json
+
+# 部署 Vercel
+vercel deploy --prod
+# 或 CF Pages
+wrangler pages deploy public
+
+# 用户 components.json
+{
+  "registries": {
+    "@acme": {
+      "url": "https://my-registry.vercel.app/r/{name}.json"
+    }
+  }
+}
+
+# 用户 add
+npx shadcn@latest add @acme/stripe-payment-form
+# 自动 add：button / input / label / form（registryDependencies）
+# 自动装：@stripe/stripe-js / react-hook-form / zod 等
+# 文件写到 components/blocks/ + lib/ + schemas/</code></pre>
+        </div>
+
+        <h3>代码 3 · monorepo 包模式</h3>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// packages/design-system/package.json
+{
+  "name": "@myorg/design-system",
+  "version": "1.0.0",
+  "main": "./src/index.ts",
+  "exports": {
+    "./button": "./src/components/button.tsx",
+    "./card": "./src/components/card.tsx",
+    "./dialog": "./src/components/dialog.tsx",
+    "./hooks/*": "./src/hooks/*.ts",
+    "./lib/utils": "./src/lib/utils.ts"
+  },
+  "dependencies": {
+    "@radix-ui/react-dialog": "^2.0.0",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.0.0",
+    "tailwind-merge": "^2.0.0"
+  }
+}</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// apps/web 用
+import { Button } from '@myorg/design-system/button';
+import { Card } from '@myorg/design-system/card';
+
+// 升级 @myorg/design-system 时所有 app 自动升级
+// 想 fork 某 app 的 button → 复制到 apps/web/components/ui/button.tsx 用 local</code></pre>
+        </div>
+
+        <h3>代码 4 · 自建带 auth 的 registry server</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// 用 Next.js Route Handler 提供 registry 端点
+// app/r/[name]/route.ts
+import { readFile } from 'node:fs/promises';
+import { NextRequest, NextResponse } from 'next/server';
+
+export async function GET(req: NextRequest, { params }: { params: { name: string } }) {
+  // 验证 token
+  const authHeader = req.headers.get('authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return new NextResponse('Unauthorized', { status: 401 });
+  }
+  const token = authHeader.slice(7);
+  if (!await verifyToken(token)) {
+    return new NextResponse('Forbidden', { status: 403 });
+  }
+
+  // 返回 registry item
+  const file = `public/r/${params.name}.json`;
+  const content = await readFile(file, 'utf-8');
+  return NextResponse.json(JSON.parse(content));
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <ul>
+          <li><b>没用 shadcn build 直接 commit JSON</b> —— 手写 JSON 易错。用 <code>shadcn build</code> 从 source 生成</li>
+          <li><b>registryDependencies 写错</b> —— add 时 CLI 找不到依赖组件。仔细列依赖关系</li>
+          <li><b>CSS variables 命名冲突</b> —— 多个 theme item 都定义 --primary，最后 add 的覆盖。分 namespace（--theme-acme-primary）</li>
+          <li><b>私有 registry 没 auth</b> —— 公开访问、商业组件被偷。Vercel Edge Function / 其他 server 加 token 校验</li>
+          <li><b>monorepo 包模式但 app 想 fork 一个组件</b> —— 复制源码到 app 本地、改 import 路径。但要记得这个组件不再跟随 design-system 升级</li>
+          <li><b>monorepo 复制模式但 app 间样式飘移</b> —— 升级时各 app 不主动 sync，时间长了各自演化。建 CI 检查</li>
+          <li><b>1300+ blocks 全部 add 到项目</b> —— 不需要。按需 add 实际用的（每个 block 几百行代码）</li>
+          <li><b>用 v0.dev 生成代码不放进自己 registry</b> —— 浪费"团队复用"机会。每次 v0 输出加到 my-registry 让团队都能用</li>
+          <li><b>Theme registry item 与组件 cssVars 冲突</b> —— 组件 cssVars 是组件需要的（如 accordion keyframes），theme cssVars 是主题色。两者应该不冲突；冲突说明 theme 在覆盖组件特殊变量</li>
+          <li><b>用户 components.json registries URL 写错</b> —— CLI 拉失败报 404。检查 URL 模板（{name} 占位）</li>
+          <li><b>shadcn build 在 Windows 路径错</b> —— path 用 forward slash（registry 内）；CLI 在 Windows 自动转</li>
+          <li><b>把私有 registry 当 npm 替代品</b> —— 不一样。registry 是"copy 进项目"，npm 是"install + 链接"。复杂业务逻辑（含可执行代码 + 副作用）仍 npm 包更合适</li>
+        </ul>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://ui.shadcn.com/docs/registry" target="_blank" rel="noopener">shadcn Registry 文档</a></li>
+          <li><a href="https://ui.shadcn.com/schema/registry-item.json" target="_blank" rel="noopener">registry-item.json schema</a></li>
+          <li><a href="https://ui.shadcn.com/docs/changelog/2026-02-blocks" target="_blank" rel="noopener">Blocks 公告（2026-02）</a></li>
+          <li><a href="https://v0.dev/" target="_blank" rel="noopener">v0.dev</a> · Vercel AI 生成 shadcn 代码</li>
+          <li><a href="../01-cli.html">本主题 P5.1 · CLI v4</a> · 配 registry 看 CLI</li>
+          <li><a href="../../pnpm-monorepo/index.html">pnpm-monorepo 主题</a> · monorepo 工具</li>
+          <li><a href="../06-engineering/02-theme-integration.html">本主题 P6.2 · Theme 集成</a> · CSS variables / theme 设计</li>
+        </ul>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
