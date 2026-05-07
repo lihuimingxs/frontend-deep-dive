@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Playwright vs Cypress 横评 · P6.2 · 测试工具深度学习</title>
+    <meta name="description" content="Playwright vs Cypress 全维度横评：跨浏览器 / 多 tab / iframes / 网络拦截 / 并行 5 维度对比 + 真实迁移案例 + 选型决策矩阵。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2334a853'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ET%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>测试工具深度学习</span><span class="site-title-badge" style="background: oklch(0.6 0.17 150); color: #fff">Test</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · E2E 测试</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-playwright-internals.html">01 · Playwright 内部</a></li>
+          <li><a href="02-playwright-vs-cypress.html" class="active">02 · Playwright vs Cypress 横评</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">测试工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · E2E 测试</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Playwright vs Cypress 横评</span>
+        </nav>
+        <h1>Playwright vs Cypress 横评</h1>
+        <p class="lead">
+          2026 年 e2e 选型答案明确：<strong>新项目选 Playwright，存量 Cypress 项目继续维护</strong>。本章给详细判据：5 个核心维度对比 + Cypress 团队动荡背景 + 真实迁移案例 + 何时不切。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P6.1（Playwright 内部）</span>
+          <span><strong>主要来源</strong> Playwright / Cypress 官方文档 + 真实开源迁移</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>新项目选 Playwright——2026 年 e2e 默认选择。新项目 70-80% 选 Playwright。除非有强 Cypress 团队偏好，无理由选 Cypress。</li>
+          <li>5 维度差距——跨浏览器（Playwright 支持 Safari，Cypress 不）/ 多 tab / iframes（Playwright 原生，Cypress 受限）/ 网络拦截（两者都强但 Playwright 更灵活）/ 并行（Playwright 内置免费，Cypress 需 Cypress Cloud 付费）。</li>
+          <li>真异步 vs Promise chain DSL —— Playwright 用标准 async/await；Cypress 用 cy.get().click() 链式 API。后者看似流畅但不能用真 await，调试难。</li>
+          <li>Cypress 团队动荡——2024 年商业化压力 + 关键工程师离职。Cypress 仍在维护但增速放缓。新项目选 Cypress 是路径依赖+品牌惯性，不是技术理性。</li>
+          <li>已有 Cypress 项目继续维护合理——不要为切而切。200 个 Cypress 用例切 Playwright 要 1-2 个月人力，除非有具体痛点（如必须 Safari 测试），ROI 通常不划算。</li>
+          <li>渐进迁移策略——新增 e2e 用 Playwright；老 Cypress 维护到自然失效。两栈共存 1-3 年是合理过渡。</li>
+          <li>真实迁移案例——Vercel / Netflix / Adobe 等大公司在 2023-2024 年从 Cypress 迁 Playwright；理由集中在跨浏览器 + 性能 + 内置并行。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>5 维度全面对比</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>Playwright</th>
+              <th>Cypress</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>架构</td>
+              <td>外部进程（Node）通过协议控制浏览器</td>
+              <td>测试代码跑在浏览器内</td>
+            </tr>
+            <tr>
+              <td>跨浏览器</td>
+              <td>Chromium / Firefox / WebKit</td>
+              <td>Chromium-based + Firefox（无 Safari）</td>
+            </tr>
+            <tr>
+              <td>多 tab / window</td>
+              <td>原生支持</td>
+              <td>不支持（强制单 tab）</td>
+            </tr>
+            <tr>
+              <td>跨域</td>
+              <td>无限制</td>
+              <td>cy.origin() 切换（受限）</td>
+            </tr>
+            <tr>
+              <td>iframes</td>
+              <td>frameLocator 自然</td>
+              <td>cy.iframe() 复杂</td>
+            </tr>
+            <tr>
+              <td>异步语法</td>
+              <td>真 async/await</td>
+              <td>Promise chain DSL（不能 await）</td>
+            </tr>
+            <tr>
+              <td>auto-wait</td>
+              <td>每个 action 自动 5 维度检查</td>
+              <td>有 auto-wait 但不如 Playwright 全</td>
+            </tr>
+            <tr>
+              <td>网络拦截</td>
+              <td>page.route() + 完整 fulfill 控制</td>
+              <td>cy.intercept() 简单 + 强大</td>
+            </tr>
+            <tr>
+              <td>并行</td>
+              <td>内置免费（进程级）</td>
+              <td>需 Cypress Cloud 付费</td>
+            </tr>
+            <tr>
+              <td>GUI runner</td>
+              <td>UI mode（2024+，追平）</td>
+              <td>Cypress App（原生强项）</td>
+            </tr>
+            <tr>
+              <td>trace / 调试</td>
+              <td>trace viewer（CI 也录）</td>
+              <td>time-travel（仅 dev）</td>
+            </tr>
+            <tr>
+              <td>Component Testing</td>
+              <td>原生支持（experimental）</td>
+              <td>原生支持（GA）</td>
+            </tr>
+            <tr>
+              <td>2026 主流度</td>
+              <td>新项目首选</td>
+              <td>存量维护</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>架构差异 · 根因决定能力</h3>
+
+        <p>两者最深差异在测试代码跑在哪：</p>
+
+        <p>Cypress：测试代码跑在浏览器内部（注入 iframe）。</p>
+        <ul>
+          <li>+ 同进程通信，速度快</li>
+          <li>+ 能直接操作 window / document / spy 应用代码</li>
+          <li>− 受同源策略约束（跨域困难）</li>
+          <li>− 不能 await（浏览器内不能跨 frame 等待）</li>
+          <li>− 不能开多 tab（浏览器内 iframe 限制）</li>
+        </ul>
+
+        <p>Playwright：测试代码跑在外部 Node 进程，通过协议控制浏览器。</p>
+        <ul>
+          <li>+ 真 async/await（Node 标准）</li>
+          <li>+ 跨域无限制（Node 不受同源策略）</li>
+          <li>+ 多 tab / window 自然</li>
+          <li>+ 协议层抽象让跨浏览器统一</li>
+          <li>− 略慢（跨进程通信）</li>
+        </ul>
+
+        <p>这套差异是根本性的，不是 Cypress 升级能修复的。</p>
+
+        <h3>真异步 vs Promise chain · 调试体验差距</h3>
+
+        <p>Cypress 的链式 API 看似流畅：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">cy.visit('/login')
+  .get('input[name=username]').type('alice')
+  .get('input[name=password]').type('secret')
+  .contains('button', 'Sign in').click()
+  .url().should('include', '/dashboard');</code></pre>
+        </div>
+
+        <p>但它<strong>不是真的 Promise</strong>——是 Cypress 自定义的 chainable command queue。陷阱：</p>
+        <ul>
+          <li>不能 <code>await cy.something()</code></li>
+          <li>不能 try/catch</li>
+          <li>不能与 async/await 标准代码混用</li>
+          <li>console.log 时序与执行时序不一致（log 立即执行，cy 命令排队后执行）</li>
+        </ul>
+
+        <p>Playwright 用真 async/await：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">await page.goto('/login');
+await page.fill('input[name=username]', 'alice');
+await page.fill('input[name=password]', 'secret');
+await page.click('button:has-text("Sign in")');
+await expect(page).toHaveURL(/\/dashboard/);</code></pre>
+        </div>
+
+        <p>每行立即执行；可以 await 任意操作；可以 try/catch；可以与标准 Node 代码混用。调试体验质变。</p>
+
+        <h3>跨浏览器：Cypress 的硬伤</h3>
+
+        <p>Cypress 仅支持：</p>
+        <ul>
+          <li>Chromium-based（Chrome / Edge / Brave）</li>
+          <li>Firefox（实验性）</li>
+        </ul>
+
+        <p>不支持：</p>
+        <ul>
+          <li>Safari / WebKit</li>
+          <li>移动端（仅模拟，无真机）</li>
+        </ul>
+
+        <p>对于公开网站 / SaaS 产品，Safari 必须测（Mac / iOS 用户主流浏览器）。Cypress 用户只能用其他工具补 Safari 测试，分散维护成本。</p>
+
+        <p>Playwright 三大引擎齐全（Chromium + Gecko + WebKit），单工具搞定。</p>
+
+        <h3>并行：Cypress 商业化痛点</h3>
+
+        <p>Cypress 并行需要 Cypress Cloud 付费服务：</p>
+        <ul>
+          <li>免费层：3 用户 + 500 测试结果/月</li>
+          <li>商业层：按团队规模 + 测试数计费</li>
+        </ul>
+
+        <p>没有 Cypress Cloud 时，Cypress 在单 CI runner 上串行跑，慢且无法 scale。</p>
+
+        <p>Playwright 内置并行（进程级）+ 免费：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// playwright.config.ts
+export default {
+  workers: 4,           // 4 worker 并行
+  fullyParallel: true   // 同文件内测试也并行
+};</code></pre>
+        </div>
+
+        <p>这是 Cypress 商业化压力的来源——Cypress 团队需要靠 Cloud 付费维持收入，但 Playwright 免费提供同等能力。</p>
+
+        <h3>Cypress 团队动荡（2023-2024）</h3>
+
+        <p>2023-2024 年公开信息：</p>
+        <ul>
+          <li>多名核心工程师离开</li>
+          <li>商业化压力加大（Cypress Cloud 是主营收入）</li>
+          <li>Component Testing GA 但市场反响一般</li>
+          <li>主线创新放缓（与 Playwright 加速发布对比鲜明）</li>
+        </ul>
+
+        <p>Cypress 仍在维护，但"未来 5 年押注 Cypress 是否合理"成为团队选型时的关键问题。Playwright 由 Microsoft 资助，背后稳定性更高。</p>
+
+        <h3>选型决策矩阵</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>场景</th>
+              <th>推荐</th>
+              <th>理由</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>新项目 e2e</td>
+              <td>Playwright</td>
+              <td>跨浏览器 + 真异步 + 内置并行</td>
+            </tr>
+            <tr>
+              <td>需要 Safari 测试</td>
+              <td>Playwright</td>
+              <td>Cypress 不支持</td>
+            </tr>
+            <tr>
+              <td>需要多 tab / 跨域</td>
+              <td>Playwright</td>
+              <td>架构原因 Cypress 受限</td>
+            </tr>
+            <tr>
+              <td>已有 Cypress 团队 + 200+ 用例</td>
+              <td>Cypress（继续）+ Playwright 新增</td>
+              <td>渐进迁移；ROI 不立即划算</td>
+            </tr>
+            <tr>
+              <td>已有 Cypress + Safari bug 漏过</td>
+              <td>Playwright（重要测试迁移）</td>
+              <td>Safari 兼容是切换的明确理由</td>
+            </tr>
+            <tr>
+              <td>极简单项目（1-5 个 e2e）</td>
+              <td>都行</td>
+              <td>差距感知不大</td>
+            </tr>
+            <tr>
+              <td>团队仅有 Cypress 经验</td>
+              <td>Playwright（学习曲线低）</td>
+              <td>API 风格类似；1-2 周上手</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>真实迁移案例</h3>
+
+        <p>2023-2024 年公开的迁移：</p>
+
+        <ul>
+          <li><strong>Vercel</strong>—— 2023 年从 Cypress 迁 Playwright。理由：Next.js 项目需要跨浏览器 + 性能。</li>
+          <li><strong>Netflix</strong>—— 主用 Playwright（部分内部工具）。理由：跨浏览器矩阵 + 真并行。</li>
+          <li><strong>Adobe</strong>—— Adobe Experience Cloud 切 Playwright。理由：trace viewer + 调试体验。</li>
+          <li>shadcn/ui —— 默认 Playwright Component Testing。</li>
+          <li>Astro —— Playwright e2e。</li>
+        </ul>
+
+        <p>典型迁移成本：100-200 个 Cypress 用例切 Playwright 约 4-8 周（含逐个 review + 重写 + 验证）。</p>
+
+        <p>Cypress 仍有大量存量用户：</p>
+        <ul>
+          <li>已写大量 Cypress 用例的项目</li>
+          <li>团队 Cypress 经验深</li>
+          <li>仅 Chrome 用户（如内部工具）</li>
+        </ul>
+
+        <p>这些项目维护 Cypress 是合理选择，不需要为切而切。</p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 关键洞见：选型 = 评估"长期 5 年下注"</div>
+          <p>e2e 测试代码维护周期长（5+ 年），选型不是看"现在哪个好"，是看"5 年后哪个仍稳定可用"。Playwright 由 Microsoft 资助 + 团队活跃 + 开源中立 + 用户增长，5 年后大概率仍是主流。Cypress 商业化压力 + 团队动荡 + 增长停滞，5 年后地位不确定。新项目选 Playwright 是降低长期风险的合理决定。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 新 SaaS 项目 e2e 选型</h3>
+          <p><strong>背景</strong>：3 人团队，新 React SaaS。前期需要写 5-10 个 e2e 覆盖关键路径。</p>
+          <p><strong>建议</strong>：Playwright。零纠结。</p>
+          <ul>
+            <li>跨浏览器（未来需要 Safari 测试时已经有）</li>
+            <li>真 async/await 调试体验好</li>
+            <li>免费内置并行</li>
+            <li>UI mode 开发体验追平 Cypress</li>
+          </ul>
+          <p>选 Cypress 在 2026 年只在"团队全部 Cypress 经验 + 0 Playwright 经验"时合理——但这种情况现在罕见。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · 已有 Cypress 200 用例要切吗</h3>
+          <p><strong>背景</strong>：3 年的 React 项目，200 个 Cypress 用例，团队熟悉。</p>
+          <p><strong>分析</strong>：</p>
+          <ul>
+            <li>切完整成本：4-8 周人力</li>
+            <li>立即收益：性能略好 / 真异步调试舒服 / 跨浏览器（如果需要）</li>
+            <li>长期收益：5 年后 Playwright 仍主流的概率高</li>
+            <li>风险：迁移期间稳定性</li>
+          </ul>
+          <p><strong>建议</strong>：不立即全切。</p>
+          <ul>
+            <li>新增 e2e 用 Playwright 写</li>
+            <li>关键 Safari 路径用 Playwright 补充</li>
+            <li>老 Cypress 维护到自然失效</li>
+            <li>2-3 年后老用例减少 50%+，再决定全切还是渐进</li>
+          </ul>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · 紧急切：Cypress 漏 Safari bug</h3>
+          <p><strong>背景</strong>：项目用 Cypress 一年，最近发现 Safari 兼容性 bug 在生产暴雷（Cypress 没 Safari 测不到）。</p>
+          <p><strong>方案</strong>：选择性切 Playwright。</p>
+          <ul>
+            <li>不全切——保留 Chrome 路径的 Cypress 测试</li>
+            <li>关键 Safari 兼容性测试用 Playwright 单独写（5-10 个）</li>
+            <li>新增 e2e 一律 Playwright</li>
+            <li>1 年后看 Cypress 用例数量趋势再做下一步决定</li>
+          </ul>
+          <p>这套"最小动作回应明确痛点"的策略避免大迁移代价同时立即获得 Safari 覆盖。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">同测试 · Cypress 写法</span>
+          <pre class="code"><code class="lang-js">describe('Login', () =&gt; {
+  it('successful login', () =&gt; {
+    cy.visit('/login');
+    cy.get('input[name=username]').type('alice');
+    cy.get('input[name=password]').type('secret');
+    cy.contains('button', 'Sign in').click();
+    cy.url().should('include', '/dashboard');
+    cy.contains('Welcome, Alice').should('be.visible');
+  });
+
+  it('error on invalid', () =&gt; {
+    cy.visit('/login');
+    cy.intercept('POST', '/api/login', { statusCode: 401, body: { error: 'Invalid' } });
+    cy.get('input[name=username]').type('bad');
+    cy.get('input[name=password]').type('bad');
+    cy.contains('button', 'Sign in').click();
+    cy.contains('Invalid').should('be.visible');
+  });
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">同测试 · Playwright 写法</span>
+          <pre class="code"><code class="lang-js">import { test, expect } from '@playwright/test';
+
+test.describe('Login', () =&gt; {
+  test('successful login', async ({ page }) =&gt; {
+    await page.goto('/login');
+    await page.getByLabel('Username').fill('alice');
+    await page.getByLabel('Password').fill('secret');
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page).toHaveURL(/\/dashboard/);
+    await expect(page.getByText('Welcome, Alice')).toBeVisible();
+  });
+
+  test('error on invalid', async ({ page }) =&gt; {
+    await page.route('/api/login', (route) =&gt; {
+      route.fulfill({ status: 401, body: JSON.stringify({ error: 'Invalid' }) });
+    });
+    await page.goto('/login');
+    await page.getByLabel('Username').fill('bad');
+    await page.getByLabel('Password').fill('bad');
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page.getByText('Invalid')).toBeVisible();
+  });
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">Playwright 多 tab 测试（Cypress 不支持）</span>
+          <pre class="code"><code class="lang-js">test('opens link in new tab', async ({ page, context }) =&gt; {
+  await page.goto('/');
+
+  // 等新 tab 打开
+  const [newPage] = await Promise.all([
+    context.waitForEvent('page'),   // 监听新 tab 事件
+    page.click('a[target="_blank"]')
+  ]);
+
+  await newPage.waitForLoadState();
+  await expect(newPage).toHaveURL(/external\.com/);
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">Playwright 跨域 OAuth 流程（Cypress 受限）</span>
+          <pre class="code"><code class="lang-js">test('oauth flow', async ({ page }) =&gt; {
+  await page.goto('/');
+  await page.click('text=Sign in with Google');
+
+  // Playwright 自然跨域跳转
+  await page.waitForURL(/accounts\.google\.com/);
+  await page.fill('input[type=email]', 'test@example.com');
+  // ... continue to OAuth provider
+  await page.click('button[type=submit]');
+
+  // 跳回我们站点
+  await page.waitForURL(/our-app\.com\/dashboard/);
+  await expect(page.getByText('Welcome')).toBeVisible();
+});</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 因为"我们用 Cypress"就不评估 Playwright</div>
+          <p>路径依赖是常见决策反模式。Cypress 在某些场景仍合理（已有大量用例 / 仅 Chrome 项目），但新项目应该评估 Playwright，不只是默认沿用。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 全切 Cypress 而不评估 ROI</div>
+          <p>看到 Playwright 火就全员切。200 个 Cypress 用例切 Playwright 4-8 周人力，节省的"长期维护"是否抵 break-even？通常需要 2-3 年。渐进迁移更现实——新增写 Playwright，老的维护到自然失效。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 把 Cypress 的限制当 e2e 通病</div>
+          <p>"e2e 都跨域受限 / 都不能多 tab" —— 错。Cypress 的限制是其架构（测试代码跑浏览器内）造成的，不是 e2e 通病。Playwright 这些场景都原生支持。不要把工具限制泛化为类别限制。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 用 Playwright 写大量 e2e 替代单元测试</div>
+          <p>"Playwright 真浏览器最准！全用它写！" —— 测试梯形反模式（详见 <a href="../02-mindset/01-pyramid-trophy.html">P2.1</a>）。Playwright 适合 5-15% 关键用户路径，不是覆盖一切。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 不开 retries 让 CI 阻塞 PR</div>
+          <p>e2e 测试本质有一定 flaky 率（网络 / 时序 / 第三方依赖）。CI 不开 retries 让偶发 flaky 阻塞 PR 合并。CI 推荐 retries: 2——区分 flaky vs 真失败 + 不阻塞合并。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://playwright.dev/" target="_blank" rel="noopener">Playwright 官方</a></li>
+          <li><a href="https://docs.cypress.io/" target="_blank" rel="noopener">Cypress 官方</a></li>
+          <li><a href="https://playwright.dev/docs/test-cli" target="_blank" rel="noopener">Playwright CLI 与 UI mode</a></li>
+          <li><a href="https://www.cypress.io/blog" target="_blank" rel="noopener">Cypress Blog（看团队动态）</a></li>
+          <li><a href="01-playwright-internals.html">P6.1 · Playwright 内部（前一章）</a></li>
+          <li><a href="../07-visual-coverage-ci/01-visual-coverage-ci.html">P7 · CI 决策树（下一阶段）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-playwright-internals.html">
+            <span class="label">← 上一章</span>
+            <span class="title">01 · Playwright 内部</span>
+          </a>
+          <a class="next" href="../07-visual-coverage-ci/index.html">
+            <span class="label">下一阶段 →</span>
+            <span class="title">P7 · 视觉、覆盖率、CI</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Playwright 内部 · P6.1 · 测试工具深度学习</title>
+    <meta name="description" content="Playwright 三协议统一抽象（CDP / WebDriver BiDi / WebKit Inspector）+ auto-wait + fixtures + trace viewer + parallel workers。回答「为什么 Playwright 比 Cypress 不那么 flaky」。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2334a853'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ET%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>测试工具深度学习</span><span class="site-title-badge" style="background: oklch(0.6 0.17 150); color: #fff">Test</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="https://playwright.dev/" target="_blank" rel="noopener">Playwright</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · E2E 测试</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-playwright-internals.html" class="active">01 · Playwright 内部</a></li>
+          <li><a href="02-playwright-vs-cypress.html">02 · Playwright vs Cypress 横评</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">测试工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · E2E 测试</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Playwright 内部</span>
+        </nav>
+        <h1>Playwright 内部</h1>
+        <p class="lead">
+          Playwright 是 Microsoft 团队（前 Google Puppeteer 团队）2020 年起步的二代 e2e 工具。它的核心创新在<strong>三协议统一抽象</strong>（CDP + WebDriver BiDi + WebKit Inspector）+ auto-wait + 真异步。本章把这套架构讲透：为什么它能跨浏览器、为什么比 Cypress 不那么 flaky、fixtures / trace viewer / parallel 怎么协作。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P2（测试心智）</span>
+          <span><strong>主要来源</strong> playwright.dev / Andrey Lushnikov 演讲 / Microsoft Playwright Engineering Blog</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Playwright 起源——Andrey Lushnikov 等核心 Puppeteer 团队 2019 年从 Google 跳 Microsoft，2020 年发布 Playwright。设计目标：跨浏览器 + 不依赖单一协议。</li>
+          <li>三协议抽象——CDP（Chromium / Edge）+ WebDriver BiDi（Firefox + 标准化路径）+ WebKit Inspector Protocol（Safari）。Playwright 在三协议上做统一 API 层。</li>
+          <li>auto-wait 是核心创新——每个 action 自动等元素稳定（visible / enabled / not animating / not detached）。这是 Playwright 比 Cypress 不那么 flaky 的根因。</li>
+          <li>fixtures 系统——测试隔离 + 资源共享。每个 worker 独立 browser context；每个测试独立 page；fixtures 自动清理。</li>
+          <li>trace viewer——失败时录制 DOM snapshot + console + network + screenshot 完整回放。trace.zip 文件可拖到 trace.playwright.dev 在线查看。</li>
+          <li>真并行——进程级。默认 worker 数 = CPU 核数。retries 区分 flaky vs 真失败（CI 默认开 2 retries）。</li>
+          <li>locator 而不是 selector——page.locator() 是懒求值的引用，使用时才 query；自带 auto-wait + 自动 retry。比 Cypress 的 cy.get() 更准确。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Playwright vs Puppeteer · 二代品的差异</h3>
+
+        <p>Andrey Lushnikov 团队 2017 年在 Google 做 Puppeteer——Chrome DevTools Protocol（CDP）直驱 Chrome。比 Selenium WebDriver 更快、更直接。但有限制：</p>
+
+        <ul>
+          <li>CDP 仅 Chrome 支持（Firefox / Safari 没有 CDP）</li>
+          <li>跨浏览器要走 WebDriver（性能差、能力弱）</li>
+          <li>多 tab / 多 window / 跨域不优雅</li>
+        </ul>
+
+        <p>2019 年团队跳 Microsoft，2020 发布 Playwright。设计立场：每个浏览器用其原生协议，做统一抽象层。</p>
+
+        <ul>
+          <li>Chromium / Edge —— 用 CDP（最成熟）</li>
+          <li>Firefox —— 用 WebDriver BiDi（W3C 标准化路径）</li>
+          <li>WebKit / Safari —— 用 WebKit Inspector Protocol</li>
+        </ul>
+
+        <p>这套抽象层让 <code>page.click(selector)</code> 在三个浏览器上行为一致（虽然底层协议完全不同）。这是 Cypress 单浏览器路线无法做到的。</p>
+
+        <h3>架构层次</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">┌─────────────────────────────────────────┐
+│  你的测试代码（Node 进程）                │
+│  page.click('button'); 等                │
+└─────────────────────────────────────────┘
+                  ↕
+┌─────────────────────────────────────────┐
+│  Playwright API 层（@playwright/test）    │
+│  统一 API：locator / page / context     │
+│  auto-wait / 重试 / fixtures            │
+└─────────────────────────────────────────┘
+                  ↕
+┌─────────────────────────────────────────┐
+│  protocol bridge 层                      │
+│  对应 3 种协议的具体实现                  │
+└─────────────────────────────────────────┘
+        ↓             ↓              ↓
+   ┌────────┐   ┌──────────┐   ┌──────────┐
+   │  CDP   │   │ WD BiDi  │   │ WebKit   │
+   │  WSS   │   │  WSS     │   │ Inspect  │
+   └────────┘   └──────────┘   └──────────┘
+        ↓             ↓              ↓
+   ┌────────────────────────────────────┐
+   │  浏览器进程（Chromium/Firefox/WebKit）│
+   └────────────────────────────────────┘</code></pre>
+        </div>
+
+        <p>关键：测试代码跑在 Node 进程，不是浏览器内（这是与 Cypress 最大架构差异）。Playwright 通过协议命令"远程操作"浏览器。</p>
+
+        <p>这套架构带来：</p>
+        <ul>
+          <li>真 async/await（Node 标准）—— 不是 Cypress 的 promise chain DSL</li>
+          <li>跨进程隔离 —— 测试 crash 不影响浏览器</li>
+          <li>无跨域限制 —— 测试代码不在浏览器中，不受同源策略约束</li>
+          <li>多 tab / 多 window 自然支持 —— 都是协议层的对象</li>
+        </ul>
+
+        <h3>auto-wait · 解决 flaky 的关键</h3>
+
+        <p>e2e 测试 flaky 的最大原因：时序问题。元素还没渲染完就点击；动画进行中点击；元素被覆盖而点击没响应。</p>
+
+        <p>传统解：手动 sleep / 自定义 wait。慢、不可靠。</p>
+
+        <p>Playwright 解：每个 action 自动等到元素满足"可操作"条件：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Action</th>
+              <th>等待条件</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>click / dblclick</td>
+              <td>visible + stable + not detached + receives events</td>
+            </tr>
+            <tr>
+              <td>fill / type</td>
+              <td>visible + enabled + editable</td>
+            </tr>
+            <tr>
+              <td>hover</td>
+              <td>visible + stable</td>
+            </tr>
+            <tr>
+              <td>check / uncheck</td>
+              <td>visible + enabled + 是 checkbox</td>
+            </tr>
+            <tr>
+              <td>selectOption</td>
+              <td>visible + enabled + 是 select</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>每个条件的具体含义：</p>
+        <ul>
+          <li><strong>visible</strong>—— 占据 layout（offsetWidth/Height &gt; 0）+ display 不是 none + opacity 不是 0</li>
+          <li><strong>stable</strong>—— 连续 2 帧位置 / 大小不变（动画结束）</li>
+          <li><strong>not detached</strong>—— 仍在 DOM 树中</li>
+          <li><strong>receives events</strong>—— pointer 落点在元素上（不被其他元素覆盖）</li>
+          <li><strong>enabled</strong>—— 没 disabled 属性</li>
+          <li><strong>editable</strong>—— 不 readonly</li>
+        </ul>
+
+        <p>默认每个 action 等 30s。如果 30s 后仍不满足，throw 详细错误（说明哪个条件未满足）。</p>
+
+        <p>这套机制让用户几乎不需要写 wait 代码——auto-wait 把"时序问题"从开发者负担转移到 Playwright 内核。</p>
+
+        <h3>locator API · 懒求值 + auto-retry</h3>
+
+        <p>Playwright 鼓励 locator 而不是 selector：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// ❌ 传统 selector：立即 query
+const button = await page.$('button');   // 现在 query
+await button.click();                     // 后续操作可能元素已变
+
+// ✅ Playwright locator：懒求值
+const button = page.locator('button');   // 只是引用，没 query
+await button.click();                     // click 时才 query + auto-wait</code></pre>
+        </div>
+
+        <p>locator 的特性：</p>
+        <ul>
+          <li><strong>懒求值</strong>——构造时不 query，使用时才 query</li>
+          <li><strong>自动 retry</strong>——每次使用都 re-query（DOM 可能变化了）</li>
+          <li><strong>chainable</strong>——<code>page.locator('table').locator('tr').first()</code></li>
+          <li><strong>filter</strong>——<code>locator.filter({ hasText: 'Alice' })</code></li>
+        </ul>
+
+        <p>Playwright 还提供与 Testing Library 一致的 query：<code>getByRole / getByLabel / getByText</code> 等（详见 <a href="../04-dom-testing/01-testing-library.html">P4.1</a>）。这样 e2e 测试与单元测试代码风格一致——都按"用户视角"找元素。</p>
+
+        <h3>fixtures · 测试隔离 + 资源共享</h3>
+
+        <p>fixtures 是 Playwright 的依赖注入系统，让测试隔离和资源共享自动化：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">import { test as base, expect } from '@playwright/test';
+
+// 自定义 fixture
+type MyFixtures = {
+  authenticatedPage: Page;
+};
+
+const test = base.extend&lt;MyFixtures&gt;({
+  authenticatedPage: async ({ page }, use) =&gt; {
+    // setup：登录
+    await page.goto('/login');
+    await page.fill('[name="username"]', 'alice');
+    await page.fill('[name="password"]', 'secret');
+    await page.click('button[type="submit"]');
+    await page.waitForURL('/dashboard');
+
+    // 把 page 提供给测试
+    await use(page);
+
+    // teardown（可选）：清理
+  }
+});
+
+// 用 fixture
+test('view profile', async ({ authenticatedPage }) =&gt; {
+  await authenticatedPage.goto('/profile');
+  // 已登录状态
+});</code></pre>
+        </div>
+
+        <p>内置 fixtures：page / context / browser / browserName / request 等。</p>
+
+        <p>Playwright 的隔离层级：</p>
+        <ul>
+          <li><strong>worker 级</strong>——每个 worker 独立 browser 实例（多 worker 并行）</li>
+          <li><strong>test 级</strong>——每个测试独立 browser context（cookies / storage 隔离）</li>
+          <li><strong>page 级</strong>——每个测试独立 page（默认）</li>
+        </ul>
+
+        <p>这套隔离让测试间互不影响，测试 A 留下的 cookie 不污染测试 B。</p>
+
+        <h3>trace viewer · 失败时的回放</h3>
+
+        <p>Playwright 录制完整测试执行：</p>
+        <ul>
+          <li>每个 action 的 DOM snapshot</li>
+          <li>console 日志</li>
+          <li>network 请求</li>
+          <li>每帧的 screenshot</li>
+          <li>Source code 关联（点 action 跳代码）</li>
+        </ul>
+
+        <p>配置：</p>
+        <div class="code-block">
+          <span class="code-label">playwright.config.ts</span>
+          <pre class="code"><code class="lang-typescript">export default {
+  use: {
+    trace: 'on-first-retry'   // 第一次重试时录制（CI 推荐）
+    // 或 'on'（每次都录）/ 'retain-on-failure'（仅失败保留）
+  }
+};</code></pre>
+        </div>
+
+        <p>失败后查看：</p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 命令行
+pnpm playwright show-trace trace.zip
+
+# 或拖到网页 https://trace.playwright.dev/</code></pre>
+        </div>
+
+        <p>trace viewer 是 Playwright 的调试杀手锏——CI 上失败的测试，开发者下载 trace 文件就能完整回放。Cypress 的 time-travel 类似但仅在 dev 模式有效。</p>
+
+        <h3>parallel + retries</h3>
+
+        <p>Playwright 默认进程级并行：</p>
+        <div class="code-block">
+          <span class="code-label">playwright.config.ts</span>
+          <pre class="code"><code class="lang-typescript">export default {
+  workers: process.env.CI ? 4 : undefined,   // CI 用 4 worker；本地用 CPU 核数
+  fullyParallel: true,                        // 同文件内的测试也并行
+  retries: process.env.CI ? 2 : 0             // CI 重试 2 次
+};</code></pre>
+        </div>
+
+        <p>retries 的工作流：</p>
+        <ol>
+          <li>测试失败</li>
+          <li>Playwright 自动重试（默认 0 次本地 / 2 次 CI）</li>
+          <li>重试通过 → 标记 "flaky"（不算失败但有警告）</li>
+          <li>重试仍失败 → 真失败</li>
+        </ol>
+
+        <p>这套机制让"flaky 测试可见但不阻塞 CI"——开发者能看到 flaky 列表，定期修，但不影响发布。</p>
+
+        <h3>Component Testing · 模糊单元 / e2e 边界</h3>
+
+        <p>Playwright 1.30+ 提供 Component Testing——在真浏览器跑组件单元测试：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// Button.spec.tsx
+import { test, expect } from '@playwright/experimental-ct-react';
+import Button from './Button';
+
+test('renders and clicks', async ({ mount }) =&gt; {
+  let clicked = false;
+  const component = await mount(&lt;Button onClick={() =&gt; { clicked = true; }}&gt;Click&lt;/Button&gt;);
+
+  await expect(component).toContainText('Click');
+  await component.click();
+  expect(clicked).toBe(true);
+});</code></pre>
+        </div>
+
+        <p>这模糊了"单元测试 vs e2e"边界——组件级测试可以跑在真浏览器（layout / CSS / 真事件）。与 Vitest browser mode 重叠。</p>
+
+        <p>选哪个：</p>
+        <ul>
+          <li>已用 Playwright e2e —— Component Testing 共享配置 + trace</li>
+          <li>已用 Vitest unit —— browser mode 与 Vitest 配置一致</li>
+          <li>2026 两者并存，按团队偏好选</li>
+        </ul>
+
+        <div class="callout info">
+          <div class="callout-title">💡 关键洞见：Playwright 的护城河是 auto-wait + 真异步</div>
+          <p>Playwright 比 Cypress 性能差距不大，但 flaky 率显著低。原因是 auto-wait 把"时序"从用户负担变成内核责任。加上真 async/await（vs Cypress 的 promise chain DSL），调试体验质变。如果你的团队 e2e 测试经常 flaky，多数情况是工具问题不是测试问题——切到 Playwright 通常立竿见影。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 新项目搭 Playwright</h3>
+          <p><strong>步骤</strong>：</p>
+          <div class="code-block">
+            <span class="code-label">bash</span>
+            <pre class="code"><code class="lang-bash">pnpm create playwright@latest
+
+# 选择：
+# - TypeScript / JavaScript
+# - tests 目录
+# - 是否加 GitHub Actions
+# - 是否装浏览器（推荐是）
+
+# 跑测试
+pnpm playwright test
+
+# UI 模式（推荐开发用）
+pnpm playwright test --ui
+
+# 看 report
+pnpm playwright show-report</code></pre>
+          </div>
+          <p>typical 配置在 playwright.config.ts —— 设 baseURL / projects（多浏览器）/ trace / retries。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · 跨浏览器矩阵测试</h3>
+          <p><strong>背景</strong>：组件库要保证 Chrome / Firefox / Safari 三浏览器兼容。</p>
+          <p><strong>方案</strong>：</p>
+          <div class="code-block">
+            <span class="code-label">playwright.config.ts</span>
+            <pre class="code"><code class="lang-typescript">import { defineConfig, devices } from '@playwright/test';
+
+export default defineConfig({
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
+    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
+    // 移动端
+    { name: 'mobile-chrome', use: { ...devices['Pixel 5'] } },
+    { name: 'mobile-safari', use: { ...devices['iPhone 13'] } }
+  ]
+});</code></pre>
+          </div>
+          <p>每个测试在 5 个 project 中跑（5x 时间，但覆盖完整）。CI 中可以并行多个 project。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · CI 上 flaky 测试治理</h3>
+          <p><strong>背景</strong>：CI 偶尔某些测试失败，重跑就过。怀疑 flaky。</p>
+          <p><strong>方案</strong>：</p>
+          <ul>
+            <li>开 retries: 2 让 CI 自动重试，flaky 不阻塞合并</li>
+            <li>开 trace: 'on-first-retry' 录制重试时的 trace</li>
+            <li>每周 review HTML report 中的 flaky 列表</li>
+            <li>下载 trace.zip 拖到 trace.playwright.dev 看回放</li>
+            <li>找出根因（动画 / 网络时序 / 元素重渲染）→ 修复</li>
+          </ul>
+          <p>详见 <a href="../07-visual-coverage-ci/01-visual-coverage-ci.html">P7</a> "flaky 治理"章节。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">基本测试（用 Testing Library 风格 query）</span>
+          <pre class="code"><code class="lang-typescript">import { test, expect } from '@playwright/test';
+
+test('user can sign in', async ({ page }) =&gt; {
+  await page.goto('/login');
+
+  // 用 accessibility role / label（与 Testing Library 一致）
+  await page.getByLabel('Username').fill('alice');
+  await page.getByLabel('Password').fill('secret');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+
+  // auto-wait + assertion
+  await expect(page).toHaveURL('/dashboard');
+  await expect(page.getByText('Welcome, Alice')).toBeVisible();
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">完整 playwright.config.ts</span>
+          <pre class="code"><code class="lang-typescript">import { defineConfig, devices } from '@playwright/test';
+
+export default defineConfig({
+  testDir: './tests',
+  fullyParallel: true,
+  forbidOnly: !!process.env.CI,
+  retries: process.env.CI ? 2 : 0,
+  workers: process.env.CI ? 4 : undefined,
+  reporter: [['html'], ['list']],
+  use: {
+    baseURL: process.env.PREVIEW_URL || 'http://localhost:3000',
+    trace: 'on-first-retry',
+    screenshot: 'only-on-failure',
+    video: 'retain-on-failure'
+  },
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
+    { name: 'webkit', use: { ...devices['Desktop Safari'] } }
+  ],
+  // 起 dev server（可选）
+  webServer: {
+    command: 'pnpm dev',
+    url: 'http://localhost:3000',
+    reuseExistingServer: !process.env.CI
+  }
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">网络拦截 + mock</span>
+          <pre class="code"><code class="lang-typescript">test('error state', async ({ page }) =&gt; {
+  // 拦截 API 返回 500
+  await page.route('/api/users/*', route =&gt; {
+    route.fulfill({ status: 500, body: 'Server error' });
+  });
+
+  await page.goto('/users');
+  await expect(page.getByRole('alert')).toContainText(/error/i);
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">认证状态复用（避免每个测试重登录）</span>
+          <pre class="code"><code class="lang-typescript">// global-setup.ts
+import { chromium } from '@playwright/test';
+
+export default async () =&gt; {
+  const browser = await chromium.launch();
+  const page = await browser.newPage();
+  await page.goto('http://localhost:3000/login');
+  await page.fill('[name=username]', 'alice');
+  await page.fill('[name=password]', 'secret');
+  await page.click('button[type=submit]');
+  await page.context().storageState({ path: 'auth.json' });
+  await browser.close();
+};
+
+// playwright.config.ts
+export default {
+  globalSetup: './global-setup.ts',
+  use: {
+    storageState: 'auth.json'   // 所有测试自动用此认证状态
+  }
+};</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">截屏 + 视觉对比</span>
+          <pre class="code"><code class="lang-typescript">test('homepage looks correct', async ({ page }) =&gt; {
+  await page.goto('/');
+  // 与基线图对比；不一致则失败
+  await expect(page).toHaveScreenshot('homepage.png');
+});
+
+// 第一次跑：生成基线 homepage.png
+// 后续跑：对比
+// 故意改后跑：pnpm playwright test --update-snapshots</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 用 page.$() / page.$$() 而不是 locator</div>
+          <p>page.$() 是 ElementHandle（立即 query），不会 auto-retry。元素重渲染后旧的 ElementHandle 失效。始终用 page.locator()——懒求值 + 自动重试。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 写 page.waitForTimeout(2000)</div>
+          <p>这是硬等。Playwright 的 auto-wait 已经处理大多数时序问题。如果你写 waitForTimeout，说明你不理解 auto-wait——找出真正想等的事件（元素出现 / 网络请求完成 / URL 变化）用 page.waitForXxx。waitForTimeout 仅在调试时用。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 不开 retries / trace 直接上 CI</div>
+          <p>CI 不开 retries —— 偶发 flaky 直接 fail PR；不开 trace —— 失败时无法回放调试。CI 推荐配置：retries: 2 + trace: 'on-first-retry' + screenshot/video on-failure。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · Component Testing 与 Vitest browser mode 同时用</div>
+          <p>两者能力重叠。同时用导致组件测试在两个工具间分散，团队 confused。选一个：偏 e2e 流程选 Playwright Component Testing；偏 Vitest unit 工作流选 Vitest browser mode。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 期望 Playwright 取代单元测试</div>
+          <p>"Playwright 真浏览器最准，全用它写！" —— 单元测试比 e2e 快 100x。把单元测试写成 Playwright e2e 是<strong>测试梯形反模式</strong>（详见 <a href="../02-mindset/01-pyramid-trophy.html">P2.1</a>）。Playwright 应该专注关键用户路径（5-15% 比例），不是覆盖一切。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://playwright.dev/" target="_blank" rel="noopener">Playwright 官方</a></li>
+          <li><a href="https://playwright.dev/docs/api/class-locator" target="_blank" rel="noopener">Locator API 文档</a></li>
+          <li><a href="https://playwright.dev/docs/test-fixtures" target="_blank" rel="noopener">Fixtures 文档</a></li>
+          <li><a href="https://trace.playwright.dev/" target="_blank" rel="noopener">Trace Viewer 在线工具</a></li>
+          <li><a href="https://www.youtube.com/watch?v=byT_-CtxWgw" target="_blank" rel="noopener">Andrey Lushnikov · Inside Playwright 演讲</a></li>
+          <li><a href="https://playwright.dev/docs/intro#component-testing" target="_blank" rel="noopener">Component Testing 文档</a></li>
+          <li><a href="../04-dom-testing/01-testing-library.html">P4.1 · Testing Library（query 风格一致）</a></li>
+          <li><a href="02-playwright-vs-cypress.html">P6.2 · Playwright vs Cypress（下一章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../05-network-mock/01-msw.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P5.1 · MSW</span>
+          </a>
+          <a class="next" href="02-playwright-vs-cypress.html">
+            <span class="label">下一章 →</span>
+            <span class="title">02 · Playwright vs Cypress 横评</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
