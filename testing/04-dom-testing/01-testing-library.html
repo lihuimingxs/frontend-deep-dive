@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Testing Library 设计哲学 · P4.1 · 测试工具深度学习</title>
+    <meta name="description" content="Testing Library 跨框架统一 API + accessibility queries + userEvent + async findBy + 反模式集锦。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2334a853'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ET%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>测试工具深度学习</span><span class="site-title-badge" style="background: oklch(0.6 0.17 150); color: #fff">Test</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · DOM 测试</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-testing-library.html" class="active">01 · Testing Library 设计哲学</a></li>
+          <li><a href="02-jsdom-vs-browser.html">02 · jsdom vs happy-dom vs browser mode</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">测试工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · DOM 测试</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Testing Library 设计哲学</span>
+        </nav>
+        <h1>Testing Library 设计哲学</h1>
+        <p class="lead">
+          Testing Library 是 2026 年 DOM 测试的事实标准。它不是另一个测试 runner（要配合 Vitest / Jest 用），而是一套<strong>"按用户视角找元素"</strong>的 query API + matcher 集合。本章讲清查询优先级、userEvent vs fireEvent、async query、跨框架统一架构，配合 P2.2"测行为不测实现"的哲学一起读才有完整图像。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P2.2（测行为不测实现）</span>
+          <span><strong>主要来源</strong> testing-library.com / Kent C. Dodds blog</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Testing Library 是 query API + matcher，不是 runner——必须配合 Vitest / Jest / Bun test 用。@testing-library/react / vue / svelte / preact 共享 @testing-library/dom 内核。</li>
+          <li>查询优先级——getByRole &gt; getByLabelText &gt; getByText &gt; getByTestId。前面是用户视角（accessibility tree），最后是实现细节退路。</li>
+          <li>userEvent 优先 fireEvent —— userEvent 模拟真实用户操作链（click 触发完整事件序列），fireEvent 是底层 DOM event。除非有性能考虑，<strong>始终用 userEvent</strong>。</li>
+          <li>async query —— findByRole / findByText 自动等元素出现（默认 1s 超时）；waitFor 用于自定义异步条件；不要用 setTimeout 硬等。</li>
+          <li>jest-dom matcher —— toBeInTheDocument / toHaveTextContent / toBeDisabled / toHaveClass 等扩展 expect。Vitest 通过 @testing-library/jest-dom/vitest 集成。</li>
+          <li>render() 返回 RenderResult —— 提供 container / rerender / unmount。多数情况不直接用，靠 screen 全局对象（screen.getByRole 等价 within(document).getByRole）。</li>
+          <li>cleanup —— 每个测试后自动清理 DOM（@testing-library/react 自动；Vitest globals 模式自动）。手动管理是反模式。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>架构：跨框架统一</h3>
+
+        <p>Testing Library 不是单一 lib 而是一组共享内核的 lib：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">@testing-library/dom（内核 · 浏览器无关）
+├── 提供 queries: getByRole / getByLabelText / ...
+├── 提供 events / waitFor / within
+└── 不依赖任何框架
+
+@testing-library/react（React 适配）
+├── render() · 把 React 组件渲染到 DOM
+└── 复用 @testing-library/dom 的 queries
+
+@testing-library/vue（Vue 适配）
+├── render() · 把 Vue 组件挂载
+└── 复用 @testing-library/dom 的 queries
+
+@testing-library/svelte / preact / solid / ...
+（同样套路：自家 render，复用 dom queries）
+
+@testing-library/user-event（独立包）
+├── 跨框架的"真实用户操作"模拟
+└── 配合任意 render
+
+@testing-library/jest-dom（matcher）
+├── toBeInTheDocument / toHaveTextContent 等
+└── 适用于 Jest 和 Vitest（通过 /vitest entry）</code></pre>
+        </div>
+
+        <p>这套架构的好处：从 React 切 Vue 时<strong>测试代码 90% 可复用</strong>——只换 render 来源（@testing-library/react → @testing-library/vue），所有 queries / userEvent / matcher 不变。这是 Testing Library 跨框架成功的关键。</p>
+
+        <h3>查询优先级详解</h3>
+
+        <p>Kent Dodds 给出一个 8 级优先级，按"用户感知度"排序：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 60px">级别</th>
+              <th>Query</th>
+              <th>含义</th>
+              <th>场景</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1</td>
+              <td>getByRole</td>
+              <td>accessibility role + name</td>
+              <td>按钮 / 链接 / 表单 / 标题</td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td>getByLabelText</td>
+              <td>表单的 label</td>
+              <td>表单输入字段</td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>getByPlaceholderText</td>
+              <td>输入框占位符</td>
+              <td>无 label 的输入框（不推荐）</td>
+            </tr>
+            <tr>
+              <td>4</td>
+              <td>getByText</td>
+              <td>文本内容</td>
+              <td>非交互元素（段落 / 状态文字）</td>
+            </tr>
+            <tr>
+              <td>5</td>
+              <td>getByDisplayValue</td>
+              <td>表单当前值</td>
+              <td>验证表单已填值</td>
+            </tr>
+            <tr>
+              <td>6</td>
+              <td>getByAltText</td>
+              <td>图片 alt</td>
+              <td>img / area / input[type=image]</td>
+            </tr>
+            <tr>
+              <td>7</td>
+              <td>getByTitle</td>
+              <td>悬停 title</td>
+              <td>icon 按钮（不推荐）</td>
+            </tr>
+            <tr>
+              <td>8（最后）</td>
+              <td>getByTestId</td>
+              <td>data-testid 标签</td>
+              <td>前 7 种都不可行（如复杂图表）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>Get / Query / Find 三个前缀的区别：</p>
+        <ul>
+          <li><code>getByXxx</code> —— 找不到 throw error；适合"必须存在"的元素</li>
+          <li><code>queryByXxx</code> —— 找不到返回 null；适合"断言不存在"（<code>expect(queryByText(...)).not.toBeInTheDocument()</code>）</li>
+          <li><code>findByXxx</code> —— 异步，自动等出现（默认 1s）；适合等异步渲染的元素</li>
+        </ul>
+
+        <p>带 All 后缀的版本（getAllByRole 等）找多个；空数组时 throw（除了 queryAll 不 throw）。</p>
+
+        <h3>getByRole 深读</h3>
+
+        <p>getByRole 是优先级最高的 query，因为它最贴近用户视角。一些示例：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 找按钮（按 accessible name）
+screen.getByRole('button', { name: 'Sign in' });
+// 匹配 &lt;button&gt;Sign in&lt;/button&gt; 或 &lt;button aria-label="Sign in"&gt;...&lt;/button&gt;
+
+// 找标题（h1-h6）
+screen.getByRole('heading', { name: 'Welcome', level: 1 });
+
+// 找链接
+screen.getByRole('link', { name: /sign up/i });   // 正则匹配
+
+// 找列表项
+screen.getAllByRole('listitem');
+
+// 找表单输入（type=text 是 textbox role）
+screen.getByRole('textbox', { name: 'Username' });
+
+// 找复选框
+screen.getByRole('checkbox', { name: 'Remember me' });
+
+// 找下拉框
+screen.getByRole('combobox', { name: 'Country' });</code></pre>
+        </div>
+
+        <p>name 选项是关键——它来自 accessibility tree 的 "accessible name"（aria-label / aria-labelledby / 文本内容 / 关联 label 等综合计算）。这与屏幕阅读器看到的内容一致。</p>
+
+        <p>意外发现：用 getByRole 写测试常常会暴露 accessibility 缺陷。"找不到 role='button'"通常意味着该按钮真的对屏幕阅读器用户不可见（用 div + onClick 而非 button 标签）。测试 + accessibility 双赢。</p>
+
+        <h3>userEvent vs fireEvent 行为差异</h3>
+
+        <p>fireEvent 是直接派发 DOM 事件：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">import { fireEvent } from '@testing-library/react';
+
+fireEvent.click(button);
+// 派发: click
+
+fireEvent.change(input, { target: { value: 'hello' } });
+// 派发: change（直接改 value，跳过 input 事件）</code></pre>
+        </div>
+
+        <p>userEvent 模拟真实用户操作链：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">import userEvent from '@testing-library/user-event';
+
+const user = userEvent.setup();   // v14+ 推荐先 setup
+
+await user.click(button);
+// 派发: pointerdown → mousedown → pointerup → mouseup → click
+// 自动等待事件循环；确保 React 状态更新
+
+await user.type(input, 'hello');
+// 每个字符派发: keydown → keypress → input → keyup
+// 每个 keypress 后等 React rerender
+
+await user.tab();
+// 模拟 Tab 键切换焦点
+
+await user.keyboard('{Enter}');
+// 模拟键盘按键
+
+await user.upload(fileInput, file);
+// 模拟文件上传
+
+await user.hover(button);
+// 模拟鼠标悬停</code></pre>
+        </div>
+
+        <p>为什么 userEvent 重要：很多 bug 只在真实事件序列下暴露。例：</p>
+        <ul>
+          <li>onMouseEnter 触发 popover；用 fireEvent.click 不会触发 popover，但真用户点之前会触发 hover</li>
+          <li>onFocus 启动验证；用 fireEvent.change 不触发 focus，验证不跑</li>
+          <li>onCompositionStart 处理输入法；只有真实键盘序列才触发</li>
+        </ul>
+
+        <p>规则：除非测的就是底层 DOM event 行为（罕见），永远用 userEvent。</p>
+
+        <h3>screen 对象 vs render() 返回值</h3>
+
+        <p>render() 返回 RenderResult：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const { container, rerender, unmount, getByRole } = render(&lt;App /&gt;);
+
+// 用法 1：直接解构 query（旧方式，不推荐）
+getByRole('button');
+
+// 用法 2：用 screen 全局对象（推荐）
+import { screen } from '@testing-library/react';
+screen.getByRole('button');</code></pre>
+        </div>
+
+        <p>用 screen 优于解构，原因：</p>
+        <ul>
+          <li>不需要每个测试都解构 query（节省样板）</li>
+          <li>screen 自动绑定 document.body —— 同效果</li>
+          <li>多个 render 时不用记每个 wrapper</li>
+        </ul>
+
+        <p>RenderResult 的真正用途是 rerender / unmount / container（局部 DOM 容器）。</p>
+
+        <h3>async query 与 waitFor</h3>
+
+        <p>async query 自动重试直到找到（或超时）：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// findByRole 默认 1s 超时
+const submitBtn = await screen.findByRole('button', { name: 'Submit' });
+
+// 自定义超时
+const item = await screen.findByText('Loaded', {}, { timeout: 5000 });
+
+// waitFor 用于自定义条件
+await waitFor(() =&gt; {
+  expect(screen.getByRole('alert')).toHaveTextContent(/error/i);
+}, { timeout: 3000 });
+
+// waitForElementToBeRemoved 等元素消失
+await waitForElementToBeRemoved(() =&gt; screen.queryByText('Loading...'));</code></pre>
+        </div>
+
+        <p>关键：<strong>不要用 setTimeout 硬等</strong>。setTimeout 让测试稳定时间长 + 慢且 flaky。findBy / waitFor 是事件驱动的，元素一出现立即继续。</p>
+
+        <h3>jest-dom matcher</h3>
+
+        <p>原生 expect 只有基础匹配（toBe / toEqual / 等）。jest-dom 提供 DOM 专属 matcher：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 装：
+//   pnpm add -D @testing-library/jest-dom
+// setup.ts:
+//   import '@testing-library/jest-dom/vitest';
+
+expect(button).toBeInTheDocument();
+expect(button).toBeDisabled();
+expect(input).toHaveValue('alice');
+expect(input).toHaveDisplayValue('alice');
+expect(button).toHaveClass('btn-primary');
+expect(button).toHaveAttribute('type', 'submit');
+expect(form).toContainElement(input);
+expect(input).toBeRequired();
+expect(input).toBeValid();
+expect(div).toBeVisible();
+expect(div).toHaveTextContent(/welcome/i);
+expect(div).toHaveStyle({ color: 'red' });</code></pre>
+        </div>
+
+        <p>这些 matcher 用语义化断言替代手写 DOM 检查（<code>expect(button.disabled).toBe(true)</code>）。错误信息也更友好。</p>
+
+        <h3>cleanup 与隔离</h3>
+
+        <p>render() 把组件挂载到 document.body。如果不清理，多个测试间 DOM 会串味（前一个测试的元素在后一个测试中仍存在）。</p>
+
+        <p>@testing-library/react 在以下情况自动清理：</p>
+        <ul>
+          <li>Jest globals 模式（默认）</li>
+          <li>Vitest globals 模式（默认）</li>
+          <li>每个 test 完成后调用 cleanup()</li>
+        </ul>
+
+        <p>不需要手动 cleanup —— 那是反模式（旧版 Testing Library 的遗留写法）。</p>
+
+        <p>但如果你显式关掉 globals（测试设置 globals: false），需要手动：</p>
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// setup.ts（仅当 globals: false 才需要）
+import { afterEach } from 'vitest';
+import { cleanup } from '@testing-library/react';
+
+afterEach(() =&gt; cleanup());</code></pre>
+        </div>
+
+        <div class="callout info">
+          <div class="callout-title">💡 关键洞见：Testing Library 是哲学的载体</div>
+          <p>Testing Library 的成功不是因为 API 漂亮，而是因为它<strong>把"测行为不测实现"的哲学落地成约束</strong>。getByRole 比 getByClassName 简单，自然引导你用 accessibility 而不是实现细节。这种"设计引导用户做对的事"是好工具的特征。学 Testing Library 不只学 API，更要理解它背后的设计选择。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 测一个 LoginForm 组件</h3>
+          <p><strong>背景</strong>：写一个 LoginForm，要测：渲染、输入、提交成功、提交失败。</p>
+          <p><strong>测试代码</strong>：见下方"典型代码"模块的完整示例。覆盖 4 个测试用例（render / fill / submit / error），用 getByRole + userEvent + jest-dom matcher。</p>
+          <p>所有 query 都用 accessibility 视角（role / label），重构组件内部不破坏。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · 测自定义 Hook</h3>
+          <p><strong>背景</strong>：useCounter() 自定义 Hook，怎么测？</p>
+          <p><strong>方案</strong>：用 @testing-library/react 的 renderHook：</p>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">import { renderHook, act } from '@testing-library/react';
+import { useCounter } from './useCounter';
+
+test('useCounter starts at 0 and increments', () =&gt; {
+  const { result } = renderHook(() =&gt; useCounter());
+
+  expect(result.current.count).toBe(0);
+
+  act(() =&gt; { result.current.increment(); });
+  expect(result.current.count).toBe(1);
+});</code></pre>
+          </div>
+          <p>注意：<strong>这是测 Hook 的契约（API 行为），仍是"行为"</strong>。如果只是简单逻辑，建议在<strong>使用该 Hook 的组件</strong>里测试整体行为，不单独测 Hook。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · 跨框架测试代码复用</h3>
+          <p><strong>背景</strong>：先写了 React 版组件库，现在要做 Vue 版。能复用测试代码吗？</p>
+          <p><strong>方案</strong>：</p>
+          <ul>
+            <li>render 来源换：@testing-library/react → @testing-library/vue</li>
+            <li>所有 query / userEvent / matcher 完全不变</li>
+            <li>测试逻辑（"用户点按钮 → 看到结果"）100% 复用</li>
+            <li>仅组件挂载方式略改</li>
+          </ul>
+          <p>这是 Testing Library 跨框架架构的最大价值。Vue 团队迁 Testing Library 时大量复用社区已有 React 测试模板。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">完整 LoginForm 测试</span>
+          <pre class="code"><code class="lang-typescript">import { describe, test, expect, beforeEach } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { http, HttpResponse } from 'msw';
+import { setupServer } from 'msw/node';
+import LoginForm from './LoginForm';
+
+const server = setupServer(
+  http.post('/api/login', async ({ request }) =&gt; {
+    const { username } = await request.json() as any;
+    if (username === 'alice') {
+      return HttpResponse.json({ user: { name: 'Alice' } });
+    }
+    return HttpResponse.json({ error: 'Invalid' }, { status: 401 });
+  })
+);
+
+beforeAll(() =&gt; server.listen());
+afterAll(() =&gt; server.close());
+
+describe('LoginForm', () =&gt; {
+  test('renders all form fields', () =&gt; {
+    render(&lt;LoginForm /&gt;);
+    expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Username')).toBeInTheDocument();
+    expect(screen.getByLabelText('Password')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+  });
+
+  test('user can fill and submit successfully', async () =&gt; {
+    const user = userEvent.setup();
+    render(&lt;LoginForm /&gt;);
+
+    await user.type(screen.getByLabelText('Username'), 'alice');
+    await user.type(screen.getByLabelText('Password'), 'secret');
+    await user.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    expect(await screen.findByText(/welcome, alice/i)).toBeInTheDocument();
+  });
+
+  test('shows error on invalid credentials', async () =&gt; {
+    const user = userEvent.setup();
+    render(&lt;LoginForm /&gt;);
+
+    await user.type(screen.getByLabelText('Username'), 'bad');
+    await user.type(screen.getByLabelText('Password'), 'bad');
+    await user.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/invalid/i);
+  });
+
+  test('disables submit button while submitting', async () =&gt; {
+    const user = userEvent.setup();
+    render(&lt;LoginForm /&gt;);
+
+    await user.type(screen.getByLabelText('Username'), 'alice');
+    await user.type(screen.getByLabelText('Password'), 'secret');
+    const submitBtn = screen.getByRole('button', { name: 'Sign in' });
+
+    user.click(submitBtn);   // 不 await，立即检查
+    expect(submitBtn).toBeDisabled();
+  });
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">setup.ts（jest-dom matcher）</span>
+          <pre class="code"><code class="lang-typescript">// vitest.config.ts 中：test.setupFiles: './src/test/setup.ts'
+import '@testing-library/jest-dom/vitest';</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">within · 局部范围查询</span>
+          <pre class="code"><code class="lang-typescript">import { within } from '@testing-library/react';
+
+test('only finds in the specified row', () =&gt; {
+  render(&lt;UserTable users={users} /&gt;);
+
+  const aliceRow = screen.getByRole('row', { name: /alice/i });
+  // 在 aliceRow 这一行里找 button，不会找到其他行的
+  expect(within(aliceRow).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">renderHook 测自定义 Hook</span>
+          <pre class="code"><code class="lang-typescript">import { renderHook, act } from '@testing-library/react';
+import { useCounter } from './useCounter';
+
+test('increments and decrements', () =&gt; {
+  const { result } = renderHook(() =&gt; useCounter(10));
+
+  expect(result.current.count).toBe(10);
+
+  act(() =&gt; result.current.increment());
+  expect(result.current.count).toBe(11);
+
+  act(() =&gt; result.current.decrement());
+  expect(result.current.count).toBe(10);
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">debug 输出 DOM（开发调试）</span>
+          <pre class="code"><code class="lang-typescript">test('debug helper', () =&gt; {
+  render(&lt;App /&gt;);
+  screen.debug();              // 打印整个 DOM
+  screen.debug(screen.getByRole('button'));   // 打印特定元素
+});
+
+// 在浏览器中互动调试：
+// screen.logTestingPlaygroundURL();   // 输出一个 URL，打开后能可视化查看哪个 query 能匹配</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 大量用 data-testid</div>
+          <p>"我懒得想 role / label，全用 testid"——这违背 Testing Library 哲学。data-testid 是第 8 优先级（最后退路），不是首选。如果发现自己大量用 testid，反思组件 accessibility（按钮没用 button 标签 / 输入没有 label）。修好 accessibility 后用 getByRole 找元素自然容易。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 用 fireEvent 不用 userEvent</div>
+          <p>fireEvent 比 userEvent 快但不模拟真实用户。结果：测试通过但真用户点击触发的"先 hover 才出现按钮"等 bug 漏过。userEvent 是默认，fireEvent 仅在测底层 DOM event 行为时用。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 不 await async query / userEvent</div>
+          <p><code>userEvent.click(btn)</code>（不 await）+ 立即 expect —— 测试 race condition。userEvent 是异步的，不 await 状态没更新。除非有意测中间态（如 disabled），否则总是 await。同样 findByRole / waitFor 都需要 await。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 在 act() 包裹一切</div>
+          <p>看到 React warning "An update to X inside a test was not wrapped in act"，就用 act 包裹所有代码。这通常多余——Testing Library 的 render / userEvent / waitFor 内部已经处理 act。仅在直接调用 React API 时才需要手动 act（如 renderHook 中的 result.current.method()）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 单独测每个 Hook</div>
+          <p>给项目里每个自定义 Hook 都写 renderHook 测试。这测的是 Hook 的<strong>实现</strong>而非用户行为。建议：在<strong>使用该 Hook 的组件</strong>里测整体行为；只对复杂或公开 lib 的 Hook 单独测试。这避免"测试比实现还多"。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://testing-library.com/docs/" target="_blank" rel="noopener">Testing Library 官方文档</a></li>
+          <li><a href="https://testing-library.com/docs/queries/about/#priority" target="_blank" rel="noopener">Query 优先级官方</a></li>
+          <li><a href="https://testing-library.com/docs/user-event/intro/" target="_blank" rel="noopener">userEvent 文档</a></li>
+          <li><a href="https://github.com/testing-library/jest-dom" target="_blank" rel="noopener">jest-dom 官方</a></li>
+          <li><a href="https://testing-playground.com/" target="_blank" rel="noopener">Testing Playground · 在线 query 调试器</a></li>
+          <li><a href="https://kentcdodds.com/blog/common-mistakes-with-react-testing-library" target="_blank" rel="noopener">Kent C. Dodds · Common mistakes with React Testing Library</a></li>
+          <li><a href="../02-mindset/02-behavior-not-implementation.html">P2.2 · 测行为不测实现（前提）</a></li>
+          <li><a href="02-jsdom-vs-browser.html">P4.2 · jsdom vs happy-dom vs browser mode（下一章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../03-vitest-unit/02-runner-comparison.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P3.2 · 4 家 runner 横评</span>
+          </a>
+          <a class="next" href="02-jsdom-vs-browser.html">
+            <span class="label">下一章 →</span>
+            <span class="title">02 · jsdom vs happy-dom vs browser mode</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

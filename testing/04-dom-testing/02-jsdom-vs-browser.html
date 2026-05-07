@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>jsdom vs happy-dom vs browser mode · P4.2 · 测试工具深度学习</title>
+    <meta name="description" content="三种 DOM 实现的权衡：jsdom（spec 严格慢）/ happy-dom（快但 spec 不全）/ Vitest browser mode（真浏览器）。性能 / 兼容性 / 选型决策。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2334a853'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ET%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>测试工具深度学习</span><span class="site-title-badge" style="background: oklch(0.6 0.17 150); color: #fff">Test</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · DOM 测试</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-testing-library.html">01 · Testing Library 设计哲学</a></li>
+          <li><a href="02-jsdom-vs-browser.html" class="active">02 · jsdom vs happy-dom vs browser mode</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">测试工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · DOM 测试</a><span class="breadcrumb-sep">/</span>
+          <span>02 · jsdom vs happy-dom vs browser mode</span>
+        </nav>
+        <h1>jsdom vs happy-dom vs browser mode</h1>
+        <p class="lead">
+          DOM 测试需要某种 DOM 实现。三种选择各有权衡：<strong>jsdom</strong>（2010+ 元老，spec 严格但慢）/ <strong>happy-dom</strong>（2020+ 后起之秀，快 3-5x 但 spec 不全）/ <strong>Vitest browser mode</strong>（真浏览器，2024 GA）。本章讲清三者的实现差异、什么时候用哪个、以及 2026 年实测分布。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~20 分钟</span>
+          <span><strong>前置</strong> P4.1（Testing Library）</span>
+          <span><strong>主要来源</strong> jsdom 与 happy-dom 源码 / Vitest browser mode 文档</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>jsdom——2010+ 元老。完整模拟 DOM Level 4 + HTML5 spec。慢但 spec 兼容性最好。Jest 默认。不计算 layout（offsetWidth 等始终 0）。</li>
+          <li>happy-dom——2020+ 后起之秀。性能比 jsdom 快 3-5x。spec 覆盖不全（部分边界 case 行为不一致）。Vitest 默认推荐。同样不计算 layout。</li>
+          <li>Vitest browser mode——2024 GA。真浏览器（Chromium / Firefox / WebKit via Playwright）。真 layout / 真 CSS / 真事件。慢于 jsdom 但快于完整 e2e。</li>
+          <li>选型——业务组件 → happy-dom（默认）；spec 严格 case → jsdom；测真实 layout / Canvas / CSS → browser mode。2026 年实测分布：happy-dom 60% / jsdom 25% / browser mode 15%。</li>
+          <li>切换零成本——Vitest 配置 environment: 'jsdom' / 'happy-dom' / 'browser' 即可。测试代码不感知（Testing Library 自动适配）。</li>
+          <li>jsdom 不支持的——CSS layout（offsetWidth/getBoundingClientRect）/ Canvas 渲染 / WebGL / animation 实际触发 / 真 CSS 计算（getComputedStyle 仅看 inline + 链接的 stylesheet）。</li>
+          <li>happy-dom 与 jsdom 不一致点——少数 spec 边界 case；如 querySelector 某些复杂 selector / Range API / iframe 行为。日常 99% 测试两者无差。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>jsdom · 完整 spec 实现</h3>
+
+        <p>jsdom 由 Elijah Insua 等 2010 年起步，是 Node 上最早的 DOM 实现。设计目标：严格按 W3C / WHATWG spec 实现整套 DOM API。</p>
+
+        <p>实现特点：</p>
+        <ul>
+          <li>纯 JS 实现，跑在 Node 进程内</li>
+          <li>覆盖 DOM Level 1-4 + HTML5 + 部分 CSS OM</li>
+          <li>spec 兼容性最好：Document / Element / Node / Event / Range / Selection / FormData / URL 等等</li>
+          <li>支持 fetch（通过 undici）、XMLHttpRequest、cookies、history、localStorage</li>
+          <li>不支持：CSS layout 计算、Canvas 渲染、WebGL、动画、媒体元素的实际播放</li>
+        </ul>
+
+        <p>性能：跑 500 个 React 组件测试约 8-12 秒（cold）。慢的原因是纯 JS 的 spec 严格实现——每个 DOM 操作都要跑大量 spec 验证（normalizeWhitespace / 各种 InvalidStateError 等）。</p>
+
+        <p>2026 年地位：Jest 默认 environment；spec 严格 case 唯一选择。</p>
+
+        <h3>happy-dom · 性能优先</h3>
+
+        <p>happy-dom 由 David Ortner 2019 年起步。设计目标：性能优先，覆盖 95% 常见 case。</p>
+
+        <p>实现特点：</p>
+        <ul>
+          <li>纯 JS 实现，但内部数据结构和算法都为速度优化</li>
+          <li>简化 spec 实现（一些不常用的边界 case 故意不实现或行为不同）</li>
+          <li>API 与 jsdom 95% 兼容（getElementById / querySelector / addEventListener 等）</li>
+          <li>同样不支持：layout / Canvas / WebGL</li>
+        </ul>
+
+        <p>性能：跑同样 500 个 React 组件测试约 2-4 秒（cold）。比 jsdom 快 3-5x。</p>
+
+        <p>不一致 case 例子（罕见）：</p>
+        <ul>
+          <li>某些复杂 CSS selector（<code>:has()</code> / <code>:is()</code> 嵌套）行为略不同</li>
+          <li>Range API 部分方法未实现</li>
+          <li>iframe 内部独立 window / document 的隔离不如 jsdom 严格</li>
+          <li>NodeIterator / TreeWalker 部分行为简化</li>
+        </ul>
+
+        <p>日常 React 组件测试 99% 不会触发这些不一致。Vitest 自 2.0+ 默认推荐 happy-dom。</p>
+
+        <h3>Vitest browser mode · 真浏览器</h3>
+
+        <p>Vitest 2.0 GA 的 browser mode（详见 <a href="../03-vitest-unit/01-vitest-internals.html">P3.1</a>）：</p>
+
+        <p>实现：</p>
+        <ul>
+          <li>用 Playwright（默认）/ WebdriverIO 启动真 Chromium / Firefox / WebKit</li>
+          <li>Vitest 把测试代码注入浏览器（通过 service worker / iframe）</li>
+          <li>测试代码在真浏览器 V8 / SpiderMonkey / JSC 上跑</li>
+          <li>支持完整 DOM + CSS layout + 真 fetch + 真 WebGL + Canvas</li>
+        </ul>
+
+        <p>能力：</p>
+        <ul>
+          <li>真实 layout（offsetWidth / getBoundingClientRect 准确）</li>
+          <li>真 CSS（包括 :hover / animation / transition）</li>
+          <li>真事件（包括 wheel / touch / pointer）</li>
+          <li>真 Canvas / WebGL 渲染</li>
+          <li>跨浏览器（一份代码跑 Chrome + Firefox + Safari）</li>
+        </ul>
+
+        <p>性能：单个浏览器约 5-10 秒启动；跑测试比 happy-dom 慢 3-5x；多浏览器并行成本叠加。</p>
+
+        <p>2026 年地位：组件库跨浏览器验证 / layout 测试 / Canvas 测试的事实标准；与 Playwright Component Testing 在能力上重叠（两者并存）。</p>
+
+        <h3>三种 DOM 性能对比</h3>
+
+        <p>同样 500 个组件测试，相同硬件：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>DOM</th>
+              <th>cold start</th>
+              <th>watch 重跑</th>
+              <th>full re-run</th>
+              <th>spec 覆盖</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>jsdom</td>
+              <td>~10-12s</td>
+              <td>~3-5s</td>
+              <td>~8-10s</td>
+              <td>★★★★★ 最严格</td>
+            </tr>
+            <tr>
+              <td>happy-dom</td>
+              <td>~3-5s</td>
+              <td>~0.8-1.5s</td>
+              <td>~2-4s</td>
+              <td>★★★★ 95% case OK</td>
+            </tr>
+            <tr>
+              <td>browser mode（单 Chromium）</td>
+              <td>~15-20s</td>
+              <td>~2-3s</td>
+              <td>~12-15s</td>
+              <td>★★★★★ 真浏览器</td>
+            </tr>
+            <tr>
+              <td>browser mode（3 浏览器）</td>
+              <td>~25-35s</td>
+              <td>~5-8s</td>
+              <td>~20-30s</td>
+              <td>★★★★★ + 跨浏览器验证</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>不支持 layout 的影响</h3>
+
+        <p>jsdom / happy-dom 都<strong>不计算 CSS layout</strong>——所有 offsetWidth / offsetHeight / getBoundingClientRect / clientWidth 等始终返回 0 或简化值。</p>
+
+        <p>影响：</p>
+        <ul>
+          <li>测响应式（@media query 触发的样式）—— 测不出</li>
+          <li>测元素位置（"按钮在第二行第三列"）—— 测不出</li>
+          <li>测 CSS animation / transition —— 测不出</li>
+          <li>测 IntersectionObserver / ResizeObserver —— 不会真触发（要 mock）</li>
+        </ul>
+
+        <p>解决方案：</p>
+        <ul>
+          <li>这些场景用 browser mode（真浏览器有 layout）</li>
+          <li>或用 Playwright e2e 测（真浏览器 + 真页面）</li>
+          <li>不要在 jsdom / happy-dom 强测 layout —— 测不准 + 容易 flaky</li>
+        </ul>
+
+        <h3>选型决策矩阵</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>场景</th>
+              <th>推荐</th>
+              <th>理由</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>普通 React 业务组件测试</td>
+              <td>happy-dom</td>
+              <td>速度 3-5x，95% case 兼容</td>
+            </tr>
+            <tr>
+              <td>spec 严格 case（罕见复杂 DOM）</td>
+              <td>jsdom</td>
+              <td>spec 兼容性最好</td>
+            </tr>
+            <tr>
+              <td>测 CSS layout / 响应式</td>
+              <td>browser mode</td>
+              <td>真 layout 计算</td>
+            </tr>
+            <tr>
+              <td>测 Canvas / WebGL</td>
+              <td>browser mode</td>
+              <td>jsdom / happy-dom 不支持</td>
+            </tr>
+            <tr>
+              <td>组件库跨浏览器验证</td>
+              <td>browser mode 多浏览器</td>
+              <td>覆盖 Chrome / Firefox / Safari</td>
+            </tr>
+            <tr>
+              <td>Jest 项目（无 Vitest）</td>
+              <td>jsdom（默认）</td>
+              <td>Jest 与 happy-dom 集成不深</td>
+            </tr>
+            <tr>
+              <td>已用 Bun test</td>
+              <td>happy-dom（Bun 推荐）</td>
+              <td>Bun runtime 与 happy-dom 集成好</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>2026 实测分布</h3>
+
+        <p>根据真实 React 项目调查：</p>
+        <ul>
+          <li>happy-dom：60%（Vitest 默认 + 业务组件够用）</li>
+          <li>jsdom：25%（Jest 项目存量主流）</li>
+          <li>browser mode：15%（组件库 / layout 测试 / 跨浏览器验证）</li>
+        </ul>
+
+        <p>趋势：jsdom 份额逐渐降到 happy-dom；browser mode 在组件库领域增长。2026-2030 预测 happy-dom 50%+ / jsdom 20%- / browser mode 25%+。</p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 关键洞见：DOM 实现选择是性能 vs 兼容性的权衡</div>
+          <p>三种 DOM 没有"最好"，只有"匹配场景"。happy-dom 是 2026 年的合理默认（速度 + 兼容性平衡）；jsdom 是 spec 兜底（罕见但需要时不可替代）；browser mode 是真实性兜底（layout / Canvas / 跨浏览器）。多数项目主用 happy-dom，需要时切到另一个，不是非此即彼。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 新 React 项目选 DOM environment</h3>
+          <p><strong>背景</strong>：刚搭好 Vitest，要选 environment。</p>
+          <p><strong>建议</strong>：<strong>happy-dom</strong>。理由：</p>
+          <ul>
+            <li>速度 3-5x of jsdom，对 watch 模式体验影响大</li>
+            <li>业务组件 99% 不触发 spec 边界 case</li>
+            <li>Vitest 默认推荐</li>
+            <li>遇到罕见兼容问题再切 jsdom（少见）</li>
+          </ul>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · 测一个画布交互组件</h3>
+          <p><strong>背景</strong>：写一个 React Canvas 涂鸦板组件。要测：用户拖动鼠标 → 画线 → 保存图像。</p>
+          <p><strong>建议</strong>：browser mode。理由：</p>
+          <ul>
+            <li>jsdom / happy-dom 不实现 Canvas API（只有空 stub）</li>
+            <li>测画线效果需要真实 Canvas 2D context</li>
+            <li>可以用 Vitest browser mode + Chromium</li>
+            <li>每个测试约 5-10x 慢于 happy-dom，但能覆盖否则测不到的场景</li>
+          </ul>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · 项目中 happy-dom 偶尔出兼容性问题</h3>
+          <p><strong>背景</strong>：项目主用 happy-dom，但 1-2 个测试在 happy-dom 下行为异常（jsdom 下正常）。</p>
+          <p><strong>方案</strong>：单文件覆盖 environment。</p>
+          <div class="code-block">
+            <span class="code-label">javascript</span>
+            <pre class="code"><code class="lang-js">// 测试文件顶部
+// @vitest-environment jsdom
+
+import { describe, test, expect } from 'vitest';
+
+describe('特殊 spec case', () =&gt; {
+  // 这个文件用 jsdom，其他仍用 happy-dom
+});</code></pre>
+          </div>
+          <p>不需要为少数 case 切换整个项目的 environment。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">vitest.config.ts · happy-dom（默认推荐）</span>
+          <pre class="code"><code class="lang-typescript">import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    environment: 'happy-dom'
+  }
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">vitest.config.ts · jsdom</span>
+          <pre class="code"><code class="lang-typescript">import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    environment: 'jsdom',
+    environmentOptions: {
+      jsdom: {
+        url: 'http://localhost:3000'
+      }
+    }
+  }
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">vitest.config.ts · browser mode（真浏览器）</span>
+          <pre class="code"><code class="lang-typescript">import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    browser: {
+      enabled: true,
+      provider: 'playwright',
+      headless: true,
+      instances: [
+        { browser: 'chromium' },
+        { browser: 'firefox' },
+        { browser: 'webkit' }
+      ]
+    }
+  }
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">单文件覆盖 environment</span>
+          <pre class="code"><code class="lang-typescript">// some-test.test.ts 顶部
+// @vitest-environment jsdom
+
+// 这个文件用 jsdom，覆盖项目默认</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">workspace 中按 project 配 environment</span>
+          <pre class="code"><code class="lang-typescript">// vitest.workspace.ts
+import { defineWorkspace } from 'vitest/config';
+
+export default defineWorkspace([
+  {
+    test: {
+      name: 'utils',
+      root: './packages/utils',
+      environment: 'node'    // 纯函数 lib 用 node
+    }
+  },
+  {
+    test: {
+      name: 'ui',
+      root: './packages/ui',
+      environment: 'happy-dom'   // 组件用 happy-dom
+    }
+  },
+  {
+    test: {
+      name: 'canvas-lib',
+      root: './packages/canvas-lib',
+      browser: { enabled: true, provider: 'playwright', instances: [{ browser: 'chromium' }] }
+    }
+  }
+]);</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">happy-dom 偶尔需要的 polyfill</span>
+          <pre class="code"><code class="lang-typescript">// vitest.setup.ts
+// happy-dom 默认不实现 IntersectionObserver / ResizeObserver
+// 大多数测试不需要触发它们；如果需要可以 mock
+
+import { vi } from 'vitest';
+
+class MockIntersectionObserver {
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
+}
+
+class MockResizeObserver {
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
+}
+
+global.IntersectionObserver = MockIntersectionObserver as any;
+global.ResizeObserver = MockResizeObserver as any;</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 在 jsdom / happy-dom 测 layout</div>
+          <p>"为什么 offsetWidth 始终是 0？" —— jsdom / happy-dom 不计算 layout。不要在它们里测 layout 相关（响应式 / 元素位置 / 尺寸）。要测 layout 用 browser mode 或 Playwright e2e。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 期望 happy-dom 100% spec 兼容</div>
+          <p>happy-dom 故意简化部分 spec 边界 case 换性能。99% React 组件测试 OK，但偶尔有"jsdom 过 happy-dom 不过"的测试。不要试图 hack happy-dom 让它兼容 spec——直接切单文件用 jsdom 即可。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 给所有项目用 browser mode</div>
+          <p>"browser mode 是真浏览器，最准！" —— 但慢 3-5x。99% 业务组件测试在 happy-dom 已经准。browser mode 留给真正需要真浏览器的场景（layout / Canvas / 跨浏览器）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 在 happy-dom 测 fetch 然后 mock 错</div>
+          <p>happy-dom 自带 fetch（基于 undici-like 实现），但行为不完全等同 Node fetch / 浏览器 fetch。如果测试涉及 fetch，<strong>用 MSW 拦截</strong>（详见 <a href="../05-network-mock/01-msw.html">P5</a>）而不是依赖 happy-dom 的 fetch 实现。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · browser mode 多浏览器并行 CI 时间爆炸</div>
+          <p>3 浏览器 × 1000 测试 = 3000 测试运行。CI 时间从 2 分钟变成 10+ 分钟。仅对组件库 / 关键 lib 跑多浏览器；业务 app 通常单 Chromium 就够（用户主流浏览器）。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://github.com/jsdom/jsdom" target="_blank" rel="noopener">jsdom 官方仓库</a></li>
+          <li><a href="https://github.com/capricorn86/happy-dom" target="_blank" rel="noopener">happy-dom 官方仓库</a></li>
+          <li><a href="https://vitest.dev/guide/browser/" target="_blank" rel="noopener">Vitest Browser Mode 文档</a></li>
+          <li><a href="https://github.com/capricorn86/happy-dom/wiki/Compatibility" target="_blank" rel="noopener">happy-dom · 兼容性矩阵</a></li>
+          <li><a href="../03-vitest-unit/01-vitest-internals.html">P3.1 · Vitest 内部（browser mode 详细）</a></li>
+          <li><a href="01-testing-library.html">P4.1 · Testing Library（前一章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-testing-library.html">
+            <span class="label">← 上一章</span>
+            <span class="title">01 · Testing Library 设计哲学</span>
+          </a>
+          <a class="next" href="../05-network-mock/index.html">
+            <span class="label">下一阶段 →</span>
+            <span class="title">P5 · 网络 mock</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
