@@ -1,0 +1,589 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vitest 内部 · P3.1 · 测试工具深度学习</title>
+    <meta name="description" content="Vitest 内部架构：Vite dev server 复用 + Tinypool 进程池 + ESM 原生 + workspace + browser mode + 类型测试。回答「为什么 Vitest 比 Jest 快」「workspace 怎么用」「什么时候用 browser mode」。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2334a853'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ET%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>测试工具深度学习</span><span class="site-title-badge" style="background: oklch(0.6 0.17 150); color: #fff">Test</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · Vitest + 单元</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-vitest-internals.html" class="active">01 · Vitest 内部</a></li>
+          <li><a href="02-runner-comparison.html">02 · Vitest vs Jest vs Bun test vs node:test</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">测试工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · Vitest + 单元</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Vitest 内部</span>
+        </nav>
+        <h1>Vitest 内部</h1>
+        <p class="lead">
+          Vitest 不是"另一个测试 runner"——它是<strong>对 Vite 生态的零成本扩展</strong>。它复用 Vite dev server 的所有能力（编译、plugin、HMR、ESM resolution），用 Tinypool 跑测试 worker。本章讲清这套架构、workspace 模式、browser mode、类型测试，以及为什么它比 Jest 快 3-5x。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟</span>
+          <span><strong>前置</strong> P2（测试心智）+ Vite 主题 P2.1（Vite dev server）</span>
+          <span><strong>主要来源</strong> vitest.dev / Anthony Fu blog / Tinypool 文档 / Vitest 源码</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Vitest 三层架构 —— 主进程跑 Vite dev server（编译 + plugin），Worker 进程跑测试用例（隔离），通信走 Tinypool（基于 piscina 的进程池）。详见 <a href="../../vite/02-vite-architecture/01-dev-mode.html">Vite P2.1</a>。</li>
+          <li>API 兼容 Jest —— describe / test / expect / vi.mock / vi.fn 几乎可直接迁移。<code>vi</code> 替代 <code>jest</code> 全局；其他 99% 兼容。</li>
+          <li>原生 ESM —— 不需要 Babel；TypeScript / JSX / JSON / CSS 通过 esbuild + Vite plugin 转换。这是性能优势的根因。</li>
+          <li>workspace 模式 —— vitest.workspace.ts 配多 project（每个 workspace 子包独立 environment / 配置）。配合 pnpm filter（详见 <a href="../../pnpm-monorepo/04-workspaces/02-filter-topological.html">pnpm P4.2</a>）。</li>
+          <li>browser mode（Vitest 2.0+ GA）—— 真浏览器（Chromium / Firefox / WebKit via Playwright）跑测试，与 jsdom / happy-dom 形成第三选项（详见 <a href="../04-dom-testing/02-jsdom-vs-browser.html">P4.2</a>）。</li>
+          <li>类型测试 —— expectTypeOf / assertType 在测试中混用类型断言。配合 tsd / type-coverage 工具补全。</li>
+          <li>覆盖率 —— v8 provider（默认，基于 V8 内置 coverage）vs istanbul provider（基于 babel-istanbul，更精确但慢）。详见 <a href="../07-visual-coverage-ci/01-visual-coverage-ci.html">P7</a>。</li>
+          <li>watch 模式启发自 HMR —— 改一个文件只重跑被它影响的测试。Vite 的 module graph 让"哪些测试被影响"准确推断。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>三层架构</h3>
+
+        <p>Vitest 启动时建立 3 层架构：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code class="lang-text">┌──────────────────────────────────────────┐
+│  主进程（Main Process）                     │
+│  ─────────────────────────                │
+│  • Vite dev server 实例                   │
+│    - 编译 TS/JSX/CSS（esbuild）            │
+│    - plugin 链（@vitejs/plugin-react 等）  │
+│    - module graph（追踪文件依赖）           │
+│  • Tinypool 进程池管理器                   │
+│  • 测试结果聚合 + reporter                  │
+└──────────────────────────────────────────┘
+               ↕ IPC（消息 + 编译产物）
+┌──────────────────────────────────────────┐
+│  Worker 进程（默认 = CPU 核数）              │
+│  ─────────────────────────                │
+│  • 跑测试用例（独立 V8 isolate）             │
+│  • happy-dom / jsdom（如果配 environment） │
+│  • 测试结果上报主进程                       │
+└──────────────────────────────────────────┘</code></pre>
+        </div>
+
+        <p>关键点：</p>
+
+        <ul>
+          <li>主进程<strong>只编译一次</strong>——多个 worker 共享同一份编译结果（Vite module graph 缓存）</li>
+          <li>Worker 进程是<strong>独立 V8 isolate</strong>，测试间完全隔离（mock / 全局变量 / DOM 状态不串味）</li>
+          <li>Tinypool 是 Vitest 团队基于 piscina 的优化版，启动 worker 比 Jest 的 jest-worker 快 30-50%</li>
+        </ul>
+
+        <p>这套架构让 Vitest 同时拿到两个优势：</p>
+
+        <ol>
+          <li>Vite 的编译速度（esbuild + 增量）</li>
+          <li>Jest 的进程隔离（避免 mock 串味）</li>
+        </ol>
+
+        <h3>Vite 复用的具体内容</h3>
+
+        <p>Vitest 直接用 Vite 的能力，不重新发明：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Vite 能力</th>
+              <th>Vitest 怎么用</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>esbuild 转换 TypeScript / JSX</td>
+              <td>测试代码直接走 Vite 编译，不需要 babel-jest</td>
+            </tr>
+            <tr>
+              <td>plugin 链</td>
+              <td>@vitejs/plugin-react / @vitejs/plugin-vue / 等都自动生效</td>
+            </tr>
+            <tr>
+              <td>resolve 配置</td>
+              <td>vite.config 中的 alias / dedupe / preserveSymlinks 直接复用</td>
+            </tr>
+            <tr>
+              <td>module graph</td>
+              <td>watch 模式 "改 A 影响哪些测试" 用 Vite 的依赖图推断</td>
+            </tr>
+            <tr>
+              <td>SSR transform</td>
+              <td>Vitest 在 worker 里用 Vite 的 SSR fetchModule 加载模块</td>
+            </tr>
+            <tr>
+              <td>CSS 处理</td>
+              <td>组件引入 .css 直接 import 不报错（jsdom 下空字符串）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>这就是为什么 Vite 项目用 Vitest "<strong>零配置</strong>"——所有 vite.config 中的设置自动作用于测试。</p>
+
+        <p>对比 Jest：要让 Jest 跑 ESM + TypeScript + JSX 项目，需要：</p>
+        <ul>
+          <li>babel-jest（转 ES5）+ ts-jest（转 TS）</li>
+          <li>jest.config 的 moduleNameMapper 重写 alias</li>
+          <li>jest.config 的 transformIgnorePatterns 处理 ESM-only 依赖</li>
+          <li>setupFiles / setupFilesAfterEach 配 jest-dom / 全局 mock</li>
+          <li>大约 50-100 行 jest.config 才能跑现代项目</li>
+        </ul>
+
+        <p>Vitest 用 Vite 项目时，<code>vitest.config.ts</code> 通常 5-15 行就够。</p>
+
+        <h3>workspace 模式</h3>
+
+        <p>monorepo 中每个 workspace 子包可能需要不同测试配置：</p>
+        <ul>
+          <li>UI 组件库（packages/ui）—— 用 happy-dom + Testing Library</li>
+          <li>纯函数 lib（packages/utils）—— 用 node environment</li>
+          <li>app（apps/web）—— 用 happy-dom + 各种 plugin</li>
+          <li>browser-only 包 —— 用 browser mode</li>
+        </ul>
+
+        <p>Vitest workspace 让每个 project 独立配置：</p>
+
+        <div class="code-block">
+          <span class="code-label">vitest.workspace.ts（项目根）</span>
+          <pre class="code"><code class="lang-typescript">import { defineWorkspace } from 'vitest/config';
+
+export default defineWorkspace([
+  // packages/ui · 组件测试
+  {
+    extends: './vitest.config.ts',
+    test: {
+      name: 'ui',
+      root: './packages/ui',
+      environment: 'happy-dom',
+      setupFiles: './packages/ui/vitest.setup.ts'
+    }
+  },
+  // packages/utils · 纯函数
+  {
+    extends: './vitest.config.ts',
+    test: {
+      name: 'utils',
+      root: './packages/utils',
+      environment: 'node'
+    }
+  },
+  // apps/web · app 测试
+  {
+    extends: './vitest.config.ts',
+    test: {
+      name: 'web',
+      root: './apps/web',
+      environment: 'happy-dom'
+    }
+  }
+]);</code></pre>
+        </div>
+
+        <p>跑测试时：</p>
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 跑全部 workspace 的测试
+pnpm vitest
+
+# 仅跑 ui workspace
+pnpm vitest --project ui
+
+# 跑变更影响的（结合 turbo）
+pnpm turbo test --filter=...[main]
+# Turborepo 按 git 变更选 workspace + 跑各自 vitest</code></pre>
+        </div>
+
+        <p>这套配合 pnpm filter + Turborepo cache 是 monorepo 测试的现代标准（详见 <a href="../../pnpm-monorepo/05-orchestration/01-turborepo.html">pnpm P5.1</a>）。</p>
+
+        <h3>browser mode · 真浏览器组件测试</h3>
+
+        <p>Vitest 2.0（2024）GA 了 browser mode——在真浏览器（不是 jsdom 模拟）跑测试：</p>
+
+        <div class="code-block">
+          <span class="code-label">vitest.config.ts</span>
+          <pre class="code"><code class="lang-typescript">import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    browser: {
+      enabled: true,
+      provider: 'playwright',  // 或 'webdriverio'
+      instances: [
+        { browser: 'chromium' },
+        { browser: 'firefox' },
+        { browser: 'webkit' }
+      ]
+    }
+  }
+});</code></pre>
+        </div>
+
+        <p>跑测试时 Vitest 起一个真 Chromium / Firefox / WebKit 实例，把测试代码注入浏览器执行。</p>
+
+        <p>什么时候用 browser mode：</p>
+        <ul>
+          <li>测真实 layout（happy-dom 不计算 layout）</li>
+          <li>测 Canvas / WebGL（jsdom / happy-dom 不支持）</li>
+          <li>测真实 CSS（包括 :hover / animation / transition）</li>
+          <li>测复杂交互（拖拽 / 多点触摸 / 视口滚动）</li>
+          <li>组件库 lib 想跨浏览器验证</li>
+        </ul>
+
+        <p>什么时候不用：</p>
+        <ul>
+          <li>简单业务组件（happy-dom 够用，速度快 5-10x）</li>
+          <li>纯逻辑函数</li>
+          <li>CI 资源紧张（每个浏览器实例占内存）</li>
+        </ul>
+
+        <p>2026 年实测分布：80% 测试在 happy-dom；15% 用 browser mode；5% 用 jsdom（spec 严格 case）。详见 <a href="../04-dom-testing/02-jsdom-vs-browser.html">P4.2</a>。</p>
+
+        <h3>类型测试</h3>
+
+        <p>TypeScript 用户的痛点：单元测试只能测运行时，类型错误要 tsc 才发现。Vitest 提供类型断言 API：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-typescript">import { describe, test, expectTypeOf, assertType } from 'vitest';
+
+function pickKey&lt;T, K extends keyof T&gt;(obj: T, key: K): T[K] {
+  return obj[key];
+}
+
+describe('pickKey types', () =&gt; {
+  test('returns the correct type', () =&gt; {
+    const result = pickKey({ name: 'Alice', age: 30 }, 'name');
+
+    // 运行时断言
+    expect(result).toBe('Alice');
+
+    // 类型断言（编译期检查 + Vitest 验证）
+    expectTypeOf(result).toEqualTypeOf&lt;string&gt;();
+    expectTypeOf(pickKey).parameter(1).toEqualTypeOf&lt;'name' | 'age'&gt;();
+  });
+});</code></pre>
+        </div>
+
+        <p>跑 <code>vitest typecheck</code> 时，Vitest 会用 tsc 验证所有 expectTypeOf 断言。</p>
+
+        <p>这套替代了过去的<code>tsd</code>（独立类型测试工具）。开源 lib 维护者尤其受益——能保证 API 类型签名向后兼容。</p>
+
+        <h3>关键配置项</h3>
+
+        <p>vitest.config.ts 常用字段：</p>
+
+        <ul>
+          <li><code>test.environment</code>—— jsdom / happy-dom / node / browser</li>
+          <li><code>test.globals</code>—— 是否注入 describe / test / expect 全局（默认 false，要 import）</li>
+          <li><code>test.setupFiles</code>—— 跑测试前执行的 setup（如 import jest-dom matcher）</li>
+          <li><code>test.coverage.provider</code>—— v8（默认）/ istanbul</li>
+          <li><code>test.poolOptions</code>—— Tinypool 配置（threads / forks / vmThreads）</li>
+          <li><code>test.alias</code>—— 测试中的额外 alias（覆盖 vite alias）</li>
+          <li><code>test.reporters</code>—— default / verbose / dot / junit / json / html</li>
+          <li><code>test.snapshotFormat</code>—— snapshot 序列化选项</li>
+        </ul>
+
+        <p>注意：<code>test</code> 字段嵌套在 vite.config 顶层，不是单独的 vitest.config（虽然支持）。这让 vite 项目的 dev server + 测试共享一份配置。</p>
+
+        <h3>watch 模式 · HMR 启发</h3>
+
+        <p>Vitest 的 watch 不是简单"文件改了就重跑全部"。它用 Vite module graph 推断：</p>
+
+        <ol>
+          <li>文件 A 改动</li>
+          <li>查 module graph，找出依赖 A 的所有模块（直接 + 间接）</li>
+          <li>找到所有"依赖图中包含 A"的测试文件</li>
+          <li>只重跑这些测试</li>
+        </ol>
+
+        <p>结果：典型项目 watch 重跑 0.3-1.5s（vs Jest 的 3-5s）。</p>
+
+        <p>这套机制借鉴了 Vite 的 HMR 思路（详见 <a href="../../vite/05-hmr/01-hmr-and-react-refresh.html">Vite P5.1</a>），但目标是"重跑测试"而不是"热更新组件"。</p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 关键洞见：Vitest 的护城河是 Vite 生态契合</div>
+          <p>Vitest 比 Jest 快、API 更简洁、配置更少——但这些都不是 Vitest 独有。它真正的护城河是<strong>与 Vite 生态深度契合</strong>：vite.config 一份配置同时管 dev / build / test；Vite plugin 自动作用于测试；module graph 让 watch 极快。如果你的项目不在 Vite 生态（如 Webpack 老项目），Vitest 仍能用，但收益减半。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · Vite + React 新项目接入 Vitest</h3>
+          <p><strong>背景</strong>：刚 create-vite 出来的 React 项目，要加测试。</p>
+          <p><strong>步骤</strong>：</p>
+          <div class="code-block">
+            <span class="code-label">bash</span>
+            <pre class="code"><code class="lang-bash">pnpm add -D vitest @testing-library/react @testing-library/jest-dom \
+  @testing-library/user-event happy-dom @vitest/ui</code></pre>
+          </div>
+          <p>修改 vite.config.ts：</p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-typescript">/// &lt;reference types="vitest" /&gt;
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  test: {
+    environment: 'happy-dom',
+    globals: true,            // 让 describe / test / expect 全局可用
+    setupFiles: './src/test/setup.ts'
+  }
+});</code></pre>
+          </div>
+          <p>添加 src/test/setup.ts：</p>
+          <div class="code-block">
+            <span class="code-label">typescript</span>
+            <pre class="code"><code class="lang-typescript">import '@testing-library/jest-dom/vitest';</code></pre>
+          </div>
+          <p>package.json scripts：<code>"test": "vitest"</code> + <code>"test:ui": "vitest --ui"</code>。完成。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · monorepo 配 Vitest workspace</h3>
+          <p><strong>背景</strong>：pnpm monorepo（5 包），想用 Vitest workspace 让每个包独立 environment。</p>
+          <p><strong>方案</strong>：根目录建 <code>vitest.workspace.ts</code> 列出 5 个 project，每个 project 设置自己的 environment / setup。子包不需要单独的 vitest.config（继承根目录）。详见上文"workspace 模式"代码示例。</p>
+          <p>跑测试：<code>pnpm vitest</code>（全部）/ <code>pnpm vitest --project ui</code>（仅 ui）。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · 给组件库加 browser mode</h3>
+          <p><strong>背景</strong>：开源 React 组件库，要在 Chromium / Firefox / WebKit 三个浏览器都跑测试，确保跨浏览器兼容。</p>
+          <p><strong>方案</strong>：</p>
+          <div class="code-block">
+            <span class="code-label">bash</span>
+            <pre class="code"><code class="lang-bash">pnpm add -D @vitest/browser playwright
+pnpm playwright install</code></pre>
+          </div>
+          <div class="code-block">
+            <span class="code-label">vitest.config.ts</span>
+            <pre class="code"><code class="lang-typescript">export default defineConfig({
+  test: {
+    browser: {
+      enabled: true,
+      provider: 'playwright',
+      headless: true,    // CI 用 headless
+      instances: [
+        { browser: 'chromium' },
+        { browser: 'firefox' },
+        { browser: 'webkit' }
+      ]
+    }
+  }
+});</code></pre>
+          </div>
+          <p>每个测试在 3 个浏览器都跑一遍。CI 时间增加 2-3x，但对组件库的跨浏览器信心值得。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <div class="code-block">
+          <span class="code-label">最简单的 Vitest 配置</span>
+          <pre class="code"><code class="lang-typescript">// vite.config.ts
+/// &lt;reference types="vitest" /&gt;
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  test: {
+    environment: 'happy-dom',
+    globals: true,
+    coverage: { provider: 'v8' }
+  }
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">setup 文件（jest-dom matcher）</span>
+          <pre class="code"><code class="lang-typescript">// src/test/setup.ts
+import '@testing-library/jest-dom/vitest';
+import { afterEach } from 'vitest';
+import { cleanup } from '@testing-library/react';
+
+afterEach(() =&gt; {
+  cleanup();    // 每个测试后清理 DOM
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">vi.mock · 模块级 mock</span>
+          <pre class="code"><code class="lang-typescript">import { describe, test, expect, vi } from 'vitest';
+import { fetchUser } from './api';
+
+vi.mock('./api', () =&gt; ({
+  fetchUser: vi.fn().mockResolvedValue({ name: 'Alice' })
+}));
+
+describe('user fetch', () =&gt; {
+  test('returns mocked user', async () =&gt; {
+    const user = await fetchUser('1');
+    expect(user.name).toBe('Alice');
+    expect(fetchUser).toHaveBeenCalledWith('1');
+  });
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">vi.spyOn · 局部 spy</span>
+          <pre class="code"><code class="lang-typescript">import { describe, test, expect, vi, beforeEach } from 'vitest';
+import * as api from './api';
+
+describe('login flow', () =&gt; {
+  beforeEach(() =&gt; {
+    vi.spyOn(api, 'login').mockResolvedValue({ token: 'abc' });
+  });
+
+  test('stores token', async () =&gt; {
+    const result = await api.login('alice', 'pass');
+    expect(result.token).toBe('abc');
+  });
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">vi.useFakeTimers · 时间控制</span>
+          <pre class="code"><code class="lang-typescript">import { describe, test, expect, vi } from 'vitest';
+
+describe('debounce', () =&gt; {
+  test('triggers after delay', () =&gt; {
+    vi.useFakeTimers();
+    const fn = vi.fn();
+    const debounced = debounce(fn, 1000);
+
+    debounced();
+    expect(fn).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1000);
+    expect(fn).toHaveBeenCalledOnce();
+
+    vi.useRealTimers();
+  });
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">snapshot 测试</span>
+          <pre class="code"><code class="lang-typescript">import { test, expect } from 'vitest';
+import { render } from '@testing-library/react';
+import Card from './Card';
+
+test('Card renders correctly', () =&gt; {
+  const { container } = render(&lt;Card title="Hello" /&gt;);
+  expect(container).toMatchSnapshot();
+});
+
+// 第一次跑生成 __snapshots__/Card.test.tsx.snap
+// 后续跑比对；不一致时 fail
+// 故意改动后跑 vitest -u 更新 snapshot</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">类型测试</span>
+          <pre class="code"><code class="lang-typescript">import { test, expectTypeOf } from 'vitest';
+
+type Result&lt;T&gt; = { ok: true; data: T } | { ok: false; error: string };
+
+function unwrap&lt;T&gt;(result: Result&lt;T&gt;): T {
+  if (!result.ok) throw new Error(result.error);
+  return result.data;
+}
+
+test('unwrap return type', () =&gt; {
+  const r1: Result&lt;string&gt; = { ok: true, data: 'hello' };
+  expectTypeOf(unwrap(r1)).toEqualTypeOf&lt;string&gt;();
+});</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 把 vitest.config 与 vite.config 分开维护</div>
+          <p>"我想测试配置独立" —— 不必要。把 <code>test</code> 字段嵌在 vite.config.ts 中是 Vitest 推荐方式（也是默认）。两份配置容易漂移（alias / plugin 改了 vite 没改 vitest）。<strong>除非有强烈理由</strong>，保持单一 vite.config.ts。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 设 globals: false 但每个测试都 import describe/test</div>
+          <p>globals: true 让 describe / test / expect 全局可用，写 import 太啰嗦。Jest 用户从 Jest 迁来时常忘记设这个，导致每个测试文件都要 <code>import { describe, test, expect } from 'vitest'</code>。<strong>建议默认设 globals: true</strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 期望 vi.mock 像 jest.mock 一样 hoisted</div>
+          <p>Jest 的 jest.mock 用 babel-jest hoisting，调用顺序灵活。Vitest 的 vi.mock 也 hoisted（通过 vite plugin），但限制更严：必须在<strong>顶层</strong>调用，不能在 describe / beforeEach 里。否则报 "vi.mock must be called at top level"。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · Vite plugin 不在测试中生效</div>
+          <p>装了某个 Vite plugin（如 vite-plugin-svgr），dev 时正常但测试报错。原因：plugin 可能不支持 SSR transform（Vitest 用 SSR 模式加载模块）。<strong>解</strong>：要么找 SSR 兼容的版本，要么在 vitest.config 中用 <code>test.deps.inline</code> 把该 plugin 处理的依赖标记内联。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 设 pool: 'threads' 后 vi.mock 串味</div>
+          <p>Vitest 默认 pool: 'forks'（每测试文件一个进程）。改成 'threads'（worker_threads）会更快，但<strong>thread 之间共享 V8 isolate</strong>，vi.mock 可能串味导致测试相互影响。除非你确定测试代码不依赖全局状态，否则保持默认 forks。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://vitest.dev/" target="_blank" rel="noopener">Vitest 官方文档</a></li>
+          <li><a href="https://vitest.dev/guide/workspace.html" target="_blank" rel="noopener">Vitest Workspace 文档</a></li>
+          <li><a href="https://vitest.dev/guide/browser/" target="_blank" rel="noopener">Vitest Browser Mode 文档</a></li>
+          <li><a href="https://github.com/tinylibs/tinypool" target="_blank" rel="noopener">Tinypool（Vitest 进程池）</a></li>
+          <li><a href="https://antfu.me/posts/release-vitest-1" target="_blank" rel="noopener">Anthony Fu · Release Vitest 1.0</a></li>
+          <li><a href="../../vite/02-vite-architecture/01-dev-mode.html">Vite P2.1 · Dev mode（本站）</a></li>
+          <li><a href="../../vite/05-hmr/01-hmr-and-react-refresh.html">Vite P5.1 · HMR（本站，watch 启发来源）</a></li>
+          <li><a href="02-runner-comparison.html">P3.2 · 4 家 runner 横评（下一章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../02-mindset/02-behavior-not-implementation.html">
+            <span class="label">← 上一章</span>
+            <span class="title">P2.2 · 测行为不测实现</span>
+          </a>
+          <a class="next" href="02-runner-comparison.html">
+            <span class="label">下一章 →</span>
+            <span class="title">02 · 4 家 runner 横评</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vitest vs Jest vs Bun test vs node:test · P3.2 · 测试工具深度学习</title>
+    <meta name="description" content="4 家单元测试 runner 全维度横评：Vitest 3 / Jest 30 / Bun test / node:test。性能 / API 兼容 / 生态 / 配置 / 决策矩阵。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2334a853'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='15' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3ET%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>测试工具深度学习</span><span class="site-title-badge" style="background: oklch(0.6 0.17 150); color: #fff">Test</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · Vitest + 单元</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-vitest-internals.html">01 · Vitest 内部</a></li>
+          <li><a href="02-runner-comparison.html" class="active">02 · 4 家 runner 横评</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">测试工具</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · Vitest + 单元</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 4 家 runner 横评</span>
+        </nav>
+        <h1>Vitest vs Jest vs Bun test vs node:test 横评</h1>
+        <p class="lead">
+          4 家单元测试 runner 全维度对比 + 选型决策矩阵 + 真实迁移案例。<strong>2026 年新项目默认 Vitest</strong>；存量 Jest 维护合理；Bun runtime 项目用 Bun test；微型 lib 用 node:test。本章给详细判据，让你能为项目精准选型。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> P3.1（Vitest 内部）</span>
+          <span><strong>主要来源</strong> 4 家官方文档 + 真实迁移案例（Astro / Vue / typescript-eslint）</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>新项目默认 Vitest——除非有强 Bun runtime / Next.js / 微型 lib 理由，2026 单元测试默认选 Vitest 3。</li>
+          <li>Jest 30 进入存量维护期——OpenJS 治理后维护活跃但创新放缓。Babel 依赖让 ESM 性能始终落后 Vitest。新项目无理由选 Jest。</li>
+          <li>Bun test 适合 Bun runtime 项目——一体化优势 + 速度优势；与 Bun runtime 项目一起用最大化收益。</li>
+          <li>node:test 适合微型 lib——内置零依赖；但缺 mock / snapshot / coverage 内置；适合不想引依赖的小项目。</li>
+          <li>API 兼容性——4 家共享 BDD 风格（describe / test）；expect 接口 Vitest / Jest / Bun 几乎相同；node:test 用 assert 不是 expect。</li>
+          <li>性能差距——Bun test 最快 / Vitest 次之 / Jest 慢 3-5x（ESM 项目）/ node:test 中等。但多数项目感知不显著。</li>
+          <li>生态成熟度——Jest 最大（10 年积累）/ Vitest 快速增长（2026 已是 React/Vue 生态主流）/ Bun test 跟随 Bun / node:test 最少。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>4 家全维度对比表</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 110px">维度</th>
+              <th>Vitest 3</th>
+              <th>Jest 30</th>
+              <th>Bun test</th>
+              <th>node:test</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>实现</td>
+              <td>JS（基于 Vite）</td>
+              <td>JS（基于 Babel）</td>
+              <td>Zig（Bun 内置）</td>
+              <td>C++（Node 内置）</td>
+            </tr>
+            <tr>
+              <td>ESM 原生</td>
+              <td>✅ 原生</td>
+              <td>🟡 实验性</td>
+              <td>✅ 原生</td>
+              <td>✅ 原生</td>
+            </tr>
+            <tr>
+              <td>TypeScript</td>
+              <td>✅ esbuild</td>
+              <td>需 ts-jest</td>
+              <td>✅ 原生</td>
+              <td>需 tsx / ts-node</td>
+            </tr>
+            <tr>
+              <td>Mock 内置</td>
+              <td>✅ vi.mock</td>
+              <td>✅ jest.mock</td>
+              <td>✅ mock</td>
+              <td>✅ mock（基础）</td>
+            </tr>
+            <tr>
+              <td>Snapshot 内置</td>
+              <td>✅</td>
+              <td>✅</td>
+              <td>✅（Bun 1.1+）</td>
+              <td>❌（外接）</td>
+            </tr>
+            <tr>
+              <td>Coverage 内置</td>
+              <td>✅ v8/istanbul</td>
+              <td>✅ istanbul</td>
+              <td>✅ V8</td>
+              <td>需 c8 外接</td>
+            </tr>
+            <tr>
+              <td>Watch 模式</td>
+              <td>✅ HMR 启发</td>
+              <td>✅</td>
+              <td>✅</td>
+              <td>❌（外接 nodemon）</td>
+            </tr>
+            <tr>
+              <td>Workspace</td>
+              <td>✅ 原生</td>
+              <td>🟡 projects 字段</td>
+              <td>✅</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td>Browser mode</td>
+              <td>✅（Playwright）</td>
+              <td>❌</td>
+              <td>❌</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td>类型测试</td>
+              <td>✅ expectTypeOf</td>
+              <td>需 tsd</td>
+              <td>需外接</td>
+              <td>需外接</td>
+            </tr>
+            <tr>
+              <td>UI 模式</td>
+              <td>✅ @vitest/ui</td>
+              <td>❌</td>
+              <td>❌</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td>主要场景</td>
+              <td>新项目主流</td>
+              <td>存量维护</td>
+              <td>Bun 项目</td>
+              <td>微型 lib</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>性能对比（中型 React 项目，500 测试）</h3>
+
+        <p>测试场景：500 个测试 / TypeScript / happy-dom / macOS M2 Pro / 现代 SSD。数字仅作参考，复现条件 + 真实 benchmark 见各家官方公告。</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>场景</th>
+              <th>Vitest 3</th>
+              <th>Jest 30</th>
+              <th>Bun test</th>
+              <th>node:test</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>cold start（首次跑）</td>
+              <td>~5-8s</td>
+              <td>~15-20s</td>
+              <td>~3-5s</td>
+              <td>~4-6s</td>
+            </tr>
+            <tr>
+              <td>watch 重跑（改 1 文件）</td>
+              <td>~0.5-1.5s</td>
+              <td>~3-5s</td>
+              <td>~0.3-1s</td>
+              <td>—（无 watch）</td>
+            </tr>
+            <tr>
+              <td>full re-run（无 cache）</td>
+              <td>~4-6s</td>
+              <td>~12-15s</td>
+              <td>~2-4s</td>
+              <td>~3-5s</td>
+            </tr>
+            <tr>
+              <td>CI（5000 测试，4 worker）</td>
+              <td>~25-35s</td>
+              <td>~80-120s</td>
+              <td>~15-25s</td>
+              <td>~20-30s</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>关键观察：</p>
+        <ul>
+          <li>Bun test 是性能标杆（Zig 实现 + 系统调用直通）</li>
+          <li>Vitest 与 Bun test 差距 1.5-2x，与 Jest 差距 3-5x</li>
+          <li>watch 重跑差距最大——Vitest module graph 让 incremental 极快</li>
+          <li>差距随项目规模放大：5000+ 测试 Vitest vs Jest 差距能到 5-10x</li>
+        </ul>
+
+        <h3>Vitest 3 详解</h3>
+
+        <p>核心定位：Vite 生态原生 runner。详见 <a href="01-vitest-internals.html">P3.1</a>。</p>
+
+        <p>2026 优势：</p>
+        <ul>
+          <li>新项目默认（React / Vue / Svelte / Solid 全生态首选）</li>
+          <li>workspace 模式优秀（monorepo 友好）</li>
+          <li>browser mode 是独家能力</li>
+          <li>类型测试 expectTypeOf 内置</li>
+          <li>UI 模式 @vitest/ui 提供交互式 dashboard</li>
+        </ul>
+
+        <p>2026 弱项：</p>
+        <ul>
+          <li>非 Vite 项目收益降低</li>
+          <li>Next.js 在 2026 仍推荐 Jest（边界 case）</li>
+          <li>Babel 插件不直接兼容（要找 Vite plugin 等价）</li>
+        </ul>
+
+        <p>真实大型用户：Vue / Vite / Vitest 自身 / Astro / Nuxt / Solid / SvelteKit / shadcn/ui / typescript-eslint / Cloudflare Workers / Slidev / Tauri。</p>
+
+        <h3>Jest 30 详解</h3>
+
+        <p>核心定位：10 年积累的"零配置全家桶"，2026 年存量主力。</p>
+
+        <p>2026 优势：</p>
+        <ul>
+          <li>10 年生态最成熟（Stack Overflow / GitHub 答案最多）</li>
+          <li>React Native 官方默认（仍最佳选择）</li>
+          <li>Next.js 官方推荐（兼容性边界 case 比 Vitest 少）</li>
+          <li>大量企业项目存量主力</li>
+          <li>Jest 30 由 OpenJS 治理，维护稳定</li>
+        </ul>
+
+        <p>2026 弱项：</p>
+        <ul>
+          <li>ESM 仍需 <code>--experimental-vm-modules</code>（性能折损）</li>
+          <li>Babel 依赖让 cold start 慢 3-5x（vs Vitest）</li>
+          <li>jest.config 在现代项目通常 50-100 行（transformIgnorePatterns / moduleNameMapper 等）</li>
+          <li>无 browser mode</li>
+          <li>无类型测试内置</li>
+        </ul>
+
+        <p>真实大型用户：React / React Native / Next.js / Babel / Webpack / Lerna / Yarn / 大量企业 React 项目。</p>
+
+        <h3>Bun test 详解</h3>
+
+        <p>核心定位：Bun 一体化工具链中的 runner。详见 <a href="../../bun/04-toolchain/04-bun-test.html">Bun P4.4</a>。</p>
+
+        <p>2026 优势：</p>
+        <ul>
+          <li>性能标杆（Zig 实现，比 Jest 快 5-10x，比 Vitest 快 1.5-2x）</li>
+          <li>无需安装依赖（Bun runtime 自带）</li>
+          <li>Jest 兼容 API（迁移成本低）</li>
+          <li>watch 模式优秀（Bun 1.1+）</li>
+          <li>与 Bun runtime / Bun build 共享 parser 和缓存</li>
+        </ul>
+
+        <p>2026 弱项：</p>
+        <ul>
+          <li>仍在补 Vitest 已有功能（snapshot / mock / coverage 完整度落后）</li>
+          <li>无 browser mode（Bun 不能跑真浏览器）</li>
+          <li>大型 React 生态项目仍倾向 Vitest（生态成熟度）</li>
+          <li>Windows 一级支持到 Bun 1.1+ 才完整</li>
+        </ul>
+
+        <p>真实大型用户：Bun runtime 自家 / Hono / Elysia / 大量 SaaS 工具型项目。</p>
+
+        <h3>node:test 详解</h3>
+
+        <p>核心定位：Node 22+ 内置的轻量 runner。详见 <a href="../../node/06-modern/01-modern-node.html">Node P6.1</a>。</p>
+
+        <p>2026 优势：</p>
+        <ul>
+          <li>不需要装依赖（Node 自带）</li>
+          <li>启动快（无 Babel / 无 esbuild 转换）</li>
+          <li>API 与 Jest / Vitest 部分兼容（describe / test）</li>
+          <li>跑 Node lib 时与生产环境完全一致</li>
+        </ul>
+
+        <p>2026 弱项：</p>
+        <ul>
+          <li>无 watch 模式（依赖外部 nodemon / tsx --watch）</li>
+          <li>无 mock / snapshot / coverage 内置</li>
+          <li>无 workspace</li>
+          <li>用 assert 不用 expect（API 与主流不一致）</li>
+          <li>跑 TypeScript 需要 tsx / ts-node</li>
+          <li>生态非常少</li>
+        </ul>
+
+        <p>真实大型用户：Node 内部测试 / 一些极简 lib（如 hono 的部分模块） / 不想引依赖的工具脚本。</p>
+
+        <h3>API 形状对比</h3>
+
+        <p>describe / test / expect 三者高度兼容，但有细节差异：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>API</th>
+              <th>Vitest 3</th>
+              <th>Jest 30</th>
+              <th>Bun test</th>
+              <th>node:test</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>导入</td>
+              <td>from 'vitest'</td>
+              <td>全局（默认）</td>
+              <td>from 'bun:test'</td>
+              <td>from 'node:test'</td>
+            </tr>
+            <tr>
+              <td>断言</td>
+              <td>expect</td>
+              <td>expect</td>
+              <td>expect</td>
+              <td>assert（差异）</td>
+            </tr>
+            <tr>
+              <td>mock</td>
+              <td>vi.fn / vi.mock</td>
+              <td>jest.fn / jest.mock</td>
+              <td>mock / mock.module</td>
+              <td>mock.fn</td>
+            </tr>
+            <tr>
+              <td>spy</td>
+              <td>vi.spyOn</td>
+              <td>jest.spyOn</td>
+              <td>spyOn</td>
+              <td>mock.method</td>
+            </tr>
+            <tr>
+              <td>fake timers</td>
+              <td>vi.useFakeTimers</td>
+              <td>jest.useFakeTimers</td>
+              <td>setSystemTime</td>
+              <td>mock.timers</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>选型决策矩阵</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>场景</th>
+              <th>首选</th>
+              <th>备选</th>
+              <th>避免</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>新建 Vite + React/Vue 项目</td>
+              <td>Vitest 3</td>
+              <td>Bun test（Bun runtime）</td>
+              <td>Jest（无理由）</td>
+            </tr>
+            <tr>
+              <td>新建 Next.js 项目</td>
+              <td>Jest 30 或 Vitest</td>
+              <td>—</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td>已用 Bun runtime</td>
+              <td>Bun test</td>
+              <td>Vitest（生态兼容）</td>
+              <td>Jest（性能差距大）</td>
+            </tr>
+            <tr>
+              <td>存量 Jest + Webpack 项目</td>
+              <td>Jest 30（不动）</td>
+              <td>计划迁 Vitest</td>
+              <td>盲目切（成本未估准）</td>
+            </tr>
+            <tr>
+              <td>React Native 项目</td>
+              <td>Jest 30</td>
+              <td>—</td>
+              <td>Vitest（兼容性差）</td>
+            </tr>
+            <tr>
+              <td>Node lib（不引依赖）</td>
+              <td>node:test</td>
+              <td>Vitest（如功能多）</td>
+              <td>Jest（重）</td>
+            </tr>
+            <tr>
+              <td>极致 CI 速度需求</td>
+              <td>Bun test</td>
+              <td>Vitest</td>
+              <td>Jest</td>
+            </tr>
+            <tr>
+              <td>组件库（跨浏览器测试）</td>
+              <td>Vitest browser mode</td>
+              <td>Playwright Component Testing</td>
+              <td>—</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>真实迁移案例</h3>
+
+        <p>以下是 2024-2025 年公开的迁移数据（含真实开源项目）：</p>
+
+        <ul>
+          <li>Astro —— 从 Mocha 迁 Vitest（2022）。理由：与 Vite 生态一致；CI 速度提升 2x；workspace 友好。</li>
+          <li>Vue 全家桶 —— 从 Jest 迁 Vitest（2022）。理由：Vue 自家 ESM 优先；Jest babel 配置过于复杂。</li>
+          <li>Storybook —— 从 Jest 部分迁 Vitest（2024）。理由：与 Vite Storybook builder 集成。</li>
+          <li>typescript-eslint —— 从 Jest 迁 Vitest（2024）。理由：monorepo workspace 模式 + 性能。</li>
+          <li>Cloudflare Workers —— Vitest 默认（2023+）。理由：原生 ESM + 与 Wrangler 工具链契合。</li>
+          <li>shadcn/ui —— Vitest 默认（2024+）。React + Vite 生态。</li>
+        </ul>
+
+        <p>反例：Next.js / React Native 仍用 Jest。Next.js 推荐 Jest 是因为某些 server-only 模块在 Vitest 下兼容性边界 case；React Native 是因为生态深度绑定。</p>
+
+        <p>典型迁移成本：500-1000 测试规模约 1-2 周（含修兼容性 case）。性能收益：CI 时间通常 2-5x 改善。</p>
+
+        <div class="callout info">
+          <div class="callout-title">💡 关键洞见：选型基于场景，不是技术评分</div>
+          <p>看 4 家技术对比，Vitest / Bun test 都比 Jest 强。但 Jest 在 Next.js / React Native 仍是最佳选择——不是因为它技术更好，而是因为它生态契合度更高。<strong>选型不是给工具打分，是看工具与你项目的契合度</strong>。新 Vite 项目选 Vitest 是简单决定；存量 Jest 项目要不要切看具体痛点（CI 时间 / ESM 性能 / monorepo 需求），不是看 Vitest 评分高就盲切。</p>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 1 · 老 Webpack + Jest 项目想迁 Vitest</h3>
+          <p><strong>背景</strong>：5 年的 React + Webpack 5 + Jest 27 项目。500 个测试，CI 跑 8 分钟。考虑迁 Vitest 提性能。</p>
+          <p><strong>分析</strong>：</p>
+          <ul>
+            <li>Webpack 项目能跑 Vitest（不需要切 Vite）—— Vitest 自带 Vite 编译</li>
+            <li>jest.config 中的 transformIgnorePatterns / moduleNameMapper 要在 vitest.config 重写</li>
+            <li>vi.mock 与 jest.mock 行为略有差异（hoisting 机制）—— 少数测试需要修</li>
+            <li>预期 CI 8 分钟 → 2-3 分钟</li>
+          </ul>
+          <p><strong>策略</strong>：</p>
+          <ul>
+            <li>第 1 周：在一个独立 workspace 试跑 Vitest（不影响 Jest 主线）</li>
+            <li>第 2 周：解决兼容性问题；运行性能 benchmark</li>
+            <li>第 3 周：全量切 + 删除 Jest 依赖；CI 改</li>
+            <li>典型问题：<code>jest.fn().mockResolvedValueOnce</code> 在 Vitest 等价；某些 jest hoist 边界 case</li>
+          </ul>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 2 · 已用 Bun runtime 选 Bun test 还是 Vitest</h3>
+          <p><strong>背景</strong>：5 人团队，Hono on Bun 后端 + React 前端。问该用什么测试 runner。</p>
+          <p><strong>分析</strong>：</p>
+          <ul>
+            <li>后端 Hono on Bun → Bun test（一体化最大化，速度优势）</li>
+            <li>前端 React + Vite → Vitest（生态成熟度 + Vite 契合）</li>
+          </ul>
+          <p>不要试图用一个 runner 测两边。前后端项目本质不同（DOM vs Node），用各自最适合的工具是合理的。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 3 · 微型 npm lib 要不要装 Vitest</h3>
+          <p><strong>背景</strong>：写一个 utility lib（5-10 个函数），发布 npm。0 运行时依赖。</p>
+          <p><strong>建议</strong>：<strong>node:test</strong>。理由：</p>
+          <ul>
+            <li>不需要 mock / snapshot / DOM</li>
+            <li>不引依赖让 dev install 极快</li>
+            <li>下游用户 install 时不会附带 Vitest 巨大体积</li>
+            <li>API 与 Vitest / Jest 兼容（learning cost 低）</li>
+          </ul>
+          <p>例外：如果要求 watch 模式 + 高 DX，仍可选 Vitest（开发期依赖，下游用户不受影响）。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码</span></h2>
+
+        <p>同一个测试在 4 家的写法对比：</p>
+
+        <div class="code-block">
+          <span class="code-label">Vitest</span>
+          <pre class="code"><code class="lang-typescript">import { describe, test, expect, vi, beforeEach } from 'vitest';
+import { fetchUser } from './api';
+
+vi.mock('./api');
+
+describe('UserService', () =&gt; {
+  beforeEach(() =&gt; {
+    vi.mocked(fetchUser).mockResolvedValue({ name: 'Alice' });
+  });
+
+  test('returns user name', async () =&gt; {
+    const user = await fetchUser('1');
+    expect(user.name).toBe('Alice');
+  });
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">Jest</span>
+          <pre class="code"><code class="lang-typescript">// 几乎与 Vitest 完全相同！
+import { fetchUser } from './api';
+
+jest.mock('./api');
+
+describe('UserService', () =&gt; {
+  beforeEach(() =&gt; {
+    (fetchUser as jest.Mock).mockResolvedValue({ name: 'Alice' });
+  });
+
+  test('returns user name', async () =&gt; {
+    const user = await fetchUser('1');
+    expect(user.name).toBe('Alice');
+  });
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">Bun test</span>
+          <pre class="code"><code class="lang-typescript">import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { fetchUser } from './api';
+
+mock.module('./api', () =&gt; ({
+  fetchUser: mock(() =&gt; Promise.resolve({ name: 'Alice' }))
+}));
+
+describe('UserService', () =&gt; {
+  test('returns user name', async () =&gt; {
+    const user = await fetchUser('1');
+    expect(user.name).toBe('Alice');
+  });
+});</code></pre>
+        </div>
+
+        <div class="code-block">
+          <span class="code-label">node:test</span>
+          <pre class="code"><code class="lang-typescript">import { describe, test, mock, beforeEach } from 'node:test';
+import assert from 'node:assert';
+import { fetchUser } from './api.js';
+
+describe('UserService', () =&gt; {
+  test('returns user name', async () =&gt; {
+    const mockedFetch = mock.fn(async () =&gt; ({ name: 'Alice' }));
+    // 注意：API 风格与 Jest/Vitest/Bun 略不同
+    const user = await mockedFetch('1');
+    assert.strictEqual(user.name, 'Alice');   // 不是 expect.toBe()
+  });
+});</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 用 benchmark 数字说服团队切</div>
+          <p>"Vitest 比 Jest 快 5x！我们必须切！" —— 性能差距通常不是首要决策因素。更重要的是：迁移成本 vs 长期收益。500 个测试切 Vitest 要 1-2 周人力，节省的 CI 时间多久能 break-even？看具体项目。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 把 Bun test 当通用 Vitest 替代</div>
+          <p>看到 Bun test 比 Vitest 快 1.5-2x，全员切 Bun test。但 Bun test 在大型 React 生态项目仍有功能空白（snapshot 完整度 / 复杂 mock / 类型测试 / browser mode）。除非项目用 Bun runtime，多数 React 项目仍以 Vitest 为佳。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · Next.js 项目盲目切 Vitest</div>
+          <p>Next.js 14 在 Vitest 下边界 case 较多（server actions / RSC 模拟 / 内部模块兼容）。Next.js 官方在 2026 年仍推荐 Jest。除非有具体性能痛点，Next.js 项目用 Jest 仍合理——别盲目跟风。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 在 Lib 里依赖 Vitest 而下游 install 慢</div>
+          <p>开源 lib 把 vitest 写在 dependencies 而不是 devDependencies。下游用户 install 时附带巨大测试 runner 依赖。修复：测试相关依赖永远在 devDependencies。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 期望 node:test 完整替代 Jest</div>
+          <p>看到 Node 22 自带 test runner 兴奋切，结果 mock / snapshot / coverage 都要外接，最后配置成本不比装 Vitest 低。node:test 的 sweet spot 是"微型 lib 不想引依赖"，不是通用替代。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+        <ul>
+          <li><a href="https://vitest.dev/" target="_blank" rel="noopener">Vitest 官方</a></li>
+          <li><a href="https://jestjs.io/" target="_blank" rel="noopener">Jest 官方</a></li>
+          <li><a href="https://bun.com/docs/cli/test" target="_blank" rel="noopener">Bun test 官方</a></li>
+          <li><a href="https://nodejs.org/api/test.html" target="_blank" rel="noopener">node:test 官方</a></li>
+          <li><a href="https://github.com/withastro/astro/issues/1543" target="_blank" rel="noopener">Astro · 从 Mocha 迁 Vitest 公告</a></li>
+          <li><a href="https://twitter.com/youyuxi/status/1495776801984196608" target="_blank" rel="noopener">Evan You · Vue 切 Vitest 公告</a></li>
+          <li><a href="../../bun/04-toolchain/04-bun-test.html">Bun P4.4 · Bun test 内部（本站）</a></li>
+          <li><a href="../../node/06-modern/01-modern-node.html">Node P6.1 · node:test（本站）</a></li>
+          <li><a href="01-vitest-internals.html">P3.1 · Vitest 内部（前一章）</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-vitest-internals.html">
+            <span class="label">← 上一章</span>
+            <span class="title">01 · Vitest 内部</span>
+          </a>
+          <a class="next" href="../04-dom-testing/index.html">
+            <span class="label">下一阶段 →</span>
+            <span class="title">P4 · DOM 测试</span>
+          </a>
+        </nav>
+      </article>
+      <aside class="on-page-toc" aria-label="本页目录">
+        <h3>本页目录</h3>
+        <ul></ul>
+      </aside>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
