@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>三代抽象升级 · 设计哲学 · P1.2 · HTTP/2 + HTTP/3 + QUIC 深度学习</title>
+    <meta name="description" content="HTTP 协议设计哲学：从 HTTP/1.x 的'消息'抽象、到 HTTP/2 的'帧+流'抽象、再到 QUIC + HTTP/3 的'用户态传输层'抽象，三代抽象升级各自被什么逼出来。讲清 5 个核心设计决策（加密默认 / 用户态可演化 / 每 stream 独立 / 中间盒防御 / TLS 1.3 内嵌），以及为什么不直接改 TCP（OS 内核绑定 + 中间盒固化协议字节序）。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EH3%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>HTTP/2 + HTTP/3 + QUIC 深度学习</span><span class="site-title-badge" style="background: #2563eb; color: #fff">H3</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P1 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · 是谁 / 为什么</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html">01 · HTTP 35 年项目史</a></li>
+          <li><a href="02-philosophy.html" class="active">02 · 三代抽象升级 · 设计哲学</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">HTTP</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · 是谁 / 为什么</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 设计哲学</span>
+        </nav>
+        <h1>从消息 → 帧 → 流 → 用户态传输层 · 设计哲学</h1>
+        <p class="lead">
+          HTTP/1.x 把信息看作<strong>消息</strong>，HTTP/2 把信息看作<strong>帧 + 流</strong>，QUIC + HTTP/3 把信息看作<strong>独立用户态传输层上的多条流</strong>。三代抽象升级背后是四件事被工程现实逼出来的：TCP 不能在内核之外改、中间盒会破坏没加密的协议、加密握手太贵、网络是多链路的。这一章把"为什么是这条路"讲清。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 读过 P1.1（35 年史）</span>
+          <span><strong>主要来源</strong> Jim Roskind 2013 QUIC 设计文档 + IETF QUIC WG charter + Mark Nottingham（前 IETF httpbis WG chair）的多次演讲与博文 + 《HTTP/3 Explained》第 2-3 章</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <ol>
+          <li>HTTP 35 年的核心动力不是"让协议更快"，是<strong>让协议能继续演化</strong>。每一代被推出来都是因为前一代撞到了"演化天花板"。</li>
+          <li><b>第一代抽象 · 消息</b>（HTTP/1.x）：一个 TCP 连接里串行发请求/响应消息。keep-alive 让连接复用，但<strong>同时只能跑一个消息</strong>。慢请求堵后面所有请求 —— 应用层 HOL blocking。</li>
+          <li><b>第二代抽象 · 帧 + 流</b>（HTTP/2）：一个 TCP 连接里跑几百几千个虚拟 stream，每个 stream 是消息序列；wire 上是 frame 序列，按 stream id 归组。解了应用层 HOL，但 TCP 字节流仍是有序的 → <strong>传输层 HOL blocking 仍在</strong>。</li>
+          <li><b>第三代抽象 · 用户态传输层</b>（QUIC + HTTP/3）：放弃 TCP，在 UDP 上自己实现"可靠+有序+加密+多路独立"传输层。每条 stream 有<strong>独立丢包恢复</strong> —— 真正消灭 HOL blocking。</li>
+          <li><b>第四代是减法</b>（HTTP/3）：HTTP/2 在 TCP 上打的几乎所有补丁（streams 抽象 / 流控 / RST_STREAM / WINDOW_UPDATE）扔回到 QUIC；HTTP/3 frame 只剩 DATA / HEADERS 等少数几种。<strong>HTTP/3 是 HTTP 协议自身的简化</strong>。</li>
+          <li>5 个核心设计决策：<strong>加密默认</strong>（中间盒看不见就不能破坏）/ <strong>用户态可演化</strong>（不依赖 OS 内核升级）/ <strong>每 stream 独立</strong>（放弃"一个有序字节流"幻觉）/ <strong>中间盒防御</strong>（用 UDP 不用新协议号 + greasing）/ <strong>TLS 1.3 内嵌</strong>（握手压成 1 RTT，0-RTT 重连免 RTT）。</li>
+          <li>"为什么不改 TCP"有三个根本理由：TCP 在<strong>OS 内核态</strong>（升级需要换 OS），中间盒已经"理解"<strong>TCP 字节序号</strong>（改 TCP 字节序就让一大批中间盒挂掉），TCP 拥塞控制<strong>30 年没大改</strong>（cubic / BBR / BBRv3 想推都太慢）。QUIC 在用户态 + UDP 直接绕开三个问题。</li>
+          <li>2026 协议设计新原则：<strong>"加密默认 + 用户态 + 可演化"</strong>。这条原则不只用于 HTTP/3，未来的传输层创新都会沿着它来。HTTP/3 是它的第一个完整应用，不会是最后一个。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>第一代 · 消息抽象（HTTP/1.x）</h3>
+
+        <p>HTTP/1.x 的核心抽象是 <strong>消息（message）</strong>：一个请求消息 + 一个响应消息构成一个交互单位。一个 TCP 连接里可以串行跑多个消息（keep-alive），但<strong>同一时刻只能有一个消息在传</strong>。</p>
+
+        <p>为什么这样设计？1991 年的 web 一个页面只有 1-3 个资源，串行就够了。1996 年加 keep-alive 已经是工程妥协 —— 那时一个页面可能 10+ 张图片，每张都重建 TCP 显然不行。</p>
+
+        <p>但当 web 进入 2000 年代，一个页面 50+ 资源、CDN 引入、第三方 script / 字体 / 图片爆炸增长，"<strong>同一连接同时只能跑一个消息</strong>"成为根本性瓶颈。这是<strong>应用层 HOL blocking</strong> —— 一个慢响应堵住后面所有响应。</p>
+
+        <p>当时浏览器的解决办法：<strong>开 6 个并发 TCP 连接</strong>。每个 TCP 连接独立跑 HTTP/1.1 keep-alive。再不够就<strong>domain sharding</strong>（拆 <code>img1.example.com</code> / <code>img2.example.com</code> / ... 因为 6 connection limit 是按 origin 计的）。</p>
+
+        <p>这种 workaround 在 wire 层是浪费的（每个连接独立握手 / 拥塞控制窗口起步小 / TLS 重协商），但是协议本身没办法。<strong>需要换抽象层</strong>。</p>
+
+        <h3>第二代 · 帧 + 流抽象（HTTP/2 / SPDY）</h3>
+
+        <p>SPDY → HTTP/2 把抽象层换成 <strong>frame + stream</strong>：</p>
+
+        <ul>
+          <li><strong>Frame</strong>：wire 上的最小单位。每帧有 type / flags / stream id / payload。一个 TCP 连接上 frame 无序穿插，按 stream id 归组。</li>
+          <li><strong>Stream</strong>：虚拟逻辑流。一个 HTTP 请求 + 响应 = 一个 stream（HEADERS frame → 多个 DATA frame → 可选 trailers）。</li>
+        </ul>
+
+        <p>这一层抽象的工程意义：<strong>多路复用</strong>。一个 TCP 连接能并发承载几百到几千 stream。浏览器不再需要开 6 个连接 / domain sharding 这套 workaround；CDN 也不用拆子域名。</p>
+
+        <p>但 HTTP/2 仍跑在 TCP 上。TCP 是字节流（byte stream），<strong>它假设它传的所有数据是一条有序的字节流</strong>。任何一个 IP packet 丢了，TCP 必须等到重传完成、按序交付，才能往应用层送字节。</p>
+
+        <p>所以即使你的 HTTP/2 流量是 100 个独立 streams，wire 上是一条 TCP 字节流。一个 packet 丢 → 整条 TCP 流 stall → 100 个 streams 全都看不到新字节。这就是 <strong>TCP HOL blocking</strong>：</p>
+
+        <div class="callout warn">
+          <div class="callout-title">⚠ 关键洞察</div>
+          <p>HTTP/2 多路复用是<strong>语义层的多路复用</strong>，wire 层仍是单路。这不是 HTTP/2 实现的 bug，是 TCP 这个底层不愿意理解"我有多个独立流"。Robin Marx 2020 年的实测显示：3% 丢包率下，HTTP/2（一个连接）比 HTTP/1.1（6 个连接）慢 —— 因为 1.1 的 6 个连接里只有一个被 HOL block 影响，另 5 个仍能跑。</p>
+        </div>
+
+        <p>这是 HTTP/2 的<strong>根本性局限</strong>，不能在 TCP 上修复。<strong>需要换传输层</strong>。</p>
+
+        <h3>第三代 · 用户态传输层抽象（QUIC + HTTP/3）</h3>
+
+        <p>QUIC 的根本性创新是<strong>放弃"在一个有序字节流上多路复用"的幻觉</strong>，承认网络本来就是丢包 + 乱序的：</p>
+
+        <ul>
+          <li>QUIC 不再是"一条字节流"，是<strong>多条独立的 stream</strong>。每条 stream 有自己的有序保证。</li>
+          <li>每条 stream 有<strong>独立的丢包恢复</strong>。stream A 丢包不影响 stream B。</li>
+          <li>QUIC 跑在 UDP 上。UDP 不假设有序、不假设可靠 —— 留给 QUIC 自己去做。</li>
+          <li>所有 QUIC 实现在<strong>用户态</strong>（浏览器 / CDN 进程内），不依赖 OS 内核。</li>
+        </ul>
+
+        <p>这层抽象升级后，"多路复用"在传输层就是真的多路 —— 不再有 HOL blocking。</p>
+
+        <p>但 UDP 自己什么保证都没给。QUIC 必须自己在 UDP 上重新实现：</p>
+
+        <ul>
+          <li>包丢失检测（packet number space）</li>
+          <li>重传与拥塞控制（loss recovery + congestion control，RFC 9002）</li>
+          <li>流控（stream + connection 两层 flow control）</li>
+          <li>加密（TLS 1.3 内嵌握手 + AEAD packet protection）</li>
+          <li>连接生命周期（握手 / 关闭 / 迁移）</li>
+        </ul>
+
+        <p>QUIC 是<strong>"一个完整的传输层"</strong>，不是"UDP 的一层包装"。把 QUIC 当成"快速 UDP"是 2026 仍很普遍的误解。</p>
+
+        <h3>第四代 · HTTP/3 是减法</h3>
+
+        <p>QUIC 把"多路独立 stream + 流控 + 丢包恢复"全做了。HTTP/3（RFC 9114）就把 HTTP/2 在 TCP 上打的补丁全扔掉：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>HTTP/2 帧</th>
+              <th>HTTP/3 是否保留</th>
+              <th>不保留的原因</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>HEADERS / DATA</td>
+              <td>✅ 保留</td>
+              <td>HTTP 语义层需要</td>
+            </tr>
+            <tr>
+              <td>SETTINGS</td>
+              <td>✅ 保留</td>
+              <td>连接级参数协商</td>
+            </tr>
+            <tr>
+              <td>STREAM 概念</td>
+              <td>❌ 移到 QUIC</td>
+              <td>QUIC 已经有 stream 抽象</td>
+            </tr>
+            <tr>
+              <td>WINDOW_UPDATE</td>
+              <td>❌ 移到 QUIC</td>
+              <td>QUIC 流控代替</td>
+            </tr>
+            <tr>
+              <td>RST_STREAM</td>
+              <td>❌ 移到 QUIC</td>
+              <td>QUIC 的 RESET_STREAM</td>
+            </tr>
+            <tr>
+              <td>PING</td>
+              <td>❌ 移到 QUIC</td>
+              <td>QUIC PING frame</td>
+            </tr>
+            <tr>
+              <td>PUSH_PROMISE</td>
+              <td>⚠ 保留 wire 但不用</td>
+              <td>Server Push 已废弃</td>
+            </tr>
+            <tr>
+              <td>PRIORITY</td>
+              <td>❌ 移除</td>
+              <td>RFC 9218 改用 Priority 头</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>HTTP/3 的 wire 比 HTTP/2 简单很多。这就是为什么"HTTP/3 是减法 + QUIC 是加法"这句话准确：HTTP/3 自身的协议复杂度其实下降了。</p>
+
+        <p>同时 HPACK 不能再用 —— HPACK 假设 header block 按 stream 顺序到达，因为它的动态表更新是顺序的。在 QUIC 上 streams 乱序到达，HPACK 解码器看到一个未定义的索引时不知道该等还是该报错。</p>
+
+        <p>QPACK（RFC 9204）的解决方法：用<strong>独立的 encoder stream</strong>（单向）发送动态表更新，<strong>独立的 decoder stream</strong>（单向）回 ack。每个 header block 引用动态表时，可以"等" encoder stream 上的对应更新到达。详见 <a href="../04-quic-http3/02-http3-qpack.html">P4.2</a>。</p>
+
+        <h3>5 个核心设计决策（QUIC + HTTP/3）</h3>
+
+        <h4>1. 加密默认 —— 中间盒看不见就不能破坏</h4>
+
+        <p>TCP 的字节序号、拥塞控制窗口、option 字段等等，被 30 年沉淀的中间盒（NAT / 透明代理 / "智能"防火墙 / 运营商 LB / 公司 firewall）"理解"了。任何对 TCP 的修改都可能让某些中间盒挂掉。</p>
+
+        <p>这种现象叫 <strong>protocol ossification</strong>（协议固化）。TCP 已经被中间盒固化到无法演化的程度。</p>
+
+        <p>QUIC 的解法：<strong>除了几个握手字段，QUIC 包内容全部加密</strong>。中间盒看不到 packet 内部 → 不能"理解"任何字段 → 没办法基于内容做决策 → 协议可以自由演化。</p>
+
+        <p>这是 QUIC <strong>没有明文模式</strong>的真实原因。不是"安全更好"那么浅，是<strong>用加密对抗中间盒固化</strong>。</p>
+
+        <h4>2. 用户态可演化 —— 不依赖 OS 升级</h4>
+
+        <p>TCP 是 OS 内核态实现。改 TCP 拥塞控制（比如从 cubic 换 BBR）需要 Linux 内核 4.9+；改 TCP option 需要内核更深的修改；新协议号通常需要内核支持。</p>
+
+        <p>结果：BBR 2016 年 Google 出，到 Linux 主线 4.9（2016-12 发布）才进来。再到大部分服务器升级到能用 BBR 的内核，又是 2-3 年。<strong>TCP 的演化速度被 OS 升级速度卡住</strong>。</p>
+
+        <p>QUIC 在用户态：拥塞控制算法、流控参数、loss detection、握手都在浏览器 / CDN 的进程里。换算法只需要 release 新版本：Cloudflare 把 BBRv1 → BBRv2 → BBRv3 的升级都做完了，不用等 Linux 内核。</p>
+
+        <h4>3. 每 stream 独立 —— 放弃"有序字节流"幻觉</h4>
+
+        <p>TCP 的核心抽象是"<strong>有序、可靠的字节流</strong>"。这是 1980 年代基于"应用程序需要简单 API"的合理设计。</p>
+
+        <p>但 web 应用不需要"一条字节流"。web 应用需要"<strong>多条独立的消息流</strong>"。强行把多条独立流塞进一条字节流，就有了 HOL blocking 这个无解问题。</p>
+
+        <p>QUIC 的抽象是"<strong>多条独立有序的 streams</strong>"。每条 stream 自己有序、自己丢包恢复。stream 之间互不影响。这才匹配 web 应用的真实需求。</p>
+
+        <h4>4. 中间盒防御 —— 用 UDP 不用新协议号 + greasing</h4>
+
+        <p>新建一个 IP 协议号（比如 IPPROTO_QUIC = 17 类似的常数）需要让所有路由器 / 防火墙 / NAT 设备认识它。<strong>这条路在 2020 年代不现实</strong>：上百万的中间盒会丢掉它们不认识的协议号包。</p>
+
+        <p>QUIC 选择走 UDP（IPPROTO_UDP = 17，所有中间盒都认得）。这样 IP 层中间盒看不出 QUIC 和普通 UDP 的差别。</p>
+
+        <p>另外 QUIC 用 <strong>greasing</strong>（RFC 8701 等借鉴的思想）：在握手里塞一些"故意不被识别"的字段，强制中间盒/服务端实现"忽略不认识的字段"而不是"假设这些字段不会出现"。这是从 TLS 学的教训 —— 防止未来的 QUIC 演化被中间盒固化。</p>
+
+        <h4>5. TLS 1.3 内嵌 —— 握手压成 1 RTT，0-RTT 重连免 RTT</h4>
+
+        <p>HTTP/2 over TLS 的连接建立要：</p>
+
+        <ol>
+          <li>TCP 三次握手：1 RTT</li>
+          <li>TLS 1.3 握手：1 RTT（TLS 1.2 是 2 RTT）</li>
+          <li>HTTP/2 SETTINGS 交换：通常和 HTTP 请求 piggyback，0 额外 RTT</li>
+        </ol>
+
+        <p>所以一个新 HTTPS 连接发出第一个请求大约要 2 RTT。用户在跨海光缆延迟 200ms 的链路上，发请求前要等 400ms。</p>
+
+        <p>QUIC 把 TLS 1.3 握手<strong>内嵌进 QUIC 握手</strong>（RFC 9001）：transport 参数 + TLS handshake 在同一组 packet 里完成。一个新 QUIC 连接 1 RTT 就能发第一个请求。</p>
+
+        <p>更进一步，<strong>0-RTT</strong>：第二次连同一 server 时，client 用上次的 PSK（pre-shared key）直接发 application data。<strong>0 个 RTT</strong> 启动。代价是 0-RTT 数据没有前向保密、可被回放（详见 <a href="../04-quic-http3/01-quic.html">P4.1</a>），所以浏览器只对 GET 启用。</p>
+
+        <p>在跨海链路上，1 RTT vs 2 RTT 是 200ms 的差别。0-RTT 更彻底。<strong>QUIC 的握手优化主要是在跨国 / 移动网络环境下生效</strong>。</p>
+
+        <h3>为什么不直接改 TCP</h3>
+
+        <p>这是每次讲 QUIC 都要回答的问题。三个根本理由：</p>
+
+        <ol>
+          <li><strong>TCP 在 OS 内核态</strong>。升级 TCP 协议要：内核更新 → 服务器升级 → CDN 升级 → 终端 OS 升级（Windows / macOS / iOS / Android 各自的节奏）。这条链上任何一个环节卡住，新功能就用不上。Web 不能等。</li>
+          <li><strong>TCP 字节序号已被中间盒固化</strong>。改 TCP 字节序、改 option 字段、加新 flag 位 —— 任何一个都可能让一批中间盒挂掉。BBR / TCP Fast Open 这些"小改"已经踩过这个坑（TCP Fast Open 因为中间盒兼容性几年都没普及）。</li>
+          <li><strong>TCP 加密无处可放</strong>。即使你想给 TCP 加默认加密（防中间盒），TCP header 本身就在中间盒可见。要改成默认加密 → 改字节序 → 一批中间盒挂掉。死循环。</li>
+        </ol>
+
+        <p>所以唯一出路是<strong>跳过 TCP，重起一个新协议</strong>。QUIC 就是这条路。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景：三代抽象在 2026 的真实分工</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 消息抽象（HTTP/1.x）：调试 + 老系统 + curl 一行</h3>
+          <p>消息抽象的核心优点是<strong>人类可读</strong>。telnet 一行调通、curl -v 直接看 wire、shell 脚本 grep 一下。这是 HTTP/1.1 在工具链 / 调试 / 内网保留 25-30% 流量的根因。<strong>当你只需要 1-2 个请求 + 不在乎并发 + 想要可读 wire</strong>，HTTP/1.1 仍是最好选择。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 帧+流抽象（HTTP/2）：CDN ↔ origin + gRPC + 数据中心内部</h3>
+          <p>HTTP/2 的多路复用 + HPACK 在<strong>低延迟 + 低丢包</strong>的网络上是最优的。CDN ↔ origin、Kubernetes 内部服务通信、gRPC RPC 框架都默认 HTTP/2。这些场景里 TCP HOL blocking 几乎不出现，QUIC 的优势体现不出来；同时 HTTP/2 over TCP 的实现更稳定、调试工具更成熟。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 用户态传输层抽象（QUIC + HTTP/3）：浏览器 ↔ CDN + 移动网络</h3>
+          <p>QUIC 的优势位是<strong>多变网络条件 + 高 RTT + 移动场景</strong>。浏览器到 CDN 这一段，用户可能在 4G / wifi / 跨国光缆上，QUIC 的连接迁移 / 0-RTT / 每 stream 独立丢包恢复全派上用场。所以 2026 年浏览器 ↔ CDN 这一段 HTTP/3 普及率 70%，是 QUIC 优势体现最明显的位置。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 极致低延迟 / 自定义协议：直接用 QUIC（不走 HTTP）</h3>
+          <p>QUIC 的 transport 层是通用的，不绑定 HTTP。WebTransport（详见 <a href="../06-streaming/02-bidirectional.html">P6.2</a>）让浏览器 JS 直接用 QUIC stream + datagram；服务端也可以基于 quiche / msquic / aioquic 跑自定义应用层协议。<strong>"在 QUIC 上跑非 HTTP 应用"是 2026 起的新工程方向</strong>。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：三代抽象的可视化</span></h2>
+
+        <p>下面用一组 ASCII 图示展示三代抽象在 wire 上的差别。</p>
+
+        <h3>第一代：HTTP/1.1（消息）</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>TCP 连接 1（同一时刻只能跑一个消息）：
+
+时间 →
+  [REQ A → ......RES A][REQ B → RES B][REQ C → RES C]
+            ↑
+            如果 A 慢，B 和 C 全堵
+            (这就是应用层 HOL blocking)
+
+浏览器解法：开 6 个连接绕过
+
+TCP 连接 1: A → A
+TCP 连接 2: B → B
+TCP 连接 3: C → C
+... (每个连接独立握手 + 拥塞控制窗口起步小，浪费)</code></pre>
+        </div>
+
+        <h3>第二代：HTTP/2（帧 + 流）</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>一条 TCP 字节流，多条虚拟 stream：
+
+时间 →
+  [HD-A1][DT-A1][HD-B1][DT-B1][DT-A2][HD-C1][DT-C1][DT-B2][DT-A3]...
+   ^stream=1  ^stream=3  ^stream=1 ...
+
+  按 stream id 归组：
+    stream 1 (A): HD → DT → DT → DT
+    stream 3 (B): HD → DT → DT
+    stream 5 (C): HD → DT
+
+  ✅ 应用层 HOL 解了
+  ❌ 但底下仍是一条 TCP 字节流：
+     如果中间一个 packet 丢了，整条流 stall。
+     stream 1/3/5 全都看不到新字节
+     (这就是 TCP HOL blocking)</code></pre>
+        </div>
+
+        <h3>第三代：QUIC + HTTP/3（用户态传输层）</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>一条 UDP datagram 流，多条独立 stream：
+
+UDP packets (each independently lost/recovered):
+  [pkt 100: stream 1 frame] → arrives
+  [pkt 101: stream 3 frame] → LOST! (stream 3 重传)
+  [pkt 102: stream 5 frame] → arrives  ← 不等 pkt 101！
+  [pkt 103: stream 1 frame] → arrives  ← 不等 pkt 101！
+
+  每条 stream 有独立的丢包恢复和有序保证：
+    stream 1: 持续推进 (没受 pkt 101 丢失影响)
+    stream 5: 持续推进 (没受 pkt 101 丢失影响)
+    stream 3: 等 pkt 101 重传，自己 stall (但只 stall 自己)
+
+  ✅ 真正的多路独立 → 没有 HOL blocking
+  ✅ 加密内嵌 → 中间盒看不见就不能破坏
+  ✅ 用户态 → 升级算法不用等 OS 内核</code></pre>
+        </div>
+
+        <h3>三代握手开销对比（跨海 200ms RTT）</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>HTTP/1.1 over TLS 1.3 (同一连接首请求)：
+  TCP 握手:     1 RTT (200ms)
+  TLS 1.3:      1 RTT (200ms)
+  HTTP request: 1 RTT (200ms)
+  ─────────────────────
+  Total:        3 RTT = 600ms
+
+HTTP/2 over TLS 1.3 (一连接多请求摊销)：
+  TCP 握手:     1 RTT (200ms)
+  TLS 1.3:      1 RTT (200ms)
+  HTTP request: 1 RTT (200ms)
+  ─────────────────────
+  首请求:      3 RTT = 600ms
+  之后请求:    1 RTT = 200ms (复用连接)
+
+HTTP/3 over QUIC (TLS 内嵌握手)：
+  QUIC 握手 + TLS:  1 RTT (200ms)  ← 合并
+  HTTP request:     1 RTT (200ms)
+  ─────────────────────
+  首请求:           2 RTT = 400ms
+  0-RTT 重连:       1 RTT = 200ms (含数据)</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 把 QUIC 当成"快速 UDP"</div>
+          <p>QUIC 不是 UDP 的简单包装，是<strong>在 UDP 上重新实现的完整传输层</strong>。它有自己的拥塞控制、丢包恢复、流控、加密握手。把 QUIC 等同 UDP 会让你低估它的实现复杂度（一个生产级 QUIC 实现至少 5-10 万行代码）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 误以为 HTTP/3 是 HTTP/2 的"快速版"</div>
+          <p>HTTP/3 的"快"主要来自<strong>底下的 QUIC</strong>，不是 HTTP/3 自身。HTTP/3 frame 比 HTTP/2 还简单（减法）。在低延迟低丢包数据中心里，HTTP/3 可能<strong>没有</strong>比 HTTP/2 快。优势位是高 RTT 多变网络。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 想给 TCP 加默认加密</div>
+          <p>历史上有过几次尝试（tcpcrypt 等），都没成。理由就是设计哲学这一节讲的：TCP header 本身在中间盒可见 → 改 TCP 加密会让一批中间盒挂掉。<strong>"不能改 TCP"是 QUIC 存在的根本理由</strong>，不是"觉得 TCP 不够好"。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 误以为加密"主要是为了安全"</div>
+          <p>QUIC 的强制加密在工程哲学层面<strong>主要是为了对抗中间盒固化</strong>，安全是副产品。这不是说安全不重要，是说"加密 = 防中间盒"这个动机一旦理解，QUIC 的很多设计选择（比如所有包内容加密、传输层参数都加密、版本协商专门处理）就都说得通了。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 期待"以后还会有新协议每隔 7 年来一次"</div>
+          <p>HTTP/0.9 → 1.0 → 1.1 → 2 → 3 看似每隔 7-10 年换一代，但<strong>QUIC 是协议演化机制本身的革命</strong>。QUIC 在用户态、加密内嵌、可演化，<strong>未来的传输层创新可以直接在 QUIC 框架内做版本升级</strong>，不需要再发明 "QUIC v2 / HTTP/4"这样的全新协议。当前 IETF 在 QUIC v2（draft）讨论的就是这个思路 —— 在 QUIC 框架内演化，不重起新协议。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · 把 0-RTT 当成"普遍加速"</div>
+          <p>0-RTT 数据没有前向保密、可被回放。<strong>只能用于幂等请求（GET）</strong>。浏览器和 CDN 都默认对 POST 关闭 0-RTT。如果你部署 QUIC 时把 0-RTT 全开，可能引入 replay attack 风险（CSRF-like）。详见 <a href="../04-quic-http3/01-quic.html">P4.1</a>。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9000#section-2" target="_blank" rel="noopener">RFC 9000 §2 · Streams（QUIC 的 stream 抽象）</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9001#section-4" target="_blank" rel="noopener">RFC 9001 §4 · Carrying TLS Messages</a> —— TLS 1.3 怎么内嵌进 QUIC 握手</li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9002" target="_blank" rel="noopener">RFC 9002 · QUIC Loss Detection and Congestion Control</a></li>
+          <li><a href="https://blog.cloudflare.com/the-road-to-quic/" target="_blank" rel="noopener">Cloudflare · The Road to QUIC</a> —— QUIC 演化史 + Cloudflare 视角</li>
+          <li><a href="https://blog.cloudflare.com/http-3-from-root-to-tip/" target="_blank" rel="noopener">Cloudflare · HTTP/3 from root to tip</a> —— 从 root packet 到 application 的全栈讲解</li>
+          <li><a href="https://www.mnot.net/blog/2018/05/14/http_201" target="_blank" rel="noopener">Mark Nottingham · HTTP/2 Approved</a> —— 前 IETF httpbis WG chair 视角</li>
+          <li>Jim Roskind · "QUIC: Multiplexed Stream Transport over UDP"（Google design doc, 2013）—— gQUIC 第一手设计文档</li>
+          <li><a href="https://github.com/rmarx/holblocking-blogpost" target="_blank" rel="noopener">Robin Marx · HOL blocking blogpost</a> —— TCP HOL 在 HTTP/2 上的实测，本章数据来源</li>
+          <li><a href="https://datatracker.ietf.org/doc/html/draft-ietf-quic-v2" target="_blank" rel="noopener">draft-ietf-quic-v2 · QUIC Version 2</a> —— "在 QUIC 框架内演化"的具体案例</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-history.html">
+            <span class="label">← 上一章</span>
+            <span class="title">HTTP 35 年项目史 + 同代人横评</span>
+          </a>
+          <a class="next" href="../02-http11/01-baseline.html">
+            <span class="label">下一章 →</span>
+            <span class="title">HTTP/1.1 真相与天花板</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

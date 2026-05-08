@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HTTP/3 + QPACK + 拥塞控制 · P4.2 · HTTP/2 + HTTP/3 + QUIC 深度学习</title>
+    <meta name="description" content="HTTP/3（RFC 9114）= HTTP/2 减法版，把 streams / WINDOW_UPDATE / PING / RST_STREAM 全交给 QUIC，HTTP/3 frame 大幅简化；QPACK（RFC 9204）解决 HPACK 在 QUIC 乱序传输上不可用的问题，用独立的 encoder/decoder unidirectional stream 同步动态表；RFC 9218 简单优先级方案替代失败的 HTTP/2 prioritization tree；BBR vs Cubic 在 QUIC 用户态可换的工程意义。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EH3%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>HTTP/2 + HTTP/3 + QUIC 深度学习</span><span class="site-title-badge" style="background: #2563eb; color: #fff">H3</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · QUIC + HTTP/3 ⭐</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-quic.html">01 · QUIC 在 UDP 上重建传输层</a></li>
+          <li><a href="02-http3-qpack.html" class="active">02 · HTTP/3 + QPACK + 拥塞控制</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">HTTP</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · QUIC + HTTP/3 ⭐</a><span class="breadcrumb-sep">/</span>
+          <span>02 · HTTP/3 + QPACK + 拥塞控制</span>
+        </nav>
+        <h1>HTTP/3 over QUIC + QPACK + 拥塞控制（BBR / Cubic）</h1>
+        <p class="lead">
+          HTTP/3 是减法。RFC 9114 把 HTTP/2 的 stream / 流控 / RST_STREAM / PING 全扔回 QUIC，HTTP/3 frame 只剩 DATA / HEADERS 等少数几种。但 HPACK 在 QUIC 乱序传输上不工作，必须重做 QPACK（RFC 9204）—— 用独立的 encoder/decoder stream 同步动态表。同时 QUIC 用户态让拥塞控制能从 Cubic 快速切到 BBRv3 而不依赖 OS 内核，这一章把这条工程意义讲清。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> 读过 P4.1（QUIC 在 UDP 上重建传输层）</span>
+          <span><strong>主要来源</strong> RFC 9114（HTTP/3）+ RFC 9204（QPACK）+ RFC 9218（priority signaling）+ Google BBR 系列论文（Cardwell et al., 2016 / 2019 / 2023）+ Cloudflare 关于 BBR 部署的工程博客</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <ol>
+          <li>HTTP/3（RFC 9114, 2022-06）= HTTP-over-QUIC。它<strong>不是 HTTP/2 升级版，是 HTTP/2 减法版</strong>。把 stream 抽象 / 流控 / RST_STREAM / WINDOW_UPDATE / PING 全交给底下的 QUIC，HTTP/3 自身的 frame 类型大幅简化。</li>
+          <li><strong>HTTP/3 frame 类型</strong>：DATA / HEADERS / CANCEL_PUSH / SETTINGS / PUSH_PROMISE（保留 wire 但不用）/ GOAWAY / MAX_PUSH_ID。<strong>不再有 STREAM / WINDOW_UPDATE / PING / RST_STREAM</strong>。</li>
+          <li><strong>HTTP/3 stream 映射</strong>：每个 HTTP 请求 = 一条 QUIC bidirectional stream（client 发起，奇数 ID）。HEADERS frame 在 stream 起始；DATA frame 跟上。</li>
+          <li><strong>QPACK（RFC 9204）</strong>：解决 HPACK 在 QUIC 乱序传输上不工作的问题。静态表扩到 99 项，动态表更新走<strong>独立的 encoder stream（unidirectional, server→client / client→server 各一对）</strong>，解码走<strong>独立的 decoder stream</strong>。</li>
+          <li><strong>QPACK 关键能力</strong>：解码器看到未知动态表索引时<strong>可以"等"</strong> encoder stream 上对应的更新到达，不用立刻报错。这是 HPACK 不能做的（HPACK 假设 header block 按发送顺序到达）。</li>
+          <li><strong>HTTP/3 优先级</strong>：HTTP/2 prioritization tree 失败被废弃，HTTP/3 直接采用 RFC 9218 简单方案：<code>Priority: u=3, i</code> 头（urgency 0-7 + incremental flag）。</li>
+          <li><strong>拥塞控制：BBR vs Cubic</strong>：QUIC 在用户态，可以快速换算法。Cubic（Linux 默认 2006）基于丢包；BBR（Google 2016）基于带宽 + RTT。BBRv2（2019）/ BBRv3（2023）解决 BBRv1 公平性问题。<strong>2026 Google / Cloudflare 大量部署 BBRv3，自建多用 Cubic 默认</strong>。</li>
+          <li><strong>HTTP/3 部署真实路径</strong>：浏览器 ↔ CDN 这一段 HTTP/3 普及率约 70%（Web Almanac 2025）；CDN ↔ origin 这一段仍以 HTTP/2 over TCP 为主（约 75%）。<strong>HTTP/3 主要解决"最后一公里"，不是端到端</strong>。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>HTTP/3 是减法</h3>
+
+        <p>HTTP/2 在 TCP 上打了大量补丁来模拟"多 stream + 流控 + 重置"。这些功能 QUIC 都已经原生提供了。所以 HTTP/3 的设计哲学是：<strong>把 QUIC 已经做好的事全交还给 QUIC，HTTP/3 只管 HTTP 自己的事</strong>。</p>
+
+        <h4>HTTP/2 vs HTTP/3 frame 对照</h4>
+
+        <table>
+          <thead>
+            <tr>
+              <th>HTTP/2 frame</th>
+              <th>HTTP/3 是否保留</th>
+              <th>为什么</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>HEADERS</td>
+              <td>✅ 保留（用 QPACK 编码）</td>
+              <td>HTTP 语义层需要 headers</td>
+            </tr>
+            <tr>
+              <td>DATA</td>
+              <td>✅ 保留</td>
+              <td>HTTP 语义层需要 body</td>
+            </tr>
+            <tr>
+              <td>SETTINGS</td>
+              <td>✅ 保留（连接级）</td>
+              <td>QPACK 配置 / 优先级配置</td>
+            </tr>
+            <tr>
+              <td>GOAWAY</td>
+              <td>✅ 保留</td>
+              <td>HTTP 层有序关闭语义</td>
+            </tr>
+            <tr>
+              <td>STREAM 抽象</td>
+              <td>❌ 移到 QUIC</td>
+              <td>QUIC 已有 stream</td>
+            </tr>
+            <tr>
+              <td>WINDOW_UPDATE</td>
+              <td>❌ 移到 QUIC</td>
+              <td>QUIC 流控代替（MAX_DATA / MAX_STREAM_DATA）</td>
+            </tr>
+            <tr>
+              <td>RST_STREAM</td>
+              <td>❌ 移到 QUIC</td>
+              <td>QUIC 的 RESET_STREAM frame</td>
+            </tr>
+            <tr>
+              <td>PING</td>
+              <td>❌ 移到 QUIC</td>
+              <td>QUIC PING frame</td>
+            </tr>
+            <tr>
+              <td>PRIORITY</td>
+              <td>❌ 移除</td>
+              <td>RFC 9218 用 Priority 头</td>
+            </tr>
+            <tr>
+              <td>PUSH_PROMISE</td>
+              <td>⚠ 保留 wire 但不用</td>
+              <td>Server Push 已废弃</td>
+            </tr>
+            <tr>
+              <td>CONTINUATION</td>
+              <td>❌ 不需要</td>
+              <td>QUIC stream 自己处理大消息分段</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>HTTP/3 的<strong>实际 wire 主要是 HEADERS 和 DATA 两种 frame</strong>。比 HTTP/2 简单很多。</p>
+
+        <h4>HTTP/3 stream 映射</h4>
+
+        <p>RFC 9114 §6 定义了几种 QUIC stream 用途：</p>
+
+        <ul>
+          <li><strong>Bidirectional client-initiated stream</strong>（QUIC stream id 4n）：每个 HTTP 请求/响应一个</li>
+          <li><strong>Unidirectional client-initiated stream</strong>（4n+2）：control stream（连接级 SETTINGS + GOAWAY）/ QPACK encoder stream / QPACK decoder stream</li>
+          <li><strong>Unidirectional server-initiated stream</strong>（4n+3）：server 的 control stream / QPACK encoder stream / QPACK decoder stream / push stream</li>
+        </ul>
+
+        <p>所以一个 HTTP/3 连接典型 stream 布局：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>QUIC connection (client ↔ server)
+
+Unidirectional control stream (client → server)  ← 一条
+  (载 SETTINGS / GOAWAY)
+
+Unidirectional QPACK encoder stream (client → server)  ← 一条
+  (载动态表更新 from client)
+
+Unidirectional QPACK decoder stream (client → server)  ← 一条
+  (载 ack from client decoder)
+
+Unidirectional control stream (server → client)  ← 一条
+  (载 SETTINGS / GOAWAY)
+
+Unidirectional QPACK encoder stream (server → client)  ← 一条
+  (载动态表更新 from server)
+
+Unidirectional QPACK decoder stream (server → client)  ← 一条
+  (载 ack from server decoder)
+
+Bidirectional request streams                    ← N 条 (每个 HTTP 请求一条)
+  Stream 0: GET /index.html  →  HTML response
+  Stream 4: GET /style.css   →  CSS response
+  Stream 8: GET /script.js   →  JS response
+  ...</code></pre>
+        </div>
+
+        <p>这是 HTTP/3 的关键设计：<strong>QPACK 用独立的 unidirectional stream 解决动态表同步问题</strong>。</p>
+
+        <h3>QPACK：HPACK 在 QUIC 上的重做</h3>
+
+        <h4>HPACK 在 QUIC 上为什么不工作</h4>
+
+        <p>已在 P3.2 解释。简短：HPACK 假设动态表更新按 header block 发送顺序解码。HTTP/2 over TCP 是字节流有序，没问题；QUIC 上 streams 乱序到达，HPACK 解码器看到未知索引时不知道该等还是该报错。</p>
+
+        <h4>QPACK 的解决思路</h4>
+
+        <p>QPACK 把动态表的<strong>更新</strong>和<strong>引用</strong>分开：</p>
+
+        <ul>
+          <li>动态表更新走<strong>独立的 encoder stream</strong>（unidirectional），按发送顺序到达</li>
+          <li>request stream 上的 header block 引用动态表索引</li>
+          <li>如果 request stream 比 encoder stream 上对应更新先到达 → request stream 解码<strong>暂存</strong>，等 encoder stream 上对应更新到达再继续</li>
+          <li>decoder 通过<strong>独立的 decoder stream</strong>回 ack，让 encoder 知道哪些动态表索引已被对方知晓</li>
+        </ul>
+
+        <h4>QPACK 静态表（99 项）</h4>
+
+        <p>QPACK 静态表比 HPACK 大（99 项 vs 61 项），覆盖更多现代 web 常见 header：</p>
+
+        <ul>
+          <li>HTTP/2 时代不存在的 header（<code>strict-transport-security</code> / <code>content-security-policy</code> / <code>access-control-allow-origin</code>）</li>
+          <li>更多 method / status code 组合（更多 :status 值）</li>
+          <li>更多 cookie 相关字段</li>
+        </ul>
+
+        <h4>QPACK encoder stream 工作流</h4>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>场景：client 第一次发请求 /api/users，header 含
+  authorization: Bearer xxx
+  user-agent: Mozilla/5.0 ...
+
+Encoder 决策（per header）：
+  - 静态表有：用静态表索引（比如 :method GET 用静态表索引 17）
+  - 静态表没但值未变：加进动态表 + 用动态表索引引用
+  - 静态表没且值唯一：直接 literal 编码（不进动态表）
+
+QPACK encoder stream 上发送（unidirectional, in-order):
+  → "Insert with name reference (static idx 23): Bearer xxx"   (动态表新增 idx 62)
+  → "Insert with name reference (static idx 58): Mozilla/5.0..."(动态表新增 idx 63)
+
+Request stream 0 上发送 HEADERS frame:
+  → ":method" → 静态表索引 17
+  → ":path"   → literal "/api/users"
+  → "authorization" → 动态表索引 62  ← 引用
+  → "user-agent"    → 动态表索引 63  ← 引用
+
+Decoder 端收到 request stream 0 的 HEADERS frame，但 encoder stream 上的更新还没到：
+  → 暂存这个 HEADERS frame，等 encoder stream 解析到 idx 62 / 63 的定义
+  → 一旦 idx 62 / 63 定义到达，恢复解码 HEADERS frame</code></pre>
+        </div>
+
+        <p>这个机制让 QPACK 能在 QUIC 乱序传输上工作。代价是<strong>实现复杂度比 HPACK 高一截</strong>，特别是 stream 缓冲管理。</p>
+
+        <h4>QPACK 的"draining" / "blocked stream" 概念</h4>
+
+        <ul>
+          <li><strong>blocked stream</strong>：等 encoder stream 上对应更新的 request stream（暂时解不出 header）</li>
+          <li><strong>SETTINGS_QPACK_BLOCKED_STREAMS</strong>：双方协商最多允许多少个 blocked stream（避免无限暂存）</li>
+          <li>encoder 必须避免引用让 blocked stream 数超过协商值的动态表索引</li>
+        </ul>
+
+        <p>这是 QPACK 实现里最微妙的部分。生产实现（Chromium / Firefox / nghttp3 / Cloudflare quiche）都花了大量精力调这个。</p>
+
+        <h3>HTTP/3 优先级（RFC 9218）</h3>
+
+        <p>HTTP/2 prioritization tree 失败已在 P3.1 + P3.2 讲。HTTP/3 直接采用 RFC 9218 的简单方案。</p>
+
+        <h4>Priority 头格式</h4>
+
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code class="lang-http"># Priority 头放在 request headers 里:
+GET /critical.css HTTP/3
+priority: u=2, i
+
+# u=N 是 urgency, 0-7 (0 最高)
+# i 表示 incremental（progressive image / streaming JSON 等）
+# 默认: u=3, 不带 i</code></pre>
+        </div>
+
+        <h4>典型 urgency 分配</h4>
+
+        <table>
+          <thead>
+            <tr>
+              <th>资源类型</th>
+              <th>建议 urgency</th>
+              <th>incremental</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>HTML</td>
+              <td>u=2</td>
+              <td>i</td>
+            </tr>
+            <tr>
+              <td>关键 CSS</td>
+              <td>u=2</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td>JS（async / defer）</td>
+              <td>u=3</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td>图片（above the fold）</td>
+              <td>u=3 或 u=4</td>
+              <td>i</td>
+            </tr>
+            <tr>
+              <td>图片（below the fold）</td>
+              <td>u=4 或 u=5</td>
+              <td>i</td>
+            </tr>
+            <tr>
+              <td>分析 / 跟踪</td>
+              <td>u=6 或 u=7</td>
+              <td>—</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>浏览器（Chrome / Firefox / Safari）2026 都已实现自动设置 Priority 头 + fetchpriority API 让开发者覆盖（详见 <a href="../05-resource-loading/01-resource-hints.html">P5.1</a>）。CDN（Cloudflare / Fastly）已支持转发 + 按 Priority 调度 stream。</p>
+
+        <h3>拥塞控制：Cubic vs BBR vs BBRv3</h3>
+
+        <p>RFC 9002 给出 QUIC 的<strong>推荐</strong>拥塞控制（默认 NewReno）+ 拥塞控制接口规范。允许（且鼓励）实现替换为其他算法（Cubic / BBR / 自家算法）。</p>
+
+        <h4>Cubic（Linux 默认 2006-至今）</h4>
+
+        <ul>
+          <li><strong>核心思想</strong>：拥塞窗口（cwnd）按三次曲线增长；丢包时按比例缩减。</li>
+          <li><strong>假设</strong>：丢包 = 网络拥塞信号。</li>
+          <li><strong>问题</strong>：在缓冲区大的网络（bufferbloat）上，Cubic 一直增长 cwnd 直到塞满缓冲区 → 高延迟。</li>
+          <li><strong>2026 仍是事实主力</strong>：Linux 内核默认；大部分 Web 服务器不调；自建 QUIC 实现也大多默认 Cubic。</li>
+        </ul>
+
+        <h4>BBR（Google 2016）</h4>
+
+        <ul>
+          <li><strong>核心思想</strong>：测量带宽（BtlBw）+ 测量 RTT（RTprop），cwnd ≈ BtlBw × RTprop。不用丢包作拥塞信号。</li>
+          <li><strong>优势</strong>：在 bufferbloat 网络上保持低延迟 + 高带宽利用。Google 自己的服务（YouTube / google.com）大幅受益。</li>
+          <li><strong>问题</strong>：BBRv1 在共享链路上对 Cubic 流不公平 —— BBR 流抢带宽，Cubic 流被挤。</li>
+        </ul>
+
+        <h4>BBRv2（2019）/ BBRv3（2023）</h4>
+
+        <ul>
+          <li><strong>BBRv2</strong>：引入 ECN（Explicit Congestion Notification）+ inflight cap，改善公平性。</li>
+          <li><strong>BBRv3</strong>：进一步调整带宽探测策略，对 Cubic 公平性提升 + 多链路场景更稳。</li>
+          <li><strong>2026 部署</strong>：Google / Cloudflare 后端大量 BBRv3；自建服务多用 Cubic 默认或 BBRv2。</li>
+        </ul>
+
+        <h4>QUIC 用户态可换的工程意义</h4>
+
+        <ul>
+          <li><strong>TCP cubic → BBR</strong>：Linux 内核 4.9（2016-12 进主线）。服务器实际部署到 2018-2019 才普及。<strong>3 年 lag</strong>。</li>
+          <li><strong>QUIC cubic → BBRv1 → BBRv2 → BBRv3</strong>：Cloudflare 内部 release 周期，<strong>几周到几个月</strong>。每次升级不需要 OS 内核改动。</li>
+        </ul>
+
+        <p>这是 QUIC "用户态可演化"在生产价值的最直接体现。</p>
+
+        <h3>HTTP/3 部署真实路径</h3>
+
+        <p>Web Almanac 2025 数据告诉我们 HTTP/3 部署的真实分布：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>浏览器 / 客户端
+       ↓ HTTPS 请求
+[这一段：HTTP/3 普及率 ~70%]
+       ↓
+   CDN POP（边缘节点）
+       ↓
+[这一段：HTTP/2 ~75%, HTTP/1.1 ~23%, HTTP/3 ~5%]
+       ↓
+  Origin Server</code></pre>
+        </div>
+
+        <h4>为什么浏览器→CDN 是 HTTP/3 优势位</h4>
+
+        <ul>
+          <li>用户网络条件多变（4G / wifi / 跨海光缆）</li>
+          <li>用户切换网络（手机移动）</li>
+          <li>RTT 高（跨国）</li>
+          <li>丢包率不稳定（1-5%）</li>
+          <li>QUIC 5 个核心创新全派上用场</li>
+        </ul>
+
+        <h4>为什么 CDN→origin 仍是 HTTP/2 主力</h4>
+
+        <ul>
+          <li>固定路由的稳定链路</li>
+          <li>低延迟（同区域 &lt; 10ms）</li>
+          <li>低丢包（&lt; 0.1%）</li>
+          <li>QUIC 优势体现不出来</li>
+          <li>origin LB / 防火墙改造成本高</li>
+          <li>HTTP/2 over TCP 实现成熟稳定</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · CDN 默认开 HTTP/3：应用层零配置</h3>
+          <p>Cloudflare / Fastly / Akamai / AWS CloudFront / Vercel 都默认对支持 QUIC 的 client 协商 HTTP/3。你的应用域名指向 CDN + HTTPS 证书有效，自动开。<strong>不需要应用层做任何事</strong>。但要看 CDN dashboard 监控 H3 fallback 率。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 跨海 / 移动应用：QUIC 显著加速</h3>
+          <p>跨海光缆 200-300ms RTT + 1-3% 丢包 + 移动场景。QUIC 0-RTT 重连免一个 RTT；连接迁移让切网络不断；每 stream 独立丢包恢复让大文件 / 视频流稳定。<strong>实测首屏 LCP 改善 30-50%</strong>。这是 HTTP/3 对 web 性能最大的贡献。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 自建 origin：HTTP/2 仍主力，逐步 HTTP/3</h3>
+          <p>自建 origin server 通常用 nginx / Apache / Node.js / Go / Rust。HTTP/2 over TCP 实现都已成熟；HTTP/3 实现仍较新（nginx-quic / Caddy / LiteSpeed / Cloudflare's quiche）。<strong>2026 自建 origin 仍以 HTTP/2 为主，逐步引入 HTTP/3</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 拥塞控制：用 BBRv3 还是 Cubic</h3>
+          <p>Google / Cloudflare 大量部署 BBRv3，对自家服务流量公平性 + 带宽利用都有优势。但自建 server 默认 Cubic 是合理的：BBR 在共享链路上对 Cubic 不公平，<strong>如果你的流量仅占链路一小部分，用 BBR 可能"抢"了别人的带宽</strong>。除非你跑大规模 CDN，默认 Cubic 是稳妥选择。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：QPACK 抓包 + Priority 头 + BBR 配置</span></h2>
+
+        <h3>抓 HTTP/3 看 QPACK encoder/decoder stream</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 1. 让 Chrome 写 TLS keys
+export SSLKEYLOGFILE=/tmp/sslkeylog.log
+google-chrome --enable-quic https://www.cloudflare.com/
+
+# 2. Wireshark 抓包，过滤 QUIC
+# 关键查看：
+#   - Stream 2 (client→server unidirectional): control stream + SETTINGS
+#   - Stream 6 (client→server unidirectional): QPACK encoder stream
+#   - Stream 10 (client→server unidirectional): QPACK decoder stream
+#   - Stream 0 (bidirectional): GET / 请求
+#   - Stream 4 (bidirectional): GET /style.css 请求
+
+# 在 Wireshark 里展开 stream 6 的 STREAM frame：
+#   "Insert with Name Reference: idx 25 (static): Mozilla/5.0..."
+#   "Insert without Name Reference: x-custom-header: value"
+# 同时 stream 0 的 HEADERS frame:
+#   "Indexed Header Field: dynamic table idx 62 (post-base)"</code></pre>
+        </div>
+
+        <h3>Node.js fetch 自动带 Priority 头</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 浏览器侧不需要写代码 —— 自动给关键资源标 priority
+&lt;link rel="stylesheet" href="/critical.css" fetchpriority="high"&gt;
+&lt;img src="/hero.jpg" fetchpriority="high"&gt;     ← LCP 图
+
+// JS 显式指定 priority
+fetch('/api/critical-data', { priority: 'high' });
+fetch('/api/analytics', { priority: 'low' });
+
+// 浏览器自动转换为 Priority 头：
+// → priority: u=2  (high → urgency 2)
+// → priority: u=6  (low → urgency 6)</code></pre>
+        </div>
+
+        <h3>Cloudflare quiche 配置 BBRv3</h3>
+
+        <div class="code-block">
+          <span class="code-label">rust</span>
+          <pre class="code"><code class="lang-rust">// Rust + quiche 创建 QUIC server config
+use quiche;
+
+let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
+
+// 拥塞控制选 BBR (quiche 内部已实现)
+config.set_cc_algorithm_name("bbr").unwrap();
+// 备选: "cubic" / "reno" / "bbr2"
+
+// QPACK 配置
+config.set_initial_max_streams_bidi(1000);
+config.set_initial_max_streams_uni(100);
+config.set_max_idle_timeout(30000);
+
+// HTTP/3 ALPN
+config.set_application_protos(&[b"h3"]).unwrap();</code></pre>
+        </div>
+
+        <h3>nginx-quic 启用 HTTP/3 + BBR</h3>
+
+        <div class="code-block">
+          <span class="code-label">nginx</span>
+          <pre class="code"><code class="lang-nginx">http {
+    server {
+        listen 443 ssl;
+        listen 443 quic reuseport;       # 启用 HTTP/3 over QUIC
+        ssl_protocols TLSv1.3;
+        http2 on;
+        http3 on;
+
+        # Alt-Svc 告诉旧 client "你下次也可以用 h3"
+        add_header alt-svc 'h3=":443"; ma=86400';
+
+        # nginx 1.25+ 支持指定 QUIC 拥塞控制
+        # 但目前主要靠 sysctl tcp_congestion_control 设 OS 级（影响 TCP）
+        # QUIC 拥塞控制由 nginx 内部实现选定，目前仍是 cubic
+    }
+}
+
+# Linux TCP 拥塞控制（影响 HTTP/2 over TCP）
+# /etc/sysctl.conf:
+# net.ipv4.tcp_congestion_control = bbr
+# net.core.default_qdisc = fq</code></pre>
+        </div>
+
+        <h3>测 HTTP/3 vs HTTP/2 在弱网下的差异</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># Linux netem 模拟 200ms RTT + 3% 丢包
+sudo tc qdisc add dev eth0 root netem delay 200ms loss 3%
+
+# 测 5 个并发拉
+URL="https://example.com/asset"
+echo "HTTP/2:"
+time curl --http2 -s -o /dev/null \
+  $URL/{1,2,3,4,5}.jpg --parallel
+echo "HTTP/3:"
+time curl --http3 -s -o /dev/null \
+  $URL/{1,2,3,4,5}.jpg --parallel
+
+# 典型结果：
+#   HTTP/2 over TCP:  ~5.0s (TCP HOL 影响明显)
+#   HTTP/3 over QUIC: ~2.8s (每 stream 独立 + 1-RTT 握手)
+
+sudo tc qdisc del dev eth0 root</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 把 HTTP/3 当成"HTTP/2 升级版"</div>
+          <p>HTTP/3 不是 HTTP/2 的升级版。它是<strong>HTTP 协议自身的简化</strong> + 委托给 QUIC 做"多 stream + 流控"。性能改善主要来自底下的 QUIC，不是 HTTP/3 自身。在内网低丢包环境，HTTP/3 可能比 HTTP/2 还慢（QUIC 用户态有 CPU 开销）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 想用 HPACK 压缩 HTTP/3</div>
+          <p>HPACK 在 QUIC 乱序传输上不工作。HTTP/3 必须用 QPACK。<strong>不要从 HTTP/2 实现配置直接套到 HTTP/3</strong>。HPACK 配置（headerTableSize 等）都要换成 QPACK 等价物（QPACK_MAX_TABLE_CAPACITY / QPACK_BLOCKED_STREAMS）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · QPACK encoder stream 阻塞 → 全连接 stall</div>
+          <p>如果 encoder stream 被阻塞（流控满 / encoder 实现 bug），所有引用动态表的 request stream 都会等。生产实测：QPACK_BLOCKED_STREAMS 配太小（比如 10）会让大量 streams 解码 stall。<strong>建议配 100 以上</strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 用 RFC 9218 Priority 头但 server 不支持</div>
+          <p>2026 浏览器都已实现 fetchpriority → Priority 头映射，但<strong>很多自建 server</strong>（特别是不在主流 CDN 后面的）仍不识别 Priority 头，按"FIFO"调度 stream。在这种 server 上 fetchpriority 无效。检查方法：抓包看响应顺序是否符合 priority 期望。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 配 BBR 但没监控其他流量</div>
+          <p>BBRv1 / BBRv2 / BBRv3 在共享链路上对 Cubic 流不公平。如果你的服务跑在共享数据中心 / VPS（与其他业务共用上行带宽），开 BBR 可能"挤"了别人。<strong>除非你跑大规模 CDN（带宽完全自己掌控），默认 Cubic 是更礼貌的选择</strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · 期望 HTTP/3 解决 backend 慢的问题</div>
+          <p>HTTP/3 优化的是<strong>网络传输层</strong>。如果你的 backend 处理一个请求要 2 秒（数据库慢 / 业务逻辑慢），HTTP/3 一个 RTT 都救不了。这种情况看 <strong>103 Early Hints + 资源提示</strong>（详见 <a href="../05-resource-loading/02-early-hints.html">P5.2</a>）—— 让 client 在 backend 处理时已经在 preload 资源。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 升级 HTTP/3 但不监控 QUIC 0-RTT 命中率</div>
+          <p>0-RTT 只对回访用户生效（有 PSK）。新用户 / 清 cookie 用户仍是 1-RTT。实测命中率 30-50%。如果你 dashboard 只看"总响应时间"不分 0-RTT vs 1-RTT，无法区分协议层优化效果。<strong>分桶看：0-RTT 命中流量的首响应时间 vs 1-RTT 流量的首响应时间</strong>。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9114" target="_blank" rel="noopener">RFC 9114 · HTTP/3</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9114#section-4" target="_blank" rel="noopener">RFC 9114 §4 · HTTP/3 Frames</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9114#section-6" target="_blank" rel="noopener">RFC 9114 §6 · Stream Mapping and Usage</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9204" target="_blank" rel="noopener">RFC 9204 · QPACK</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9204#section-3" target="_blank" rel="noopener">RFC 9204 §3 · Reference Model</a> —— encoder/decoder stream 模型</li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9218" target="_blank" rel="noopener">RFC 9218 · HTTP Priority Signaling</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9002" target="_blank" rel="noopener">RFC 9002 · QUIC Loss Detection and Congestion Control</a></li>
+          <li><a href="https://research.google/pubs/bbr-congestion-based-congestion-control/" target="_blank" rel="noopener">Cardwell et al. · BBR: Congestion-Based Congestion Control</a> —— Google 2016 BBR 原文</li>
+          <li><a href="https://blog.cloudflare.com/cubic-and-hystart-support-in-quiche/" target="_blank" rel="noopener">Cloudflare · Cubic and HyStart++ in quiche</a> —— 拥塞控制实现</li>
+          <li><a href="https://datatracker.ietf.org/doc/draft-ietf-ccwg-bbr/" target="_blank" rel="noopener">draft-ietf-ccwg-bbr · BBRv3</a> —— BBRv3 标准化进展</li>
+          <li><a href="https://github.com/nghttp3/nghttp3" target="_blank" rel="noopener">nghttp3</a> —— C 语言 HTTP/3 + QPACK 实现</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-quic.html">
+            <span class="label">← 上一章</span>
+            <span class="title">QUIC 在 UDP 上重建传输层</span>
+          </a>
+          <a class="next" href="../05-resource-loading/01-resource-hints.html">
+            <span class="label">下一章 →</span>
+            <span class="title">资源提示家族 + fetchpriority + RFC 9218</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

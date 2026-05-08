@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>资源提示家族 + fetchpriority + RFC 9218 · P5.1 · HTTP/2 + HTTP/3 + QUIC 深度学习</title>
+    <meta name="description" content="资源提示家族（dns-prefetch / preconnect / prefetch / preload / modulepreload）按激进度阶梯：DNS → 建连 → 低优先级下载 → 高优先级下载 → JS module 图。fetchpriority API（2023 起）让 LCP 关键资源标 high 自动转换为 RFC 9218 Priority 头。Speculation Rules API 替代 prerender。这一章把整个家族 + 优先级信号 + 浏览器实现 2026 现状串起来。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EH3%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>HTTP/2 + HTTP/3 + QUIC 深度学习</span><span class="site-title-badge" style="background: #2563eb; color: #fff">H3</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · 资源加载工程</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-resource-hints.html" class="active">01 · 资源提示家族 + fetchpriority + RFC 9218</a></li>
+          <li><a href="02-early-hints.html">02 · Server Push 之死 + 103 Early Hints</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">HTTP</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · 资源加载工程</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 资源提示家族</span>
+        </nav>
+        <h1>资源提示家族 + HTTP/2 优先级 + fetchpriority + RFC 9218</h1>
+        <p class="lead">
+          每天用 <code>preload</code> / <code>preconnect</code> / <code>prefetch</code>，但说不清谁负责 DNS、谁建连、谁下载、谁影响优先级 —— 这一章把整个资源提示家族按"激进度阶梯"串起来：dns-prefetch → preconnect → prefetch → preload → modulepreload → Speculation Rules。同时讲 fetchpriority API（2023 起新加）和 RFC 9218 Priority 头的关系，给 LCP 优化一条工程闭环。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 用过 fetch / 写过 link 标签</span>
+          <span><strong>主要来源</strong> W3C Resource Hints + W3C Speculation Rules + HTML 标准 fetchpriority + RFC 9218 + Chrome 团队博客 + web.dev 性能指南</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <ol>
+          <li><strong>资源提示激进度阶梯</strong>：dns-prefetch（只 DNS）→ preconnect（DNS + TCP + TLS）→ prefetch（低优先级下载下次用）→ preload（高优先级当前用）→ modulepreload（preload 的 JS 变种带依赖图）→ Speculation Rules API（prerender / 跨页面 prefetch）。</li>
+          <li><strong>dns-prefetch</strong>：<code>&lt;link rel="dns-prefetch" href="//cdn.example.com"&gt;</code> 提前解析 DNS。最便宜，几乎免费。仅对未来要用的第三方域名有意义。</li>
+          <li><strong>preconnect</strong>：<code>&lt;link rel="preconnect" href="https://cdn.example.com"&gt;</code> DNS + TCP + TLS 全做（不发请求）。预热第三方 origin。</li>
+          <li><strong>prefetch</strong>：低优先级下载到 cache 给下次导航用；浏览器实现差异大（Chrome 实现质量最好）。</li>
+          <li><strong>preload</strong>：<strong>高优先级强制下载</strong>当前页面用。必须指定 <code>as="..."</code>，否则浏览器 fetch 两次（一次 preload + 一次正常请求 → 拿不到 cache 命中）。</li>
+          <li><strong>modulepreload</strong>：preload 的 JS module 专用，浏览器会顺带解析 import 依赖图（<code>import 'foo'</code> 引用的子模块也预热）。</li>
+          <li><strong>Speculation Rules API（2024 稳定）</strong>：JSON-based 配置 prerender / prefetch；替代过时的 <code>&lt;link rel="prerender"&gt;</code>。Chrome 121+ 默认开。</li>
+          <li><strong>fetchpriority API（2023 起）</strong>：<code>&lt;img fetchpriority="high"&gt;</code> / <code>fetch(url, { priority: 'high' })</code>。浏览器自动转换为 RFC 9218 Priority 头发给 server。<strong>LCP 优化最直接的工具</strong>。</li>
+          <li><strong>RFC 9218 priority signaling</strong>：HTTP header <code>Priority: u=3, i</code>（urgency 0-7 + incremental）。CDN（Cloudflare / Fastly）支持转发并按它调度 stream。HTTP/2 / HTTP/3 都用同一套。</li>
+          <li><strong>2026 实现现状</strong>：Chromium 系完整支持所有提示 + fetchpriority + Speculation Rules；Firefox / Safari 部分支持（Speculation Rules / fetchpriority Safari 17.5+）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>资源提示激进度阶梯</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>激进度由低到高：
+
+dns-prefetch
+  ↓ 只做 DNS 解析
+  ↓ 几乎免费 (1-3 KB DNS query)
+  ↓ 适用：未来 5-30s 内可能要的第三方域名
+
+preconnect
+  ↓ DNS + TCP 三次握手 + TLS 1.3 握手 (不发请求)
+  ↓ 成本：1-2 RTT 延迟 + 一个空闲连接
+  ↓ 适用：5-15s 内一定要发请求的第三方 origin
+
+prefetch
+  ↓ 低优先级下载到 HTTP cache，等下次导航用
+  ↓ 成本：占带宽 + 占 cache
+  ↓ 适用：用户大概率要去的下一页 (产品详情页 hover)
+
+preload
+  ↓ 高优先级下载，当前页要立即用
+  ↓ 必须指定 as="image" / "style" / "script" / "font" / ...
+  ↓ 成本：抢占主资源带宽
+  ↓ 适用：LCP 关键资源 / 首屏字体 / 关键 CSS
+
+modulepreload
+  ↓ preload 的 JS module 变种 + 自动解析 import 图
+  ↓ 适用：ES module 入口 (现代 SPA / Vite / Rollup 输出)
+
+Speculation Rules API
+  ↓ prefetch / prerender 整个目标页面
+  ↓ 浏览器自己决定置信度阈值
+  ↓ 适用：明确知道用户下一步去哪 (导航主入口)</code></pre>
+        </div>
+
+        <h3>dns-prefetch · 几乎免费的 DNS 预热</h3>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 在 &lt;head&gt; 里 --&gt;
+&lt;link rel="dns-prefetch" href="//fonts.googleapis.com" /&gt;
+&lt;link rel="dns-prefetch" href="//www.google-analytics.com" /&gt;
+&lt;link rel="dns-prefetch" href="//cdn.example.com" /&gt;</code></pre>
+        </div>
+
+        <p>浏览器收到 dns-prefetch 后会异步发 DNS query。下次需要这些域名的资源时，DNS 已经在 cache 里。</p>
+
+        <p>注意：<strong>preconnect 已经包含 DNS 解析</strong>，所以 preconnect 同一域名时 dns-prefetch 是冗余。但实践中两个一起写作 fallback —— 老浏览器 / 不支持 preconnect 时退化到 dns-prefetch。</p>
+
+        <h3>preconnect · 提前打开第三方连接</h3>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;link rel="preconnect" href="https://fonts.gstatic.com" crossorigin /&gt;
+&lt;link rel="preconnect" href="https://api.example.com" /&gt;</code></pre>
+        </div>
+
+        <p>关键点：</p>
+
+        <ul>
+          <li><strong>不发 HTTP 请求</strong>，只建立 TCP + TLS 连接 + ALPN 协商</li>
+          <li><strong>有 idle timeout</strong>：浏览器只保持几秒空闲连接，超时关闭。所以 preconnect 必须紧接着用 —— 提前 30 秒 preconnect 没意义</li>
+          <li><code>crossorigin</code> 属性：preconnect 字体 / fetch CORS 资源时必须加，否则连接没用 anonymous credentials mode 的资源还是要重建连接</li>
+        </ul>
+
+        <p>preconnect 的 1-2 RTT "省"在第三方资源加载首次发请求时体现：DNS + TCP + TLS 都已完成，真正的 GET 是 1 RTT 直接发出。</p>
+
+        <h3>prefetch · 下次导航用</h3>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 用户大概率会点 /pricing 这个链接，提前下 --&gt;
+&lt;link rel="prefetch" href="/pricing" as="document" /&gt;
+&lt;link rel="prefetch" href="/api/pricing-data" as="fetch" crossorigin /&gt;
+&lt;link rel="prefetch" href="/pricing.chunk.js" as="script" /&gt;</code></pre>
+        </div>
+
+        <p>注意：</p>
+
+        <ul>
+          <li><strong>低优先级</strong>：浏览器只在主页面 idle 时才下</li>
+          <li><strong>下完进 HTTP cache</strong>：下次导航时被命中（必须 cache headers 允许）</li>
+          <li><strong>浏览器实现差异大</strong>：Chrome 实现质量最高；Firefox / Safari 实现节奏不同；某些场景跨 origin prefetch 被忽略（CORS / cookie 策略）</li>
+          <li><strong>2026 渐被 Speculation Rules 替代</strong> —— 后者更精细控制</li>
+        </ul>
+
+        <h3>preload · 当前页高优先级</h3>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- LCP 关键图：不等 HTML 解析就下载 --&gt;
+&lt;link rel="preload" as="image" href="/hero.jpg" fetchpriority="high" /&gt;
+
+&lt;!-- 关键 CSS --&gt;
+&lt;link rel="preload" as="style" href="/critical.css" /&gt;
+&lt;link rel="stylesheet" href="/critical.css" /&gt;
+
+&lt;!-- 字体（必须 crossorigin） --&gt;
+&lt;link rel="preload" as="font" type="font/woff2" href="/fonts/regular.woff2" crossorigin /&gt;</code></pre>
+        </div>
+
+        <p>关键点：</p>
+
+        <ul>
+          <li><code>as</code> 属性<strong>必须</strong>指定。原因：浏览器不知道资源类型时会按"通用"下载，无法应用类型相关的优先级 / cache key 规则。漏掉 as → 浏览器 fetch 两次（一次 preload + 一次主请求），preload 失效</li>
+          <li><strong>preload 抢占主请求带宽</strong>：preload 同时太多反而让主资源慢</li>
+          <li>preload 的资源进 <strong>memory cache + HTTP cache</strong>，主请求用同一资源时直接命中</li>
+          <li>2026 起 LCP 关键资源加 <code>fetchpriority="high"</code> 比单纯 preload 更精确</li>
+        </ul>
+
+        <h3>modulepreload · ES module 专用</h3>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;link rel="modulepreload" href="/app.mjs" /&gt;
+
+&lt;!-- 浏览器解析 /app.mjs 找到它 import 的子模块 --&gt;
+&lt;!-- 自动 modulepreload 这些子模块（深度解析） --&gt;
+&lt;!-- 等用户真正 import('./app.mjs') 时整个图已就绪 --&gt;</code></pre>
+        </div>
+
+        <p>这是 ES module 时代的 preload 优化。Vite / Rollup 等 bundler 会自动注入 modulepreload 链接给 lazy chunk。</p>
+
+        <h3>Speculation Rules API · 2024 起替代 prerender</h3>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;script type="speculationrules"&gt;
+{
+  "prerender": [
+    {
+      "source": "list",
+      "urls": ["/pricing", "/about"]
+    },
+    {
+      "where": { "selector_matches": "a.likely-next" },
+      "eagerness": "moderate"
+    }
+  ],
+  "prefetch": [
+    {
+      "where": { "href_matches": "/products/*" },
+      "eagerness": "conservative"
+    }
+  ]
+}
+&lt;/script&gt;</code></pre>
+        </div>
+
+        <p>关键点：</p>
+
+        <ul>
+          <li><strong>prerender</strong>：浏览器在后台<strong>完整渲染</strong>目标页面（执行 JS、应用 CSS、生成 DOM）。用户点击时瞬间切换，几乎 0ms LCP</li>
+          <li><strong>prefetch</strong>：只下载资源，不渲染（类似旧 <code>&lt;link rel="prefetch"&gt;</code>，但更精细的控制）</li>
+          <li><strong>eagerness</strong>：immediate / eager / moderate / conservative，控制浏览器何时触发</li>
+          <li><strong>Chrome 121+ 默认开启</strong>；Firefox / Safari 仍在实现中</li>
+          <li><strong>替代旧 <code>&lt;link rel="prerender"&gt;</code></strong>：旧 API 仅 prefetch，2024 已 deprecated</li>
+        </ul>
+
+        <h3>fetchpriority API · LCP 优化的杀器</h3>
+
+        <p>2023 年加入 HTML 标准，2024 在 Chromium / Safari / Firefox 全部稳定。</p>
+
+        <h4>三种用法</h4>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!-- 1. img / link 标签上 --&gt;
+&lt;img src="/hero.jpg" fetchpriority="high" /&gt;
+&lt;img src="/below-fold.jpg" fetchpriority="low" /&gt;
+&lt;link rel="stylesheet" href="/non-critical.css" fetchpriority="low" /&gt;
+
+&lt;!-- 2. JS fetch() --&gt;
+fetch('/api/critical', { priority: 'high' });
+fetch('/api/analytics', { priority: 'low' });
+
+&lt;!-- 3. preload 配合 --&gt;
+&lt;link rel="preload" as="image" href="/hero.jpg" fetchpriority="high" /&gt;</code></pre>
+        </div>
+
+        <h4>三个值的语义</h4>
+
+        <ul>
+          <li><strong>high</strong>：覆盖浏览器默认，提到 high。用于 LCP 关键资源</li>
+          <li><strong>low</strong>：降级到 low。用于 below-the-fold 图、analytics、非关键 CSS</li>
+          <li><strong>auto</strong>（默认）：浏览器按资源类型默认</li>
+        </ul>
+
+        <h4>映射到 RFC 9218 Priority 头</h4>
+
+        <p>浏览器根据 fetchpriority + 资源类型自动设置 HTTP 请求的 <code>Priority</code> 头：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>资源类型 / fetchpriority</th>
+              <th>auto (默认)</th>
+              <th>high</th>
+              <th>low</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>HTML</td>
+              <td>u=2, i</td>
+              <td>u=1, i</td>
+              <td>u=3, i</td>
+            </tr>
+            <tr>
+              <td>CSS（render-blocking）</td>
+              <td>u=2</td>
+              <td>u=1</td>
+              <td>u=3</td>
+            </tr>
+            <tr>
+              <td>JS（async / defer）</td>
+              <td>u=3</td>
+              <td>u=2</td>
+              <td>u=4</td>
+            </tr>
+            <tr>
+              <td>img（above the fold）</td>
+              <td>u=3, i</td>
+              <td>u=2, i</td>
+              <td>u=4, i</td>
+            </tr>
+            <tr>
+              <td>img（below the fold）</td>
+              <td>u=4, i</td>
+              <td>u=2, i</td>
+              <td>u=5, i</td>
+            </tr>
+            <tr>
+              <td>fetch (default)</td>
+              <td>u=3</td>
+              <td>u=1</td>
+              <td>u=4</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h4>RFC 9218 Priority 头</h4>
+
+        <p>RFC 9218 定义了 HTTP header <code>Priority: u=3, i</code>：</p>
+
+        <ul>
+          <li><strong>u=N</strong>：urgency，0-7（0 最紧急，默认 3）</li>
+          <li><strong>i</strong>：incremental，表示资源可以增量利用（progressive image / streaming JSON）</li>
+        </ul>
+
+        <p>HTTP/2 + HTTP/3 都用这套，<strong>替代 HTTP/2 失败的 prioritization tree</strong>。CDN（Cloudflare / Fastly）2026 已支持转发并按 priority 调度 stream 顺序。</p>
+
+        <h4>fetchpriority + LCP 实测</h4>
+
+        <p>web.dev 2024 实测数据：</p>
+
+        <ul>
+          <li>给 LCP 图加 <code>fetchpriority="high"</code>：<strong>LCP 改善 中位数 9%、p75 改善 18%</strong></li>
+          <li>这是 2024 起单点优化对 LCP 影响最大的一招（不需要改业务代码、不需要后端配合）</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · LCP 优化：fetchpriority + preload 组合</h3>
+          <p>典型 e-commerce 产品详情页：hero image 是 LCP 元素。组合姿势：(1) <code>&lt;link rel="preload" as="image" href="/hero.jpg" fetchpriority="high"&gt;</code> 在 head 提前下；(2) <code>&lt;img src="/hero.jpg" fetchpriority="high"&gt;</code> 渲染时复用 preload 的 cache；(3) below-fold 图加 <code>fetchpriority="low" loading="lazy"</code>。这套组合 LCP 改善 15-30%。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 第三方 origin 预热</h3>
+          <p>页面要用 Google Fonts + Stripe checkout SDK + Sentry SDK：head 里 preconnect 这三个 origin。每个省 1-2 RTT。注意 fonts 等需要 CORS 凭据的加 <code>crossorigin</code>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 路由切换预热</h3>
+          <p>用户在产品列表页 hover 某个商品 → 在 hover 事件里 prefetch 商品详情页 + API 数据。用户点击时大概率 cache 命中，瞬间切换。Next.js / TanStack Router 都内置这套。详见 <a href="../../tanstack-query/04-advanced-patterns/02-suspense-streaming.html">TanStack Query P4.2</a>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · Speculation Rules prerender 大幅 LCP</h3>
+          <p>新闻类站点：用户点首页大头条 → prerender 大头条页面。用户真正点击时已渲染完成，LCP 几乎 0ms。eagerness=moderate（hover 时触发）/ conservative（更保守，避免浪费）。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 E · ES module 应用预加载</h3>
+          <p>Vite 输出的 SPA：每个 route 一个 chunk，bundler 自动注入 modulepreload 给当前路由可能跳的下一路由 chunk。开发者不用手动写。但生产配置可以加 prefetch / Speculation Rules 进一步优化。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：完整 LCP 优化案例</span></h2>
+
+        <h3>电商首页 head 完整组合</h3>
+
+        <div class="code-block">
+          <span class="code-label">html</span>
+          <pre class="code"><code class="lang-html">&lt;!doctype html&gt;
+&lt;html&gt;
+&lt;head&gt;
+  &lt;meta charset="utf-8" /&gt;
+
+  &lt;!-- 第三方 origin 预热 --&gt;
+  &lt;link rel="preconnect" href="https://fonts.gstatic.com" crossorigin /&gt;
+  &lt;link rel="preconnect" href="https://api.example.com" /&gt;
+  &lt;link rel="dns-prefetch" href="//www.google-analytics.com" /&gt;
+
+  &lt;!-- 关键 CSS preload + stylesheet 配对 --&gt;
+  &lt;link rel="preload" as="style" href="/critical.css" /&gt;
+  &lt;link rel="stylesheet" href="/critical.css" /&gt;
+
+  &lt;!-- 字体（CORS 必须） --&gt;
+  &lt;link rel="preload" as="font" type="font/woff2"
+        href="/fonts/inter-v12-latin-regular.woff2" crossorigin /&gt;
+
+  &lt;!-- LCP hero 图：preload + fetchpriority high --&gt;
+  &lt;link rel="preload" as="image" href="/hero.webp"
+        type="image/webp" fetchpriority="high" /&gt;
+
+  &lt;!-- modulepreload JS module --&gt;
+  &lt;link rel="modulepreload" href="/app.mjs" /&gt;
+
+  &lt;!-- Speculation Rules: hover 商品时 prefetch 详情 --&gt;
+  &lt;script type="speculationrules"&gt;
+  {
+    "prefetch": [{
+      "where": { "href_matches": "/product/*" },
+      "eagerness": "moderate"
+    }]
+  }
+  &lt;/script&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;!-- LCP 元素：fetchpriority high + 同 src 配 preload --&gt;
+  &lt;img src="/hero.webp" alt="..." fetchpriority="high"
+       width="1200" height="600" /&gt;
+
+  &lt;!-- below the fold：fetchpriority low + lazy --&gt;
+  &lt;img src="/below.webp" alt="..." fetchpriority="low" loading="lazy" /&gt;
+
+  &lt;!-- 主 JS：modulepreload 已经预热，import 时 cache 命中 --&gt;
+  &lt;script type="module" src="/app.mjs"&gt;&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;</code></pre>
+        </div>
+
+        <h3>JS fetch + priority</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 关键 API（影响首屏）
+fetch('/api/user-profile', { priority: 'high' })
+  .then(r =&gt; r.json())
+  .then(updateUI);
+
+// 跟踪 / 分析（不阻塞）
+fetch('/api/track', {
+  method: 'POST',
+  body: JSON.stringify(event),
+  priority: 'low',
+  keepalive: true,  // 即使 page unload 也发完
+});
+
+// 默认（auto）
+fetch('/api/general');</code></pre>
+        </div>
+
+        <h3>看自己页面发出的 Priority 头</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// Chrome DevTools → Network → 点请求 → Headers
+// 看 Request Headers 里有没有 priority 头：
+// priority: u=2, i      ← LCP 图
+// priority: u=4, i      ← 普通图
+// priority: u=6         ← 分析
+
+// 或在响应里看 server 是否回传（CDN 转发）：
+// 在 Cloudflare 后看 cf-cache-status / priority 是否生效</code></pre>
+        </div>
+
+        <h3>用 Lighthouse / WebPageTest 看 LCP 改善</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># Lighthouse CLI
+npx lighthouse https://example.com --view
+
+# 关键指标：
+#   Largest Contentful Paint (LCP)
+#   First Contentful Paint (FCP)
+#   Total Blocking Time (TBT)
+
+# 添加 fetchpriority="high" 后再跑：
+#   LCP 应该改善 5-25%（取决于网络条件）</code></pre>
+        </div>
+
+        <h3>检查 preload 是否被复用（没浪费）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// Chrome 控制台警告：
+// "The resource ... was preloaded using link preload but not used within
+//  a few seconds from the window's load event."
+// → preload 浪费了，资源没被实际使用
+
+// 常见原因：
+// 1. 漏写 as 属性
+// 2. CORS 不匹配（preload crossorigin 但请求没 crossorigin）
+// 3. type 不匹配（字体没指定 type="font/woff2"）
+// 4. 资源 URL 不一致（preload /hero.jpg 但 img src="/hero.JPG"）</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · preload 滥用：什么都标 high</div>
+          <p>把所有资源都 preload + fetchpriority="high"，浏览器无法合理排序。LCP 反而更慢（关键资源被次要资源挤）。<strong>原则：每页 preload 最多 3-5 个资源</strong>，只标真正的 LCP 关键资源。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · preload 漏写 as 属性</div>
+          <p><code>&lt;link rel="preload" href="/hero.jpg"&gt;</code> 没 <code>as="image"</code>。结果：浏览器不知道类型 → 不知道哪个 cache key 用 → 主请求来时不命中 → 下了两次。<strong>preload 必须有 as</strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 字体 preload 没 crossorigin</div>
+          <p>字体在 CSS 里 fetch 时浏览器自动加 CORS（anonymous），但 preload 默认不加。结果：preload 进了"普通 cache"，CSS fetch 走"CORS cache"，不命中。<strong>字体 preload 必须加 <code>crossorigin</code></strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · prefetch 跨 origin 没 cookie 处理</div>
+          <p>跨 origin prefetch 时，浏览器策略各异。某些场景 prefetch 不带 cookie → 实际导航时仍要重新拉。Chrome 2024 起改进，但 Firefox / Safari 仍旧。<strong>跨 origin prefetch 不要假设一定生效；用 Speculation Rules 更可控</strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · preconnect 太早 / 用不上就 idle 关</div>
+          <p>preconnect 后浏览器空闲连接 5-10 秒就关。如果你 preconnect 30 秒前用不到的 origin，连接已被关闭，preconnect 浪费。<strong>preconnect 要紧接着用</strong>，否则不如不写。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · fetchpriority 用了但 server 不识别 Priority 头</div>
+          <p>fetchpriority 在浏览器侧已经影响调度（请求顺序、并发数），即使 server 不识别 Priority 头也有效果。但<strong>如果你的 server / CDN 也支持 Priority 头</strong>（Cloudflare / Fastly 已支持），server 端调度也会按 priority。如果你自建 origin 不识别 Priority 头，效果只在浏览器侧。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · Speculation Rules prerender 触发太多</div>
+          <p>prerender 整个页面意味着<strong>下完整 HTML + 执行所有 JS + 应用 CSS + 跑分析脚本</strong>。如果你 eagerness=immediate 同时 prerender 5 个页面，等于在用户后台跑 5 个完整 web app。CPU / 带宽 / 内存全爆。<strong>用 conservative / moderate</strong>，让浏览器自己决定置信度。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 8 · 仍在用 <code>&lt;link rel="prerender"&gt;</code></div>
+          <p>旧 prerender 已 deprecated（2024）。Chrome 121+ 走 Speculation Rules。<strong>移除 <code>&lt;link rel="prerender"&gt;</code>，改 <code>&lt;script type="speculationrules"&gt;</code></strong>。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://html.spec.whatwg.org/multipage/links.html#link-type-preload" target="_blank" rel="noopener">HTML 标准 · preload / preconnect / dns-prefetch / prefetch / modulepreload</a></li>
+          <li><a href="https://wicg.github.io/nav-speculation/speculation-rules.html" target="_blank" rel="noopener">W3C · Speculation Rules API</a></li>
+          <li><a href="https://html.spec.whatwg.org/multipage/urls-and-fetching.html#fetch-priority-attribute" target="_blank" rel="noopener">HTML 标准 · fetchpriority 属性</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9218" target="_blank" rel="noopener">RFC 9218 · HTTP Priority Signaling</a></li>
+          <li><a href="https://web.dev/articles/fetch-priority" target="_blank" rel="noopener">web.dev · Optimizing resource loading with fetch priority</a></li>
+          <li><a href="https://web.dev/articles/preload-critical-assets" target="_blank" rel="noopener">web.dev · Preload critical assets</a></li>
+          <li><a href="https://developer.chrome.com/docs/web-platform/prerender-pages" target="_blank" rel="noopener">Chrome · Prerender pages with Speculation Rules</a></li>
+          <li><a href="https://blog.cloudflare.com/extensible-prioritization-scheme-http-rfc-9218/" target="_blank" rel="noopener">Cloudflare · RFC 9218 实现</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../04-quic-http3/02-http3-qpack.html">
+            <span class="label">← 上一章</span>
+            <span class="title">HTTP/3 + QPACK + 拥塞控制</span>
+          </a>
+          <a class="next" href="02-early-hints.html">
+            <span class="label">下一章 →</span>
+            <span class="title">Server Push 之死 + 103 Early Hints</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

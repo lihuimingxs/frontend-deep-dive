@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HTTP/2 + HTTP/3 + QUIC 深度学习 · 协议机制与现代前端工程</title>
+    <meta
+      name="description"
+      content="HTTP/2 + HTTP/3 + QUIC 深度学习。7 阶段、12 章、双线齐重：协议层（HTTP/1.1 → /2 → /3 + QUIC 三代抽象升级 / HPACK + QPACK / 0-RTT / 连接迁移 / TLS 1.3 集成 / 拥塞控制）+ 工程层（资源提示家族 / fetchpriority / 103 Early Hints / Server Push 之死 / fetch streams + SSE + WebSocket + WebTransport + WebRTC 横评 / CDN/Edge 部署 / 协议层选型决策树）。回答「HTTP/3 为什么不只是更快的 HTTP/2」「Server Push 为什么死了」「QUIC ≠ UDP 重建了什么」「RSC / TanStack streamedQuery / Vercel AI SDK 的流式响应底下走什么协议」等具体问题。锁定 RFC 9000-9114 + RFC 9204/9218。"
+    />
+    <link rel="stylesheet" href="../assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EH3%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="index.html">
+          <span>HTTP/2 + HTTP/3 + QUIC 深度学习</span>
+          <span class="site-title-badge" style="background: #2563eb; color: #fff">H3</span>
+        </a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../index.html">← 深度学习</a>
+          <a href="https://datatracker.ietf.org/doc/html/rfc9114" target="_blank" rel="noopener">RFC 9114 (H3)</a>
+          <a href="https://datatracker.ietf.org/doc/html/rfc9000" target="_blank" rel="noopener">RFC 9000 (QUIC)</a>
+          <a href="#phases">章节</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">
+          <span class="icon-light">☀</span>
+          <span class="icon-dark">☾</span>
+        </button>
+      </div>
+    </header>
+
+    <main id="main" class="home">
+      <section class="hero">
+        <h1>HTTP/2 + HTTP/3 + QUIC 深度学习</h1>
+        <p>
+          基于 IETF
+          <a href="https://datatracker.ietf.org/doc/html/rfc9110" target="_blank" rel="noopener">RFC 9110-9114</a>（HTTP semantics + caching + /1.1/2/3）+
+          <a href="https://datatracker.ietf.org/doc/html/rfc9000" target="_blank" rel="noopener">RFC 9000-9002</a>（QUIC v1）+
+          <a href="https://datatracker.ietf.org/doc/html/rfc9204" target="_blank" rel="noopener">RFC 9204</a>（QPACK）+
+          <a href="https://datatracker.ietf.org/doc/html/rfc9218" target="_blank" rel="noopener">RFC 9218</a>（priority signaling）+
+          <a href="https://datatracker.ietf.org/doc/html/rfc8297" target="_blank" rel="noopener">RFC 8297</a>（103 Early Hints）一手规范，配 Cloudflare / Fastly / Akamai / Google 工程博客与 production 实测整理。回答三个问题：HTTP/1.1 → /2 → /3 + QUIC 这条 35 年演化背后的<strong>三代抽象升级</strong>究竟是什么；2026 年前端工程师该用 <code>preload</code> / <code>fetchpriority</code> / <code>103 Early Hints</code> 这堆<strong>资源加载工具</strong>怎么搭；以及 RSC / TanStack streamedQuery / Vercel AI SDK <strong>流式响应</strong>底下究竟走的是哪条协议路径。是 <a href="../tanstack-query/index.html">TanStack Query</a> + <a href="../next/index.html">Next.js</a> + <a href="../browser-rendering/index.html">浏览器渲染</a>主题在网络层的根因供给。
+        </p>
+        <div class="hero-meta">
+          <span>受众 <code>会用 fetch / SSE / WebSocket 但说不清协议层的工程师</code></span>
+          <span>来源 <code>RFC 9000-9114 / 9204 / 9218 + Cloudflare / Fastly 工程博客</code></span>
+          <span>章节 <code>12 章 / 7 阶段</code></span>
+          <span>主线 <code>RFC 9000 QUIC v1 · RFC 9114 HTTP/3 · RFC 9113 HTTP/2</code></span>
+          <span>状态 <code>✅ 12/12 章完成</code></span>
+        </div>
+      </section>
+
+      <h2 id="phases" style="margin-top: 0">分阶段目录</h2>
+      <p style="color: var(--text-muted); max-width: 720px">
+        共 7 个阶段、12 章，<strong>协议层 5 章 + 工程层 4 章 + 总览/决策 3 章</strong>双线齐重铺开：是谁 → HTTP/1.1 基线 → HTTP/2 协议层 → QUIC + HTTP/3 协议层 ⭐ → 资源加载工程 → 流式与实时通信 → 决策与陷阱。建议按顺序读；想理解"HTTP/3 为什么不只是更快"看 P1.2 + P3 + P4；做资源加载性能优化看 P5；做实时 / 流式 / AI 应用看 P6；架构选型 / SRE 看 P7。
+      </p>
+
+      <div class="phase-grid">
+        <a class="phase-card" href="01-overview/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P1 · 是谁 / 为什么</h3>
+            <span class="phase-card-badge">✅ 2 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            HTTP 35 年项目史（HTTP/0.9 1991 → /1.0 → /1.1 → SPDY → /2 → Google QUIC → IETF QUIC → RFC 9000-9114 2022）+ 同代人横评（HTTP/1.1 / 2 / 3 / WebSocket / WebTransport / gRPC）+ <strong>三代抽象升级</strong>（消息 → 帧+流 → 用户态传输层）+ 5 个核心设计决策（加密默认 / 用户态 / 每 stream 独立 / 中间盒防御 / TLS 1.3 内嵌）。
+          </p>
+          <div class="phase-card-topics">
+            <span>35 年时间线</span>
+            <span>SPDY → /2 → QUIC</span>
+            <span>三代抽象</span>
+            <span>同代人横评</span>
+            <span>设计哲学</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="02-http11/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P2 · HTTP/1.1 基线</h3>
+            <span class="phase-card-badge">✅ 1 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            <strong>HTTP/1.1 真相与天花板</strong>（RFC 9110-9112 修订视角）：keep-alive / chunked / Range / Host header 怎么工作 + pipelining 为什么所有浏览器都禁用 + 6 connection limit 从哪来 + 应用层 HOL blocking 是 HTTP/2 出现的根本动机 + cookie 大小压力 + 1.1 在 2026 仍占 25-30% 流量为什么活着。
+          </p>
+          <div class="phase-card-topics">
+            <span>keep-alive</span>
+            <span>chunked</span>
+            <span>HOL blocking</span>
+            <span>6 connection</span>
+            <span>RFC 9110-9112</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="03-http2/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P3 · HTTP/2 协议层</h3>
+            <span class="phase-card-badge">✅ 2 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            <strong>二进制帧 + streams + 多路复用 + flow control</strong>（9-byte 帧头 / 10 种帧类型 / stream 状态机 / 两层 window / TCP 与 HTTP/2 流控为何不重复）+ <strong>HPACK 头压缩 + Server Push 兴衰 + HTTP/2 的 TCP HOL 限制</strong>（静态/动态表 + Huffman / Server Push 实测伤性能的真实数据 / 弱网下 HTTP/2 反而比 1.1 慢的根因 / RFC 9113 移除 prioritization tree）。
+          </p>
+          <div class="phase-card-topics">
+            <span>二进制帧</span>
+            <span>multiplexing</span>
+            <span>HPACK</span>
+            <span>Server Push 之死</span>
+            <span>TCP HOL 限制</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="04-quic-http3/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P4 · QUIC + HTTP/3 协议层 ⭐</h3>
+            <span class="phase-card-badge">✅ 2 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            本主题最难。<strong>QUIC 在 UDP 上重建传输层</strong>（每条 stream 独立丢包恢复 / TLS 1.3 内嵌握手 / 0-RTT 安全权衡 / 连接 ID 解耦于 4-tuple 的连接迁移 / 用户态可演化）+ <strong>HTTP/3 + QPACK + 拥塞控制</strong>（HTTP/3 帧类型大幅简化 / QPACK 双 stream 解决乱序 / RFC 9218 简单优先级 / BBR vs Cubic 在 QUIC 用户态的意义）。
+          </p>
+          <div class="phase-card-topics">
+            <span>UDP 重建传输层</span>
+            <span>0-RTT</span>
+            <span>连接迁移</span>
+            <span>QPACK</span>
+            <span>BBR / Cubic</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="05-resource-loading/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P5 · 资源加载工程</h3>
+            <span class="phase-card-badge">✅ 2 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            <strong>资源提示家族 + fetchpriority + RFC 9218</strong>（dns-prefetch / preconnect / prefetch / preload / modulepreload / Speculation Rules 激进度阶梯 + LCP 关键资源 fetchpriority="high" 实战）+ <strong>Server Push 之死 + 103 Early Hints + 现代替代</strong>（Cloudflare 实测 LCP -20-30% / Vercel + Next.js 16 集成 / CDN 缓存 103 头工程姿势）。
+          </p>
+          <div class="phase-card-topics">
+            <span>preload / preconnect</span>
+            <span>fetchpriority</span>
+            <span>RFC 9218 priority</span>
+            <span>103 Early Hints</span>
+            <span>Speculation Rules</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="06-streaming/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P6 · 流式 + 实时通信</h3>
+            <span class="phase-card-badge">✅ 2 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            <strong>单向流</strong>（chunked / fetch + ReadableStream / SSE 与 RSC payload / TanStack streamedQuery / Vercel AI SDK Data Stream Protocol 协议层根因 + nginx buffering 等典型陷阱）+ <strong>双向通信横评</strong>（WebSocket RFC 6455 / WebTransport over HTTP/3 草案 / WebRTC DataChannel 三者横评 + 2026 浏览器实现状态 + 选型决策矩阵）。
+          </p>
+          <div class="phase-card-topics">
+            <span>fetch streams</span>
+            <span>SSE</span>
+            <span>RSC payload 协议层</span>
+            <span>WebSocket</span>
+            <span>WebTransport / WebRTC</span>
+          </div>
+        </a>
+
+        <a class="phase-card" href="07-decision/index.html" data-status="ready">
+          <div class="phase-card-header">
+            <h3 class="phase-card-title">P7 · 决策树 + 陷阱</h3>
+            <span class="phase-card-badge">✅ 1 章完成</span>
+          </div>
+          <p class="phase-card-desc">
+            <strong>测量工具 + ALPN/TLS 1.3/HTTPS DNS/ECH + CDN/Edge + 选型决策树 + 陷阱清单</strong>（curl --http3 / nghttp / Wireshark + SSLKEYLOGFILE / Chrome DevTools 必会三件套 + Alt-Svc / RFC 9460 HTTPS DNS RR / Encrypted Client Hello 现状 + Cloudflare/Vercel/Fastly 部署对协议层的影响 + 12 个陷阱配修复 + 2027 展望）。
+          </p>
+          <div class="phase-card-topics">
+            <span>curl / nghttp / Wireshark</span>
+            <span>Alt-Svc / HTTPS DNS</span>
+            <span>CDN/Edge 部署</span>
+            <span>3 层决策树</span>
+            <span>12 个陷阱</span>
+          </div>
+        </a>
+      </div>
+
+      <h2 style="margin-top: 48px">编写约定</h2>
+      <p style="color: var(--text-muted); max-width: 720px">
+        每章遵循统一的 6 段结构：<strong>速览 → 底层逻辑 → 应用场景 → 典型代码 → 常见陷阱 → 延伸阅读</strong>。本主题相比其他主题有以下额外约定：
+      </p>
+      <ul style="color: var(--text-muted); line-height: 1.8">
+        <li>
+          <strong>协议机制以 RFC 一手为准</strong> —— HPACK 哈夫曼表、QUIC 帧格式、QPACK encoder/decoder stream、congestion control 算法都引 RFC 章节号；不引 blog / 不引知乎；引用规范优先 RFC 9000-9114 / 9204 / 9218 / 8297 / 8446
+        </li>
+        <li>
+          <strong>工程实战以头部厂商 production 数据为准</strong> —— Server Push 实测伤性能、Early Hints 增益、BBR vs Cubic 公平性、HTTP/3 fallback 率必须有 Cloudflare / Fastly / Akamai / Google 实测；不靠"我觉得"
+        </li>
+        <li>
+          <strong>「短重述 + 链回」</strong> —— RSC payload 与 Server Components 在 <a href="../next/index.html">Next.js 主题</a>；fetch / Streams API 在 <a href="../javascript/index.html">JavaScript 主题</a>；TanStack streamedQuery 在 <a href="../tanstack-query/index.html">TanStack Query 主题</a>；Web Vitals / CRP 在 <a href="../browser-rendering/index.html">浏览器渲染主题</a>；本主题用 1-3 句话点到本质，紧跟一句"详细的 X 请参考 Y"
+        </li>
+        <li>
+          <strong>不重讲假设已掌握</strong> —— HTTP 应用层基础（headers / methods / status codes）、HTTP cache 语义（Cache-Control / ETag）、TLS 1.3 record layer、TCP 内部排队论、WebRTC 信令完整链都不展开，引一手规范但本主题不复述
+        </li>
+        <li>
+          <strong>观点强度</strong> —— 强观点（"Server Push 是失败实验，2026 不要再配"，"HTTP/3 是新协议默认，但 HTTP/2 仍是回源主力"，"QUIC ≠ UDP，是在 UDP 上重建了一个完整传输层"）；弱观点（"WebTransport 看浏览器支持再决定"）；不观点（"WebSocket vs WebTransport 看场景"）
+        </li>
+      </ul>
+
+      <h2 style="margin-top: 48px">与既有主题的关系</h2>
+      <p style="color: var(--text-muted); max-width: 720px">
+        HTTP/2/3/QUIC 是协议层根因；多个已写主题在应用层引用。本主题<strong>不重复</strong>那些主题的应用层论述，但会在每个交叉点提供"短重述 + 链接 + 协议层根因"。常见对应：
+      </p>
+      <ul style="color: var(--text-muted); line-height: 1.8">
+        <li>
+          P5 资源提示家族 + LCP 优化 → <a href="../browser-rendering/index.html">浏览器渲染主题（CRP / Web Vitals 应用层）</a>
+        </li>
+        <li>
+          P6.1 RSC payload 协议层 + 流式渲染 → <a href="../react/index.html">React 主题（RSC / use API）</a> + <a href="../next/index.html">Next.js 主题（RSC streaming / Server Actions）</a>
+        </li>
+        <li>
+          P6.1 TanStack streamedQuery 协议层根因 → <a href="../tanstack-query/index.html">TanStack Query 主题 P4.2</a>（双向链）
+        </li>
+        <li>
+          P6.1 Vercel AI SDK Data Stream Protocol → 待写 AI SDK 主题（双向链 · 两个主题在流式协议层强相关）
+        </li>
+        <li>
+          P6.1 fetch + ReadableStream / Streams API → <a href="../javascript/index.html">JavaScript 主题（网络与流）</a>
+        </li>
+        <li>
+          P7.1 Edge runtime 部署对协议层的影响 → <a href="../next/index.html">Next.js 主题（Edge / Node runtime + 部署矩阵）</a>
+        </li>
+      </ul>
+    </main>
+
+    <script src="../assets/app.js"></script>
+  </body>
+</html>

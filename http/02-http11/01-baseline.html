@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HTTP/1.1 真相与天花板 · P2.1 · HTTP/2 + HTTP/3 + QUIC 深度学习</title>
+    <meta name="description" content="HTTP/1.1 在 RFC 9110-9112 修订视角下的真相：keep-alive / chunked / Range / Host / pipelining 怎么工作；6 connection limit 从哪来；为什么所有现代浏览器禁用 pipelining；应用层 HOL blocking 是后面所有协议演化的根本动机；为什么 HTTP/1.1 在 2026 仍占 web 流量 25-30%。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EH3%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>HTTP/2 + HTTP/3 + QUIC 深度学习</span><span class="site-title-badge" style="background: #2563eb; color: #fff">H3</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · HTTP/1.1 基线</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-baseline.html" class="active">01 · HTTP/1.1 真相与天花板</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">HTTP</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · HTTP/1.1 基线</a><span class="breadcrumb-sep">/</span>
+          <span>01 · HTTP/1.1 真相与天花板</span>
+        </nav>
+        <h1>HTTP/1.1 真相与天花板（RFC 9110-9112 修订视角）</h1>
+        <p class="lead">
+          HTTP/1.1 在 2026 年仍占 web 流量 25-30%。这一章按 2022 年 RFC 9110-9112 大重构后的现行规范视角，把 keep-alive / chunked / Range / Host header / pipelining 五个核心机制讲清；同时把 1.1 的三个根本天花板（应用层 HOL blocking / 6 connection limit / headers 不压缩重发）讲清 —— 它们正是后面 HTTP/2 / HTTP/3 出现的全部动机。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~18 分钟</span>
+          <span><strong>前置</strong> 用过 fetch / curl，知道 HTTP request / response 结构</span>
+          <span><strong>主要来源</strong> RFC 9110（HTTP semantics）+ RFC 9111（caching）+ RFC 9112（HTTP/1.1 wire）+ Mozilla MDN HTTP 参考 + Web Almanac 2024-2025 协议层流量数据</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <ol>
+          <li>HTTP/1.1 在 2026 年的现行规范是 <strong>RFC 9110</strong>（语义）+ <strong>RFC 9111</strong>（caching）+ <strong>RFC 9112</strong>（1.1 wire format），2022-06 一次性发布。RFC 7230-7235 已被替代。</li>
+          <li><strong>5 个核心机制</strong>：keep-alive / Host header / chunked transfer encoding / Range + 206 / pipelining（理论上）。</li>
+          <li><strong>keep-alive 默认开</strong>（Connection: close 才显式关）：发完一个请求 TCP 连接不关，下一个请求复用 → 省 TCP/TLS 握手。这是 HTTP/1.1 vs 1.0 最大的改进。</li>
+          <li><strong>Host header 强制</strong>：让一台 IP 上的 server 能 vhost 多个站点 → web hosting 商业模式的协议基础。1.1 强制要求，缺了就是 400 错误。</li>
+          <li><strong>chunked transfer encoding</strong>：动态长度响应 wire 格式（每 chunk = <code>&lt;size hex&gt;\r\n&lt;data&gt;\r\n</code>，0 size 结束）。这是 SSE / 流式 RSC / Server-Sent JSON 的 wire 基础（详见 <a href="../06-streaming/01-streaming.html">P6.1</a>）。</li>
+          <li><strong>Range / 206 Partial Content</strong>：断点续传、视频拖动、大文件多段下载 → 静态 CDN 必备。</li>
+          <li><strong>pipelining 全部禁用</strong>：理论上可以连发多个请求不等响应，实际上中间盒兼容性问题严重 + 仍受 HOL blocking 影响 → 所有现代浏览器禁用。Chrome 2018 移除支持，Firefox 2020 默认关。</li>
+          <li><strong>三个天花板</strong>：(a) 应用层 HOL blocking（一个慢请求堵后面）；(b) 6 connection limit（每 origin 6 个并发连接）；(c) headers 重复发送不压缩（cookie 大的网站每个请求都重发）。HTTP/2 的所有创新都对这三个的回应。</li>
+          <li>2026 仍活着的根因：<strong>curl 一行可读 wire / 内网工具链 / 老 backend / CDN ↔ origin 段大量仍用 1.1 / HTTP/2 共享 1.1 语义所以切换不是颠覆</strong>。Web Almanac 2025：1.1 占总流量 5%（浏览器侧）+ 23%（CDN 回源）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>RFC 9110 / 9111 / 9112 三层切分</h3>
+
+        <p>2022 年 IETF 把 HTTP 规范<strong>重新切成三层</strong>：</p>
+
+        <ul>
+          <li><strong>RFC 9110 · HTTP semantics</strong> —— method / status code / header / range / 认证 / cache 头等"和 wire 无关的语义"。HTTP/1.1/2/3 都引用它。</li>
+          <li><strong>RFC 9111 · HTTP caching</strong> —— Cache-Control / ETag / Vary / 包含原 RFC 5861 的 stale-while-revalidate。</li>
+          <li><strong>RFC 9112 · HTTP/1.1 wire format</strong> —— 只剩 1.1 wire 怎么编码（ASCII 文本 + chunked + keep-alive）。</li>
+          <li>HTTP/2 → RFC 9113；HTTP/3 → RFC 9114。</li>
+        </ul>
+
+        <p>这次重切的工程意义：以前把 HTTP/1.1 当 baseline、把 2/3 当"补丁"看的心态被纠正了。三种 wire 现在完全平等，<strong>语义</strong>是它们共用的根。本主题在 P2 之后讨论 HTTP/2 / HTTP/3 时，<strong>不再重讲 cookie / cache / authentication 这些应用层语义</strong>，因为它们在 9110/9111 里，三种 wire 都一样。</p>
+
+        <h3>核心机制 1 · keep-alive</h3>
+
+        <p>HTTP/1.1 默认 keep-alive：</p>
+
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code class="lang-http">GET /a HTTP/1.1
+Host: example.com
+
+HTTP/1.1 200 OK
+Content-Length: 100
+
+(100 bytes body)
+&lt;-- TCP 连接保持，下一个请求复用 --&gt;
+
+GET /b HTTP/1.1
+Host: example.com
+
+HTTP/1.1 200 OK
+Content-Length: 200
+
+(200 bytes body)</code></pre>
+        </div>
+
+        <p>关键点：</p>
+
+        <ul>
+          <li><strong>必须有可靠的 body 长度边界</strong>：要么 <code>Content-Length</code>、要么 <code>Transfer-Encoding: chunked</code>，否则下一个请求/响应解析不出来从哪开始</li>
+          <li>客户端或服务端发 <code>Connection: close</code> → 这是连接最后一个消息</li>
+          <li>RFC 9112 规定：1.1 默认 keep-alive；1.0 默认 close（除非 <code>Connection: keep-alive</code>）</li>
+        </ul>
+
+        <p><strong>keep-alive 解决的是 TCP/TLS 握手开销</strong>。它<strong>不解决并发</strong> —— 同一连接同一时刻仍然只能一个消息。这是 1.1 的核心局限。</p>
+
+        <h3>核心机制 2 · Host header</h3>
+
+        <p>HTTP/1.0 的 server 只能跑一个站点（因为 request line 里只有 path，没有 host）。HTTP/1.1 强制要求 <code>Host</code> header：</p>
+
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code class="lang-http">GET /a HTTP/1.1
+Host: example.com   ← 必须
+
+# 缺了 Host：
+GET /a HTTP/1.1
+
+HTTP/1.1 400 Bad Request</code></pre>
+        </div>
+
+        <p>这一改让"<strong>一个 IP 跑多个站点</strong>"成为可能。1990 年代后期 web hosting（虚拟主机）商业模式整个建立在这个 header 上。HTTPS 时代 Host 信息也需要（TLS SNI 扩展），但那是另一层。</p>
+
+        <h3>核心机制 3 · chunked transfer encoding</h3>
+
+        <p>当响应长度无法预先知道（动态生成 / 流式 / 大文件分块），1.1 用 <strong>chunked</strong>：</p>
+
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code class="lang-http">HTTP/1.1 200 OK
+Transfer-Encoding: chunked
+Content-Type: text/event-stream
+
+7\r\n
+data: 1\n\r\n      ← 第一个 chunk，大小 0x7 = 7 字节
+9\r\n
+data: 22\n\n\r\n   ← 第二个 chunk，大小 0x9 = 9 字节
+0\r\n              ← 0 大小表示结束
+\r\n               ← 空行（可放 trailers）</code></pre>
+        </div>
+
+        <p>chunked 是 1.1 流式响应的 wire 基础。<strong>SSE</strong>（Server-Sent Events）就是 chunked 上铺一层 <code>text/event-stream</code> 格式约定；<strong>RSC payload</strong>（React Flight）也是 chunked + 自定义文本格式；<strong>Vercel AI SDK Data Stream Protocol</strong> 同理。详见 <a href="../06-streaming/01-streaming.html">P6.1</a>。</p>
+
+        <p>HTTP/2 / HTTP/3 上不再用 chunked —— 它们用自己的 DATA frame，每个 frame 自带长度。但应用层流式语义是一样的。</p>
+
+        <h3>核心机制 4 · Range / 206 Partial Content</h3>
+
+        <p>客户端只想下载文件的一部分（断点续传 / 视频拖动 / 大文件并发段下载）：</p>
+
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code class="lang-http">GET /video.mp4 HTTP/1.1
+Host: example.com
+Range: bytes=1000-1999
+
+HTTP/1.1 206 Partial Content
+Content-Range: bytes 1000-1999/5000000
+Content-Length: 1000
+
+(1000 bytes)</code></pre>
+        </div>
+
+        <p>这是静态 CDN 的核心能力。视频播放器拖动进度条 → 浏览器发 Range；下载工具并发拉一个文件的不同段 → 也是 Range。RFC 9110 §14 定义了 Range 语义，三种 wire 都支持。</p>
+
+        <h3>核心机制 5 · pipelining 为什么死了</h3>
+
+        <p>HTTP/1.1 理论上允许 <strong>pipelining</strong>：客户端连发多个请求不等响应。</p>
+
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code class="lang-http">// 客户端连发：
+GET /a HTTP/1.1
+Host: example.com
+
+GET /b HTTP/1.1
+Host: example.com
+
+GET /c HTTP/1.1
+Host: example.com
+
+// 服务端按顺序回：
+HTTP/1.1 200 OK ... (a 响应)
+HTTP/1.1 200 OK ... (b 响应)
+HTTP/1.1 200 OK ... (c 响应)</code></pre>
+        </div>
+
+        <p>看起来很美好。实际上：</p>
+
+        <ul>
+          <li><strong>仍然 HOL blocking</strong>：服务端必须按顺序回。a 慢就堵 b 和 c。</li>
+          <li><strong>中间盒兼容性极差</strong>：很多老 proxy 不支持 pipelining，会"乱串"响应顺序，或者干脆只回第一个。</li>
+          <li><strong>没有可靠的"出错回退"机制</strong>：连接出问题时，pipeline 里哪些请求成功了不知道。</li>
+        </ul>
+
+        <p>结论：所有现代浏览器禁用 pipelining。Chrome 2018 移除代码；Firefox 2020 默认关；Safari / Edge 一直没开。<strong>HTTP/1.1 实际只有 keep-alive 这一种"一连接多请求"姿势 —— 串行</strong>。HTTP/2 的多路复用是真正的并发。</p>
+
+        <h3>三个天花板</h3>
+
+        <h4>天花板 1 · 应用层 HOL blocking</h4>
+
+        <p>同一连接同一时刻只能跑一个消息。如果第一个请求响应慢（server 处理 5 秒、或 body 大），后面所有请求都得排队。</p>
+
+        <p>对单连接来说<strong>不可解</strong>。HTTP/2 多路复用在同一连接里跑 100+ stream 才彻底解决。</p>
+
+        <h4>天花板 2 · 6 connection limit</h4>
+
+        <p>浏览器解决 HOL 的办法：每个 origin 开 6 个 TCP 连接。这个 6 不是规范规定的，是浏览器实现的"经验值"。RFC 7230 建议"2 个连接"，被浏览器集体忽略。</p>
+
+        <p>Chrome / Firefox / Safari / Edge 2026 都是 6 个。极少数老浏览器是 8 / 13。</p>
+
+        <p>问题：</p>
+
+        <ul>
+          <li>每个 TCP 连接独立握手 → TLS 1.3 时代仍有 1-2 RTT 浪费</li>
+          <li>每个 TCP 连接独立的拥塞控制窗口（slow start）→ 起步小，几 KB 下载完才进入正常发送速率</li>
+          <li>6 个不够 → 拆 <code>img1.example.com</code> / <code>img2.example.com</code> ... <strong>domain sharding</strong> workaround</li>
+          <li>domain sharding 后每个子域名又是 6 个连接 → 浪费连接 + DNS 查询激增</li>
+        </ul>
+
+        <p>HTTP/2 一个连接里可以承载几百到几千 stream，<strong>同时取消 6 connection limit 和 domain sharding 的需求</strong>。</p>
+
+        <h4>天花板 3 · headers 重复发送</h4>
+
+        <p>HTTP/1.1 每个请求都重发完整 headers。一个典型现代 web 应用的请求 headers：</p>
+
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code class="lang-http">GET /api/users HTTP/1.1
+Host: example.com
+User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/...
+Accept: application/json, text/plain, */*
+Accept-Encoding: gzip, deflate, br
+Accept-Language: en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7
+Cookie: sessionid=abc123...; csrftoken=xyz789...; ga=GA1.2....; (etc, 2-4 KB)
+Authorization: Bearer eyJhbGc...
+Origin: https://example.com
+Referer: https://example.com/dashboard
+Sec-Fetch-Dest: empty
+Sec-Fetch-Mode: cors
+Sec-Fetch-Site: same-origin
+...</code></pre>
+        </div>
+
+        <p>典型大小：1.5 - 4 KB。一个页面发 50 个请求 → headers 重发 75-200 KB。在移动网络上这是<strong>真实的带宽消耗</strong>。</p>
+
+        <p>HTTP/2 的 HPACK 头压缩（详见 <a href="../03-http2/02-hpack-push.html">P3.2</a>）解决这个：常见 header 用单字节索引、动态表缓存、Huffman 编码 → 压缩比 80-90%。HTTP/3 的 QPACK 同样目标。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景：HTTP/1.1 在 2026 仍活着的位置</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · curl 一行调试 / 写 shell 脚本</h3>
+          <p>HTTP/1.1 是 ASCII 文本，<code>curl -v</code> 可以直接读 wire。HTTP/2 / HTTP/3 是二进制，必须用 <code>nghttp</code> 或 Wireshark + SSLKEYLOGFILE 才能看。所以"调试 + 一行 curl"这一段 HTTP/1.1 不会消失。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · CDN ↔ origin 回源（仍是主力）</h3>
+          <p>Web Almanac 2025：CDN 回源 origin 这一段 HTTP/1.1 仍占 23%。为什么？(1) 老 backend 没升级；(2) 内网链路稳定，HTTP/2 优势不明显；(3) origin 端 LB / 防火墙改造成本。Cloudflare / Fastly 都允许 origin 端配 1.1 或 2，默认 2，但很多用户保留 1.1。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 老浏览器 / 老客户端 fallback</h3>
+          <p>IE 11 不支持 HTTP/2；Android 4.x 默认浏览器不支持；老 SDK / 老 SmartTV / IoT 设备很多只跑 1.1。CDN 必须保留 1.1 fallback。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 内网工具链 / 监控 / 简单服务</h3>
+          <p>Prometheus 暴露 metrics（<code>/metrics</code> 端点）走 HTTP/1.1；K8s 内部 health check / readiness probe 走 1.1；很多 SaaS 后台管理 API 走 1.1。这些场景不需要 1.1 的天花板被砸。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 E · server-sent events 在某些 proxy 后</h3>
+          <p>SSE 通过 chunked transfer encoding 流式响应。某些老 proxy / corp firewall 对 HTTP/2 / HTTP/3 的流支持不完善，在那些环境下 SSE over HTTP/1.1 比 over HTTP/2 更稳。详见 <a href="../06-streaming/01-streaming.html">P6.1</a>。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：手写 + 抓包看 wire</span></h2>
+
+        <h3>用 curl 看完整 wire</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">curl --http1.1 -v https://example.com/api/users -H "Cookie: sessionid=abc"
+
+# 输出关键部分：
+* Connected to example.com (...) port 443
+* TLSv1.3 handshake complete
+&gt; GET /api/users HTTP/1.1
+&gt; Host: example.com
+&gt; User-Agent: curl/8.5.0
+&gt; Accept: */*
+&gt; Cookie: sessionid=abc
+&gt;
+&lt; HTTP/1.1 200 OK
+&lt; Content-Type: application/json; charset=UTF-8
+&lt; Transfer-Encoding: chunked
+&lt; Connection: keep-alive
+&lt;
+&lt; (chunked body)
+* Connection #0 to host example.com left intact</code></pre>
+        </div>
+
+        <h3>用 Node.js net.Socket 手写一个 HTTP/1.1 请求</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 不用 http 模块，直接 TCP 写 wire
+import { connect } from 'node:tls';
+
+const socket = connect({ host: 'example.com', port: 443, ALPNProtocols: ['http/1.1'] });
+
+socket.on('secureConnect', () =&gt; {
+  socket.write(
+    'GET / HTTP/1.1\r\n' +
+    'Host: example.com\r\n' +
+    'Accept: */*\r\n' +
+    'Connection: close\r\n' +   // 这次只发一个请求就关
+    '\r\n'
+  );
+});
+
+let buf = '';
+socket.on('data', (chunk) =&gt; { buf += chunk.toString(); });
+socket.on('end', () =&gt; {
+  const [head, ...rest] = buf.split('\r\n\r\n');
+  console.log('Headers:\n', head);
+  console.log('Body:\n', rest.join('\r\n\r\n'));
+});</code></pre>
+        </div>
+
+        <h3>chunked transfer encoding 手写解析</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 简化的 chunked decoder（生产环境用 readline / WHATWG Streams）
+function* parseChunked(stream) {
+  let buf = '';
+  for await (const chunk of stream) {
+    buf += chunk;
+    while (true) {
+      const sizeEnd = buf.indexOf('\r\n');
+      if (sizeEnd === -1) break;
+      const size = parseInt(buf.slice(0, sizeEnd), 16);
+      if (Number.isNaN(size)) throw new Error('bad chunk size');
+      if (size === 0) return; // 终结
+      const dataStart = sizeEnd + 2;
+      const dataEnd = dataStart + size;
+      if (buf.length &lt; dataEnd + 2) break; // 还没收完
+      yield buf.slice(dataStart, dataEnd);
+      buf = buf.slice(dataEnd + 2); // 跳过尾部 \r\n
+    }
+  }
+}</code></pre>
+        </div>
+
+        <p>这个 decoder 揭示了 chunked 的本质：<strong>每块 = 16 进制大小 + \r\n + 数据 + \r\n，0 大小结束</strong>。SSE / RSC / 流式 JSON 都铺在这上面。</p>
+
+        <h3>Range 请求并发段下载</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 把一个 100MB 文件拆成 4 段并发下载
+async function downloadInSegments(url, totalSize, segments = 4) {
+  const segSize = Math.ceil(totalSize / segments);
+  const promises = [];
+  for (let i = 0; i &lt; segments; i++) {
+    const start = i * segSize;
+    const end = Math.min(start + segSize - 1, totalSize - 1);
+    promises.push(
+      fetch(url, { headers: { Range: `bytes=${start}-${end}` } })
+        .then(r =&gt; {
+          if (r.status !== 206) throw new Error('range not supported');
+          return r.arrayBuffer();
+        })
+    );
+  }
+  const buffers = await Promise.all(promises);
+  // 拼接
+  const total = new Uint8Array(totalSize);
+  let offset = 0;
+  for (const buf of buffers) {
+    total.set(new Uint8Array(buf), offset);
+    offset += buf.byteLength;
+  }
+  return total;
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 用 telnet 调 HTTPS</div>
+          <p>HTTPS 是 TLS 包了一层，telnet 直接连看到的全是加密字节。<strong>调试 HTTPS 用 curl -v + 看明文请求 / 响应；要看 wire 用 Wireshark + SSLKEYLOGFILE</strong>。telnet 只对裸 HTTP（少见）有用。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 误以为 HTTP/1.1 pipelining 是"还能用的优化"</div>
+          <p>所有现代浏览器都禁用了，server 端就算开了也没意义。Chrome 2018 完全移除代码。如果你的代码 / 文档 / 面试题里提"用 pipelining 优化"，2026 已经是过时知识。<strong>正确答案是升级 HTTP/2</strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 把 6 connection limit 当成"可调参数"</div>
+          <p>浏览器侧用户没法调（除非改浏览器源码 / 命令行 flag）。开发时<strong>不要假设用户能调</strong>。优化方向应该是：(a) HTTP/2 取消这个限制；(b) 减少需要并发请求的资源数（合并 / 精简）；(c) 用 service worker cache。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · cookie 不限大小一直堆</div>
+          <p>HTTP/1.1 每请求重发整个 cookie。一个 4KB 的 cookie + 50 个请求 = 200KB 浪费。解法：(a) 关键认证用 Authorization header（精简）；(b) 把大数据放 localStorage / IndexedDB 而不是 cookie；(c) 升级到 HTTP/2 + HPACK / HTTP/3 + QPACK 自动压缩。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · keep-alive 没有边界标识</div>
+          <p>keep-alive 要求每个响应必须有 <code>Content-Length</code> 或 <code>Transfer-Encoding: chunked</code>，不然下一个响应解不出来。一些老的 CGI 脚本不发 Content-Length 也不开 chunked，导致连接一发完就必须 close → 实际上没复用。检查这个问题用 <code>curl -v</code> 看每个响应的头。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · SSE 经过 nginx 但没关 buffering</div>
+          <p>nginx 默认对响应做 buffering，会把 chunked 流"攒一阵再发" → 客户端体感不流式。配 <code>proxy_buffering off;</code> + <code>X-Accel-Buffering: no</code> 响应头才能透传 chunked。这是 SSE / RSC 在生产部署最常见的坑。详见 <a href="../06-streaming/01-streaming.html">P6.1</a>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 引用旧 RFC 7230</div>
+          <p>RFC 7230 已被 RFC 9112 替代。2026 写文档 / 代码 review 时引一手规范应该用 9112；引旧 RFC 不只是"老旧"，还会错过 9112 修订里很多 erratum 修复。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9110" target="_blank" rel="noopener">RFC 9110 · HTTP semantics</a> —— method / status / header / range / 认证 / cache 头语义</li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9111" target="_blank" rel="noopener">RFC 9111 · HTTP caching</a> —— Cache-Control / ETag / Vary / stale-while-revalidate（含原 RFC 5861 归并）</li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9112" target="_blank" rel="noopener">RFC 9112 · HTTP/1.1 wire format</a> —— 1.1 当代规范</li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9112#section-9.3" target="_blank" rel="noopener">RFC 9112 §9.3 · Pipelining</a> —— 规范层面的 pipelining 说明 + 历史实现问题</li>
+          <li><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP" target="_blank" rel="noopener">MDN · HTTP 参考</a> —— headers / methods / status codes 应用层基础</li>
+          <li><a href="https://almanac.httparchive.org/en/2024/http" target="_blank" rel="noopener">Web Almanac 2024 · HTTP 章</a> —— 2024 协议层流量分布</li>
+          <li><a href="https://en.wikipedia.org/wiki/HTTP_pipelining" target="_blank" rel="noopener">Wikipedia · HTTP pipelining</a> —— pipelining 失败史的简明回顾</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../01-overview/02-philosophy.html">
+            <span class="label">← 上一章</span>
+            <span class="title">三代抽象升级 · 设计哲学</span>
+          </a>
+          <a class="next" href="../03-http2/01-frames-multiplexing.html">
+            <span class="label">下一章 →</span>
+            <span class="title">HTTP/2 二进制帧 + streams + 多路复用</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

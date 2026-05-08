@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>单向流：fetch streams / chunked / SSE / RSC + AI SDK 协作 · P6.1 · HTTP/2 + HTTP/3 + QUIC 深度学习</title>
+    <meta name="description" content="单向流的协议层三个层次：HTTP/1.1 chunked transfer encoding（基础）/ fetch + ReadableStream（浏览器统一抽象）/ Server-Sent Events（chunked + text/event-stream + 自动重连）。RSC payload 走 fetch + 自定义文本格式；TanStack streamedQuery 协议层根因；Vercel AI SDK Data Stream Protocol 为什么用 fetch + ReadableStream 不用 SSE。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EH3%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>HTTP/2 + HTTP/3 + QUIC 深度学习</span><span class="site-title-badge" style="background: #2563eb; color: #fff">H3</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · 流式 + 实时通信</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-streaming.html" class="active">01 · 单向流：fetch streams / chunked / SSE</a></li>
+          <li><a href="02-bidirectional.html">02 · 双向：WebSocket / WebTransport / WebRTC</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">HTTP</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · 流式 + 实时通信</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 单向流</span>
+        </nav>
+        <h1>单向流：fetch streams / chunked / SSE / 与 RSC + streamedQuery + AI SDK 协作</h1>
+        <p class="lead">
+          RSC 流式渲染、TanStack streamedQuery、Vercel AI SDK 流式响应底下都是协议层的 1-2 条特定路径。这一章把单向流（server → client）的三个层次讲清：HTTP/1.1 chunked（基础）/ fetch + ReadableStream（浏览器统一抽象）/ SSE（chunked + 格式约定 + 自动重连）。然后给三个应用层场景（RSC payload / TanStack streamedQuery / AI SDK Data Stream）的协议层根因。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> 用过 fetch；写过 SSE 或 React 19 use API 至少一种</span>
+          <span><strong>主要来源</strong> WHATWG Streams 标准 + WHATWG EventSource 标准 + RFC 9112 §7（chunked）+ Vercel AI SDK Data Stream Protocol 文档 + React Flight serialization format（公开但未文档化）+ Cloudflare Workers / Vercel Edge 关于流式响应的工程博客</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <ol>
+          <li>单向流（server → client，client 不发回写）的<strong>协议层三个层次</strong>：(a) HTTP/1.1 chunked transfer encoding（wire 基础）；(b) fetch + ReadableStream（浏览器侧统一抽象）；(c) SSE（chunked + <code>text/event-stream</code> 格式 + 自动重连）。</li>
+          <li><strong>chunked transfer encoding</strong>（RFC 9112 §7）：HTTP/1.1 流式 wire 基础。每 chunk = <code>&lt;size hex&gt;\r\n&lt;data&gt;\r\n</code>，0 size 结束。HTTP/2 / HTTP/3 上不再用 chunked，用各自的 DATA frame 替代，但<strong>应用层流式语义一样</strong>。</li>
+          <li><strong>fetch + ReadableStream</strong>：WHATWG Streams 标准的浏览器实现。<code>fetch(url).then(r =&gt; r.body)</code> 返回 <code>ReadableStream</code>，可以 <code>.getReader()</code> 边收边解析。<strong>对 chunked / HTTP/2 DATA / HTTP/3 DATA 三种 wire 统一抽象</strong>。</li>
+          <li><strong>SSE</strong>（Server-Sent Events，<code>EventSource</code> API）：HTTP body 是 <code>text/event-stream</code>，每事件 = <code>data: ...\n\n</code>。浏览器内置自动重连（断网后重连 + Last-Event-ID 续传）。</li>
+          <li><strong>SSE vs fetch + ReadableStream 选择</strong>：SSE 自动重连 + 跨 origin EventSource 比较开箱；fetch + ReadableStream 更灵活（自定义协议 / 二进制 / POST 请求 / 取消控制）。<strong>2024+ 新项目流式响应几乎都走 fetch + ReadableStream</strong>。</li>
+          <li><strong>RSC payload 协议层</strong>：HTTP/1.1 chunked 或 HTTP/2/3 DATA frame 承载 React Flight serialization（<code>0:[...]\n1:I[...]\n2:HL[...]\n</code> 每行一个 JSON 块）。详见 <a href="../../next/index.html">Next.js 主题</a>。</li>
+          <li><strong>TanStack streamedQuery 协议层</strong>：fetch + ReadableStream，边收边累加进 query cache + 触发组件重渲。详见 <a href="../../tanstack-query/04-advanced-patterns/02-suspense-streaming.html">TanStack Query P4.2</a>（双向链）。</li>
+          <li><strong>Vercel AI SDK Data Stream Protocol</strong>：fetch + ReadableStream（<strong>不</strong>用 SSE）+ NDJSON-like 自定义格式（每行 <code>&lt;type&gt;:&lt;value&gt;\n</code>，支持 text-delta / tool-call / annotation 等）。</li>
+          <li><strong>HTTP/2 / 3 上的流式 vs HTTP/1.1</strong>：HTTP/2 流式数据走 DATA 帧 multiplexed，不阻塞别的 stream；HTTP/3 每条 stream 独立丢包恢复 → <strong>流式响应在丢包下表现最好</strong>。HTTP/1.1 流式独占连接（不能并发 + 6 connection limit 是真实约束）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>三层抽象的关系</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>应用层抽象        | RSC payload | TanStack streamedQuery | Vercel AI SDK | SSE | 普通 NDJSON
+─────────────────|─────────────|──────────────────────|─────────────|─────|────────────
+浏览器 API        | fetch+RS    | fetch+RS              | fetch+RS    | EventSource | fetch+RS
+─────────────────|─────────────|──────────────────────|─────────────|─────|────────────
+协议层 wire        | chunked / DATA frames                                  | chunked
+─────────────────|────────────────────────────────────────────────────────|────────────
+传输层            | TCP / QUIC                                              | TCP
+
+RS = ReadableStream</code></pre>
+        </div>
+
+        <p>三层抽象的关键观察：</p>
+
+        <ul>
+          <li><strong>SSE 选了独立的浏览器 API（EventSource）</strong>，不复用 fetch；这给了它"自动重连"的内置能力，但牺牲了灵活性</li>
+          <li><strong>RSC / streamedQuery / AI SDK 都用 fetch + ReadableStream</strong>，自己定义应用层格式 → 完全可控</li>
+          <li><strong>底下都是 chunked / DATA frame</strong>，wire 层完全相同</li>
+        </ul>
+
+        <h3>HTTP/1.1 chunked transfer encoding（wire 基础）</h3>
+
+        <p>已在 P2.1 简述。这里展开。</p>
+
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code class="lang-http">HTTP/1.1 200 OK
+Content-Type: application/x-ndjson
+Transfer-Encoding: chunked
+
+7\r\n
+{"a":1}\r\n     ← chunk 1: 大小 0x7=7 字节 + data 7 字节 + \r\n
+
+8\r\n
+{"b":22}\r\n    ← chunk 2: 大小 0x8=8 字节 + data 8 字节 + \r\n
+
+0\r\n            ← 终结 chunk: 0 大小
+\r\n             ← 空行（可放 trailer）</code></pre>
+        </div>
+
+        <p>关键点：</p>
+
+        <ul>
+          <li>chunked 是<strong>wire 层格式</strong>，应用层看到的是连续 body</li>
+          <li>每 chunk 大小用<strong>16 进制 ASCII 字符</strong>，不是二进制（这是 HTTP/1.1 文本协议的痕迹）</li>
+          <li>0 大小表示流结束</li>
+          <li><strong>HTTP/2 / HTTP/3 不用 chunked</strong> —— 它们的 DATA frame 自带长度。但<strong>response 的 wire 长度可以是渐进的</strong>（一个 frame 一个 frame 发），应用层语义一样</li>
+        </ul>
+
+        <h3>fetch + ReadableStream（浏览器统一抽象）</h3>
+
+        <p>WHATWG Streams 标准定义了三种流：ReadableStream / WritableStream / TransformStream。<code>fetch</code> 的 <code>response.body</code> 是 <code>ReadableStream</code>。</p>
+
+        <h4>核心 API</h4>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const res = await fetch('/stream-endpoint');
+
+// 1. 直接当 stream 用（适合传给 Response 或转换）
+return new Response(res.body);
+
+// 2. getReader 手动消费
+const reader = res.body.getReader();
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  // value is Uint8Array
+  console.log('chunk:', value);
+}
+
+// 3. for await...of (现代姿势)
+for await (const chunk of res.body) {
+  // chunk is Uint8Array
+  console.log('chunk:', chunk);
+}
+
+// 4. pipe to TextDecoderStream + line splitter
+const lines = res.body
+  .pipeThrough(new TextDecoderStream())
+  .pipeThrough(new LineSplitter());  // 自定义 transform
+for await (const line of lines) {
+  console.log('line:', line);
+}</code></pre>
+        </div>
+
+        <h4>关键能力</h4>
+
+        <ul>
+          <li><strong>边收边消费</strong>：不等整个响应到齐</li>
+          <li><strong>背压（backpressure）</strong>：消费慢时通知 producer 暂停</li>
+          <li><strong>取消（cancel）</strong>：<code>reader.cancel()</code> 中断 + 关闭底层 TCP 连接</li>
+          <li><strong>转换（pipe through）</strong>：链式 transform，每一段独立处理</li>
+          <li><strong>统一抽象</strong>：HTTP/1.1 chunked / HTTP/2 DATA / HTTP/3 DATA 都给同一个 ReadableStream</li>
+        </ul>
+
+        <h3>SSE（Server-Sent Events）</h3>
+
+        <p>SSE 是 chunked + 一层文本格式约定 + 浏览器内置 EventSource API。</p>
+
+        <h4>Wire 格式</h4>
+
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code class="lang-http">HTTP/1.1 200 OK
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Transfer-Encoding: chunked
+
+data: hello\n\n           ← 一个事件，两个 \n 结束
+data: world\n\n           ← 另一个事件
+
+event: update\n           ← 自定义事件类型
+data: {"id":1,"x":2}\n\n
+
+id: 42\n                  ← Last-Event-ID（重连续传用）
+data: with id\n\n
+
+retry: 5000\n             ← 重连间隔（ms）
+data: with retry\n\n
+
+: this is a comment\n\n   ← 注释（: 开头）+ 兼容性 keep-alive
+</code></pre>
+        </div>
+
+        <h4>EventSource API</h4>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">const es = new EventSource('/api/events');
+
+// 默认事件
+es.onmessage = (e) =&gt; {
+  console.log('data:', e.data);
+  console.log('lastEventId:', e.lastEventId);
+};
+
+// 自定义事件
+es.addEventListener('update', (e) =&gt; {
+  const data = JSON.parse(e.data);
+  console.log('update:', data);
+});
+
+// 错误（自动重连）
+es.onerror = (e) =&gt; {
+  console.log('error or connection lost; auto reconnecting...');
+};
+
+// 手动关闭
+es.close();</code></pre>
+        </div>
+
+        <h4>SSE 内置能力</h4>
+
+        <ul>
+          <li><strong>自动重连</strong>：连接断开后自动重连（间隔由 server 通过 <code>retry: ms</code> 控制，默认 3 秒）</li>
+          <li><strong>Last-Event-ID 续传</strong>：重连时浏览器自动带 <code>Last-Event-ID: 42</code> header；server 可以续从 ID 42 之后的事件</li>
+          <li><strong>跨 origin</strong>：标准支持 <code>EventSource(url, { withCredentials: true })</code>；server 配 CORS 即可</li>
+          <li><strong>事件分发</strong>：浏览器自动按 <code>event:</code> 字段分发到不同 listener</li>
+        </ul>
+
+        <h4>SSE 局限</h4>
+
+        <ul>
+          <li><strong>仅文本（UTF-8）</strong>：不能传二进制（要传二进制只能 base64 编码）</li>
+          <li><strong>仅 GET 请求</strong>：不能 POST（这是 EventSource API 的硬限制）</li>
+          <li><strong>HTTP/1.1 上独占连接</strong>：6 connection limit 影响多 SSE 同 origin</li>
+          <li><strong>没法"取消请求"+ 立刻发新请求</strong>：必须 close + new EventSource</li>
+        </ul>
+
+        <p>这些局限是 2024+ 新项目改用 fetch + ReadableStream 的理由。</p>
+
+        <h3>三个应用层场景的协议层根因</h3>
+
+        <h4>RSC payload（React Server Components）</h4>
+
+        <ul>
+          <li><strong>协议层</strong>：HTTP/1.1 chunked 或 HTTP/2/3 DATA frame</li>
+          <li><strong>应用层格式</strong>：React Flight serialization。每行一个 JSON 块：<code>0:[...]\n</code> / <code>1:I[...]\n</code> / <code>2:HL[...]\n</code>。其中第一个数字是 ID，后面是元素描述</li>
+          <li><strong>工程意义</strong>：浏览器在收完整页面前已开始渲染部分组件 → 改善 TTFB / FCP</li>
+          <li><strong>关键设计</strong>：每个 chunk 是独立可解析的 JSON 行（NDJSON-like），即使流中断也能渲染已收到的部分</li>
+          <li>详见 <a href="../../next/index.html">Next.js 主题 RSC streaming</a> 和 <a href="../../react/06-modern/01-server-components.html">React 主题 P6.1</a></li>
+        </ul>
+
+        <h4>TanStack streamedQuery</h4>
+
+        <ul>
+          <li><strong>协议层</strong>：fetch + ReadableStream</li>
+          <li><strong>应用层格式</strong>：用户自定义（NDJSON / SSE format / 自定义协议）</li>
+          <li><strong>工程意义</strong>：边收边累加进 query cache + 触发订阅组件重渲</li>
+          <li><strong>关键 API</strong>：v5 的 <code>streamedQuery</code> 在 <code>queryFn</code> 里返回 async iterator，TanStack Query 自动处理 cache 增量更新</li>
+          <li>详见 <a href="../../tanstack-query/04-advanced-patterns/02-suspense-streaming.html">TanStack Query P4.2</a>（双向链）</li>
+        </ul>
+
+        <h4>Vercel AI SDK Data Stream Protocol</h4>
+
+        <ul>
+          <li><strong>协议层</strong>：fetch + ReadableStream（<strong>不</strong>用 SSE）</li>
+          <li><strong>应用层格式</strong>：NDJSON-like，每行 <code>&lt;type&gt;:&lt;json&gt;\n</code>。<code>0</code> = text delta；<code>2</code> = data；<code>3</code> = error；<code>9</code> = tool call；<code>a</code> = tool result；<code>e</code> = finish reason；等</li>
+          <li><strong>为什么不用 SSE</strong>：(1) 需要 POST（用户消息在 body 里）；(2) 需要二进制能力（attachment / image）；(3) 需要 fine-grained 取消控制；(4) 自定义 frame 类型（tool calls 等不是简单"事件"）</li>
+          <li><strong>2026 现状</strong>：v5 起标准协议；v6（latest）/ v7（canary）继续演进</li>
+          <li>详见待写 AI SDK 主题（双向链）</li>
+        </ul>
+
+        <h3>HTTP/2 / HTTP/3 上流式 vs HTTP/1.1</h3>
+
+        <h4>HTTP/2 上流式</h4>
+
+        <ul>
+          <li>流式数据走 DATA 帧</li>
+          <li>同一 TCP 连接里多个 stream 并发流式（与 6 connection limit 无关）</li>
+          <li>但仍受 TCP HOL blocking：丢包时整连接 stall</li>
+        </ul>
+
+        <h4>HTTP/3 上流式</h4>
+
+        <ul>
+          <li>流式数据走 QUIC stream 上的 STREAM frame</li>
+          <li>每条 stream 独立丢包恢复 → 一条流式响应丢包不影响其他流</li>
+          <li><strong>流式响应在丢包下表现最好</strong></li>
+        </ul>
+
+        <h4>HTTP/1.1 上流式</h4>
+
+        <ul>
+          <li>流式独占一个 TCP 连接（连接里不能并发别的请求）</li>
+          <li>6 connection limit 是真实约束 —— 一个页面同时跑 4-5 个 SSE 已经吃掉一半连接配额</li>
+          <li>这是<strong>不应该在生产用 HTTP/1.1 跑多 SSE 的根本理由</strong></li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · LLM 流式聊天（GPT / Claude）</h3>
+          <p>用户提问 → server 边生成边返回 token → 客户端边收边显示。<strong>fetch + ReadableStream + 自定义协议（Vercel AI SDK Data Stream Protocol）</strong>是 2026 主流。SSE 不行因为：(1) 需要 POST 提交用户消息；(2) 需要二进制（图片）；(3) 需要细粒度取消（用户 stop 生成）。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 实时通知 / 监控 dashboard</h3>
+          <p>server push 状态变化（订单状态 / 监控指标 / 股票价格）。<strong>SSE 是经典选择</strong> —— 自动重连 + Last-Event-ID 续传 + 跨 origin 简单。HTTP/1.1 / 2 / 3 都支持。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · RSC 流式渲染</h3>
+          <p>Next.js / React Server Components：server 渲染时边渲边推 RSC payload chunks。<strong>fetch + ReadableStream + React Flight format</strong>。浏览器在收完整页面前已渲染部分组件 → FCP 改善 30-50%。详见 <a href="../../next/index.html">Next.js 主题</a>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · TanStack Query streamedQuery 大量数据</h3>
+          <p>查询返回大量数据（搜索结果 / 列表分页）：server 边查边返回。<strong>fetch + ReadableStream + NDJSON</strong>。TanStack v5 的 streamedQuery API 自动处理 cache 增量。详见 <a href="../../tanstack-query/04-advanced-patterns/02-suspense-streaming.html">TanStack Query P4.2</a>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 E · 单向数据流监控/日志</h3>
+          <p>server 持续推日志 / 指标到 client。<strong>SSE 仍然合适</strong>，特别是 client 不关心顺序、希望 reconnect 时拿到漏掉的事件（Last-Event-ID）。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：完整 NDJSON / SSE / RSC 实现</span></h2>
+
+        <h3>Express NDJSON 流式 server</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">import express from 'express';
+
+const app = express();
+
+app.get('/api/stream-data', async (req, res) =&gt; {
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('Transfer-Encoding', 'chunked');
+  res.setHeader('X-Accel-Buffering', 'no');  // 防止 nginx buffer
+
+  // 边查数据库边推
+  for (let i = 0; i &lt; 100; i++) {
+    const data = await fetchSomething(i);
+    res.write(JSON.stringify(data) + '\n');
+    // res.write 立即刷到 wire（chunked）
+  }
+
+  res.end();
+});
+
+app.listen(3000);</code></pre>
+        </div>
+
+        <h3>fetch + ReadableStream 解析 NDJSON</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">async function* streamNDJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('fetch failed');
+
+  const decoder = new TextDecoder();
+  let buf = '';
+
+  for await (const chunk of res.body) {
+    buf += decoder.decode(chunk, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop();  // 留最后一行（可能不完整）
+    for (const line of lines) {
+      if (line.trim()) yield JSON.parse(line);
+    }
+  }
+  // 处理最后一行
+  if (buf.trim()) yield JSON.parse(buf);
+}
+
+// 使用
+for await (const item of streamNDJSON('/api/stream-data')) {
+  console.log('item:', item);
+}</code></pre>
+        </div>
+
+        <h3>SSE 完整 server + client</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// server
+app.get('/api/events', (req, res) =&gt; {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  const lastEventId = req.headers['last-event-id'];
+  let id = lastEventId ? parseInt(lastEventId) + 1 : 1;
+
+  const interval = setInterval(() =&gt; {
+    res.write(`id: ${id}\n`);
+    res.write(`event: update\n`);
+    res.write(`data: ${JSON.stringify({ id, time: Date.now() })}\n\n`);
+    id++;
+  }, 1000);
+
+  // 客户端断开
+  req.on('close', () =&gt; clearInterval(interval));
+});
+
+// client
+const es = new EventSource('/api/events');
+es.addEventListener('update', (e) =&gt; {
+  const data = JSON.parse(e.data);
+  console.log(`event ${e.lastEventId}:`, data);
+});</code></pre>
+        </div>
+
+        <h3>Vercel AI SDK 风格的流式协议（手写）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// server: 模拟 LLM 流式
+app.post('/api/chat', async (req, res) =&gt; {
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Transfer-Encoding', 'chunked');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  const { messages } = req.body;
+  const tokens = generateTokens(messages);  // 假设逐 token 生成
+
+  for await (const token of tokens) {
+    // 0: text delta
+    res.write(`0:${JSON.stringify(token)}\n`);
+  }
+
+  // e: finish reason
+  res.write(`e:${JSON.stringify({ finishReason: 'stop' })}\n`);
+  res.end();
+});
+
+// client: 解析协议
+async function streamChat(messages) {
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages }),
+  });
+
+  const decoder = new TextDecoder();
+  let buf = '';
+
+  for await (const chunk of res.body) {
+    buf += decoder.decode(chunk, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop();
+
+    for (const line of lines) {
+      if (!line) continue;
+      const colonIdx = line.indexOf(':');
+      const type = line.slice(0, colonIdx);
+      const value = JSON.parse(line.slice(colonIdx + 1));
+      yield { type, value };
+    }
+  }
+}
+
+// 使用
+for await (const part of streamChat([{ role: 'user', content: 'hi' }])) {
+  if (part.type === '0') {
+    appendToUI(part.value);
+  } else if (part.type === 'e') {
+    console.log('done:', part.value.finishReason);
+  }
+}</code></pre>
+        </div>
+
+        <h3>nginx 配置：让流式响应不被 buffer</h3>
+
+        <div class="code-block">
+          <span class="code-label">nginx</span>
+          <pre class="code"><code class="lang-nginx">location /api/stream {
+    # 禁用 nginx 对响应的 buffering
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_set_header X-Accel-Buffering no;
+
+    # 长流式连接需要长 timeout
+    proxy_read_timeout 24h;
+    proxy_send_timeout 24h;
+
+    # HTTP/1.1（与 upstream 通信用 1.1 + keep-alive）
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+
+    proxy_pass http://upstream;
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 流式响应被 nginx buffer 吞掉</div>
+          <p>nginx 默认对响应做 buffering，把 chunked 流"攒一阵再发" → 客户端体感不流式。<strong>必须配 <code>proxy_buffering off;</code> + 应用响应头加 <code>X-Accel-Buffering: no</code></strong>。这是 SSE / RSC / AI SDK 在生产部署最常见的坑。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · SSE 跨 origin 没正确处理 CORS preflight</div>
+          <p>EventSource 默认不带 cookie；要带要 <code>new EventSource(url, { withCredentials: true })</code> + server 设 <code>Access-Control-Allow-Credentials: true</code> + <code>Access-Control-Allow-Origin: &lt;具体 origin&gt;</code>（不能是 *）。漏掉任何一个 → SSE 失败。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · HTTP/1.1 上多个 SSE 同 origin → 6 connection limit 撑爆</div>
+          <p>典型场景：dashboard 同时开 5 个 SSE → 占 5 个连接 → 用户其他请求只剩 1 个连接配额 → 整个页面慢。<strong>用 HTTP/2 / HTTP/3 解决（不再有 6 connection limit）</strong>，或合并多个 SSE 到一个端点（用 event 字段区分）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · SSE 想传二进制</div>
+          <p>SSE 标准明确要求 UTF-8 文本。要传二进制 → base64 编码 → 体积膨胀 33%。<strong>需要二进制就别用 SSE，改 fetch + ReadableStream（流式 binary 直接传）或 WebSocket</strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · ReadableStream 取消但服务端不知道</div>
+          <p>客户端 <code>reader.cancel()</code> 后浏览器关 TCP 连接，但 Node.js / Express 的 <code>res</code> 不一定收到 <code>close</code> 事件（特别是经过 proxy 时）。<strong>server 监听 <code>req.on('close')</code> + <code>req.on('aborted')</code> 双重保险</strong>。否则 server 一直在生成，资源浪费。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · Service Worker 拦截流式响应被 buffer</div>
+          <p>Service Worker 注册了 fetch handler，默认行为可能 buffer 整个响应再返回。<strong>SW 内必须显式传 stream</strong>：<code>event.respondWith(fetch(event.request))</code> 而不是先 read body 再返。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · NDJSON 解析没处理"半行 chunk"</div>
+          <p>fetch chunk 可能切在 JSON 中间（一行 JSON 跨两个 chunk）。简单 <code>chunk.split('\n').forEach(JSON.parse)</code> 会失败。<strong>必须 buffer 跨 chunk + 只解析完整行</strong>（最后一行留到下次 chunk 一起处理）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 8 · 误以为 SSE 自动重连无脑可靠</div>
+          <p>SSE 重连时 server 必须支持 Last-Event-ID 续传（自己管 event ID + 重连时从 ID+1 续）。如果 server 不实现 → 重连后从头开始，client 收重复事件。<strong>SSE 自动重连只是连接层面，应用层续传逻辑要自己写</strong>。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9112#section-7" target="_blank" rel="noopener">RFC 9112 §7 · Transfer Codings (chunked)</a></li>
+          <li><a href="https://streams.spec.whatwg.org/" target="_blank" rel="noopener">WHATWG · Streams Standard</a></li>
+          <li><a href="https://html.spec.whatwg.org/multipage/server-sent-events.html" target="_blank" rel="noopener">HTML 标准 · Server-Sent Events</a></li>
+          <li><a href="https://developer.mozilla.org/en-US/docs/Web/API/EventSource" target="_blank" rel="noopener">MDN · EventSource API</a></li>
+          <li><a href="https://developer.mozilla.org/en-US/docs/Web/API/Streams_API" target="_blank" rel="noopener">MDN · Streams API</a></li>
+          <li><a href="https://sdk.vercel.ai/docs/concepts/streaming" target="_blank" rel="noopener">Vercel AI SDK · Streaming</a> —— Data Stream Protocol</li>
+          <li><a href="https://github.com/facebook/react/blob/main/packages/react-server/README.md" target="_blank" rel="noopener">React Server Components 内部</a> —— Flight serialization</li>
+          <li><a href="../../tanstack-query/04-advanced-patterns/02-suspense-streaming.html" rel="noopener">本站 · TanStack Query P4.2 streamedQuery</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../05-resource-loading/02-early-hints.html">
+            <span class="label">← 上一章</span>
+            <span class="title">Server Push 之死 + 103 Early Hints</span>
+          </a>
+          <a class="next" href="02-bidirectional.html">
+            <span class="label">下一章 →</span>
+            <span class="title">双向：WebSocket / WebTransport / WebRTC</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

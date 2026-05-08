@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HTTP 35 年项目史 + 同代人横评 · P1.1 · HTTP/2 + HTTP/3 + QUIC 深度学习</title>
+    <meta name="description" content="HTTP 35 年项目史：从 1991 年 Tim Berners-Lee 一行 GET 到 2022 年 RFC 9000-9114 + 2026 全面普及。讲清 SPDY → HTTP/2 → Google QUIC → IETF QUIC → HTTP/3 这条主线为什么是必然，每一代解决了前一代什么痛点；同时把 HTTP/1.1 / 2 / 3 / WebSocket / WebTransport / gRPC 在 2026 年的真实分工讲清。给后面所有协议层和工程层章节提供历史坐标。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EH3%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>HTTP/2 + HTTP/3 + QUIC 深度学习</span><span class="site-title-badge" style="background: #2563eb; color: #fff">H3</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P1 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · 是谁 / 为什么</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html" class="active">01 · HTTP 35 年项目史</a></li>
+          <li><a href="02-philosophy.html">02 · 三代抽象升级 · 设计哲学</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">HTTP</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · 是谁 / 为什么</a><span class="breadcrumb-sep">/</span>
+          <span>01 · HTTP 35 年项目史</span>
+        </nav>
+        <h1>HTTP 35 年项目史 + 同代人横评</h1>
+        <p class="lead">
+          从 1991 年 Tim Berners-Lee 一行 <code>GET /</code> 到 2022 年 RFC 9000-9114 一次性把 HTTP/1.1/2/3 + QUIC + 头压缩 + 优先级信号全部修订完毕，HTTP 这条线 35 年没有"改良"，一共发生了三次<strong>抽象层重做</strong>。这一章把演化串起来，让"为什么 HTTP/2 / HTTP/3 各自必要"以及"WebSocket / WebTransport / gRPC 在 2026 年各占什么位置"有历史根因。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 用过 fetch / curl，知道 HTTP request / response 结构</span>
+          <span><strong>主要来源</strong> IETF HTTP/QUIC WG charter 与各 RFC + Google SPDY whitepaper（2009）+ Jim Roskind QUIC 早期演讲（2013）+ Daniel Stenberg "HTTP/3 Explained" + Web Almanac 2024-2025</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>HTTP 不是一个协议，是<strong>三代协议共用一套语义层</strong>。RFC 9110（HTTP semantics, 2022）把 method / status / header / cache 抽到独立文档；HTTP/1.1（RFC 9112）/ HTTP/2（RFC 9113）/ HTTP/3（RFC 9114）只决定"这套语义在 wire 上怎么编码"。</li>
+          <li><b>1991-1996</b> · <b>HTTP/0.9 → 1.0</b>：从一行 <code>GET</code> 到引入 method / status / header / Content-Type。HTTP/1.0（RFC 1945）让 HTTP 第一次"长得像一个真正的协议"。</li>
+          <li><b>1997-1999</b> · <b>HTTP/1.1</b>（RFC 2068 → 2616）：keep-alive 默认开 / Host header 让一台 server 跑多站 / chunked transfer / pipelining（理论上）/ Range 请求。主导 web 20 年，2026 仍占 25-30% 流量。</li>
+          <li><b>2009</b> · <b>SPDY</b>（Google 实验）：Mike Belshe + Roberto Peon 把"二进制帧 + 多路复用 + 头压缩 + Server Push"打包成一个实验协议。HTTP/2 后来基本是 SPDY 的标准化。</li>
+          <li><b>2014-05</b> · <b>RFC 7230-7235</b>：把 1999 年的 HTTP/1.1（RFC 2616）的混乱定义重切成 6 个独立 RFC，第一次给 HTTP 一个"模块化"的规范结构。</li>
+          <li><b>2015-05</b> · <b>HTTP/2 RFC 7540 + 7541</b>：基于 SPDY，IETF 标准化。二进制 / 多路复用 / HPACK / Server Push 一次性进规范。</li>
+          <li><b>2012-2013</b> · <b>Google QUIC（gQUIC）</b>：Jim Roskind 团队在 UDP 上重建传输层；Google.com / YouTube 实验。动机：TCP 的 HOL blocking 在弱网下让 HTTP/2 也救不了。</li>
+          <li><b>2016</b> · <b>IETF QUIC WG 成立</b>：从 gQUIC 抽象出标准化版本。</li>
+          <li><b>2021-05</b> · <b>RFC 9000-9002</b>（QUIC v1）正式标准化。core / TLS / loss & congestion 三份 RFC。</li>
+          <li><b>2022-06</b> · <b>HTTP 大重构</b>：RFC 9110（semantics）/ 9111（caching）/ 9112（1.1 wire）/ 9113（2.0）/ 9114（3.0）/ 9204（QPACK）一次性发布；HTTP/2 RFC 7540 / 7541 被替代；Server Push 被正式不再推荐；prioritization tree 被废弃改用 RFC 9218。</li>
+          <li><b>2024-2026</b> · HTTP/3 在 Cloudflare / Fastly / Akamai 全面默认；浏览器到 CDN 这一段普及率约 70%；CDN 到 origin 仍以 HTTP/2 为主；Server Push 全面退场，103 Early Hints 接班。</li>
+          <li>2026 年同代人分工：HTTP/1.1 仍是 fallback 与回源主力；HTTP/2 是 CDN ↔ origin 默认；HTTP/3 是浏览器 ↔ CDN 默认；WebSocket 仍是双向通用方案；WebTransport 是 Chromium-only 实验；gRPC over HTTP/2 是服务端到服务端的事实主力。<strong>没有"一个协议统一所有场景"</strong>。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>1991-1996 · HTTP/0.9 → 1.0：从"一行 GET"到"长得像协议"</h3>
+
+        <p>HTTP/0.9 不是规范，是 Tim Berners-Lee 1991 年在 CERN 实现的一个最小协议。<strong>整个协议只有一行</strong>：</p>
+
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code class="lang-http">GET /index.html
+&lt;-- 服务器返回 HTML 内容，连接关闭
+</code></pre>
+        </div>
+
+        <p>没有 status code、没有 headers、没有 method（除了 <code>GET</code>），响应只能是 HTML，连接每次重建。这套设计在 1991 年是合理的：那时 web 上只有几台服务器，每个文档就是 HTML。</p>
+
+        <p>1996 年 <strong>HTTP/1.0（RFC 1945）</strong> 让 HTTP 长得像一个真正的协议：</p>
+
+        <ul>
+          <li>引入 <strong>method</strong>（<code>GET</code> / <code>HEAD</code> / <code>POST</code>）</li>
+          <li>引入 <strong>status code</strong>（200 / 301 / 404 / 500 等）</li>
+          <li>引入 <strong>headers</strong>（请求与响应都有）</li>
+          <li>引入 <strong>Content-Type</strong>，HTTP 不再是"只能传 HTML"的协议</li>
+        </ul>
+
+        <p>但 HTTP/1.0 默认<strong>每个请求一个 TCP 连接 + 用完关闭</strong>。当 web 页面开始有几十张图片之后，每张图片都做一次 TCP 三次握手 + TLS 握手，延迟无法接受。</p>
+
+        <h3>1997-1999 · HTTP/1.1：定型 web 20 年</h3>
+
+        <p><strong>HTTP/1.1（RFC 2068, 1997 → RFC 2616, 1999）</strong> 引入了一组延续到今天的核心机制：</p>
+
+        <ul>
+          <li><strong>keep-alive 默认开</strong>：一个 TCP 连接发完一个请求不关，下一个请求复用 → 省 TCP/TLS 握手</li>
+          <li><strong>Host header</strong>：让一台服务器能 vhost 多个站点 → web hosting 商业模式的协议基础</li>
+          <li><strong>Transfer-Encoding: chunked</strong>：动态长度响应；这是 SSE / 流式 RSC 的 wire 基础（详见 P6.1）</li>
+          <li><strong>Range / 206 Partial Content</strong>：断点续传、视频拖动 → 静态 CDN 必备</li>
+          <li><strong>pipelining</strong>：理论上可以连发多个请求不等响应 → 实际上中间盒兼容性问题严重，所有现代浏览器都禁用</li>
+          <li><strong>Cache-Control / ETag / Vary</strong>：HTTP 缓存语义系统化（详见 RFC 9111，本主题不重讲）</li>
+        </ul>
+
+        <p>HTTP/1.1 主导 web 20 年。但它的设计在 web 流量爆炸之后显出三个根本性天花板（详见 <a href="../02-http11/01-baseline.html">P2.1</a>）：应用层 HOL blocking、6 connection limit、headers 不压缩重复发送。</p>
+
+        <p>1999 年的 RFC 2616 因为模块切分混乱、erratum 累积，到 2014 年被 <strong>RFC 7230-7235</strong> 重切成 6 个独立 RFC（消息语法 / 语义 / 条件请求 / range / cache / 认证）。这次重切是后来 RFC 9110 把"语义层"独立的前奏。</p>
+
+        <h3>2009 · SPDY 实验：HTTP/2 的真正起点</h3>
+
+        <p>2009 年 Google 的 Mike Belshe 和 Roberto Peon 公开 <strong>SPDY</strong>（读"speedy"）—— 一个 HTTP 上层的实验协议，目标是<strong>在不改 HTTP 语义的前提下，把 1.1 的天花板砸掉</strong>。</p>
+
+        <p>SPDY 引入的四个机制后来全部进入 HTTP/2 标准：</p>
+
+        <ul>
+          <li><strong>二进制帧</strong>：替代 ASCII 文本协议，解析更快、状态机更明确</li>
+          <li><strong>多路复用 streams</strong>：一个 TCP 连接里跑多个虚拟 stream，解除应用层 HOL</li>
+          <li><strong>头压缩</strong>（SPDY 用 zlib，HTTP/2 改成更安全的 HPACK）</li>
+          <li><strong>Server Push</strong>：server 主动推 client 还没请求的资源</li>
+        </ul>
+
+        <p>SPDY 在 Google 自己的服务上跑了 2009-2015，然后让位给基于它的 HTTP/2 标准。SPDY 的代码并入 Chromium 后逐步移除（最终在 Chrome 51, 2016 年彻底删掉）。</p>
+
+        <p><strong>关键事实</strong>：HTTP/2 不是"凭空想出来的标准"，是把 SPDY 这个跑了 6 年的实验协议规范化。它的所有设计选择都有 production 数据背书。</p>
+
+        <h3>2015 · HTTP/2 RFC 7540：标准化 SPDY</h3>
+
+        <p><strong>HTTP/2（RFC 7540, 2015-05）</strong> + <strong>HPACK（RFC 7541）</strong> 由 Belshe 和 Peon（SPDY 同班人马）主导起草，IETF httpbis WG 历时 3 年完成。HTTP/2 保持<strong>HTTP 语义不变</strong>（method / status / headers 都不动），只重做 wire format。</p>
+
+        <p>HTTP/2 在 2015-2018 完成普及。Web Almanac 2018 数据：约 35-45% web 流量过 HTTP/2。但同时，工程现实暴露了 HTTP/2 的两个根本性局限：</p>
+
+        <ol>
+          <li><strong>TCP HOL blocking 仍在</strong>：HTTP/2 多路复用解了应用层 HOL，但 TCP 字节流仍是有序的；任何一个 IP packet 丢失，整条 TCP 流 stall，所有 stream 都要等。弱网下 HTTP/2 可能比 HTTP/1.1（拆 6 个 TCP 连接）还慢。Robin Marx 的研究（2020）给了详细的实测数据。</li>
+          <li><strong>Server Push 是失败实验</strong>：浏览器 cache 和 server push 协调机制在工程上不成立 —— server 不知道 client 已有什么 cache，push 经常重复，反而吃带宽。Chrome 团队 2017-2020 实测表明大部分场景 Server Push 伤性能。2018 起 Chrome 开始限制 push；2022 RFC 9113 正式不再推荐；2026 几乎所有 server 已停用。</li>
+        </ol>
+
+        <h3>2012-2016 · gQUIC：在 UDP 上重做传输层</h3>
+
+        <p>2012 年 Google 网络团队意识到：HTTP/2 在 TCP 上的所有补丁都救不了 TCP 自身的 HOL。同年 <strong>Jim Roskind</strong> 启动 <strong>gQUIC</strong>（Google QUIC）项目 —— 把传输层从 TCP 整体替换为 UDP + 用户态实现的新协议。</p>
+
+        <p>gQUIC 的关键决策（后来全部进入标准 QUIC）：</p>
+
+        <ul>
+          <li><strong>UDP 而不是新协议</strong>：因为新的 IP 协议号会被中间盒（NAT / firewall）丢弃；UDP 是中间盒认得的最少阻力路径</li>
+          <li><strong>每条 stream 独立的丢包恢复</strong>：streams 不再共享一个有序字节流 → 真正消灭 HOL blocking</li>
+          <li><strong>加密强制</strong>：内嵌 TLS-like 加密；中间盒看不见内部，不能像对 TCP 那样"理解+破坏"</li>
+          <li><strong>用户态实现</strong>：浏览器和 CDN 拥有完整控制权，不依赖 OS 内核升级</li>
+          <li><strong>0-RTT 重连</strong>：第二次连接同一 server 时直接发 application data，省 1 个 RTT</li>
+          <li><strong>连接 ID 解耦于 IP+port</strong>：手机切 wifi → 4G 时连接不断</li>
+        </ul>
+
+        <p>gQUIC 在 Google 服务上跑了 2013-2018，2017 年 Google 报告 7% 的 internet 流量已经在 QUIC 上（绝大部分是 google.com / YouTube）。这是 IETF 启动 QUIC 标准化的实际数据基础。</p>
+
+        <h3>2016-2021 · IETF QUIC：从实验到标准</h3>
+
+        <p>2016 年 IETF <strong>QUIC WG</strong> 成立。WG 决定：标准 QUIC 不是 gQUIC v1.5，而是一次<strong>语义清理 + TLS 1.3 集成 + 抽象通用化</strong>的重设计 —— gQUIC 把 HTTP/2 的语义缠在 transport 里，标准 QUIC 把 transport 和 application 完全分层。</p>
+
+        <p>WG 历时 5 年，中间反复推翻早期决策（最大的一次是 2018 把 TLS 1.3 从"贴在 QUIC 旁边"改成"内嵌到 QUIC 包结构"）。最终成果：</p>
+
+        <ul>
+          <li><strong>RFC 9000</strong>（QUIC core, 2021-05）—— 包结构 / streams / 流控 / 连接迁移</li>
+          <li><strong>RFC 9001</strong>（TLS in QUIC）—— TLS 1.3 与 QUIC packet protection 的集成</li>
+          <li><strong>RFC 9002</strong>（loss & congestion）—— 包丢失检测 + 推荐拥塞控制（NewReno/CUBIC/BBR 都允许）</li>
+        </ul>
+
+        <p>QUIC v1 锁定后，HTTP-over-QUIC 即 <strong>HTTP/3（RFC 9114, 2022-06）</strong> 才能定稿。</p>
+
+        <h3>2022-06 · HTTP 大重构：6 份 RFC 一次性发布</h3>
+
+        <p>2022 年 6 月 IETF 一次性发布了一套相互引用的 HTTP RFC，是 HTTP 自 RFC 2616（1999）以来最大的规范重构：</p>
+
+        <ul>
+          <li><strong>RFC 9110</strong> · HTTP semantics —— 把 method / status / header / range / 认证 / cache 头等"和 wire 无关的语义"独立成单一文档；HTTP/1.1/2/3 都引用它</li>
+          <li><strong>RFC 9111</strong> · HTTP caching —— 替代 RFC 7234；含 RFC 5861 的 <code>stale-while-revalidate</code> 归并</li>
+          <li><strong>RFC 9112</strong> · HTTP/1.1 wire format —— 替代 RFC 7230；只剩 1.1 的字节怎么编码</li>
+          <li><strong>RFC 9113</strong> · HTTP/2 —— 替代 RFC 7540 + 7541 errata；明确移除 prioritization tree、Server Push 不再推荐</li>
+          <li><strong>RFC 9114</strong> · HTTP/3 —— HTTP-over-QUIC，frame 大幅简化</li>
+          <li><strong>RFC 9204</strong> · QPACK —— HTTP/3 的头压缩，HPACK 不能用在 QUIC 乱序传输上的替代</li>
+          <li><strong>RFC 9218</strong>（紧接着 7 月发布）· priority signaling —— 替代 HTTP/2 prioritization tree 失败的尝试</li>
+        </ul>
+
+        <p>这次重构的工程意义在于：HTTP 不再是"一坨规范，1.1 是基线、2/3 是补丁"的形态，而是<strong>语义层（9110）+ 缓存层（9111）+ 三种 wire 编码（9112/9113/9114）</strong>。三种 wire 完全平等，没有"主版本"。</p>
+
+        <h3>2024-2026 · HTTP/3 全面默认 + Server Push 退场</h3>
+
+        <p>2024 起 HTTP/3 在头部 CDN 全面默认开启：Cloudflare、Fastly、Akamai、AWS CloudFront、Vercel 都已默认对支持 QUIC 的客户端协商 HTTP/3。Web Almanac 2025 数据：</p>
+
+        <ul>
+          <li>浏览器 ↔ CDN 这一段：<strong>HTTP/3 普及率约 70%</strong>；HTTP/2 约 25%；HTTP/1.1 约 5%（多为老 client / 内网工具）</li>
+          <li>CDN ↔ origin 这一段：<strong>HTTP/2 约 75%</strong>；HTTP/1.1 约 23%；HTTP/3 仍少（因为回源 LB / 防火墙改造少）</li>
+          <li>Server Push 启用率：<strong>&lt; 1%</strong>，等同于退场</li>
+          <li>103 Early Hints：约 8% 网站启用，2022 年的 1% 翻了 8 倍（详见 <a href="../05-resource-loading/02-early-hints.html">P5.2</a>）</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景：2026 年同代人分工</span></h2>
+
+        <p>每代协议在 2026 年都没有完全退场，而是在自己擅长的位置占住。这一节把"在哪一段路上用什么"讲清。</p>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 浏览器 ↔ CDN：HTTP/3 默认</h3>
+          <p>这一段路是 HTTP/3 普及最快的位置。理由：用户网络条件多变（4G / wifi / 国际跨海光缆），是 QUIC 的优势位（连接迁移 + 0-RTT + 每 stream 独立丢包恢复）。CDN 通过 <code>Alt-Svc</code> 头或 HTTPS DNS RR 通告 HTTP/3 端点；浏览器自动升级。</p>
+          <p>同时保留 HTTP/2 fallback：UDP 在某些企业 firewall 被丢，QUIC 握手失败 → 浏览器 fallback 到 HTTP/2 over TCP。CDN 仪表板都能看到 fallback 率。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · CDN ↔ origin：HTTP/2 仍主力</h3>
+          <p>这一段路 HTTP/3 普及缓慢。理由：CDN 到 origin 通常是固定路由的高质量链路，UDP/TCP 性能差异小；origin LB / 防火墙 / 内部基础设施改造成本高；HTTP/2 over TCP 已经够用。Cloudflare 2024 给出的数据：回源用 HTTP/2 占 75%，HTTP/1.1 占 23%（仍有大量老 backend），HTTP/3 占比仍是个位数。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 服务端 ↔ 服务端 RPC：gRPC over HTTP/2</h3>
+          <p>gRPC（Google 出品的 RPC 框架）在 2015 年就锁定 HTTP/2 作为底层 wire；它依赖 HTTP/2 的多路复用 + 二进制帧 + trailers。2026 年仍是服务端到服务端 RPC 的事实主力（特别是 Kubernetes / Istio 生态）。gRPC over HTTP/3 是实验状态，未广泛部署。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 浏览器双向：WebSocket 仍默认</h3>
+          <p>WebSocket（RFC 6455, 2011）通过 HTTP/1.1 Upgrade 握手，切换到自己的二进制/文本帧协议。2026 仍是浏览器双向通信的默认选择 —— 库丰富、跨浏览器兼容、proxy 兼容性最好。RFC 8441（WebSocket over HTTP/2）和 RFC 9220（over HTTP/3）几乎无人实现。详见 <a href="../06-streaming/02-bidirectional.html">P6.2</a>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 E · 内网工具 / 调试 / curl 一行：HTTP/1.1</h3>
+          <p>HTTP/1.1 的 ASCII 文本格式让 telnet / curl -v / 写 shell 脚本能一行调通。HTTP/2 / HTTP/3 是二进制，需要 nghttp / curl --http3 build / Wireshark 才能看 wire。所以"工具链 + 内网调试"这一段 HTTP/1.1 不会消失。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 F · 低延迟实验 / 游戏：WebTransport over HTTP/3</h3>
+          <p>WebTransport（W3C / IETF draft）把 QUIC 多 stream + datagram 暴露给浏览器 JS，用于"我不需要 HTTP 语义，只需要 QUIC 的低延迟双向流"场景。2026 仅 Chromium 系实现完整；Firefox 实验，Safari 完全没做。所以是"知道用户在 Chrome 才用"的实验路线。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：用 curl 看四代协议</span></h2>
+
+        <p>历史最直观的体验方式是用 curl 一个个跑过去。下面用同一个 URL（假设 <code>https://example.com</code>）展示四代协议的 wire 长什么样。</p>
+
+        <h3>HTTP/1.1：ASCII 文本</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">curl --http1.1 -v https://example.com/
+
+# 关键 wire（去掉 TLS 部分）：
+&gt; GET / HTTP/1.1
+&gt; Host: example.com
+&gt; User-Agent: curl/8.5.0
+&gt; Accept: */*
+&gt;
+&lt; HTTP/1.1 200 OK
+&lt; Content-Type: text/html; charset=UTF-8
+&lt; Content-Length: 1256
+&lt; ...
+&lt; (body...)</code></pre>
+        </div>
+
+        <p>注意：你能直接读 wire。这是 HTTP/1.1 至今活着的核心理由。</p>
+
+        <h3>HTTP/2：二进制帧（用 nghttp 看）</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">nghttp -nv https://example.com/
+
+# 关键 wire（nghttp 翻译过的人类可读视图）：
+[  0.123] Connected
+[  0.234] h2 negotiated via ALPN
+[  0.235] send SETTINGS frame &lt;length=18, flags=0x00, stream_id=0&gt;
+          (niv=3)
+          [SETTINGS_MAX_CONCURRENT_STREAMS(0x03):100]
+          [SETTINGS_INITIAL_WINDOW_SIZE(0x04):65535]
+[  0.236] send HEADERS frame &lt;length=43, flags=0x05, stream_id=1&gt;
+          ; END_STREAM | END_HEADERS
+          :method: GET
+          :scheme: https
+          :path: /
+          :authority: example.com
+          accept: */*
+          user-agent: nghttp2/1.55.1
+[  0.345] recv HEADERS frame &lt;length=125, flags=0x04, stream_id=1&gt;
+          ; END_HEADERS
+          :status: 200
+          content-type: text/html; charset=UTF-8
+          content-length: 1256
+[  0.346] recv DATA frame &lt;length=1256, flags=0x01, stream_id=1&gt;
+          ; END_STREAM</code></pre>
+        </div>
+
+        <p>注意：协议变成了 <strong>frame 序列</strong>，每个 frame 有 type / flags / stream id。HEADERS 和 DATA 走在同一个 stream（id=1）上，和别的请求复用同一 TCP 连接。</p>
+
+        <h3>HTTP/3：QUIC 上的 frame（curl 需要 quiche/ngtcp2 build）</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">curl --http3 -v https://example.com/
+
+# 关键 wire：
+* ALPN: offers h3
+* Connected to example.com (...)
+* QUIC connection established
+* h3 negotiated
+&gt; GET / HTTP/3
+&gt; Host: example.com
+&gt; User-Agent: curl/8.5.0 (+nghttp3)
+&gt; Accept: */*
+&gt;
+&lt; HTTP/3 200
+&lt; content-type: text/html; charset=UTF-8
+&lt; content-length: 1256
+&lt; (body...)</code></pre>
+        </div>
+
+        <p>表面看 HTTP/3 的 curl 输出很像 HTTP/2 的"语义视图"，但底下走的是完全不同的传输层（UDP + QUIC streams）。要看真实 wire 必须 Wireshark + SSLKEYLOGFILE 解密 QUIC 包（详见 <a href="../07-decision/01-decision.html">P7.1</a>）。</p>
+
+        <h3>WebSocket：HTTP/1.1 Upgrade 握手</h3>
+
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code class="lang-http">GET /chat HTTP/1.1
+Host: example.com
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Sec-WebSocket-Version: 13
+
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+
+&lt;-- 之后切换到 WebSocket 帧协议（不是 HTTP）--&gt;</code></pre>
+        </div>
+
+        <p>WebSocket 是"借 HTTP/1.1 握手然后切走"。握手完成后 wire 不再是 HTTP，是 WebSocket 自己的 frame 格式（RFC 6455）。这就是为什么 WebSocket 不能简单升级到 HTTP/2 / HTTP/3 —— 它的 wire 设计假设了 1.1 风格的"独占连接"。</p>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 把 HTTP/2 / HTTP/3 当成"主版本号"看待</div>
+          <p>HTTP/3 不是 HTTP/2 的升级版，HTTP/2 也不是 HTTP/1.1 的升级版。RFC 9110 把语义独立后，三个 wire 完全平等：你可以用 HTTP/3 走老 1.1 的 cookie 认证，也可以用 HTTP/1.1 走 RFC 9218 优先级头。<strong>"协议升级"是 wire 升级，不是语义升级</strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 仍在配置 Server Push</div>
+          <p>2022 起 RFC 9113 已经明确不再推荐；2026 几乎所有 server 已停用；浏览器 cache 协调机制让 Server Push 实际上伤性能。<strong>遇到老配置直接删掉，改用 103 Early Hints + preload</strong>（详见 <a href="../05-resource-loading/02-early-hints.html">P5.2</a>）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 误以为 HTTP/3 处处比 HTTP/2 快</div>
+          <p>HTTP/3 的优势位是<strong>用户网络条件多变 + 高 RTT</strong>（4G / 跨国 / wifi 切换）。在数据中心内部低延迟低丢包的网络上，HTTP/2 over TCP 可能仍然更快（因为 TCP 拥塞控制经过 30 年优化、QUIC 仍有用户态开销）。所以 CDN ↔ origin 大部分仍是 HTTP/2。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · WebSocket 想升级到 HTTP/2 / HTTP/3</div>
+          <p>RFC 8441（over /2）和 RFC 9220（over /3）几乎无人实现。如果你的应用想用 QUIC 的多 stream，应该考虑 <strong>WebTransport</strong> 而不是 WebSocket-over-HTTP/3。但 WebTransport 2026 仅 Chromium 系实现 —— 选型时必须考虑用户浏览器分布。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 把 SPDY 当成"被淘汰的失败品"</div>
+          <p>SPDY 不是失败，是<strong>实验阶段的 HTTP/2</strong>。它跑在 Google production 上 6 年，给 HTTP/2 提供了 production 数据。它在 2016 年被 Chrome 移除是因为 HTTP/2 标准化完成，不是因为设计错。HTTP/2 的几乎所有创新都来自 SPDY。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · 引用旧 RFC（7230 / 7540 / 7541）</div>
+          <p>2022 RFC 9110-9114 + 9204 已经替代了 RFC 7230-7235（HTTP/1.1 模块化）+ RFC 7540 + 7541（HTTP/2 + HPACK）。文档 / 代码 review / 学习材料里如果引用旧 RFC，会错过 2022 重构里很多重要细节（比如 HTTP/2 的 prioritization tree 已废弃 / Server Push 不再推荐）。<strong>2026 写 HTTP 相关文档，引一手规范应该全是 9xxx</strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 把 gRPC 当成"HTTP/2 的应用"</div>
+          <p>gRPC 锁定 HTTP/2 是因为它需要 trailers + 流式双向。它不能简单切到 HTTP/3 是因为部分 gRPC 框架的中间件假设了 HTTP/2 的 stream 模型。gRPC-over-HTTP/3 是 IETF draft，2026 部署率仍很低。如果你的服务正在升级 HTTP/3，<strong>gRPC 仍走 HTTP/2 是合理选择</strong>。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9110" target="_blank" rel="noopener">RFC 9110 · HTTP semantics（2022-06）</a> —— 三种 wire 共用的语义层</li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9112" target="_blank" rel="noopener">RFC 9112 · HTTP/1.1 wire format</a> —— 替代 RFC 7230，1.1 当代规范</li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9113" target="_blank" rel="noopener">RFC 9113 · HTTP/2</a> —— 替代 RFC 7540 + 7541 errata，明确移除 prioritization tree</li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9114" target="_blank" rel="noopener">RFC 9114 · HTTP/3</a> —— HTTP-over-QUIC</li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9000" target="_blank" rel="noopener">RFC 9000 · QUIC v1 core</a></li>
+          <li><a href="https://http3-explained.haxx.se/" target="_blank" rel="noopener">Daniel Stenberg · HTTP/3 Explained</a> —— curl 作者写的免费在线书，最易读的 HTTP/3 入门</li>
+          <li><a href="https://github.com/rmarx/holblocking-blogpost" target="_blank" rel="noopener">Robin Marx · HOL blocking blogpost</a> —— TCP HOL 在 HTTP/2 上的实测研究，本主题 P3.2 的关键来源</li>
+          <li><a href="https://blog.cloudflare.com/tag/http-3/" target="_blank" rel="noopener">Cloudflare blog · HTTP/3 系列</a> —— Cloudflare 工程团队的部署经验</li>
+          <li><a href="https://almanac.httparchive.org/en/2025/" target="_blank" rel="noopener">Web Almanac 2025</a> —— HTTP 协议层流量数据 / 部署率 / 趋势</li>
+          <li>Mike Belshe & Roberto Peon · "SPDY: An experimental protocol for a faster web"（Google whitepaper, 2009）</li>
+          <li>Jim Roskind · "QUIC: Multiplexed Stream Transport over UDP"（Google design doc, 2013）</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../index.html">
+            <span class="label">← 上一节</span>
+            <span class="title">主题首页</span>
+          </a>
+          <a class="next" href="02-philosophy.html">
+            <span class="label">下一章 →</span>
+            <span class="title">从消息 → 帧 → 流 → 用户态传输层 · 设计哲学</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

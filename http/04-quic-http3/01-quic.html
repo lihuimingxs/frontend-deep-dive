@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>QUIC 在 UDP 上重建传输层 · P4.1 · HTTP/2 + HTTP/3 + QUIC 深度学习</title>
+    <meta name="description" content="QUIC（RFC 9000-9002）的 5 个核心创新：每条 stream 独立丢包恢复 / TLS 1.3 内嵌握手 / 0-RTT 重连 / 连接 ID 解耦于 IP+port 的连接迁移 / 用户态可演化。讲清 QUIC 包结构（long header + short header）+ 几十种 frame 类型 + packet number space + 0-RTT 安全权衡 + 连接迁移的工程现实。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EH3%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>HTTP/2 + HTTP/3 + QUIC 深度学习</span><span class="site-title-badge" style="background: #2563eb; color: #fff">H3</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · QUIC + HTTP/3 ⭐</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-quic.html" class="active">01 · QUIC 在 UDP 上重建传输层</a></li>
+          <li><a href="02-http3-qpack.html">02 · HTTP/3 + QPACK + 拥塞控制</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">HTTP</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · QUIC + HTTP/3 ⭐</a><span class="breadcrumb-sep">/</span>
+          <span>01 · QUIC 在 UDP 上重建传输层</span>
+        </nav>
+        <h1>QUIC 在 UDP 上重建传输层 · streams / 0-RTT / 连接迁移 / TLS 1.3 集成</h1>
+        <p class="lead">
+          整个主题最难一章。QUIC（RFC 9000-9002）<strong>不是 UDP 的快速包装</strong>，是在 UDP 上重新实现的、用户态的、加密内嵌的、多路独立流的完整传输层。这一章按 RFC 9000（core）+ 9001（TLS 集成）+ 9002（loss & congestion）拆解 QUIC 的 5 个核心创新：每条 stream 独立丢包恢复、TLS 1.3 内嵌、0-RTT 重连、连接迁移、用户态可演化；同时把 0-RTT 的安全权衡和连接迁移的工程现实讲清。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~30 分钟（最长一章）</span>
+          <span><strong>前置</strong> 读过 P1.2（设计哲学）+ P3.2（HTTP/2 的 TCP HOL 限制）</span>
+          <span><strong>主要来源</strong> RFC 9000 / 9001 / 9002 + Daniel Stenberg "HTTP/3 Explained" + Cloudflare blog "The Road to QUIC" + Robin Marx 的 QUIC 论文 + Google QUIC team 的 0-RTT 安全分析</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <ol>
+          <li>QUIC 是<strong>跑在 UDP 上的完整传输层</strong>。它不是 UDP 包装，是在 UDP 之上重新实现"可靠 + 有序 + 加密 + 多路独立"。一个生产级 QUIC 实现至少 5-10 万行代码（RFC 9000 三份 RFC 加起来 280 页）。</li>
+          <li><strong>5 个核心创新</strong>：(1) 每条 stream 独立丢包恢复；(2) TLS 1.3 内嵌握手；(3) 0-RTT 重连；(4) 连接 ID 解耦于 IP+port 的连接迁移；(5) 用户态可演化。</li>
+          <li><strong>包结构</strong>：long header（握手期）+ short header（建连后）。长头有版本号 + 源/目的 connection ID；短头只有目的 connection ID + packet number。</li>
+          <li><strong>frame</strong>：QUIC 包内含一个或多个 frame（CRYPTO / STREAM / ACK / PADDING / NEW_CONNECTION_ID 等几十种）。</li>
+          <li><strong>每条 stream 独立丢包恢复</strong>：QUIC streams 在 UDP 上各自有序，互不影响。stream A 丢包 stall stream A，stream B / C 继续。这是消灭 TCP HOL blocking 的核心。</li>
+          <li><strong>TLS 1.3 内嵌</strong>（RFC 9001）：握手 = TLS 1.3 + QUIC transport 参数 + 密钥派生合并成 1 RTT。HTTP/2 over TLS 是 TCP 1 RTT + TLS 1 RTT。<strong>QUIC 省掉一个 RTT</strong>。</li>
+          <li><strong>0-RTT</strong>：第二次连同一 server，client 用上次的 PSK 直接发 application data 在第一个 RTT 内。代价：没有前向保密 + 可被回放 → <strong>只能用于幂等请求（GET）</strong>。</li>
+          <li><strong>连接迁移</strong>：连接由<strong>独立的 connection ID</strong> 标识，不是 4-tuple（IP+port）。手机切 wifi → 4G IP 变了，QUIC 连接 ID 不变 → 连接照旧。但工程现实是<strong>NAT / LB 必须 connection-ID-aware</strong>，2026 大型 CDN 都做了，自建 LB 大多没做。</li>
+          <li><strong>用户态可演化</strong>：拥塞控制 / 流控 / 丢包恢复全在用户态（浏览器 / CDN 进程内），换算法不需要 OS 内核升级 → 演化速度从"OS 升级周期"提到"软件 release 周期"。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>QUIC 包结构</h3>
+
+        <p>QUIC packet 跑在 UDP datagram 里。一个 UDP datagram 可以塞一个或多个 QUIC packet（coalesced packets）。</p>
+
+        <h4>Long header（握手期）</h4>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>RFC 9000 §17.2 · Long Header Packet:
+
++-+-+-+-+-+-+-+-+
+|1|1|T T|X X X X|       Header Form (1) + Fixed Bit (1) + Type (2) + Type-specific (4)
++-+-+-+-+-+-+-+-+
+|        Version (32)               |
++-+-+-+-+-+-+-+-+
+|DCID Len (8)   |
++---------------+
+|  Destination Connection ID (0..160)   |
++---------------+
+|SCID Len (8)   |
++---------------+
+|  Source Connection ID (0..160)        |
++---------------+
+|  Type-specific payload (...)          |
++---------------+
+
+Type 4 种:
+  Initial    (00) — 握手起始
+  0-RTT      (01) — 0-RTT 数据
+  Handshake  (10) — 握手中间
+  Retry      (11) — server 要求 client 重发握手 (DDoS 防御)</code></pre>
+        </div>
+
+        <h4>Short header（建连后）</h4>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>RFC 9000 §17.3 · Short Header (1-RTT) Packet:
+
++-+-+-+-+-+-+-+-+
+|0|1|S|R R|K|P P|       Header Form (0) + Fixed Bit (1) + Spin Bit (1)
++-+-+-+-+-+-+-+-+         + Reserved (2) + Key Phase (1) + Packet Number Length (2)
+|  Destination Connection ID (0..160)   |
++---------------+
+|  Packet Number (8/16/24/32)           |
++---------------+
+|  Encrypted Payload (...)              |
++---------------+
+
+短头：去掉 version / source CID，因为建连后双方都知道
+       packet number 加密保护</code></pre>
+        </div>
+
+        <p>注意几点：</p>
+
+        <ul>
+          <li><strong>除了 first byte + connection ID 部分</strong>，整个 packet payload 加密。中间盒看不见 packet 内容。</li>
+          <li><strong>connection ID 是核心</strong>：它解耦了"连接"和"4-tuple（IP+port）"。即使 client IP 变了，server 仍按 connection ID 找到对应的连接状态。</li>
+          <li><strong>packet number</strong> 单调递增，独立于 stream offset，用于 ACK 和重传。</li>
+        </ul>
+
+        <h3>QUIC frame 类型（几十种）</h3>
+
+        <p>QUIC packet 内承载 frame。frame 类型按功能分类：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>类别</th>
+              <th>frame 类型</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>密钥/握手</td>
+              <td>CRYPTO</td>
+              <td>承载 TLS 1.3 握手消息</td>
+            </tr>
+            <tr>
+              <td>数据</td>
+              <td>STREAM</td>
+              <td>stream 上的应用数据（HTTP/3 frame 等）</td>
+            </tr>
+            <tr>
+              <td>ACK</td>
+              <td>ACK / ACK_ECN</td>
+              <td>确认收到 packet（按 packet number range）</td>
+            </tr>
+            <tr>
+              <td>流控</td>
+              <td>MAX_DATA / MAX_STREAM_DATA / DATA_BLOCKED / STREAM_DATA_BLOCKED</td>
+              <td>连接级 + stream 级窗口</td>
+            </tr>
+            <tr>
+              <td>stream 控制</td>
+              <td>RESET_STREAM / STOP_SENDING</td>
+              <td>取消 stream</td>
+            </tr>
+            <tr>
+              <td>连接管理</td>
+              <td>NEW_CONNECTION_ID / RETIRE_CONNECTION_ID / NEW_TOKEN</td>
+              <td>下发新 conn ID（连接迁移用）</td>
+            </tr>
+            <tr>
+              <td>路径验证</td>
+              <td>PATH_CHALLENGE / PATH_RESPONSE</td>
+              <td>验证迁移后新路径可用</td>
+            </tr>
+            <tr>
+              <td>探活/连接</td>
+              <td>PING / CONNECTION_CLOSE / HANDSHAKE_DONE</td>
+              <td>保活、关闭</td>
+            </tr>
+            <tr>
+              <td>填充</td>
+              <td>PADDING</td>
+              <td>放大/抗放大</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>一个 packet 可以塞多个 frame，甚至跨 stream（一个 packet 里包含 stream 1 的 STREAM frame + stream 3 的 STREAM frame + 一个 ACK frame）。</p>
+
+        <h3>每条 stream 独立丢包恢复</h3>
+
+        <p>这是 QUIC 消灭 HOL blocking 的核心机制。</p>
+
+        <h4>关键观察</h4>
+
+        <p>TCP 的可靠 + 有序保证作用于<strong>整条字节流</strong>：任何一个 byte 丢了，TCP 等到所有前面的字节都到齐才能往应用层送。HTTP/2 多 stream 在 TCP 字节流上 → 一个 packet 丢影响所有 streams。</p>
+
+        <p>QUIC 把"可靠 + 有序"做在<strong>每条 stream 内部</strong>：</p>
+
+        <ul>
+          <li>每条 stream 有自己的逻辑 byte sequence（stream offset）</li>
+          <li>每条 stream 有自己的 ACK 状态（"我收到了 stream 1 的 0-1499 字节"，"我没收到 stream 1 的 1500-2999 字节"）</li>
+          <li>stream A 缺字节只让 stream A stall，stream B / C 不受影响</li>
+        </ul>
+
+        <h4>实现层面：packet number 和 stream offset 解耦</h4>
+
+        <p>这是 QUIC 设计的精巧处。RFC 9000 §13.1：</p>
+
+        <ul>
+          <li><strong>packet number</strong>：单调递增，整个连接共享一个序列。用于 ACK 和拥塞控制。</li>
+          <li><strong>stream offset</strong>：每条 stream 自己的字节序号。用于 stream 内部的有序保证。</li>
+        </ul>
+
+        <p>同一个 packet 里可以包含 stream 1 offset 1000-1499 + stream 3 offset 0-499。如果这个 packet 丢了：</p>
+
+        <ul>
+          <li>QUIC 知道 packet number X 丢了 → 重传 packet X 内的 frames</li>
+          <li>但 stream 1 已收到 0-999 + 1500-1999？没关系，stream 1 等 1000-1499 重传到位再交付应用层</li>
+          <li>stream 3 已收到 500-999？stream 3 等 0-499 重传到位再交付</li>
+          <li>stream 5 完全没受影响（它的字节根本不在丢的 packet 里）→ 继续推进</li>
+        </ul>
+
+        <p>这是 HTTP/2 不能做到的（HTTP/2 没有"每条 stream 自己的 ACK 状态"，所有 stream 共用 TCP 的 byte stream ACK）。</p>
+
+        <h3>TLS 1.3 内嵌（RFC 9001）</h3>
+
+        <p>QUIC 不是"先建 UDP 连接 + 然后跑 TLS"，是<strong>把 TLS 1.3 内嵌进 QUIC 握手</strong>。RFC 9001 详细规定怎么嵌。</p>
+
+        <h4>关键事实</h4>
+
+        <ul>
+          <li>TLS 1.3 record layer<strong>不在</strong> QUIC 里。TLS 只贡献握手（key exchange / certificate / finished）+ 密钥派生。</li>
+          <li>数据加密由 QUIC 的 <strong>packet protection</strong>（AEAD）做，密钥来自 TLS。</li>
+          <li>必须用 TLS 1.3，不能用 TLS 1.2 —— QUIC 对加密 API 的要求只有 1.3 提供。</li>
+          <li>TLS 1.3 握手消息（ClientHello / ServerHello / EncryptedExtensions / Certificate / Finished）通过 CRYPTO frame 承载。</li>
+        </ul>
+
+        <h4>握手时序对比</h4>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>HTTP/2 over TLS 1.3 握手时序：
+
+  TCP SYN              →
+                       ← TCP SYN+ACK         (RTT 1: TCP 握手)
+  TCP ACK              →
+  TLS ClientHello      →
+                       ← TLS ServerHello
+                         ServerCertificate
+                         ServerFinished       (RTT 2: TLS 1.3)
+  TLS ClientFinished   →
+  HTTP request         →
+                       ← HTTP response        (RTT 3: 第一个请求)
+
+  Total: 3 RTTs
+
+QUIC 握手时序：
+
+  Initial (CRYPTO: ClientHello)        →
+                                       ← Initial (CRYPTO: ServerHello)
+                                         Handshake (CRYPTO: certificate +
+                                                    Finished)             (RTT 1: 握手 + TLS 合并)
+  Handshake (CRYPTO: ClientFinished)
+  + 1-RTT (HTTP request)               →
+                                       ← 1-RTT (HTTP response)            (RTT 2: 第一个响应)
+
+  Total: 2 RTTs (省一个)</code></pre>
+        </div>
+
+        <p>跨海 200ms RTT 链路上，省一个 RTT 是 200ms 实打实的差异。这是 HTTP/3 在跨国场景显著加速的根本理由。</p>
+
+        <h3>0-RTT 重连</h3>
+
+        <p>QUIC 在<strong>第二次</strong>连同一 server 时可以省更多。</p>
+
+        <h4>原理</h4>
+
+        <ol>
+          <li>第一次连接成功后，server 给 client 发一个 NEW_TOKEN frame（含 PSK / session ticket）。</li>
+          <li>第二次连接时，client 用 PSK 直接派生 0-RTT 密钥，<strong>在第一个 packet 里就能发加密的 application data</strong>。</li>
+          <li>Server 验 PSK 通过 → 直接处理 application data 不等 1-RTT 握手完成。</li>
+        </ol>
+
+        <h4>0-RTT 时序</h4>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>QUIC 0-RTT 时序 (第二次连接):
+
+  Initial (CRYPTO: ClientHello + PSK)
+  + 0-RTT (HTTP GET request, 用 0-RTT 密钥加密)  →
+                                                  ← Initial (CRYPTO: ServerHello)
+                                                    Handshake (CRYPTO: Finished)
+                                                    1-RTT (HTTP response)         (RTT 1)
+
+  Total: 1 RTT (含数据)
+  (实际上 application data 在 0 RTT 就发出去了)</code></pre>
+        </div>
+
+        <p>0-RTT 让"第二次访问已经认识的 server"几乎免延迟。CDN 大量场景受益（用户回访、跨页面导航）。</p>
+
+        <h4>0-RTT 安全权衡</h4>
+
+        <p>0-RTT 不是免费午餐：</p>
+
+        <ul>
+          <li><strong>没有前向保密（forward secrecy）</strong>：0-RTT 数据用 PSK 加密；如果 PSK 泄露，过去的 0-RTT 数据可被解密。1-RTT 数据用握手生成的 ephemeral 密钥，PSK 泄露不影响过去数据。</li>
+          <li><strong>可被回放（replay attack）</strong>：攻击者抓到 0-RTT packet → 在另一个时间重放 → server 看到合法 PSK + 合法应用数据，处理它。如果是 GET 不影响（幂等），如果是 POST → 多次执行同一动作（CSRF-like）。</li>
+        </ul>
+
+        <p><strong>工程姿势</strong>：</p>
+
+        <ul>
+          <li>浏览器（Chrome / Firefox）默认<strong>只对 GET 启用 0-RTT</strong>，POST / PUT / DELETE 走 1-RTT 握手</li>
+          <li>CDN 默认对幂等请求开 0-RTT，非幂等关</li>
+          <li>RFC 9001 §9.2 给出"0-RTT 数据应该幂等"的明确规范</li>
+        </ul>
+
+        <h3>连接迁移：connection ID 解耦于 4-tuple</h3>
+
+        <p>TCP 连接由 4-tuple（src IP + src port + dst IP + dst port）唯一标识。手机切 wifi → 4G，src IP 变 → TCP 4-tuple 变 → TCP 看到这是另一个连接 → 原连接断开 → 重连。</p>
+
+        <p>QUIC 的解法：连接由<strong>独立的 connection ID</strong> 标识。手机切网络后：</p>
+
+        <ol>
+          <li>Client 看到自己 IP 变了</li>
+          <li>Client 在新 IP 上发一个带原 connection ID 的 QUIC packet（含 PATH_CHALLENGE frame）</li>
+          <li>Server 看到旧 connection ID 来自新 IP → 触发 path validation（PATH_RESPONSE）</li>
+          <li>Path validation 通过 → server 把新 IP 关联到此连接 → 连接照旧</li>
+        </ol>
+
+        <p>HTTP/3 over QUIC 的<strong>视频流不卡断</strong> / <strong>下载不中断</strong>就是这个机制。</p>
+
+        <h4>工程现实：NAT / LB 必须 connection-ID-aware</h4>
+
+        <p>但实际生产中连接迁移没那么简单：</p>
+
+        <ul>
+          <li><strong>NAT 路由器</strong>：很多 NAT 把 UDP 流按 4-tuple 分流。客户端 IP 变了 → NAT 把它当新连接，可能 drop。</li>
+          <li><strong>Load balancer</strong>：默认按 4-tuple 哈希分配后端 → 4-tuple 变了 → 转到不同后端 → 后端看到旧 connection ID 不知道是谁。</li>
+          <li><strong>Anti-DDoS / 防火墙</strong>：可能丢掉"突然变 IP 的连接"作为攻击防御。</li>
+        </ul>
+
+        <p>解决：LB 必须按 connection ID 路由（QUIC-aware LB）。Cloudflare / Google / Fastly 后端的 LB 都做了；自建 LB（HAProxy / Nginx LB）大多没做或刚做。</p>
+
+        <p>RFC 9000 §5.1 + §9 详细规定了 connection ID 的下发机制：server 通过 NEW_CONNECTION_ID frame 持续给 client 备用 conn ID；client 在迁移时换用备用 ID 让中间盒看起来更像"新连接"，避免被路径上某些设备识别为"同一连接换 IP"而被 drop。</p>
+
+        <h3>用户态可演化</h3>
+
+        <p>QUIC 的所有逻辑（拥塞控制 / 流控 / loss recovery / packet protection）都在用户态。</p>
+
+        <h4>对比 TCP</h4>
+
+        <ul>
+          <li>TCP cubic → BBR：Linux 内核 4.9（2016-12 发布）才进 BBR 主线；服务器实际部署到 2018-2019 才普及。</li>
+          <li>QUIC 拥塞控制：Cloudflare 把 BBRv1 → BBRv2 → BBRv3 一路升级，从决定换到全量上线只需要几周。</li>
+        </ul>
+
+        <h4>实际收益</h4>
+
+        <ul>
+          <li>新拥塞算法（BBRv3, COPA, Brisk）能更快进生产</li>
+          <li>flow control 调优能针对应用场景定制（视频流和大文件下载用不同窗口策略）</li>
+          <li>实验性功能（multipath QUIC 等）可以快速试错</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 移动应用 / 视频流：QUIC 优势位</h3>
+          <p>用户在地铁里 wifi → 4G 切换 / 高铁里基站切换 / 跨国漫游。这些场景丢包率 1-5%、网络条件多变、连接被切断的概率高。<strong>QUIC 的连接迁移 + 0-RTT + 每 stream 独立丢包恢复全派上用场</strong>。视频流 / 直播 / 大文件下载在 QUIC 上稳定性比 HTTP/2 over TCP 好 30-50%。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 跨海 / 高 RTT 链路：QUIC 握手优化收益最大</h3>
+          <p>跨海光缆 200-300ms RTT。HTTP/2 over TLS 首请求要 3 RTT = 600-900ms。QUIC 首请求 2 RTT = 400-600ms（节省 200-300ms），0-RTT 重连 1 RTT = 200-300ms（节省 400-600ms）。<strong>跨国 SaaS 服务在 QUIC 上的首屏 LCP 改善能到 30-50%</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · CDN 部署：默认开</h3>
+          <p>Cloudflare / Fastly / Akamai / AWS CloudFront / Vercel 都默认对支持 QUIC 的 client 协商 HTTP/3 over QUIC。应用层不需要做什么 —— 域名指向 CDN，HTTPS 证书有了，自动开。但要监控 fallback 率（CDN dashboard 都能看）。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 数据中心内部：QUIC 优势体现不出来</h3>
+          <p>内网链路低延迟、低丢包、固定路由。QUIC 的连接迁移 / 0-RTT 没意义；用户态拥塞控制 vs Linux 内核 cubic 在数据中心内差异 &lt; 5%。<strong>仍用 HTTP/2 over TCP（mTLS）</strong>是合理选择。Kubernetes / Istio 内部全部 HTTP/2。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：用 curl --http3 + Wireshark 看 QUIC</span></h2>
+
+        <h3>curl --http3 看 QUIC 协商</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 需要 quiche / ngtcp2 build 的 curl
+curl --http3 -v https://example.com/
+
+# 关键 wire（去掉 TLS 握手细节）：
+* ALPN: offers h3
+* Connected to example.com (...) port 443
+* QUIC connection established  ← QUIC 握手 + TLS 1.3 合并完成
+* h3 negotiated
+&gt; GET / HTTP/3
+&gt; Host: example.com
+&gt; User-Agent: curl/8.5.0 (+nghttp3)
+&gt; Accept: */*
+&gt;
+&lt; HTTP/3 200
+&lt; content-type: text/html; charset=UTF-8
+&lt; content-length: 1256
+&lt;
+* Closing connection</code></pre>
+        </div>
+
+        <h3>Wireshark + SSLKEYLOGFILE 看 QUIC 包</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 1. 让 Chrome 把 TLS 密钥写到日志（QUIC 解密需要）
+export SSLKEYLOGFILE=/tmp/sslkeylog.log
+google-chrome --enable-quic https://example.com/
+
+# 2. 抓包
+tshark -i wlan0 -w /tmp/quic.pcap -f "udp port 443"
+
+# 3. 用 Wireshark 打开 quic.pcap
+# Edit → Preferences → Protocols → TLS → (Pre)-Master-Secret log filename
+# 选 /tmp/sslkeylog.log
+# Wireshark 自动解密 QUIC packets
+
+# 关键查看：
+#   - Initial packet: long header, 含 ClientHello (CRYPTO frame)
+#   - Handshake packet: long header, 含 ServerCertificate / ServerFinished
+#   - 1-RTT packet: short header, 含 STREAM frame (HTTP/3 数据)</code></pre>
+        </div>
+
+        <h3>用 Node.js（实验）跑一个 HTTP/3 server</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// Node.js 22+ 实验性 HTTP/3 支持，需要 --experimental-quic 标志
+// 生产 server 通常用 Cloudflare quiche / google quiche / nginx-quic / Caddy / LiteSpeed
+
+import { createQuicSocket } from 'node:net';  // 实验 API
+
+const socket = createQuicSocket({
+  endpoint: { port: 443 },
+  server: {
+    key: fs.readFileSync('key.pem'),
+    cert: fs.readFileSync('cert.pem'),
+    alpn: 'h3',
+  },
+});
+
+socket.on('session', (session) =&gt; {
+  console.log(`new QUIC session, conn id = ${session.connectionID}`);
+  session.on('stream', (stream) =&gt; {
+    // stream 是 QUIC stream（不是 HTTP/3）
+    // 实际生产用 nghttp3 实现 HTTP/3 帧解析
+    stream.on('data', (chunk) =&gt; {
+      console.log('stream data:', chunk);
+    });
+  });
+});
+
+socket.listen();</code></pre>
+        </div>
+
+        <p>Node.js 22 / 23 的 QUIC 支持仍是实验性的（<code>--experimental-quic</code> 标志）。生产 HTTP/3 server 用 Cloudflare quiche、Google quiche、nginx-quic、Caddy、LiteSpeed —— 都已成熟。</p>
+
+        <h3>测试 0-RTT 重连</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 第一次连接（建立 PSK）
+curl --http3 -v --tls-max 1.3 https://example.com/ \
+  --output /dev/null
+
+# 第二次连接（用 PSK 启用 0-RTT）
+# curl 默认会尝试 0-RTT 如果上次有 session ticket
+curl --http3 -v --tls-max 1.3 https://example.com/ \
+  --output /dev/null
+
+# verbose 输出里看 "Early data" 字样表示 0-RTT 成功</code></pre>
+        </div>
+
+        <h3>看连接迁移：手机切网络抓包</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 在手机抓 youtube.com / google.com 的 QUIC 流量（这俩默认全 H3）
+# 切 wifi → 4G 时观察：
+#   1. 切换瞬间手机 IP 变了
+#   2. 短暂的 PATH_CHALLENGE / PATH_RESPONSE frame 交换（验证新路径）
+#   3. 然后视频继续播 / 数据继续传，没断流
+
+# 工具：iOS 用 ProxyMan / mitmproxy；Android 用 Wireshark on rooted phone</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 把 QUIC 当成"快速 UDP"</div>
+          <p>QUIC 不是 UDP 的简单包装。它在 UDP 上重新实现了一个完整的传输层（可靠 + 有序 + 多路 + 加密 + 流控 + 拥塞）。生产实现至少 5-10 万行代码。<strong>"用 UDP 替代 TCP"是完全错误的概括</strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 0-RTT 用在 POST / 状态变更请求</div>
+          <p>0-RTT 数据可被回放（replay attack）。POST / PUT / DELETE 等非幂等请求重放会导致状态变更两次（CSRF-like）。<strong>RFC 9001 §9.2 明确要求 0-RTT 数据应该幂等</strong>。浏览器 / CDN 默认对非幂等请求关 0-RTT，自建 client 必须自己保证。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 自建 LB 不识别 QUIC connection ID</div>
+          <p>HAProxy / Nginx LB 默认按 4-tuple 哈希分配后端。QUIC 连接迁移后 4-tuple 变 → LB 把它转到不同后端 → 后端看到陌生 connection ID 直接断。<strong>必须用 QUIC-aware LB（HAProxy 2.6+ / Nginx Plus / Cloudflare 内部 LB）</strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 部署 HTTP/3 但不监控 fallback 率</div>
+          <p>UDP 在某些 corp firewall / 老 NAT 被 drop / 限速 → QUIC 握手失败 → 浏览器 fallback 到 HTTP/2 over TCP。如果你不监控 fallback 率，可能你以为 100% 用户在 HTTP/3，实际上只有 50%。<strong>CDN dashboard 都有 H3 connection / fallback rate 仪表，必须看</strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · UDP 被 firewall / NAT 限速 / drop</div>
+          <p>很多企业 firewall 默认对 UDP 限速（怕 DDoS / 流媒体占带宽）。HTTPS over UDP（QUIC）有时被当成"奇怪的 UDP 流量"丢。<strong>QUIC 的 anti-amplification 机制（RFC 9000 §8）有部分缓解，但 UDP 路径存在永远是 H3 部署的潜在风险</strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · 把 QUIC 默认 wire 当成"明文 UDP"调试</div>
+          <p>QUIC 包除了几个握手字段全部加密。tcpdump 抓到的 QUIC packet 你看不到内容，连 stream id / packet number 都加密保护。<strong>调试 QUIC 必须 SSLKEYLOGFILE + Wireshark</strong>。直接 <code>tcpdump -X</code> 看到的全是密文。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 误以为 0-RTT 普遍生效</div>
+          <p>0-RTT 需要客户端有上次连接的 PSK / session ticket。新用户首次访问、清 cookie 后访问、切设备访问 —— 这些场景都没 PSK，仍是 1-RTT。0-RTT 只对回访用户生效。<strong>实测大部分 web 流量 0-RTT 命中率 30-50%</strong>，不是 100%。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 8 · TLS 1.2 想跑 QUIC</div>
+          <p>QUIC 强制 TLS 1.3（RFC 9001 §4）。TLS 1.2 不提供 QUIC 需要的 API。如果 server 只支持 TLS 1.2 → QUIC 协商失败，必须升级到 TLS 1.3。<strong>2026 几乎所有 production server 都已 TLS 1.3，但内网老 server 偶尔仍有 1.2-only</strong>。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9000" target="_blank" rel="noopener">RFC 9000 · QUIC core</a> —— 包结构 / streams / 流控 / 连接迁移</li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9000#section-17" target="_blank" rel="noopener">RFC 9000 §17 · Packet Formats</a> —— long/short header 详解</li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9000#section-19" target="_blank" rel="noopener">RFC 9000 §19 · Frame Types and Formats</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9001" target="_blank" rel="noopener">RFC 9001 · TLS in QUIC</a> —— TLS 1.3 + QUIC packet protection 集成</li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9001#section-4" target="_blank" rel="noopener">RFC 9001 §4 · Carrying TLS Messages</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9001#section-9.2" target="_blank" rel="noopener">RFC 9001 §9.2 · Replay Attacks with 0-RTT</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9002" target="_blank" rel="noopener">RFC 9002 · QUIC Loss Detection and Congestion Control</a></li>
+          <li><a href="https://blog.cloudflare.com/the-road-to-quic/" target="_blank" rel="noopener">Cloudflare · The Road to QUIC</a></li>
+          <li><a href="https://blog.cloudflare.com/http-3-from-root-to-tip/" target="_blank" rel="noopener">Cloudflare · HTTP/3 from root to tip</a></li>
+          <li><a href="https://http3-explained.haxx.se/" target="_blank" rel="noopener">Daniel Stenberg · HTTP/3 Explained</a> —— 最易读的 HTTP/3 入门</li>
+          <li><a href="https://github.com/cloudflare/quiche" target="_blank" rel="noopener">Cloudflare quiche</a> · Rust 实现的 QUIC + HTTP/3 库</li>
+          <li><a href="https://github.com/microsoft/msquic" target="_blank" rel="noopener">Microsoft msquic</a> · C 实现的 QUIC 库</li>
+          <li><a href="https://nodejs.org/api/quic.html" target="_blank" rel="noopener">Node.js QUIC docs</a> —— 实验性 API</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../03-http2/02-hpack-push.html">
+            <span class="label">← 上一章</span>
+            <span class="title">HPACK + Server Push 之死 + TCP HOL 限制</span>
+          </a>
+          <a class="next" href="02-http3-qpack.html">
+            <span class="label">下一章 →</span>
+            <span class="title">HTTP/3 over QUIC + QPACK + 拥塞控制</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

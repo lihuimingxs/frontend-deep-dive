@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Server Push 之死 + 103 Early Hints + 现代替代方案 · P5.2 · HTTP/2 + HTTP/3 + QUIC 深度学习</title>
+    <meta name="description" content="Server Push（HTTP/2 PUSH_PROMISE）从 2015 杀手锏到 2022 RFC 9113 不再推荐到 2026 全面退场的复盘；103 Early Hints（RFC 8297）怎么接班 —— server 在最终响应前先发 preload 信号，浏览器主动决定要不要下；Cloudflare 实测 LCP -20-30%；Vercel + Next.js 16 集成；现代替代 Server Push 的完整方案：preload + fetchpriority + 103 + Speculation Rules。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EH3%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>HTTP/2 + HTTP/3 + QUIC 深度学习</span><span class="site-title-badge" style="background: #2563eb; color: #fff">H3</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · 资源加载工程</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-resource-hints.html">01 · 资源提示家族 + fetchpriority + RFC 9218</a></li>
+          <li><a href="02-early-hints.html" class="active">02 · Server Push 之死 + 103 Early Hints</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">HTTP</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · 资源加载工程</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Server Push 之死 + 103 Early Hints</span>
+        </nav>
+        <h1>Server Push 之死 + 103 Early Hints + 现代替代方案</h1>
+        <p class="lead">
+          Server Push 是 HTTP/2 时代最大的失败实验。2015 标准化、2017-2020 实测伤性能、2022 RFC 9113 不再推荐、2026 全面退场。接班的是 <strong>103 Early Hints</strong>（RFC 8297）—— server 在最终响应前先发 preload 信号，浏览器自己决定要不要下。Cloudflare / Vercel 实测：在 backend 慢的场景下 LCP 减少 20-30%。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~18 分钟</span>
+          <span><strong>前置</strong> 读过 P3.2（Server Push 兴衰）+ P5.1（资源提示家族）</span>
+          <span><strong>主要来源</strong> RFC 8297（103 Early Hints）+ RFC 9113 §8.4（Server Push 不再推荐）+ Cloudflare 2022 Early Hints 实测博客 + Vercel Next.js 16 文档 + Chrome team 退役 Server Push 的官方说明</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <ol>
+          <li><strong>Server Push 已经死了</strong>。2022 RFC 9113 §8.4 明确不再推荐；2022 Chrome 默认禁用；2023 Cloudflare / Fastly / Akamai 移除；2026 几乎所有 server 已停用；Web Almanac 2025 启用率 &lt; 1%。<strong>遇到老配置直接删</strong>。</li>
+          <li><strong>Server Push 失败 4 个根本理由</strong>：(a) 浏览器 cache 协调失败（server 不知道 client 已 cache 什么）；(b) 浏览器实现 bug 多；(c) push 占 server 上行带宽挤压主请求；(d) Chrome 2017-2020 production 实测显示伤性能。</li>
+          <li><strong>103 Early Hints（RFC 8297, 2017）</strong>：HTTP 1xx 系列状态码，server 在最终 200 响应前先发一个 103 + <code>Link: ...; rel=preload</code> 头。浏览器立刻开始 preload 这些资源。</li>
+          <li><strong>关键差异 vs Server Push</strong>：浏览器主动决定要不要下；如果 cache 已有就不下 → <strong>不会浪费带宽</strong>。</li>
+          <li><strong>关键差异 vs 普通 preload</strong>：可以在 server 还在<strong>处理 backend / 数据库</strong>时就发 preload 信号 → 节省 server 处理时间这一段。</li>
+          <li><strong>Cloudflare 2022 实测</strong>：在 backend 慢的场景（首字节时间 500ms+）下，103 Early Hints LCP 减少 20-30%。</li>
+          <li><strong>Vercel + Next.js 16 集成</strong>：Server Component 渲染时可以发 Early Hints（<code>response.writeEarlyHints()</code> 或框架封装）。Next.js 16 起部分场景自动发。</li>
+          <li><strong>现代替代 Server Push 的完整方案</strong>：(1) 首屏关键资源 → preload + fetchpriority="high" 内联在 head；(2) backend 慢 → 103 Early Hints 在 backend 处理前发 preload 信号；(3) 路由切换预热 → Speculation Rules API。</li>
+          <li><strong>2026 启用率</strong>：103 Early Hints 约 8% 站点启用（2022 还只是 1%），Cloudflare / Vercel 默认开 → 接下来 2-3 年会快速普及。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Server Push 复盘：失败的工程现实</h3>
+
+        <p>这一节是 P3.2 的延伸：Server Push 死的具体过程。</p>
+
+        <h4>设计意图（2009-2015）</h4>
+
+        <p>HTML 解析串行：浏览器收 HTML → 解析到 <code>&lt;link rel="stylesheet"&gt;</code> → 才发 CSS 请求。这一段"等"是浪费。</p>
+
+        <p>Server Push 解决：server 知道 <code>index.html</code> 必然依赖 <code>style.css</code>，发完 HTML 顺手 push CSS。客户端拿到 HTML 时 CSS 已经在 cache。</p>
+
+        <h4>失败理由 1 · cache 协调不可解</h4>
+
+        <p>浏览器 cache 状态对 server 不可见：</p>
+
+        <ul>
+          <li>Server push <strong>总是</strong>推 → 浪费带宽（重复 push 已 cache 资源）</li>
+          <li>Server <strong>不</strong>推 → 失去 push 意义</li>
+          <li>引入 cache digest（client 告诉 server "我有什么"）→ 计算贵 + 实现复杂 + 隐私问题</li>
+          <li>RFC 7540 留了 RST_STREAM 给 client "拒绝这个 push"，但 push 已经在 wire 上才能拒绝 → 已浪费</li>
+        </ul>
+
+        <p>这是<strong>本质的工程矛盾</strong>，不是实现问题。</p>
+
+        <h4>失败理由 2 · 浏览器实现 bug 多</h4>
+
+        <p>Chrome / Firefox / Safari 的 push cache 实现各不相同：</p>
+
+        <ul>
+          <li>Chrome 2017-2020 多次发现 push 资源没正确进 cache</li>
+          <li>有些场景进了 cache 但下次请求没用上</li>
+          <li>跨 connection 的 push 资源协调更复杂</li>
+        </ul>
+
+        <p>这种"理论上有效但实现 bug 多"让生产部署不稳定。</p>
+
+        <h4>失败理由 3 · 实测数据</h4>
+
+        <p>Chrome 团队 2018 公布数据：</p>
+
+        <ul>
+          <li>使用 push vs 不使用：FCP / LCP / TTI 差异 &lt; 0.5%（统计噪音内）</li>
+          <li>但流量浪费明显（重复推送已 cache 资源）</li>
+          <li>有些场景 push 还<strong>更慢</strong>（push 占 server 上行带宽挤压主请求）</li>
+        </ul>
+
+        <h4>退场时间线</h4>
+
+        <ul>
+          <li><strong>2018</strong> Chrome 限制 push（默认禁用某些场景）</li>
+          <li><strong>2020</strong> Chrome 团队公开考虑移除</li>
+          <li><strong>2022-06</strong> RFC 9113 §8.4 明确"不再推荐"</li>
+          <li><strong>2022</strong> Chrome 默认禁用 push（仍可手动启用）</li>
+          <li><strong>2023</strong> Cloudflare / Fastly / Akamai 移除 push 功能</li>
+          <li><strong>2024-2026</strong> 几乎所有 server 停用</li>
+        </ul>
+
+        <h3>103 Early Hints（RFC 8297）</h3>
+
+        <h4>HTTP 1xx 系列简介</h4>
+
+        <p>HTTP 状态码 1xx 是 informational，<strong>不是最终响应</strong>。server 可以发一个或多个 1xx 后再发最终 2xx/3xx/4xx/5xx。</p>
+
+        <p>1xx 的著名例子：</p>
+
+        <ul>
+          <li><strong>100 Continue</strong>：client 大 body 时先发 headers + Expect: 100-continue → server 检查 headers OK → 发 100 → client 才上传 body</li>
+          <li><strong>101 Switching Protocols</strong>：HTTP/1.1 → WebSocket Upgrade 用</li>
+          <li><strong>103 Early Hints</strong>：本章主角</li>
+        </ul>
+
+        <h4>103 Early Hints wire 长这样</h4>
+
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code class="lang-http">Client → Server:
+  GET /index.html HTTP/1.1
+  Host: example.com
+
+Server → Client (立即发，不等 backend):
+  HTTP/1.1 103 Early Hints
+  Link: &lt;/style.css&gt;; rel=preload; as=style
+  Link: &lt;/critical.js&gt;; rel=preload; as=script
+  Link: &lt;https://fonts.gstatic.com&gt;; rel=preconnect; crossorigin
+
+Server → Client (backend 处理完后):
+  HTTP/1.1 200 OK
+  Content-Type: text/html
+  Content-Length: ...
+
+  &lt;!doctype html&gt;
+  &lt;html&gt;
+  ...</code></pre>
+        </div>
+
+        <p>关键时序：</p>
+
+        <ol>
+          <li>Client 发 GET</li>
+          <li>Server <strong>立即</strong>发 103（在 backend 还在处理时）</li>
+          <li>Client 看到 103 + Link 头 → 立刻开始 preload 这些资源</li>
+          <li>Backend 处理完成（500ms-2s）</li>
+          <li>Server 发 200 + body</li>
+          <li>Client 收到 HTML 时，preload 资源可能已经下完一部分</li>
+        </ol>
+
+        <p>"立即发 103"是关键：在 backend 还在查数据库 / 渲染 SSR 时，client 已经在 preload。这一段时间不再浪费。</p>
+
+        <h4>为什么不是 Server Push</h4>
+
+        <p>Early Hints 和 Server Push 关键差异：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>Server Push</th>
+              <th>103 Early Hints</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>谁决定要不要下</td>
+              <td>Server</td>
+              <td>Browser</td>
+            </tr>
+            <tr>
+              <td>cache 协调</td>
+              <td>Server 盲发 → 浪费</td>
+              <td>Browser 检查 cache，已有就不下</td>
+            </tr>
+            <tr>
+              <td>带宽风险</td>
+              <td>有（重复 push）</td>
+              <td>无（browser cache 检查）</td>
+            </tr>
+            <tr>
+              <td>实现复杂度</td>
+              <td>高（需要 cache digest）</td>
+              <td>低（标准 preload 机制）</td>
+            </tr>
+            <tr>
+              <td>HTTP 协议要求</td>
+              <td>仅 HTTP/2 + 部分 /3</td>
+              <td>HTTP/1.1 / 2 / 3 都支持</td>
+            </tr>
+            <tr>
+              <td>2026 状态</td>
+              <td>已退场</td>
+              <td>普及中（8%→ 持续增长）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h4>HTTP/2 / HTTP/3 上的 103 Early Hints</h4>
+
+        <p>HTTP/2 / HTTP/3 也支持 1xx 系列响应。每个 1xx 是一个独立的 HEADERS frame（带 :status 1xx）。最终 2xx 是另一个 HEADERS frame。</p>
+
+        <p>实际上 HTTP/3 上的 Early Hints 比 HTTP/1.1 上更可靠：HTTP/1.1 上某些老代理 / proxy 不识别 1xx 直接吞掉（兼容性问题）；HTTP/2 / HTTP/3 上代理对 1xx 的处理更标准。</p>
+
+        <h3>Cloudflare 2022 实测</h3>
+
+        <p>Cloudflare 2022 在大量站点 A/B 测试 103 Early Hints：</p>
+
+        <ul>
+          <li><strong>FCP</strong>（First Contentful Paint）减少 中位数 5-10%</li>
+          <li><strong>LCP</strong>（Largest Contentful Paint）减少 中位数 10%、p75 减少 20%、<strong>backend 慢的站点（500ms+ TTFB）减少 30%</strong></li>
+          <li><strong>TTFB</strong>（Time to First Byte）不变（103 不影响 TTFB 计算）</li>
+        </ul>
+
+        <p>关键洞察：<strong>backend 越慢，103 Early Hints 收益越大</strong>。原因：backend 处理时间这一段以前是"浏览器干等"，现在变成"浏览器在 preload"。</p>
+
+        <h3>Vercel + Next.js 16 集成</h3>
+
+        <p>Vercel Edge runtime 2022 起支持 103 Early Hints。Next.js 16 的具体集成：</p>
+
+        <ul>
+          <li><strong>静态资源自动发</strong>：Next.js 16 在 SSR 阶段，把页面引用的关键 CSS / JS chunks 自动转换成 Link header 发 103</li>
+          <li><strong>Server Component 提示</strong>：可以在 Server Component 里调用 API 提示 preload（API 仍在演进，2026 主线方案）</li>
+          <li><strong>Vercel Edge Functions</strong>：<code>res.writeEarlyHints()</code> 直接写 103</li>
+        </ul>
+
+        <p>详见 <a href="../../next/index.html">Next.js 主题</a>（链回）。</p>
+
+        <h3>现代替代 Server Push 的完整方案</h3>
+
+        <p>2026 替代 Server Push 不是单一工具，是一套组合：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>资源类型</th>
+              <th>替代方案</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>首屏关键 CSS / 字体</td>
+              <td><code>&lt;link rel="preload"&gt;</code> 内联在 head</td>
+            </tr>
+            <tr>
+              <td>LCP 图</td>
+              <td><code>fetchpriority="high"</code> + preload</td>
+            </tr>
+            <tr>
+              <td>backend 慢的关键资源</td>
+              <td><strong>103 Early Hints</strong>（在 backend 处理前发）</td>
+            </tr>
+            <tr>
+              <td>第三方 origin 预热</td>
+              <td><code>&lt;link rel="preconnect"&gt;</code></td>
+            </tr>
+            <tr>
+              <td>路由切换预热</td>
+              <td>Speculation Rules API（prerender / prefetch）</td>
+            </tr>
+            <tr>
+              <td>同 origin 下次访问</td>
+              <td>HTTP cache（Cache-Control / ETag）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>这套组合<strong>覆盖了 Server Push 想解决的所有场景</strong>，而且每个工具都更精确、更可控、更 cache-aware。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · backend 500ms+ 的 SSR 应用</h3>
+          <p>典型 Next.js / Rails / Django SSR 应用，backend 渲染 + 数据库查询要 500-1500ms。<strong>103 Early Hints 收益最大的场景</strong>。在 backend 处理前发 preload CSS / JS / 字体 → 用户感知首屏减少 200-500ms。Cloudflare / Vercel 部署时默认开。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 静态站点：103 Early Hints 收益小</h3>
+          <p>静态 HTML 直接从 CDN edge cache 出来，TTFB 已经 50-100ms。在这个时间窗口里 103 没多少时间帮忙 preload。对静态站点 LCP 影响 1-3%。<strong>仍可以开（Cloudflare 默认开），但不是关键优化</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · CDN 缓存 103 头给后端 cache miss 时用</h3>
+          <p>典型工程姿势：CDN 在 origin 响应里抓 <code>Link</code> 头，把它们当 103 缓存。下次同一 URL cache miss 时，CDN 立刻发 103（带 Link 头）+ 同时回源拿正文。<strong>把 Early Hints 的"提前提示"扩展到 CDN 层</strong>。Cloudflare Smart Hints 2022 起自动做这件事。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 仍配 Server Push 的老站点：迁移工作清单</h3>
+          <p>(1) 删 nginx <code>http2_push</code> 指令；(2) 删 Apache <code>H2PushResource</code>；(3) 应用代码里 <code>Link: ...; rel=preload</code> 的资源标 <code>; nopush</code>（避免被 nginx-quic 当 push 触发）；(4) 改用 103 Early Hints 或纯 preload；(5) 验证：抓包确认没 PUSH_PROMISE 帧。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：发 103 Early Hints</span></h2>
+
+        <h3>Node.js Express / Fastify 发 103</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// Node.js 18+ ServerResponse 内置 writeEarlyHints
+import express from 'express';
+
+const app = express();
+
+app.get('/page', async (req, res) =&gt; {
+  // 立即发 103，不等 backend
+  res.writeEarlyHints({
+    link: [
+      '&lt;/critical.css&gt;; rel=preload; as=style',
+      '&lt;/app.js&gt;; rel=preload; as=script',
+      '&lt;https://fonts.gstatic.com&gt;; rel=preconnect; crossorigin',
+    ],
+  });
+
+  // 慢 backend 处理（数据库 / SSR 渲染）
+  const data = await fetchSlowData();    // 500ms+
+  const html = renderSSR(data);
+
+  // 最终 200
+  res.status(200).send(html);
+});
+
+app.listen(3000);</code></pre>
+        </div>
+
+        <h3>用 curl 看 103 wire</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">curl -v --http2 https://example.com/
+
+# 关键 wire：
+&lt; HTTP/2 103
+&lt; link: &lt;/critical.css&gt;; rel=preload; as=style
+&lt; link: &lt;/app.js&gt;; rel=preload; as=script
+&lt;
+&lt; HTTP/2 200
+&lt; content-type: text/html; charset=utf-8
+&lt; content-length: 5432
+&lt;
+&lt; (HTML body...)
+
+# 注意：curl 默认显示 103，但要确认 server 真的发了 103
+# Wireshark 抓包看 HTTP/2 HEADERS frame 是否含 :status 103</code></pre>
+        </div>
+
+        <h3>Cloudflare Workers 发 103</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// Cloudflare Workers (2022+ 支持 Early Hints)
+export default {
+  async fetch(request, env, ctx) {
+    // 用 ctx.waitUntil 不阻塞响应
+    // 但 Early Hints 是同步发出的（在 fetch 处理过程中）
+
+    // Cloudflare 自动从 origin 响应 Link 头转 103
+    // 也可以显式控制：
+    const earlyHintsHeaders = new Headers();
+    earlyHintsHeaders.set('Link', '&lt;/style.css&gt;; rel=preload; as=style');
+
+    // 传给 fetch 的 cf 配置启用 Early Hints
+    const originResponse = await fetch(request, {
+      cf: {
+        earlyHints: true,
+      },
+    });
+
+    return originResponse;
+  },
+};</code></pre>
+        </div>
+
+        <h3>Next.js 16 自动发 103</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// next.config.js
+module.exports = {
+  experimental: {
+    earlyHints: true,  // 启用 (Next.js 16 起默认 true 在 Vercel 上)
+  },
+};
+
+// app/page.tsx (Server Component)
+// Next.js 在 SSR 阶段自动收集页面引用的关键 chunks
+// → 自动发 103 Early Hints 给 Vercel Edge
+// → Edge 转发给浏览器
+
+export default function Page() {
+  return &lt;div&gt;...&lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <h3>nginx 删 push 配置</h3>
+
+        <div class="code-block">
+          <span class="code-label">nginx</span>
+          <pre class="code"><code class="lang-nginx"># 旧配置（删掉）：
+http {
+  server {
+    location = / {
+      # http2_push /style.css;        ← 删
+      # http2_push /app.js;           ← 删
+    }
+  }
+}
+
+# 新配置：用 Link header + nopush 标记 + 让 Cloudflare/Vercel/CDN 转 103
+http {
+  server {
+    location = / {
+      # 加 Link 头让上游 CDN 转 103 Early Hints
+      # nopush 防止 nginx 自己触发 HTTP/2 push
+      add_header Link "&lt;/style.css&gt;; rel=preload; as=style; nopush" always;
+      add_header Link "&lt;/app.js&gt;; rel=preload; as=script; nopush" always;
+    }
+  }
+}</code></pre>
+        </div>
+
+        <h3>测 Early Hints 实际效果</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># Chrome DevTools Network → 启用 Early Hints 显示
+# 看请求时间线：
+#   Request sent  →  103 Early Hints received
+#                                            ↓
+#                                       浏览器开始 preload
+#                                            ↓
+#                                       backend 处理 (500ms)
+#                                            ↓
+#                                       Final 200 received
+
+# 用 Lighthouse 测 LCP 改善
+npx lighthouse https://example.com --view
+
+# 或用 WebPageTest 比较 with/without Early Hints
+# 在 WPT 配置里勾 "Disable Early Hints" 跑两次对照</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 仍在配 Server Push</div>
+          <p>nginx <code>http2_push</code> / Apache <code>H2PushResource</code> / 应用代码发 Link 头但没 nopush —— 都是反模式。<strong>2026 全部删，改 103 Early Hints 或纯 preload</strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 老 proxy 吞 103</div>
+          <p>HTTP/1.1 上某些老代理（特别是企业内网代理）不识别 1xx，直接吞掉 → 客户端从来收不到 103。<strong>检查方法：用 curl 直连 origin 看 wire；用 curl 经过 proxy 看 wire 是否还有 103</strong>。HTTP/2 / HTTP/3 上代理处理 1xx 标准化更好，问题更少。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 103 头发了但和最终响应不一致</div>
+          <p>103 里 preload 了 <code>/style.v1.css</code>，最终 HTML 引用的是 <code>/style.v2.css</code>。结果：浏览器下了 v1.css 又下 v2.css，浪费带宽。<strong>103 必须和最终响应严格一致</strong>。Next.js 等框架自动同步；自建 server 必须谨慎。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 把 103 当"魔法加速"</div>
+          <p>Backend 已经很快（TTFB &lt; 100ms）的场景，103 增益极小（&lt; 3%）。甚至有些场景下，多发一个 103 响应增加少许网络开销 → 可能为负。<strong>103 是 backend 慢场景的优化，不是处处加速</strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 103 链接太多，反而拖慢主请求</div>
+          <p>103 里 preload 50 个资源 → 浏览器全部高优先级下 → 主 HTML 请求被挤。<strong>原则：103 只 preload 5-10 个真正关键的资源</strong>。同 P5.1 的 preload 滥用一样的道理。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · 浏览器不支持 103 → 仍发不报错</div>
+          <p>不支持 103 的浏览器（极少见，2026 主流全支持）会忽略 103 直接等 200。<strong>103 是渐进增强，发了不会报错；不发也只是失去优化</strong>。无需 feature detection。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 框架文档说自动发 103，实际没发</div>
+          <p>Next.js / Hono / Bun 等框架声称支持 103，但实际触发条件可能很苛刻（必须 Vercel Edge / 必须特定配置）。<strong>用 curl -v 或 Chrome DevTools 验证</strong>。如果没发，看框架配置 / 升级版本。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc8297" target="_blank" rel="noopener">RFC 8297 · 103 Early Hints</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9113#section-8.4" target="_blank" rel="noopener">RFC 9113 §8.4 · Server Push（不再推荐）</a></li>
+          <li><a href="https://blog.cloudflare.com/early-hints/" target="_blank" rel="noopener">Cloudflare · Early Hints 实测</a></li>
+          <li><a href="https://blog.cloudflare.com/early-hints-update-cloudflare-fastly/" target="_blank" rel="noopener">Cloudflare · Smart Early Hints 升级</a></li>
+          <li><a href="https://developer.chrome.com/blog/early-hints" target="_blank" rel="noopener">Chrome 团队 · Early Hints support</a></li>
+          <li><a href="https://developer.chrome.com/blog/removing-push" target="_blank" rel="noopener">Chrome 团队 · Removing HTTP/2 Server Push</a></li>
+          <li><a href="https://nodejs.org/api/http.html#responsewriteearlyhintshints" target="_blank" rel="noopener">Node.js · response.writeEarlyHints()</a></li>
+          <li><a href="https://vercel.com/docs/edge-network/early-hints" target="_blank" rel="noopener">Vercel · Early Hints docs</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-resource-hints.html">
+            <span class="label">← 上一章</span>
+            <span class="title">资源提示家族 + fetchpriority + RFC 9218</span>
+          </a>
+          <a class="next" href="../06-streaming/01-streaming.html">
+            <span class="label">下一章 →</span>
+            <span class="title">单向流：fetch streams / chunked / SSE</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

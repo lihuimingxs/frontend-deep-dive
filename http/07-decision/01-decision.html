@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>测量 + ALPN/HTTPS DNS/ECH + CDN/Edge + 决策 + 陷阱 · P7.1 · HTTP/2 + HTTP/3 + QUIC 深度学习</title>
+    <meta name="description" content="HTTP/2 + HTTP/3 + QUIC 收束章。把测量工具（curl --http3 / nghttp / Wireshark + SSLKEYLOGFILE / Chrome DevTools）+ 协议升级辅助（ALPN / Alt-Svc / RFC 9460 HTTPS DNS RR / ECH）+ CDN/Edge 部署影响 + 3 层选型决策树 + 12 个陷阱清单合在一章。最后给 2027 展望。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EH3%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>HTTP/2 + HTTP/3 + QUIC 深度学习</span><span class="site-title-badge" style="background: #2563eb; color: #fff">H3</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P7 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · 决策树 + 陷阱</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-decision.html" class="active">01 · 测量 + ALPN/HTTPS DNS + CDN + 决策 + 陷阱</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">HTTP</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · 决策树 + 陷阱</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 决策与陷阱</span>
+        </nav>
+        <h1>测量 + ALPN/HTTPS DNS/ECH + CDN/Edge + 选型决策树 + 陷阱清单</h1>
+        <p class="lead">
+          整个主题的收束章。从"该不该开 HTTP/3"到"fetchpriority 怎么用"到"Early Hints 在我的 CDN 上行不行"，给一条端到端的决策链。同时把测量工具三件套、协议升级辅助、CDN/Edge 部署影响、12 个陷阱配修复合在一章。最后给 2027 展望。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 读过 P1-P6（本章是收束）</span>
+          <span><strong>主要来源</strong> RFC 7301（ALPN）+ RFC 9460（HTTPS DNS RR, 2023）+ ECH draft + Chrome DevTools 文档 + curl --http3 build 文档 + nghttp 文档 + Web Almanac 2025 + Cloudflare radar</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <ol>
+          <li><strong>测量工具三件套必会</strong>：(a) <code>curl --http3 -v</code> 单请求看协议层；(b) <code>nghttp -nv</code> 看 HTTP/2 帧；(c) Wireshark + SSLKEYLOGFILE 看 QUIC / HTTP/2 完整 wire；外加 Chrome DevTools Network。</li>
+          <li><strong>协议升级辅助</strong>：(a) <strong>ALPN</strong>（RFC 7301）在 TLS 握手协商应用层协议；(b) <strong>Alt-Svc</strong> 头让 server 通过 HTTP/2 响应告诉 client "下次也可以用 h3"；(c) <strong>HTTPS DNS RR</strong>（RFC 9460, 2023）让 DNS 直接返回 ALPN + IP + ECH 配置 → 第一次连就能直接 HTTP/3；(d) <strong>ECH</strong>（Encrypted Client Hello, draft）TLS 1.3 SNI 加密。</li>
+          <li><strong>CDN / Edge 部署的协议层影响</strong>：浏览器→CDN HTTP/3 默认开（Cloudflare / Fastly / Akamai / Vercel）；CDN→origin 仍以 HTTP/2 over TCP 为主；Edge runtime 可在 edge 直接发 Early Hints / Server Action。</li>
+          <li><strong>3 层选型决策树</strong>：(a) 协议层升级（用 CDN？升 HTTP/3 监控 fallback；自建？评估 LB / NAT / firewall 是否准备好 UDP）；(b) 资源加载（LCP 关键资源 fetchpriority="high"；backend 慢加 103 Early Hints；不再用 Server Push）；(c) 流式响应（RSC / AI 走 fetch+ReadableStream；监控走 SSE；双向用 WebSocket；P2P 用 WebRTC）。</li>
+          <li><strong>12 个陷阱清单</strong>：每条配修复 —— Server Push 配置、preload 滥用、SSE buffering、0-RTT POST、HTTP/3 fallback 不监控、自建 LB 不识别 connection ID、cookie 过大、HTTPS DNS RR 没配、WebSocket 心跳缺失、WebTransport 没 fallback、Early Hints 头不一致、引旧 RFC。</li>
+          <li><strong>2027 展望</strong>：HTTP/3 普及率到 80%+；WebTransport 在 Firefox / Safari 落地；ECH 在更多浏览器默认开；Web Vitals 与协议层关联工具进一步成熟；QUIC 服务端实现进一步标准化（msquic / picoquic / aioquic / quiche / nghttp3 仍多元）；HTTP/2 over TCP 仍是 CDN ↔ origin 主力。</li>
+          <li><strong>2026 强观点收尾</strong>：(a) Server Push 是失败实验，不要再配；(b) 用 CDN 的项目升级 HTTP/3 是默认动作；(c) LCP 优化的单点最大杠杆是给 hero image 加 fetchpriority="high"；(d) 流式响应优先 fetch + ReadableStream，不优先 SSE。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>测量工具三件套</h3>
+
+        <h4>1. curl --http3 -v</h4>
+
+        <p>需要 quiche / ngtcp2 build 的 curl（<code>curl --version</code> 看是否含 "HTTP3" feature）。看一个请求走 HTTP/3：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">curl --http3 -v https://example.com/
+
+# 关键查看：
+* ALPN: offers h3
+* QUIC connection established  ← QUIC 握手完成
+* h3 negotiated                ← HTTP/3 选定
+&gt; GET / HTTP/3
+...</code></pre>
+        </div>
+
+        <p>如果没装 HTTP/3 build：<code>brew install curl --HEAD</code> 或 docker pull <code>archlinux:base</code>（Arch Linux 默认 curl 含 HTTP/3）。</p>
+
+        <h4>2. nghttp -nv</h4>
+
+        <p>HTTP/2 调试瑞士军刀。可以看完整的帧序、HPACK 解码、stream 状态：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">nghttp -nv https://example.com/
+
+# 关键查看：
+[  0.234] h2 negotiated via ALPN
+[  0.235] send SETTINGS frame
+[  0.238] send HEADERS frame &lt;flags=0x05, stream_id=1&gt;
+          ; END_STREAM | END_HEADERS
+          :method: GET
+          :scheme: https
+          :path: /
+          :authority: example.com
+[  0.345] recv HEADERS frame ...</code></pre>
+        </div>
+
+        <h4>3. Wireshark + SSLKEYLOGFILE</h4>
+
+        <p>看真实 wire（特别是 QUIC，必须解密）：</p>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 1. 让 Chrome 把 TLS keys 写到日志
+export SSLKEYLOGFILE=/tmp/sslkeylog.log
+google-chrome --enable-quic https://example.com/
+
+# 2. 抓包
+tshark -i wlan0 -w /tmp/quic.pcap -f "udp port 443"
+
+# 3. Wireshark 打开 quic.pcap
+# Edit → Preferences → Protocols → TLS → Pre-Master-Secret log filename
+# 选 /tmp/sslkeylog.log → Wireshark 自动解密</code></pre>
+        </div>
+
+        <h4>4. Chrome DevTools 内置</h4>
+
+        <ul>
+          <li><strong>Network 面板</strong>：每个请求显示 Protocol 列（h1 / h2 / h3）；筛选 / 排序方便</li>
+          <li><strong>chrome://net-internals/#http2</strong>：HTTP/2 连接状态 + frame 历史</li>
+          <li><strong>chrome://net-internals/#quic</strong>：QUIC 会话 + 0-RTT 状态 + connection ID</li>
+          <li><strong>chrome://flags</strong>：调实验功能（开/关 HTTP/3 / Early Hints / WebTransport）</li>
+        </ul>
+
+        <h3>协议升级辅助</h3>
+
+        <h4>ALPN（RFC 7301）</h4>
+
+        <p>TLS 握手时协商应用层协议。Client 在 ClientHello 的 ALPN extension 里列出支持的协议；server 在 ServerHello 选定一个。常见协议名：</p>
+
+        <ul>
+          <li><code>"h2"</code> — HTTP/2</li>
+          <li><code>"http/1.1"</code> — HTTP/1.1</li>
+          <li><code>"h3"</code> — HTTP/3</li>
+          <li><code>"webrtc"</code> — WebRTC</li>
+        </ul>
+
+        <p>这是 web 协议升级的根机制。HTTPS over QUIC 也用 ALPN（在 QUIC 握手内部）。</p>
+
+        <h4>Alt-Svc 头</h4>
+
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code class="lang-http">HTTP/2 200 OK
+Content-Type: text/html
+Alt-Svc: h3=":443"; ma=86400
+
+# 解读: "下次连接也可以走 h3 端口 443，可信任此信息 86400 秒"
+# Browser 缓存这个信息，下次访问 example.com 直接尝试 HTTP/3</code></pre>
+        </div>
+
+        <p>Alt-Svc 是<strong>"老协议告诉 client 新协议在哪"</strong>的机制。HTTP/3 的初始普及大量靠 Alt-Svc：第一次访问走 HTTP/2，server 回 Alt-Svc 头通告 h3，第二次访问浏览器直接尝试 h3。</p>
+
+        <h4>HTTPS DNS RR（RFC 9460, 2023）</h4>
+
+        <p>新的 DNS 资源记录类型，<strong>把 ALPN + IP + ECH 配置直接放在 DNS 里</strong>。这样第一次访问就能直接走 HTTP/3，不用先经过 Alt-Svc。</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>example.com.   3600   IN   HTTPS   1 . alpn="h3,h2" port=443 ipv4hint=...
+
+# 浏览器查 DNS 时除了拿 A 记录，也拿 HTTPS RR
+# 看到 alpn 含 h3 → 第一次连接就尝试 HTTP/3</code></pre>
+        </div>
+
+        <p>2026 现状：Cloudflare / Fastly 已支持 HTTPS DNS RR；Chrome / Firefox / Safari 都已实现客户端解析。<strong>这是 HTTP/3 first-connection 优化的关键</strong>。</p>
+
+        <h4>ECH（Encrypted Client Hello, draft）</h4>
+
+        <p>TLS 1.3 ClientHello 里的 SNI 字段（标识访问哪个 server）目前是明文 → 中间人能看到你访问哪个域名。ECH 用 server 的公钥加密 SNI → 中间人看不见。</p>
+
+        <p>2026 现状：Cloudflare 已支持；Chrome / Firefox 实验开启；Safari 没做。ECH 配置通过 HTTPS DNS RR 下发（这是 RFC 9460 同时设计 ECH 配置的原因）。</p>
+
+        <h3>CDN / Edge 部署的协议层影响</h3>
+
+        <h4>浏览器 → CDN（HTTP/3 默认开）</h4>
+
+        <p>Cloudflare / Fastly / Akamai / AWS CloudFront / Vercel 都已默认对支持 QUIC 的 client 协商 HTTP/3。应用层零配置 —— 域名指向 CDN + HTTPS 证书有了，自动开。</p>
+
+        <p>但<strong>必须监控 fallback 率</strong>。CDN dashboard 都有 H3 connection / fallback rate 仪表。fallback 主要原因：</p>
+
+        <ul>
+          <li>UDP 被 firewall / NAT drop</li>
+          <li>UDP 被 corp proxy 限速</li>
+          <li>移动运营商对 UDP 限速</li>
+          <li>客户端不支持 QUIC</li>
+        </ul>
+
+        <h4>CDN → origin（HTTP/2 主力，1.1 仍多）</h4>
+
+        <p>Web Almanac 2025 数据：HTTP/2 占 75%，HTTP/1.1 占 23%，HTTP/3 仅 ~2%。理由：</p>
+
+        <ul>
+          <li>固定路由的稳定链路 → QUIC 优势体现不出来</li>
+          <li>origin LB / 防火墙改造成本高</li>
+          <li>HTTP/2 over TCP 实现成熟 + 调试工具好</li>
+          <li>很多老 backend 仍只支持 HTTP/1.1</li>
+        </ul>
+
+        <h4>Edge runtime 的协议层能力</h4>
+
+        <p>Cloudflare Workers / Vercel Edge Functions / Fastly Compute@Edge 等"在 edge 跑代码"的 runtime：</p>
+
+        <ul>
+          <li>可在 edge 直接发 103 Early Hints（在回源前 / 同时）</li>
+          <li>可在 edge 直接处理 Server Action / API 路由</li>
+          <li>可在 edge 操纵 priority 头转发</li>
+          <li>大部分 Edge runtime 默认就在 HTTP/3 上跑（CDN 自动协商）</li>
+        </ul>
+
+        <h3>3 层选型决策树</h3>
+
+        <h4>第一层：协议层升级</h4>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>用主流 CDN（Cloudflare / Vercel / Fastly）？
+  ├─ 是 → HTTP/3 默认开 ✅
+  │       └─ 监控 fallback 率（&lt; 5% 健康，&gt; 15% 调查）
+  │
+  └─ 自建 / 老 CDN
+      └─ 评估 LB / NAT / firewall 是否准备好 UDP
+          ├─ 是 → 配置 HTTP/3 + 监控
+          └─ 否 → 继续 HTTP/2 over TCP，先升级基础设施
+
+数据中心内部？
+  └─ 用 HTTP/2 over TLS（QUIC 优势小）
+
+CDN ↔ origin 回源？
+  └─ HTTP/2 over TCP 默认（QUIC 现阶段不必）</code></pre>
+        </div>
+
+        <h4>第二层：资源加载</h4>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>LCP 关键资源 (hero image / above-the-fold)
+  └─ &lt;img fetchpriority="high"&gt;
+      + &lt;link rel="preload" as="image" fetchpriority="high"&gt;
+
+第三方 origin (字体 / 分析 / payment SDK)
+  └─ &lt;link rel="preconnect" crossorigin&gt;
+
+backend 慢 (TTFB &gt; 300ms)
+  └─ 103 Early Hints (CDN / Vercel / Cloudflare 默认开)
+      或显式 res.writeEarlyHints()
+
+路由切换预热 (用户 hover 链接)
+  └─ Speculation Rules API (eagerness="moderate")
+
+绝不再做的事
+  └─ Server Push (RFC 9113 不再推荐, 2026 已退场)</code></pre>
+        </div>
+
+        <h4>第三层：流式响应</h4>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>RSC / AI / 实时 LLM 流式
+  └─ fetch + ReadableStream + 自定义协议
+      (NDJSON / Vercel AI SDK Data Stream Protocol)
+
+监控 / 通知 / dashboard 推送
+  └─ SSE (自动重连 + Last-Event-ID)
+
+通用双向 (chat / collaboration)
+  └─ WebSocket (RFC 6455 over HTTP/1.1 Upgrade)
+
+低延迟多 stream + 知道用户在 Chromium
+  └─ WebTransport over HTTP/3
+
+P2P / 视频会议 / 实时协作
+  └─ WebRTC DataChannel (+ TURN 后备)
+
+绝不再做的事
+  └─ HTTP/2 Server Push 推流式数据
+      WebSocket 跑 RFC 8441/9220 over HTTP/2/3 (无人实现)</code></pre>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景：决策实战</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 新 SaaS 项目（2026 首选栈）</h3>
+          <p>(1) 域名指向 Cloudflare / Vercel → HTTP/3 自动开；(2) backend SSR 慢 → 103 Early Hints（CDN 默认开）；(3) LCP hero image 加 fetchpriority="high"；(4) 路由切换 Speculation Rules prefetch；(5) 实时通知 SSE；(6) chat 用 WebSocket；(7) 不写 Server Push 配置；(8) 监控 H3 fallback 率。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 改造老应用（HTTP/2-only → HTTP/3）</h3>
+          <p>步骤：(1) 用 Cloudflare / Fastly 前置 → 立刻有 HTTP/3 浏览器侧；(2) origin 仍 HTTP/2 over TCP 不动；(3) 移除老 Server Push 配置（nginx <code>http2_push</code> / Apache <code>H2PushResource</code>）；(4) 在 Link 头加 nopush 标记防止意外 push；(5) 添加 fetchpriority 到 LCP 资源；(6) 监控 fallback 率 + LCP 改善。预期：LCP 改善 10-25%，无业务代码改动。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 全自建（电信 / 金融内网）</h3>
+          <p>不能用公网 CDN（合规 / 数据本地化）。决策：(1) HTTPS over HTTP/2（仍是首选 —— 实现成熟、工具成熟）；(2) 内部 LB 用 HAProxy / Nginx；(3) 不上 HTTP/3（除非内网网络条件特殊，比如卫星链路）；(4) Server Push 仍不要用；(5) Early Hints 在自建场景需要应用代码改造，先评估 backend 慢的程度。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 移动 SDK（iOS / Android）</h3>
+          <p>移动客户端到云服务：(1) 用 CDN（含 HTTP/3）能直接显著改善体验；(2) iOS 17+ / Android 14+ 对 HTTP/3 / QUIC 已成熟；(3) 老移动版本 fallback HTTP/2 自动；(4) 长连接（IM 推送）用 WebSocket（成熟）或 MQTT-over-WebSocket。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：决策落地</span></h2>
+
+        <h3>用 Lighthouse + curl 验证协议层</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash"># 1. 看自己网站协议
+curl -I --http3 https://yoursite.com/   # 应该看到 HTTP/3
+curl -I --http2 https://yoursite.com/   # fallback
+
+# 2. Lighthouse 报告
+npx lighthouse https://yoursite.com/ --view
+
+# 关键指标:
+#   LCP &lt; 2.5s (good) / 2.5-4s (needs improvement) / &gt; 4s (poor)
+#   FCP &lt; 1.8s
+#   CLS &lt; 0.1
+#   INP &lt; 200ms
+
+# 3. WebPageTest 跨地区测试（看跨国 RTT 改善）
+# https://webpagetest.org/</code></pre>
+        </div>
+
+        <h3>HTTPS DNS RR 配置（Cloudflare）</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code># Cloudflare 已自动给所有域名生成 HTTPS RR
+# 无需手动配，dig 验证：
+
+dig example.com type=HTTPS
+
+# 输出:
+# example.com. 300 IN HTTPS 1 . alpn="h3,h2" ipv4hint=...
+
+# 自建 DNS（NSD / BIND / Knot）需要手动加：
+# example.com.   3600   IN   HTTPS   1 . alpn="h3,h2" port=443</code></pre>
+        </div>
+
+        <h3>nginx 启用 HTTP/3 + ECH（实验）</h3>
+
+        <div class="code-block">
+          <span class="code-label">nginx</span>
+          <pre class="code"><code class="lang-nginx">http {
+    server {
+        listen 443 ssl;
+        listen 443 quic reuseport;       # HTTP/3
+        ssl_protocols TLSv1.3;
+        http2 on;
+        http3 on;
+
+        # Alt-Svc 让旧 client 知道 h3 也可用
+        add_header alt-svc 'h3=":443"; ma=86400';
+
+        # ECH (实验, OpenSSL 3.x branch)
+        # ssl_ech_keys /etc/nginx/ech.keys;
+    }
+}</code></pre>
+        </div>
+
+        <h3>Cloudflare Workers 综合优化</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">export default {
+  async fetch(request, env, ctx) {
+    // 1. Edge cache (HTTPS 缓存层 1)
+    const cache = caches.default;
+    const cached = await cache.match(request);
+    if (cached) return cached;
+
+    // 2. 立即发 103 Early Hints（CDN 自动 Smart Hints, 也可显式）
+    // Cloudflare Workers 通过返回特殊响应实现
+
+    // 3. 回源（HTTP/2 over TCP）
+    const response = await fetch(request);
+
+    // 4. 给 LCP 资源加 priority 头（如果是图）
+    const newHeaders = new Headers(response.headers);
+    if (request.url.includes('hero') &amp;&amp; request.url.endsWith('.webp')) {
+      // CDN 转发时按 priority 调度
+    }
+
+    // 5. 缓存
+    ctx.waitUntil(cache.put(request, response.clone()));
+    return response;
+  },
+};</code></pre>
+        </div>
+
+        <h3>监控 HTTP/3 fallback 率</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 客户端 RUM (Real User Monitoring)
+window.addEventListener('load', () =&gt; {
+  const navTiming = performance.getEntriesByType('navigation')[0];
+  const protocol = navTiming.nextHopProtocol;  // 'h2' / 'h3' / 'http/1.1'
+
+  // 上报到分析后端
+  navigator.sendBeacon('/api/rum', JSON.stringify({
+    url: location.pathname,
+    protocol,
+    lcp: getLCP(),
+    fcp: navTiming.responseEnd - navTiming.fetchStart,
+    ttfb: navTiming.responseStart - navTiming.requestStart,
+  }));
+});
+
+// server 侧聚合：分桶看 h3 vs h2 vs h1 的 LCP / TTFB 分布</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱（12 条收束清单）</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 仍配 Server Push</div>
+          <p>nginx <code>http2_push</code> / Apache <code>H2PushResource</code> / 应用代码不加 nopush。<strong>修复</strong>：删配置 + Link 头加 <code>nopush</code> + 改 103 Early Hints + preload + fetchpriority。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · preload 滥用</div>
+          <p>什么都 preload + 标 high。<strong>修复</strong>：每页 preload 最多 3-5 个资源；只标真正的 LCP 关键资源 high；其他用 auto / low。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · preload 漏写 as / 字体没 crossorigin</div>
+          <p>导致 preload 失效（fetch 两次）。<strong>修复</strong>：preload 必须有 <code>as="image|style|script|font|fetch"</code>；字体加 <code>crossorigin</code>；type 显式（<code>type="font/woff2"</code>）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · SSE / RSC 被 nginx buffer</div>
+          <p>nginx 默认 proxy_buffering on。<strong>修复</strong>：<code>proxy_buffering off; proxy_cache off; proxy_read_timeout 24h;</code> + 应用响应头 <code>X-Accel-Buffering: no</code>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · HTTP/3 部署但不监控 fallback</div>
+          <p>大量用户实际仍 HTTP/2 但你以为 100% H3。<strong>修复</strong>：监控 navigation timing API 的 <code>nextHopProtocol</code> + 上报 RUM；CDN dashboard 看 H3 connection rate。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · 自建 LB 不识别 QUIC connection ID</div>
+          <p>QUIC 连接迁移后 4-tuple 变 → LB 把它转到不同后端。<strong>修复</strong>：用 QUIC-aware LB（HAProxy 2.6+ / 云 LB）；或暂不开 HTTP/3（用 CDN 前置）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 0-RTT 用在 POST</div>
+          <p>0-RTT 数据可被回放。POST 重放导致状态变更两次。<strong>修复</strong>：浏览器 / CDN 默认对 POST 关 0-RTT；自建 client 必须自己保证 0-RTT 仅幂等。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 8 · cookie 过大 + HTTP/1.1</div>
+          <p>每请求重发 4KB cookie，移动网络浪费带宽。<strong>修复</strong>：(a) 升级 HTTP/2 / HTTP/3 享受 HPACK / QPACK 自动压缩；(b) 关键认证用 Authorization header（精简）；(c) 大数据放 localStorage / IndexedDB。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 9 · WebSocket 没心跳 → 中间盒断</div>
+          <p>NAT / LB 通常对 idle TCP 5-30 分钟超时。<strong>修复</strong>：30-60 秒发心跳（ping/pong frame 或应用层 'ping' 字符串）；服务端识别心跳不当真实消息。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 10 · WebTransport 没 fallback → 非 Chromium 全挂</div>
+          <p>Safari / Firefox 不支持。<strong>修复</strong>：探测 <code>typeof WebTransport !== 'undefined'</code> → 不可用 fallback WebSocket；或直接用 WebSocket（多数项目这样）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 11 · Early Hints 头和最终响应不一致</div>
+          <p>103 里 preload v1.css，最终 HTML 引用 v2.css。<strong>修复</strong>：必须严格同步。Next.js / 框架自动；自建必须谨慎。审计：抓包对比 103 Link 头 vs 最终 HTML 引用。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 12 · 引旧 RFC（7230 / 7540 / 7541）</div>
+          <p>2022 RFC 9110-9114 + 9204 已替代旧 RFC。文档 / 代码 review / 学习材料引旧 RFC 错过 erratum 修复。<strong>修复</strong>：2026 引用规范全用 9xxx；删旧 RFC 7230 / 7540 / 7541 引用。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读 + 2027 展望</span></h2>
+
+        <h3>2027 展望</h3>
+
+        <ul>
+          <li><strong>HTTP/3 普及率</strong>：2027 浏览器→CDN 段 80%+，CDN→origin 段 ~15-25%（仍以 HTTP/2 为主）</li>
+          <li><strong>WebTransport</strong>：Firefox 稳定（预计 2026 末），Safari 仍未实现（无 roadmap）；2027 仍是"Chromium-only 实验"</li>
+          <li><strong>ECH</strong>：Cloudflare / Mozilla 推动；2027 主流浏览器默认开</li>
+          <li><strong>Web Vitals 与协议层关联工具</strong>：Chrome DevTools 显示 H3 0-RTT 命中 / fallback 原因；Lighthouse 加 HTTP/3 检查项</li>
+          <li><strong>QUIC 服务端</strong>：msquic / picoquic / aioquic / quiche / nghttp3 / nginx-quic 仍多元；预计 2027-2028 出现"事实标准"实现（很可能是 Cloudflare quiche 或 nghttp3）</li>
+          <li><strong>QUIC v2（RFC 草案）</strong>：在 QUIC 框架内演化的第一个案例 —— 不重起新协议名，仅版本号变化 + 新 transport 参数；2027 可能 RFC 化</li>
+          <li><strong>"AI streaming over HTTP/3"</strong>：LLM 应用进一步普及，AI SDK Data Stream Protocol 等会成为流式响应的事实标准格式</li>
+        </ul>
+
+        <h3>本主题 2026 强观点收尾</h3>
+
+        <ul>
+          <li><strong>"Server Push 已死"</strong> —— 2022 RFC 9113 不再推荐；2026 几乎所有 server 已停用；遇到老配置直接删</li>
+          <li><strong>"用 CDN 的项目升 HTTP/3 是默认动作"</strong> —— Cloudflare / Vercel / Fastly 都默认开，应用层零配置</li>
+          <li><strong>"LCP 优化的单点最大杠杆是 fetchpriority='high'"</strong> —— 给 hero image 加这一个属性，LCP 改善 中位数 9%、p75 改善 18%</li>
+          <li><strong>"流式响应优先 fetch + ReadableStream"</strong> —— 比 SSE 更灵活；RSC / TanStack streamedQuery / Vercel AI SDK 全部走这条</li>
+          <li><strong>"WebSocket 在 2026 仍是双向通用方案"</strong> —— WebTransport 等浏览器全支持后再说</li>
+          <li><strong>"QUIC 不是 UDP，是在 UDP 上重建的完整传输层"</strong> —— 这个心智不立起来，HTTP/3 的所有讨论都偏</li>
+        </ul>
+
+        <h3>本主题以外的关联主题</h3>
+
+        <ul>
+          <li><a href="../../tanstack-query/index.html">TanStack Query / SWR 主题</a> —— 客户端数据获取应用层（双向链）</li>
+          <li><a href="../../next/index.html">Next.js 主题</a> —— RSC streaming + Server Actions + Edge runtime</li>
+          <li><a href="../../react/index.html">React 主题</a> —— RSC + use(promise) + Suspense</li>
+          <li><a href="../../browser-rendering/index.html">浏览器渲染主题</a> —— CRP + Web Vitals 应用层</li>
+          <li><a href="../../javascript/index.html">JavaScript 主题</a> —— fetch / Streams API / WebSocket / SSE 网络层 API</li>
+          <li>待写 AI SDK 主题 —— Vercel AI SDK Data Stream Protocol（双向链）</li>
+        </ul>
+
+        <h3>规范一手清单</h3>
+
+        <ul>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9110" target="_blank" rel="noopener">RFC 9110 · HTTP semantics</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9111" target="_blank" rel="noopener">RFC 9111 · HTTP caching</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9112" target="_blank" rel="noopener">RFC 9112 · HTTP/1.1</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9113" target="_blank" rel="noopener">RFC 9113 · HTTP/2</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9114" target="_blank" rel="noopener">RFC 9114 · HTTP/3</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9000" target="_blank" rel="noopener">RFC 9000 · QUIC</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9001" target="_blank" rel="noopener">RFC 9001 · QUIC + TLS 1.3</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9002" target="_blank" rel="noopener">RFC 9002 · QUIC loss + congestion</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9204" target="_blank" rel="noopener">RFC 9204 · QPACK</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9218" target="_blank" rel="noopener">RFC 9218 · HTTP priority signaling</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc8297" target="_blank" rel="noopener">RFC 8297 · 103 Early Hints</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9460" target="_blank" rel="noopener">RFC 9460 · HTTPS DNS RR</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc7301" target="_blank" rel="noopener">RFC 7301 · ALPN</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc8446" target="_blank" rel="noopener">RFC 8446 · TLS 1.3</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc6455" target="_blank" rel="noopener">RFC 6455 · WebSocket</a></li>
+        </ul>
+
+        <h3>工程一手参考</h3>
+
+        <ul>
+          <li><a href="https://blog.cloudflare.com/" target="_blank" rel="noopener">Cloudflare blog</a> —— 协议层最详细的工程视角</li>
+          <li><a href="https://almanac.httparchive.org/" target="_blank" rel="noopener">Web Almanac</a> —— 年度 web 技术趋势数据</li>
+          <li><a href="https://radar.cloudflare.com/" target="_blank" rel="noopener">Cloudflare radar</a> —— 实时 internet 流量数据</li>
+          <li><a href="https://http3-explained.haxx.se/" target="_blank" rel="noopener">Daniel Stenberg · HTTP/3 Explained</a></li>
+          <li><a href="https://github.com/rmarx/holblocking-blogpost" target="_blank" rel="noopener">Robin Marx · HOL blocking</a></li>
+          <li><a href="https://web.dev/learn/performance/" target="_blank" rel="noopener">web.dev · Performance learn path</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../06-streaming/02-bidirectional.html">
+            <span class="label">← 上一章</span>
+            <span class="title">双向：WebSocket / WebTransport / WebRTC</span>
+          </a>
+          <a class="next" href="../index.html">
+            <span class="label">主题首页 ↑</span>
+            <span class="title">HTTP/2 + HTTP/3 + QUIC 深度学习</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

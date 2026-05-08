@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HTTP/2 二进制帧 + streams + 多路复用 · P3.1 · HTTP/2 + HTTP/3 + QUIC 深度学习</title>
+    <meta name="description" content="HTTP/2（RFC 9113）的核心：9-byte 二进制帧头 + 10 种帧类型 + stream 状态机 + 多路复用解除 HTTP/1.1 的 6 connection limit + 两层 flow control（连接 + stream）+ prioritization tree 失败实验。讲清 HTTP/2 解决了 HTTP/1.1 应用层 HOL blocking 的同时为什么仍受 TCP 字节流 HOL 限制。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EH3%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>HTTP/2 + HTTP/3 + QUIC 深度学习</span><span class="site-title-badge" style="background: #2563eb; color: #fff">H3</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · HTTP/2 协议层</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-frames-multiplexing.html" class="active">01 · 二进制帧 + streams + 多路复用</a></li>
+          <li><a href="02-hpack-push.html">02 · HPACK + Server Push 之死 + TCP HOL 限制</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">HTTP</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · HTTP/2 协议层</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 二进制帧 + streams + 多路复用</span>
+        </nav>
+        <h1>HTTP/2 二进制帧 + streams + 多路复用 + flow control</h1>
+        <p class="lead">
+          HTTP/2 把 HTTP 从文本协议变成<strong>二进制帧 + 虚拟 stream</strong>，一个 TCP 连接里跑几百到几千 stream。这一章按 RFC 9113（2022 替代 RFC 7540）讲清：9-byte 帧头、10 种帧类型、stream 五态状态机、多路复用怎么消解 HTTP/1.1 的 6 connection limit、两层 flow control 与 TCP 流控为什么不重复、prioritization tree 为什么是失败实验。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~25 分钟</span>
+          <span><strong>前置</strong> 读过 P2.1（HTTP/1.1 天花板）</span>
+          <span><strong>主要来源</strong> RFC 9113（HTTP/2，替代 RFC 7540）+ Mike Belshe & Roberto Peon 的 SPDY whitepaper + nghttp2 项目文档 + Cloudflare 关于 prioritization 的工程博客</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <ol>
+          <li>HTTP/2 在 RFC 9113（2022-06）替代 RFC 7540 + 7541 errata。语义层（method / status / cache 头等）和 HTTP/1.1 / HTTP/3 共用 RFC 9110，<strong>HTTP/2 自身只决定 wire 怎么编码</strong>。</li>
+          <li><strong>9-byte 帧头</strong>：length(24) + type(8) + flags(8) + R(1) + stream id(31)。所有 frame 共用这个头。</li>
+          <li><strong>10 种帧类型</strong>：DATA / HEADERS / PRIORITY（已废）/ RST_STREAM / SETTINGS / PUSH_PROMISE（已废）/ PING / GOAWAY / WINDOW_UPDATE / CONTINUATION。</li>
+          <li><strong>stream 抽象</strong>：奇数 id（client 发起）/ 偶数 id（仅 Server Push 用）；五态状态机（idle / open / half-closed-local / half-closed-remote / closed）。</li>
+          <li><strong>多路复用</strong>：一个 TCP 连接里 frame 无序穿插发送，按 stream id 归组。理论上一个连接可承载几千 stream。<strong>解除浏览器 6 connection limit + domain sharding 需求</strong>。</li>
+          <li><strong>两层 flow control</strong>：每条 stream 有 window，整个连接也有 window。WINDOW_UPDATE 帧扩窗。初始窗口 65535 字节（连接级），可调。<strong>与 TCP 流控不重复</strong> —— TCP 流控是 sender→receiver byte stream，HTTP/2 流控是 producer→consumer 应用层，能让 stream A 暂停而 stream B 继续。</li>
+          <li><strong>prioritization tree 失败</strong>：HTTP/2 RFC 7540 设计了 priority dependency tree（让 client 告诉 server 哪些 stream 重要）。实际上几乎没有 server 实现得对，浏览器实现也常年有 bug。RFC 9113 正式废弃；改用 RFC 9218 的简单 <code>Priority</code> 头。</li>
+          <li><strong>HTTP/2 的根本性局限</strong>：解了应用层 HOL blocking，但 wire 上仍是一条 TCP 字节流 → 任何 IP packet 丢失整条流 stall → <strong>TCP HOL blocking 仍在</strong>。这是下一章 P4 QUIC + HTTP/3 必要性的根。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>9-byte 帧头</h3>
+
+        <p>HTTP/2 wire 不再是 ASCII 文本，所有数据都包在 frame 里。每个 frame 有固定 9-byte 头：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>+-----------------------------------------------+
+|                 Length (24)                   |
++---------------+---------------+---------------+
+|   Type (8)    |   Flags (8)   |
++-+-------------+---------------+-------------------------------+
+|R|                 Stream Identifier (31)                      |
++=+=============================================================+
+|                   Frame Payload (0...)                      ...
++---------------------------------------------------------------+
+
+Length:    payload 长度（不含 9-byte 头）。最大 2^14 - 1 = 16383 默认；
+           SETTINGS_MAX_FRAME_SIZE 可调到 2^24 - 1
+Type:      帧类型（0x00 - 0x0a 共 10 种 + 0x0b 已废 + 实验扩展）
+Flags:     按帧类型解释（END_STREAM / END_HEADERS / ACK 等）
+R:         保留位，必须 0
+Stream ID: 31-bit；0 = 连接级（不属于任何 stream）；
+           奇数 = client 发起；偶数 = server 发起（仅 Server Push）</code></pre>
+        </div>
+
+        <p>定长头是 HTTP/2 解析快的关键：解析器读 9 字节就知道 frame 类型 + 长度 + 归属哪条 stream，不需要复杂的状态机。</p>
+
+        <h3>10 种帧类型</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>名称</th>
+              <th>用途</th>
+              <th>2026 状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>0x00</td>
+              <td>DATA</td>
+              <td>request / response body</td>
+              <td>主力</td>
+            </tr>
+            <tr>
+              <td>0x01</td>
+              <td>HEADERS</td>
+              <td>request / response headers（HPACK 编码）</td>
+              <td>主力</td>
+            </tr>
+            <tr>
+              <td>0x02</td>
+              <td>PRIORITY</td>
+              <td>设置 stream priority dependency</td>
+              <td>已废（RFC 9113）</td>
+            </tr>
+            <tr>
+              <td>0x03</td>
+              <td>RST_STREAM</td>
+              <td>立即终止一个 stream</td>
+              <td>用</td>
+            </tr>
+            <tr>
+              <td>0x04</td>
+              <td>SETTINGS</td>
+              <td>连接级参数协商（max streams / 窗口大小等）</td>
+              <td>主力</td>
+            </tr>
+            <tr>
+              <td>0x05</td>
+              <td>PUSH_PROMISE</td>
+              <td>声明即将 push 的资源</td>
+              <td>已废（RFC 9113 不再推荐）</td>
+            </tr>
+            <tr>
+              <td>0x06</td>
+              <td>PING</td>
+              <td>测 RTT / 探活</td>
+              <td>用</td>
+            </tr>
+            <tr>
+              <td>0x07</td>
+              <td>GOAWAY</td>
+              <td>关闭连接（含最后处理的 stream id）</td>
+              <td>用</td>
+            </tr>
+            <tr>
+              <td>0x08</td>
+              <td>WINDOW_UPDATE</td>
+              <td>扩窗（流控）</td>
+              <td>主力</td>
+            </tr>
+            <tr>
+              <td>0x09</td>
+              <td>CONTINUATION</td>
+              <td>HEADERS 太大分多帧时续传</td>
+              <td>少用（HEADERS 通常一帧够）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>2026 实际 wire 主要是 DATA + HEADERS + SETTINGS + WINDOW_UPDATE 四种 frame 反复穿插。其他都是少见或已废。</p>
+
+        <h3>stream 状态机</h3>
+
+        <p>RFC 9113 §5.1 定义了 stream 状态机。简化版：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>                +--------+
+        recv H  |        |  send H
+        ,-------|  idle  |--------.
+       /        |        |         \
+      v         +--------+          v
++----------+                    +----------+
+|          |  send H            |          |
+|  open    |&lt;-------------------|  open    |
+|          |                    |          |
++----------+                    +----------+
+   |   |     send ES / recv ES     |   |
+   |   `---------------+-----------'   |
+   v                   v               v
++--------+       +--------+         +--------+
+| half-  |       |        |         | half-  |
+| closed |       | closed |         | closed |
+| local  |       |        |         | remote |
++--------+       +--------+         +--------+
+
+H  = HEADERS
+ES = END_STREAM flag</code></pre>
+        </div>
+
+        <p>关键转换：</p>
+
+        <ul>
+          <li><strong>idle → open</strong>：发或收 HEADERS 帧。stream 此时启动。</li>
+          <li><strong>open → half-closed (local)</strong>：发了带 END_STREAM 的帧（请求 body 结束）。仍能收响应。</li>
+          <li><strong>half-closed → closed</strong>：收到对方的 END_STREAM。stream 完成。</li>
+          <li><strong>任意态 → closed</strong>：RST_STREAM 强制终止。</li>
+        </ul>
+
+        <p>实现层面，stream 不是真正的 TCP 连接 / OS 资源，是<strong>一个 stream id + 状态变量 + 关联的 buffer</strong>。每条 stream 占用很轻。</p>
+
+        <h3>多路复用：一个 TCP 连接 N 条 stream</h3>
+
+        <p>HTTP/2 wire 上 frame 按时间线无序穿插。下面是 3 个并发请求的 wire：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>时间 →
++-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
+|H1=A |H1=B |D1=A |H1=C |D1=B |D1=A |D1=C |D1=A |D1=B |D1=C |
++-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
+
+H = HEADERS  D = DATA
+1 = stream id (这里 stream 1 / 3 / 5 用 A/B/C 简称)
+
+按 stream id 归组：
+  stream A (id=1): HEADERS → DATA → DATA → DATA → END
+  stream B (id=3): HEADERS → DATA → DATA
+  stream C (id=5): HEADERS → DATA → END</code></pre>
+        </div>
+
+        <p>这是 HTTP/2 的核心创新。同一连接同时跑 3 个独立请求/响应，每个 stream 自己的 frame 按需穿插。<strong>没有 HTTP/1.1 那种"一个慢请求堵后面所有"</strong>。</p>
+
+        <p>SETTINGS_MAX_CONCURRENT_STREAMS 通常协商到 100-1000 stream 同时活跃。浏览器侧不再需要开 6 个 TCP 连接。Web Almanac 数据：HTTP/2 站点的中位每域名 TCP 连接数从 6 降到 1.5（多出来的 0.5 是因为 fallback / 异常重连）。</p>
+
+        <h3>flow control：两层 window</h3>
+
+        <p>HTTP/2 在 stream 和 connection 两个层级都有流控 window：</p>
+
+        <ul>
+          <li><strong>connection-level window</strong>：整个连接能在不收到 ACK 前发多少字节</li>
+          <li><strong>stream-level window</strong>：每条 stream 单独的窗口</li>
+        </ul>
+
+        <p>初始 window 是 65535 字节（SETTINGS_INITIAL_WINDOW_SIZE 可调）。每发 N 字节 DATA，对应 window 减 N。<strong>WINDOW_UPDATE 帧</strong> 扩窗：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>WINDOW_UPDATE 帧（payload 4 字节）：
+  +-+-------------+
+  |R| Increment   | (31-bit)
+  +-+-------------+
+
+stream id = 0  → 连接级窗口扩
+stream id = N  → stream N 的窗口扩</code></pre>
+        </div>
+
+        <p><strong>为什么不重复 TCP 流控</strong>：</p>
+
+        <ul>
+          <li>TCP 流控是<strong>整条 byte stream 的</strong>：sender 不能发超过 receiver 公布的窗口</li>
+          <li>HTTP/2 流控是<strong>每条 stream 的</strong>：能让 stream A 暂停（窗口为 0）而 stream B 继续</li>
+          <li>用例：浏览器边播视频边收图片。视频 stream 慢点没关系（用户看视频跟得上），图片 stream 优先涨窗口</li>
+        </ul>
+
+        <p>实际生产中流控调优是<strong>HTTP/2 性能优化的一个重点</strong>。Cloudflare 的 nginx-quic 把初始窗口调到几 MB；nginx 默认 65535（太小）会让大文件下载分段卡。</p>
+
+        <h3>prioritization tree 为什么失败</h3>
+
+        <p>HTTP/2 RFC 7540 设计了一个复杂的 <strong>priority dependency tree</strong>：每条 stream 可以声明依赖另一条 stream + weight；server 按这棵树决定多个 stream 的发送顺序。</p>
+
+        <p>设计意图：浏览器告诉 server "CSS 比 image 重要、style.css 是 home.html 的依赖"，server 调度 frame 时按这棵树。</p>
+
+        <p>工程现实：</p>
+
+        <ul>
+          <li><strong>几乎没有 server 实现得对</strong>：dependency tree 的更新规则非常复杂；server 实现细节差异巨大；同一份浏览器 tree 在不同 server 上得到不同发送顺序</li>
+          <li><strong>浏览器实现也常年有 bug</strong>：Chrome 的 priority tree 在 2017-2020 多次被指出错的；Firefox / Safari 实现各不同</li>
+          <li><strong>测量结果"看不出差别"</strong>：Cloudflare 等做过 A/B 实测，priority tree 对 LCP 的影响 &lt; 1%</li>
+        </ul>
+
+        <p>RFC 9113（2022）的处置：</p>
+
+        <ul>
+          <li>正式废弃 PRIORITY 帧</li>
+          <li>把 priority signaling 重做成 RFC 9218：HTTP header <code>Priority: u=3, i</code>（urgency 0-7 + incremental flag）</li>
+          <li>HTTP/3 直接不实现 priority tree，只实现 RFC 9218 简单方案</li>
+        </ul>
+
+        <p><strong>这是 HTTP/2 设计史上唯一被规范层面废弃的大特性</strong>。详见 <a href="../05-resource-loading/01-resource-hints.html">P5.1</a>。</p>
+
+        <h3>HTTP/2 over TLS：ALPN 协商</h3>
+
+        <p>HTTP/2 不能简单用 Upgrade header 在 1.1 上"切换"（虽然 RFC 7540 里有 h2c 明文模式），生产几乎全部走 TLS + ALPN：</p>
+
+        <ol>
+          <li>TLS 1.3 ClientHello 里 ALPN 扩展：<code>"h2"</code> 优先 / <code>"http/1.1"</code> fallback</li>
+          <li>Server 在 ServerHello 选定 <code>"h2"</code> 或 <code>"http/1.1"</code></li>
+          <li>选定 h2 之后，开始跑 HTTP/2 wire（先发 connection preface "<code>PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n</code>" + SETTINGS frame）</li>
+        </ol>
+
+        <p>如果 server 不支持 h2，ALPN 选 <code>http/1.1</code>，fallback 到 1.1。这是 2026 浏览器和 server 协商协议的统一姿势（HTTP/3 也用 ALPN，<code>"h3"</code>）。详见 <a href="../07-decision/01-decision.html">P7.1</a>。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 浏览器到 CDN：HTTP/2 时代主力</h3>
+          <p>HTTP/2 在 2018-2022 是浏览器到 CDN 的事实主力。2022 起被 HTTP/3 蚕食，但 2026 仍占约 25%（剩下 70% HTTP/3 + 5% 1.1 fallback）。即使站点开了 HTTP/3，HTTP/2 仍是 fallback —— 网络限制 UDP 时浏览器降级 HTTP/2。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · CDN ↔ origin：HTTP/2 仍是事实主力（75%）</h3>
+          <p>这一段路是 HTTP/2 在 2026 占比最高的位置（Web Almanac 2025 数据）。理由：CDN 到 origin 通常是固定路由的稳定链路，QUIC 优势体现不出来 + 回源 LB / 防火墙改造成本高 + HTTP/2 over TCP 实现成熟。Cloudflare / Fastly 都允许 origin 端配 1.1 / 2 / 3，默认 2。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · gRPC：HTTP/2 锁死</h3>
+          <p>gRPC 在 2015 年锁死 HTTP/2 作为底层 wire，至今不变。它依赖 HTTP/2 的：(1) trailers（gRPC status code 在 response trailers 里）；(2) 真正的双向流；(3) 二进制帧（protobuf payload）。gRPC-over-HTTP/3 是 IETF draft，2026 部署率低。Kubernetes / Istio 内部全部 HTTP/2 over TLS。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 数据中心内部 RPC</h3>
+          <p>低延迟、低丢包、固定路由的环境，HTTP/2 多路复用 + HPACK 头压缩很合适，QUIC 优势体现不出来。Linkerd / Istio 等服务网格 mTLS 都跑 HTTP/2。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：用 nghttp / Node.js 看 HTTP/2 帧</span></h2>
+
+        <h3>用 nghttp 看 wire</h3>
+
+        <div class="code-block">
+          <span class="code-label">bash</span>
+          <pre class="code"><code class="lang-bash">nghttp -nv https://example.com/
+
+# 关键 wire（nghttp 翻译过的人类可读视图）：
+[  0.123] Connected
+[  0.234] h2 negotiated via ALPN
+[  0.235] send SETTINGS frame &lt;length=18, flags=0x00, stream_id=0&gt;
+          (niv=3)
+          [SETTINGS_MAX_CONCURRENT_STREAMS(0x03):100]
+          [SETTINGS_INITIAL_WINDOW_SIZE(0x04):65535]
+          [SETTINGS_HEADER_TABLE_SIZE(0x01):4096]
+[  0.236] recv SETTINGS frame &lt;length=18, flags=0x00, stream_id=0&gt;
+          (server 的 SETTINGS)
+[  0.237] send SETTINGS frame &lt;length=0, flags=0x01, stream_id=0&gt;
+          ; ACK
+[  0.238] send HEADERS frame &lt;length=43, flags=0x05, stream_id=1&gt;
+          ; END_STREAM | END_HEADERS
+          :method: GET
+          :scheme: https
+          :path: /
+          :authority: example.com
+[  0.345] recv HEADERS frame &lt;length=125, flags=0x04, stream_id=1&gt;
+          ; END_HEADERS
+          :status: 200
+          content-type: text/html; charset=UTF-8
+          content-length: 1256
+[  0.346] recv DATA frame &lt;length=1256, flags=0x01, stream_id=1&gt;
+          ; END_STREAM</code></pre>
+        </div>
+
+        <p>注意几个关键点：</p>
+
+        <ul>
+          <li>开始有 <strong>SETTINGS 协商</strong>（双向交换 + ACK）</li>
+          <li>HEADERS 帧的 flags 含 <code>END_STREAM</code> + <code>END_HEADERS</code> 表示 GET 请求没 body 同时 headers 完整</li>
+          <li>响应 HEADERS 里有 <code>:status: 200</code> 这种 <strong>pseudo-header</strong>（HTTP/2 把 status code 抽成 pseudo-header）</li>
+        </ul>
+
+        <h3>用 Node.js http2 模块跑一个 server</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">import http2 from 'node:http2';
+import fs from 'node:fs';
+
+const server = http2.createSecureServer({
+  key: fs.readFileSync('key.pem'),
+  cert: fs.readFileSync('cert.pem'),
+  // 调大初始窗口（默认 65535 太小）
+  settings: {
+    initialWindowSize: 1024 * 1024,  // 1 MB per stream
+    maxConcurrentStreams: 250,
+  },
+});
+
+server.on('stream', (stream, headers) =&gt; {
+  // stream 是一个 Duplex；headers 是 :method / :scheme / :path / :authority + 用户 headers
+  console.log(`[${stream.id}] ${headers[':method']} ${headers[':path']}`);
+
+  stream.respond({
+    ':status': 200,
+    'content-type': 'application/json; charset=utf-8',
+  });
+  stream.end(JSON.stringify({ ok: true, streamId: stream.id }));
+});
+
+server.listen(443);</code></pre>
+        </div>
+
+        <h3>客户端：发 5 个并发请求看一连接复用</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">import http2 from 'node:http2';
+
+const client = http2.connect('https://example.com');
+
+const promises = Array.from({ length: 5 }, (_, i) =&gt; {
+  return new Promise((resolve, reject) =&gt; {
+    const req = client.request({
+      ':method': 'GET',
+      ':path': `/api/item/${i}`,
+    });
+
+    let body = '';
+    req.on('data', (chunk) =&gt; { body += chunk; });
+    req.on('end', () =&gt; resolve({ stream: req.id, body }));
+    req.on('error', reject);
+    req.end();
+  });
+});
+
+const results = await Promise.all(promises);
+console.log(results);
+// 5 个 stream id（奇数：1, 3, 5, 7, 9）走在同一个 TCP 连接
+
+client.close();</code></pre>
+        </div>
+
+        <h3>用 SETTINGS 调流控窗口</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 默认 65535 字节 → 在大文件上传场景会反复 WINDOW_UPDATE
+// 调到 1 MB 让大文件不分段卡
+
+const client = http2.connect('https://example.com', {
+  settings: {
+    initialWindowSize: 1024 * 1024,
+  },
+});
+
+// 注意：这是 stream-level 初始窗口
+// connection-level 默认窗口固定 65535，不能通过 SETTINGS 调
+// 要扩 connection-level 窗口必须发 WINDOW_UPDATE(stream_id=0)
+client.on('connect', () =&gt; {
+  client.setLocalWindowSize(1024 * 1024 * 4);  // 调连接级窗口到 4 MB
+});</code></pre>
+        </div>
+
+        <h3>看 prioritization 信号（RFC 9218 现代姿势）</h3>
+
+        <div class="code-block">
+          <span class="code-label">http</span>
+          <pre class="code"><code class="lang-http"># 浏览器自动给关键资源标 priority 头：
+GET /critical.css HTTP/2
+:authority: example.com
+priority: u=2, i        # urgency 2 (CSS), incremental
+
+GET /image.jpg HTTP/2
+:authority: example.com
+priority: u=4, i        # urgency 4 (image)
+
+GET /analytics.js HTTP/2
+:authority: example.com
+priority: u=6           # urgency 6 (low priority)</code></pre>
+        </div>
+
+        <p>RFC 9218 的 <code>Priority</code> 头取代了 RFC 7540 的 PRIORITY 帧 + dependency tree。<strong>简单了 10 倍，server 实现负担小</strong>。Chrome / Cloudflare / Fastly 已支持。</p>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 误以为多路复用消除了所有阻塞</div>
+          <p>HTTP/2 解了应用层 HOL，但 TCP HOL 仍在。弱网下（3% 丢包）HTTP/2 over 1 个连接可能比 HTTP/1.1 over 6 个连接还慢。<strong>这是 HTTP/3 必要性的根</strong>。详见下一章 P3.2 + P4。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 用 telnet / curl -v 调 HTTP/2</div>
+          <p>HTTP/2 是二进制，<code>curl -v --http2</code> 看到的还是"语义视图"，不是真实 wire。要看 wire 用 <code>nghttp -nv</code> 或 Wireshark。<strong>HTTP/2 不能用文本调试工具调底层</strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 误以为 HTTP/2 prioritization 还在</div>
+          <p>RFC 9113（2022）正式废弃 PRIORITY 帧 + dependency tree。仍在文档 / 代码 / 面试题里讲"HTTP/2 priority"的，2026 已经过时。<strong>正确答案是 RFC 9218 简单方案 + fetchpriority API</strong>（详见 <a href="../05-resource-loading/01-resource-hints.html">P5.1</a>）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 流控窗口默认太小</div>
+          <p>SETTINGS_INITIAL_WINDOW_SIZE 默认 65535（64 KB）。大文件下载 / 流式响应时反复 WINDOW_UPDATE 增加 RTT。生产 server 通常调到 1 MB - 4 MB。注意 connection-level 窗口要单独 WINDOW_UPDATE(stream_id=0) 扩，不是 SETTINGS 能调的。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · h2c 明文模式不可用</div>
+          <p>RFC 7540 / 9113 都定义了 h2c（HTTP/2 over TCP without TLS）。理论上可以用，但浏览器全部不支持 —— Chrome / Firefox / Safari 一律要求 h2 必须 over TLS。所以"开 HTTP/2 节省 TLS 开销"的想法不成立，HTTP/2 总是 over TLS 的。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · CONTINUATION 帧的潜在 DoS</div>
+          <p>HEADERS 太大要分多个 CONTINUATION 帧。攻击者可以用大量 CONTINUATION 帧吃 server 内存（CVE-2024-27316 nginx CONTINUATION flood）。RFC 9113 修复后 server 应限制单 stream HEADERS 总大小。检查你的 server 是否打了对应补丁。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 连接 idle 太久被中间盒断</div>
+          <p>HTTP/2 长连接（keep-alive 几分钟）可能被中间 NAT / load balancer 断（idle timeout）。server 应定期发 PING 帧保活；浏览器自己会处理。自建 client 时记得开 PING。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9113" target="_blank" rel="noopener">RFC 9113 · HTTP/2</a> —— 2022 替代 RFC 7540</li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9113#section-4" target="_blank" rel="noopener">RFC 9113 §4 · HTTP Frames</a> —— 9-byte 帧头 + 10 种帧类型</li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9113#section-5" target="_blank" rel="noopener">RFC 9113 §5 · Streams and Multiplexing</a> —— stream 状态机</li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9113#section-5.2" target="_blank" rel="noopener">RFC 9113 §5.2 · Flow Control</a></li>
+          <li><a href="https://datatracker.ietf.org/doc/html/rfc9218" target="_blank" rel="noopener">RFC 9218 · HTTP Priority Signaling</a> —— 替代 prioritization tree</li>
+          <li><a href="https://nghttp2.org/" target="_blank" rel="noopener">nghttp2 项目</a> —— C 语言 HTTP/2 库 + nghttp / nghttpx 工具</li>
+          <li><a href="https://blog.cloudflare.com/http-2-prioritization-with-nginx/" target="_blank" rel="noopener">Cloudflare · HTTP/2 prioritization with nginx</a> —— priority tree 实测</li>
+          <li><a href="https://daniel.haxx.se/blog/2024/04/03/http-2-continuation-flood/" target="_blank" rel="noopener">Daniel Stenberg · HTTP/2 CONTINUATION flood</a> —— CVE-2024-27316 详解</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../02-http11/01-baseline.html">
+            <span class="label">← 上一章</span>
+            <span class="title">HTTP/1.1 真相与天花板</span>
+          </a>
+          <a class="next" href="02-hpack-push.html">
+            <span class="label">下一章 →</span>
+            <span class="title">HPACK + Server Push 之死 + TCP HOL 限制</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
