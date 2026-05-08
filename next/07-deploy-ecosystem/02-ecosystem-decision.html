@@ -137,6 +137,21 @@ export default function RootLayout({ children }) {
 
         <p>结果：build 时下载字体到 .next/，运行时无第三方请求 + 字体预加载 link。FOIT/FOUT 消除（display:swap 避免空白闪烁）。</p>
 
+        <p><b>硬规则</b>：<code>Inter()</code> / <code>localFont()</code> 必须在<strong>模块顶层</strong>调用，参数必须是<strong>字面量</strong>。不能根据变量动态选字体（详见 P7.1 第 2 节"框架硬规则"对类似机制的解释）：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// ❌ build 失败 —— next/font 必须 top-level + 字面量参数
+const font = lang === 'zh' ? Noto_Sans_SC({ subsets: [...] }) : Inter({ subsets: [...] });
+
+// ✅ 两个都 top-level 声明，组件里按 lang 切 className
+const inter = Inter({ subsets: ['latin'] });
+const noto = Noto_Sans_SC({ subsets: ['chinese-simplified'] });
+&lt;html className={lang === 'zh' ? noto.className : inter.className}&gt;</code></pre>
+        </div>
+
+        <p>原因：next/font 在 build 时下载字体文件并 self-host，bundler 需要静态分析参数才能确定下载哪些字体子集。运行时计算的值它读不到，所以强制 top-level 字面量。</p>
+
         <h3>next/metadata API · 声明式 SEO</h3>
 
         <p>静态 metadata 直接 export：</p>
