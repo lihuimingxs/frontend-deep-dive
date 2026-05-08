@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>useChat / useCompletion / useObject 全谱 · P3.1 · AI SDK 深度学习</title>
+    <meta name="description" content="Vercel AI SDK UI 层三个核心 hooks：useChat（多轮对话）/ useCompletion（单次补全）/ useObject（流式结构化对象）。讲清 v5+ UIMessage parts 类型 / convertToModelMessages 转换 / handleSubmit 流式 / 自定义 data part / 与 Server Action 配合。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%237c3aed'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EAI%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>AI SDK 深度学习</span><span class="site-title-badge" style="background: #7c3aed; color: #fff">AI</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · UI hooks + Generative UI</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-usechat.html" class="active">01 · useChat / useCompletion / useObject</a></li>
+          <li><a href="02-stream-ui.html">02 · streamUI · Generative UI · RSC</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">AI SDK</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · UI hooks + Generative UI</a><span class="breadcrumb-sep">/</span>
+          <span>01 · useChat / useCompletion / useObject</span>
+        </nav>
+        <h1>useChat / useCompletion / useObject 全谱（v5+ UIMessage 心智）</h1>
+        <p class="lead">
+          useChat 是 Vercel AI SDK 最重要的 hook，2026 年 React/Next.js 项目集成 LLM 几乎都从它开始。这一章把 useChat / useCompletion / useObject 三个 UI hook 在 v5+ UIMessage 心智下的完整使用讲清：API 全谱、parts 类型、自定义 data part、与 Server Action 配合、多框架（Vue / Svelte / Angular）等价物。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 读过 P2（架构 + Stream Protocol）</span>
+          <span><strong>主要来源</strong> ai-sdk.dev/docs/ai-sdk-ui + ai-sdk.dev/docs/ai-sdk-ui/use-chat + Vercel useChat 实战博文 + Next.js Server Action 文档</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>三个核心 UI hook</strong>：(a) <code>useChat</code> 多轮对话；(b) <code>useCompletion</code> 单次补全（不是 chat）；(c) <code>useObject</code> 流式生成结构化对象（按 Zod schema）。</li>
+          <li><code>useChat({ api: '/api/chat' })</code> 返回 <strong>{ messages, input, setInput, status, sendMessage, regenerate, stop, error }</strong>。messages 是 UIMessage[]（v5+ 心智）。</li>
+          <li><strong>UIMessage 结构</strong>：<code>{ id, role, parts: Part[], metadata? }</code>。parts 是各种 type-specific part（text / tool-{name} / data-{custom} / source / step-start / 等）。</li>
+          <li><strong>parts 类型</strong>：<code>text</code>（文字）/ <code>tool-{name}</code>（v5+ type-specific tool 调用）/ <code>data-{custom}</code>（应用自定义数据）/ <code>source</code>（RAG citation）/ <code>step-start | step-end</code>（multi-step agent）/ <code>file</code>（attachment）等。</li>
+          <li><code>useCompletion</code>：<strong>单次输入 → 单次流式输出</strong>，不是多轮对话。<code>{ completion, complete, input, setInput, isLoading, stop }</code>。适合"提示词改写"/"翻译"等单次操作。</li>
+          <li><code>useObject</code>：流式生成结构化对象。前后端都用同一个 Zod schema。<code>{ object, submit, isLoading, error, stop }</code>。<strong>边收边给逐渐完整的 object</strong>，UI 边收边渲染。适合"生成 form / 表格 / 卡片"。</li>
+          <li><strong>convertToModelMessages</strong>：v5+ 关键边界转换函数。在 server side 把 UIMessage[] 转成 ModelMessage[]（发给 LLM 的格式）。<strong>必须用</strong>，否则 type 不兼容。</li>
+          <li><strong>多框架等价物</strong>：v5 起 React / Vue / Svelte / Angular feature parity。<code>ai/react</code> / <code>ai/vue</code> / <code>ai/svelte</code> / <code>ai/angular</code>。</li>
+          <li>2026 实际项目分布：useChat（~85% 项目）/ useCompletion（~15%）/ useObject（~30%）/ useAssistant（OpenAI Assistants API 专用，~5% 收缩中）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>useChat 完整 API</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { useChat } from 'ai/react';
+
+const {
+  messages,         // UIMessage[]
+  input,            // string (用户输入)
+  setInput,         // (value: string) =&gt; void
+  handleInputChange,// React event handler 简写
+  handleSubmit,     // form submit handler 简写
+  sendMessage,      // (text: string) =&gt; void  显式发消息
+  status,           // 'submitted' | 'streaming' | 'ready' | 'error'
+  error,            // Error | undefined
+  regenerate,       // () =&gt; void  重新生成上一条 assistant 消息
+  stop,             // () =&gt; void  中止当前流
+  setMessages,      // (messages: UIMessage[]) =&gt; void
+} = useChat({
+  api: '/api/chat',          // 后端 endpoint
+  initialMessages: [...],    // 初始 messages
+  headers: { ... },          // 自定义 headers
+  body: { customField: ... },// 额外 request body
+  onFinish: (message) =&gt; { ... },
+  onError: (error) =&gt; { ... },
+});</code></pre>
+        </div>
+
+        <h3>UIMessage 完整结构</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">type UIMessage = {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  parts: Array&lt;
+    // 文字
+    | { type: 'text'; text: string }
+
+    // tool 调用 (v5+ type-specific)
+    | {
+        type: `tool-${string}`;       // 如 'tool-getWeather'
+        toolCallId: string;
+        state: 'partial-call' | 'call' | 'result' | 'error';
+        input?: any;
+        output?: any;
+        errorText?: string;
+      }
+
+    // 应用自定义 data part
+    | {
+        type: `data-${string}`;        // 如 'data-progress'
+        id?: string;
+        data: any;
+      }
+
+    // RAG citation
+    | { type: 'source'; source: { id: string; url?: string; title?: string } }
+
+    // multi-step agent (v6+)
+    | { type: 'step-start' }
+    | { type: 'step-end' }
+
+    // attachment
+    | {
+        type: 'file';
+        url: string;
+        mediaType: string;
+      }
+
+    // reasoning trace (o1 / Claude extended thinking)
+    | { type: 'reasoning'; reasoning: string }
+  &gt;;
+  metadata?: any;  // 不发给 LLM
+};</code></pre>
+        </div>
+
+        <h3>handleSubmit 流式响应过程</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>用户输入 + 点 submit
+    ↓
+useChat.handleSubmit (form 默认行为)
+    ↓
+SDK 把 input 加进 messages (新增 UIMessage role: 'user')
+    ↓
+SDK 序列化整个 messages 数组发到 /api/chat (POST)
+    ↓
+─────────────── 后端 ───────────────
+Route Handler 收到 messages
+    ↓
+convertToModelMessages(messages) → ModelMessage[]
+    ↓
+streamText({ model, messages: modelMessages, tools? })
+    ↓
+result.toUIMessageStreamResponse() 返回 v5 SSE 协议响应
+─────────────── 后端 ───────────────
+    ↓
+SDK 边收 SSE events 边累加进 messages state
+    ↓
+触发 useChat 订阅组件 re-render
+    ↓
+status: 'submitted' → 'streaming' → 'ready'</code></pre>
+        </div>
+
+        <h3>useCompletion API</h3>
+
+        <p>useCompletion 是<strong>单次输入 → 单次流式输出</strong>，不维护对话历史：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { useCompletion } from 'ai/react';
+
+const {
+  completion,      // string (累加的输出)
+  complete,        // (prompt: string) =&gt; void
+  input,
+  setInput,
+  handleInputChange,
+  handleSubmit,
+  isLoading,
+  stop,
+  error,
+} = useCompletion({
+  api: '/api/completion',
+});
+
+// 用法:
+&lt;form onSubmit={handleSubmit}&gt;
+  &lt;input value={input} onChange={handleInputChange} /&gt;
+  &lt;button type="submit"&gt;翻译&lt;/button&gt;
+&lt;/form&gt;
+&lt;div&gt;{completion}&lt;/div&gt;</code></pre>
+        </div>
+
+        <p>useCompletion 与 useChat 的区别：</p>
+
+        <ul>
+          <li>useCompletion <strong>不</strong>维护 messages 历史</li>
+          <li>useCompletion <strong>不</strong>支持 tool calling（仅文本）</li>
+          <li>useCompletion 的 server endpoint 用 <code>streamText</code> + <code>toTextStreamResponse()</code>（注意是 toTextStream 不是 toUIMessageStream）</li>
+        </ul>
+
+        <h3>useObject API</h3>
+
+        <p>useObject 流式生成结构化对象：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { useObject } from 'ai/react';
+import { z } from 'zod';
+
+// 同一个 schema 前后端共用
+const orderSchema = z.object({
+  customer: z.string(),
+  items: z.array(z.object({
+    name: z.string(),
+    quantity: z.number(),
+    price: z.number(),
+  })),
+  total: z.number(),
+});
+
+const {
+  object,        // Partial&lt;OrderType&gt; 边收边变化（中间状态可能不完整）
+  submit,        // (input: any) =&gt; void
+  isLoading,
+  error,
+  stop,
+} = useObject({
+  api: '/api/generate-order',
+  schema: orderSchema,
+});
+
+// 用法
+&lt;button onClick={() =&gt; submit({ description: 'Apple x2, Banana x3' })}&gt;
+  Generate Order
+&lt;/button&gt;
+{object?.customer &amp;&amp; &lt;p&gt;Customer: {object.customer}&lt;/p&gt;}
+{object?.items?.map(...)} {/* 边收边渲染 */}
+{object?.total &amp;&amp; &lt;p&gt;Total: ${object.total}&lt;/p&gt;}</code></pre>
+        </div>
+
+        <p>关键：<strong>partial object 不一定符合 schema</strong>（中间字符串可能截断），但<strong>最终 object 一定符合</strong>。前端渲染时要 optional chaining。</p>
+
+        <h3>自定义 data part</h3>
+
+        <p>v5+ 重要新能力：在流式响应里推自定义数据，前端按 part type 接收：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 后端 (Route Handler)
+import { streamText, createUIMessageStreamResponse } from 'ai';
+
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+
+  return createUIMessageStreamResponse({
+    execute: async (writer) =&gt; {
+      // 推自定义 data part (不进 LLM context)
+      writer.write({
+        type: 'data-progress',
+        data: { step: 1, total: 5, message: 'Loading data...' },
+      });
+
+      const data = await fetchExpensiveData();
+
+      writer.write({
+        type: 'data-progress',
+        data: { step: 2, total: 5, message: 'Calling LLM...' },
+      });
+
+      // 调 LLM 流式
+      const result = streamText({
+        model: openai('gpt-4o'),
+        messages: convertToModelMessages(messages),
+      });
+
+      // 把 streamText 的 stream 也写进 writer
+      writer.merge(result.toUIMessageStream());
+
+      writer.write({
+        type: 'data-progress',
+        data: { step: 5, total: 5, message: 'Done' },
+      });
+    },
+  });
+}
+
+// 前端
+const { messages } = useChat({ api: '/api/chat' });
+messages.map((m) =&gt; m.parts.map((part) =&gt; {
+  if (part.type === 'data-progress') {
+    return &lt;ProgressBar step={part.data.step} total={part.data.total} /&gt;;
+  }
+  // 其他 part type
+}));</code></pre>
+        </div>
+
+        <h3>多框架等价物</h3>
+
+        <p>v5 起 Vue / Svelte / Angular feature parity。同一份后端代码，不同前端 hook：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// React
+import { useChat } from 'ai/react';
+const { messages } = useChat({ api: '/api/chat' });
+
+// Vue 3 Composition API
+import { useChat } from 'ai/vue';
+const { messages } = useChat({ api: '/api/chat' });
+// messages 是 Vue ref
+
+// Svelte 5
+import { Chat } from 'ai/svelte';
+let chat = new Chat({ api: '/api/chat' });
+// chat.messages 是 $state rune
+
+// Angular
+import { useChat } from 'ai/angular';
+const chat = useChat({ api: '/api/chat' });
+// chat.messages 是 signal</code></pre>
+        </div>
+
+        <h3>useAssistant（已收缩）</h3>
+
+        <p>useAssistant 是给 OpenAI Assistants API 用的专门 hook（threads / runs / file 上传）。<strong>2026 年使用率收缩</strong>，原因：</p>
+
+        <ul>
+          <li>OpenAI Assistants API 自身演进缓慢</li>
+          <li>大部分 chat 应用用 useChat + 自己存 thread state 即可</li>
+          <li>需要"OpenAI Assistants 特有功能"（比如 file_search built-in tool）的项目仍可用</li>
+        </ul>
+
+        <p>新项目优先选 useChat。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 客服 chat（多轮对话）→ useChat</h3>
+          <p>用户与 LLM 多轮对话；LLM 调 tool 查订单 / 发通知。useChat 维护完整 messages history + 流式渲染 + tool call UI。<strong>这是 useChat 的本垒</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 提示词改写 / 翻译（单次）→ useCompletion</h3>
+          <p>"把这段中文翻译成英文" / "把这段提示词改得更精炼"。单次输入 → 单次流式输出，不需要 multi-turn history。useCompletion 比 useChat 更轻。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 流式生成 form / 表格 → useObject</h3>
+          <p>用户描述需求 → LLM 流式生成 order 确认 form / 比较表格 / 推荐卡片。useObject + Zod schema 让前端边收边渲染逐渐完整的 object。<strong>比 useChat + 自己 parse JSON 更可靠</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 调 Server Action（不是 Route Handler）→ useChat with prepareRequestBody</h3>
+          <p>Next.js 项目想用 Server Action 而不是 Route Handler。useChat 仍能用：通过 <code>experimental_prepareRequestBody</code> 自定义请求 + Server Action 内部 streamText。详见 04 节代码。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 E · 进度条 + LLM 流式 → 自定义 data part</h3>
+          <p>chat 应用里 backend 处理慢（先查 DB → 调 LLM → 后处理）。用 data part 推 progress：<code>data-progress</code> step 1/5 → 5/5。前端按 part type 渲染进度条 + LLM 文字流式同时显示。<strong>用户感知 backend 在工作</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 F · RAG citation → source part</h3>
+          <p>RAG 应用：LLM 回答时引用 N 篇文档。后端在响应里发 source parts（含 url / title），前端渲染成 citation 卡片。比塞进 text 让 LLM 自己打 footnote 更可靠。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：完整端到端</span></h2>
+
+        <h3>useChat 端到端最小例子</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// app/api/chat/route.ts
+import { streamText, convertToModelMessages, type UIMessage } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+export async function POST(req: Request) {
+  const { messages }: { messages: UIMessage[] } = await req.json();
+  const result = streamText({
+    model: openai('gpt-4o'),
+    messages: convertToModelMessages(messages),
+  });
+  return result.toUIMessageStreamResponse();
+}
+
+// app/chat/page.tsx
+'use client';
+import { useChat } from 'ai/react';
+
+export default function ChatPage() {
+  const { messages, input, setInput, handleSubmit, status } = useChat({
+    api: '/api/chat',
+  });
+
+  return (
+    &lt;div&gt;
+      {messages.map((m) =&gt; (
+        &lt;div key={m.id}&gt;
+          &lt;strong&gt;{m.role}&lt;/strong&gt;:
+          {m.parts.map((part, i) =&gt;
+            part.type === 'text' ? &lt;span key={i}&gt;{part.text}&lt;/span&gt; : null
+          )}
+        &lt;/div&gt;
+      ))}
+      &lt;form onSubmit={handleSubmit}&gt;
+        &lt;input
+          value={input}
+          onChange={(e) =&gt; setInput(e.target.value)}
+          disabled={status !== 'ready'}
+        /&gt;
+      &lt;/form&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>useChat 调 Server Action（不是 Route Handler）</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// app/actions.ts
+'use server';
+import { streamText, convertToModelMessages } from 'ai';
+import { openai } from '@ai-sdk/openai';
+import { createStreamableValue } from 'ai/rsc';
+
+export async function chatAction(messages: UIMessage[]) {
+  const stream = createStreamableValue('');
+  (async () =&gt; {
+    const result = streamText({
+      model: openai('gpt-4o'),
+      messages: convertToModelMessages(messages),
+    });
+    for await (const delta of result.textStream) {
+      stream.append(delta);
+    }
+    stream.done();
+  })();
+  return stream.value;
+}
+
+// 但实际上更常见用法是：useChat 仍走 /api/chat (Route Handler)
+// Server Action 在 generative UI 场景用 (P3.2)</code></pre>
+        </div>
+
+        <h3>useObject 完整流式 form 生成</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// schema.ts (前后端共用)
+import { z } from 'zod';
+
+export const formSchema = z.object({
+  title: z.string().describe('Form title'),
+  description: z.string().describe('Brief description'),
+  fields: z.array(z.object({
+    name: z.string(),
+    label: z.string(),
+    type: z.enum(['text', 'email', 'number', 'select', 'textarea']),
+    required: z.boolean(),
+    options: z.array(z.string()).optional(),
+  })).describe('Form fields'),
+});
+
+// app/api/generate-form/route.ts
+import { streamObject } from 'ai';
+import { openai } from '@ai-sdk/openai';
+import { formSchema } from '@/schema';
+
+export async function POST(req: Request) {
+  const { description } = await req.json();
+  const result = streamObject({
+    model: openai('gpt-4o'),
+    schema: formSchema,
+    prompt: `Generate a form with fields for: ${description}`,
+  });
+  return result.toTextStreamResponse();
+}
+
+// app/form-gen/page.tsx
+'use client';
+import { experimental_useObject as useObject } from 'ai/react';
+import { formSchema } from '@/schema';
+
+export default function FormGen() {
+  const { object, submit, isLoading } = useObject({
+    api: '/api/generate-form',
+    schema: formSchema,
+  });
+
+  return (
+    &lt;div&gt;
+      &lt;button onClick={() =&gt; submit({ description: 'A signup form for SaaS' })}&gt;
+        Generate
+      &lt;/button&gt;
+      {object?.title &amp;&amp; &lt;h2&gt;{object.title}&lt;/h2&gt;}
+      {object?.description &amp;&amp; &lt;p&gt;{object.description}&lt;/p&gt;}
+      {object?.fields?.map((field, i) =&gt; (
+        field?.name &amp;&amp; (
+          &lt;div key={i}&gt;
+            &lt;label&gt;{field.label}&lt;/label&gt;
+            &lt;input type={field.type} name={field.name} required={field.required} /&gt;
+          &lt;/div&gt;
+        )
+      ))}
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>自定义 data part 实现 progress 进度</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 后端
+import { createUIMessageStreamResponse, streamText, convertToModelMessages } from 'ai';
+
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+  return createUIMessageStreamResponse({
+    execute: async (writer) =&gt; {
+      writer.write({ type: 'data-progress', data: { step: 1, total: 3, label: 'Searching...' } });
+      const docs = await searchKnowledgeBase(messages);
+
+      writer.write({ type: 'data-progress', data: { step: 2, total: 3, label: 'Generating...' } });
+
+      const result = streamText({
+        model: openai('gpt-4o'),
+        system: `Use these docs as context: ${JSON.stringify(docs)}`,
+        messages: convertToModelMessages(messages),
+      });
+      writer.merge(result.toUIMessageStream());
+
+      writer.write({ type: 'data-progress', data: { step: 3, total: 3, label: 'Done' } });
+    },
+  });
+}
+
+// 前端
+{messages.map((m) =&gt;
+  m.parts.map((part, i) =&gt; {
+    if (part.type === 'text') return &lt;span key={i}&gt;{part.text}&lt;/span&gt;;
+    if (part.type === 'data-progress')
+      return &lt;ProgressIndicator key={i} step={part.data.step} total={part.data.total} label={part.data.label} /&gt;;
+    return null;
+  })
+)}</code></pre>
+        </div>
+
+        <h3>带 metadata 的 useChat（前端 state 不污染 LLM）</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">'use client';
+import { useChat } from 'ai/react';
+
+const { messages, sendMessage, setMessages } = useChat({ api: '/api/chat' });
+
+// 用户点赞某条消息（更新 metadata，不重发给 LLM）
+function likeMessage(id: string) {
+  setMessages((prev) =&gt;
+    prev.map((m) =&gt;
+      m.id === id
+        ? { ...m, metadata: { ...m.metadata, liked: true, likedAt: Date.now() } }
+        : m
+    )
+  );
+}
+
+// 渲染时显示 metadata
+{messages.map((m) =&gt; (
+  &lt;div key={m.id}&gt;
+    {m.parts.map(...)}
+    {m.metadata?.liked &amp;&amp; &lt;span&gt;👍 已赞&lt;/span&gt;}
+    &lt;button onClick={() =&gt; likeMessage(m.id)}&gt;赞&lt;/button&gt;
+  &lt;/div&gt;
+))}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 把 metadata 当 part 用</div>
+          <p>metadata 不会发给 LLM 也不会进 part 数组。如果你想让 LLM 看到某条信息（用户偏好 / 时间戳），应该塞进新 part type 或 message text。<strong>修复</strong>：明确"前端展示用 metadata；发给 LLM 用 parts"。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 渲染 partial object 时直接用 schema.parse</div>
+          <p>useObject 的 partial 中间状态<strong>不一定</strong>符合 schema → schema.parse 抛错。<strong>修复</strong>：渲染时用 optional chaining（<code>object?.fields?.map(...)</code>）；validate 仅在最终 object。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · useChat 初始 messages 没设</div>
+          <p>每次 mount 都从空开始。如果用户刷新页面会丢失对话历史。<strong>修复</strong>：通过 <code>initialMessages</code> 注入（从 server / localStorage / 数据库读）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 流式中改 messages 数组</div>
+          <p>流式响应时（status === 'streaming'）用 setMessages 改 messages 可能与 SDK 内部累加冲突。<strong>修复</strong>：流式中只用 SDK 提供的 API（sendMessage / regenerate / stop）；改 metadata / 编辑历史等操作要在 status === 'ready' 时做。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · useCompletion 端 toUIMessageStreamResponse</div>
+          <p>useCompletion 端要 <code>toTextStreamResponse()</code>（纯文本 stream），不是 <code>toUIMessageStreamResponse()</code>（含 parts 结构）。混了 → useCompletion 收不到。<strong>修复</strong>：useChat 端用 toUIMessageStreamResponse；useCompletion 端用 toTextStreamResponse。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · v4 → v5 升级后 input value 丢失</div>
+          <p>v4 用 <code>handleInputChange</code> + <code>input</code>；v5 仍可用但推荐 <code>setInput</code>。混用可能让 input 控制不对。<strong>修复</strong>：统一用 <code>setInput</code> 风格（<code>onChange={(e) =&gt; setInput(e.target.value)}</code>）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 多个 useChat 实例共享 state 期待</div>
+          <p>同一组件树里两个 useChat 是<strong>独立实例</strong>，不共享 messages。如果你想跨组件共享，要么 lift up state 到 context，要么用 <code>setMessages</code> 同步。<strong>修复</strong>：用 React Context / Zustand / Jotai 把 messages 提升到全局。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 8 · 用 useAssistant 启新项目</div>
+          <p>useAssistant 是 OpenAI Assistants API 专用，2026 使用率收缩。<strong>修复</strong>：新项目优先 useChat + 自己管 thread state；除非确定要用 OpenAI Assistants 特有 feature（file_search 等）。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://ai-sdk.dev/docs/ai-sdk-ui/use-chat" target="_blank" rel="noopener">useChat 完整文档</a></li>
+          <li><a href="https://ai-sdk.dev/docs/ai-sdk-ui/use-completion" target="_blank" rel="noopener">useCompletion 文档</a></li>
+          <li><a href="https://ai-sdk.dev/docs/ai-sdk-ui/use-object" target="_blank" rel="noopener">useObject 文档</a></li>
+          <li><a href="https://ai-sdk.dev/docs/ai-sdk-ui/chatbot-message-persistence" target="_blank" rel="noopener">Message persistence 模式</a></li>
+          <li><a href="https://ai-sdk.dev/docs/ai-sdk-ui/streaming-data" target="_blank" rel="noopener">自定义 data parts 文档</a></li>
+          <li><a href="https://dev.to/whoffagents/vercel-ai-sdk-usechat-in-production-streaming-errors-and-the-patterns-nobody-writes-about-4ecf" target="_blank" rel="noopener">useChat 生产实战博文</a></li>
+          <li><a href="../../next/index.html">本站 · Next.js 主题</a> —— Server Actions 集成</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../02-vercel-core/02-stream-protocol.html">
+            <span class="label">← 上一章</span>
+            <span class="title">Stream Protocol 演化</span>
+          </a>
+          <a class="next" href="02-stream-ui.html">
+            <span class="label">下一章 →</span>
+            <span class="title">Generative UI · streamUI · RSC</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

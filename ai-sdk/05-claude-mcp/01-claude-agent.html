@@ -1,0 +1,626 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Claude Agent SDK + 跨范式对比 · P5.1 · AI SDK 深度学习</title>
+    <meta name="description" content="Claude Agent SDK 是 Anthropic 给'构建生产 AI agents'的官方库，与 Claude Code 共享 agent loop。这一章讲它的设计哲学（agent loop / subagents / hooks / sessions / built-in tools / MCP）+ 与 Vercel AI SDK 8 维对比 + 2026 选型决策（前端 web 选 Vercel / CLI 复杂后端 agent 选 Claude / 混合各管一边）。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%237c3aed'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EAI%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>AI SDK 深度学习</span><span class="site-title-badge" style="background: #7c3aed; color: #fff">AI</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · Claude Agent SDK + MCP</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-claude-agent.html" class="active">01 · Claude Agent SDK + 跨范式对比</a></li>
+          <li><a href="02-mcp.html">02 · MCP 协议在两边的位置</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">AI SDK</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · Claude Agent SDK + MCP</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Claude Agent SDK + 跨范式对比</span>
+        </nav>
+        <h1>Claude Agent SDK 设计哲学 + 与 Vercel 两种范式对比</h1>
+        <p class="lead">
+          Claude Agent SDK 是 Anthropic 给"构建生产 AI agents"的官方库，<strong>同一个 agent loop 驱动 Claude Code 自身</strong>（dogfooding）。这一章把它的核心组件（agent loop / subagents / hooks / sessions / built-in tools / MCP）+ 与 Vercel AI SDK 的 8 维对比讲清，给"哪个 SDK 该用在哪"提供决策基础。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 读过 P1.2（设计哲学）+ P4（Vercel Agent abstraction）</span>
+          <span><strong>主要来源</strong> code.claude.com/docs/en/agent-sdk + github.com/anthropics/claude-agent-sdk-python + github.com/anthropics/claude-agent-sdk-typescript + Anthropic engineering blog（"How we built Claude Code"）</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Claude Agent SDK 是 Anthropic 官方的"agent 构建库"，<strong>Python + TypeScript 双语言</strong>。同一个 agent loop 驱动 Claude Code 自身（CLI 工具）。</li>
+          <li><strong>核心组件</strong>：(a) <strong>Agent Loop</strong>（与 Claude Code 共用）；(b) <strong>Subagents</strong>（独立 context window + 独立 prompt + 独立 tool 权限）；(c) <strong>Hooks</strong>（PreToolUse / PostToolUse / UserPromptSubmit / Stop 等完整生命周期）；(d) <strong>Sessions</strong>（SDK 内部管 conversation state）；(e) <strong>Built-in tools</strong>（Read / Edit / Bash / Glob / WebSearch / Task 等 Claude Code 同款）；(f) <strong>MCP integration</strong>（中心地位）。</li>
+          <li><strong>Subagents 关键</strong>：每个 subagent 有自己的 context window，<strong>解决主 agent context 膨胀问题</strong>。父 agent 通过特殊 tool 调子 agent。messages 含 <code>parent_tool_use_id</code> 字段追踪谁调谁。</li>
+          <li><strong>Hooks 完整生命周期</strong>：PreToolUse（拦截 tool 调用前）/ PostToolUse（修改 tool 输出，2026-05 起可通过 <code>hookSpecificOutput.updatedToolOutput</code> 替换）/ UserPromptSubmit / Stop。比 Vercel 的 onStep / onFinish 更细粒度。</li>
+          <li><strong>In-process MCP servers</strong>（2026-05 改进）：自定义工具不再需要单独进程跑 MCP server。直接在 Python / TS 进程内实现，性能 + 部署都更简单。</li>
+          <li><strong>跨范式 8 维对比</strong>：主战场 / UI 层 / Agent 抽象 / 多 provider / MCP / Hooks / 状态管理 / Dogfooding 八个维度，两家差异明显。</li>
+          <li><strong>2026 选型决策</strong>：(a) 前端 web 应用 → <strong>Vercel</strong>；(b) CLI 工具 / 终端 agent → <strong>Claude SDK</strong>；(c) 后端复杂 agent orchestration（多 subagent / 长任务）→ <strong>Claude SDK</strong>；(d) 简单后端 agent → 都行，看团队栈；(e) 前后端混合 → 各管一边。</li>
+          <li><strong>不是"一个替代另一个"</strong>：两家解决不同问题，部分重叠。2026 起 MCP / streaming / multi-provider 等维度收敛，但核心定位（前端 SDK vs agent SDK）仍不同。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Claude Agent SDK 核心组件</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>┌──────────────────────────────────────────────────────────────┐
+│  Claude Agent SDK                                              │
+│                                                                │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │ Agent Loop (与 Claude Code 共用)                        │  │
+│  │  - 加载 system prompt + tools                          │  │
+│  │  - 调 Claude API → 看 tool calls → 调 tools → 喂回     │  │
+│  │  - until stop                                           │  │
+│  └────────────────────────────────────────────────────────┘  │
+│                                                                │
+│  ┌─────────────────┐  ┌─────────────────────┐              │
+│  │ Subagents       │  │ Hooks               │              │
+│  │ - 独立 context   │  │ - PreToolUse        │              │
+│  │ - 独立 prompt    │  │ - PostToolUse       │              │
+│  │ - 独立 权限       │  │ - UserPromptSubmit  │              │
+│  └─────────────────┘  │ - Stop              │              │
+│                        └─────────────────────┘              │
+│                                                                │
+│  ┌─────────────────┐  ┌─────────────────────┐              │
+│  │ Sessions        │  │ Built-in Tools      │              │
+│  │ - 状态管理        │  │ - Read / Edit       │              │
+│  │ - 历史持久化      │  │ - Bash / Glob       │              │
+│  └─────────────────┘  │ - WebSearch / Task  │              │
+│                        └─────────────────────┘              │
+│                                                                │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │ MCP Integration (中心地位)                              │  │
+│  │  - In-process MCP servers (2026-05)                     │  │
+│  │  - External MCP servers (stdio / HTTP / WebSocket)      │  │
+│  └────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘</code></pre>
+        </div>
+
+        <h3>Subagents：独立 context 解决膨胀问题</h3>
+
+        <p>主 agent 跑长任务时 context window 会膨胀（messages + tool results 累积）。Subagents 解决这个问题：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { ClaudeAgent } from '@anthropic-ai/claude-agent-sdk';
+
+const agent = new ClaudeAgent({
+  systemPrompt: 'You are a code review coordinator.',
+  subagents: {
+    codeReviewer: {
+      systemPrompt: 'You are a strict code reviewer focused on security and performance.',
+      tools: ['Read', 'Glob', 'Grep'],  // 只给读权限
+      // 独立 context window —— 主 agent 不看 review 的中间过程
+    },
+    testRunner: {
+      systemPrompt: 'You are a test runner.',
+      tools: ['Bash', 'Read'],
+    },
+    securityScanner: {
+      systemPrompt: 'You scan code for security issues.',
+      tools: ['Read', 'Grep', 'WebSearch'],
+    },
+  },
+  // 主 agent 用 Task tool 调 subagent
+  tools: ['Task'],
+});
+
+await agent.run({
+  prompt: 'Review PR #42: run tests, check security, summarize findings',
+});
+
+// 主 agent 流程:
+// 1. 主 agent 用 Task tool 调 codeReviewer
+// 2. codeReviewer 在自己的 context 里完成 review
+// 3. 返回 review summary 给主 agent (主 agent 只看 summary 不看 review 过程)
+// 4. 主 agent 用 Task tool 调 testRunner / securityScanner
+// 5. 综合三个 subagent 结果给最终回复</code></pre>
+        </div>
+
+        <p>关键好处：</p>
+
+        <ul>
+          <li><strong>主 agent context 不膨胀</strong>：subagent 内部细节不进主 agent context</li>
+          <li><strong>专项化</strong>：每个 subagent 用 specialized prompt + 受限 tool 权限</li>
+          <li><strong>可并行</strong>：理论上多个 subagent 可并发跑（CLAUDE_CODE_FORK_SUBAGENT=1）</li>
+        </ul>
+
+        <h3>Hooks 完整生命周期</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">const agent = new ClaudeAgent({
+  systemPrompt: '...',
+  tools: [...],
+
+  hooks: {
+    // 用户提交 prompt 前
+    UserPromptSubmit: async ({ prompt }) =&gt; {
+      // 可以修改 prompt（添加 context）
+      return { prompt: `[User session: ${userId}]\n${prompt}` };
+      // 或返回 { decision: 'block', reason: '...' } 阻止
+    },
+
+    // tool 调用前（可拦截 / 修改 input / 阻止）
+    PreToolUse: async ({ tool, input }) =&gt; {
+      console.log(`Calling ${tool.name} with`, input);
+      if (tool.name === 'Bash' &amp;&amp; input.command.includes('rm -rf')) {
+        return { decision: 'block', reason: 'Dangerous command blocked' };
+      }
+      // log 到 observability
+      observability.log({ event: 'tool_call', tool: tool.name, input });
+    },
+
+    // tool 调用后（可修改 output, 2026-05 新能力）
+    PostToolUse: async ({ tool, input, output }) =&gt; {
+      // 脱敏输出再喂回 LLM
+      if (tool.name === 'Read' &amp;&amp; output.includes('SECRET=')) {
+        const sanitized = output.replace(/SECRET=\S+/g, 'SECRET=***');
+        return {
+          hookSpecificOutput: {
+            updatedToolOutput: sanitized,
+          },
+        };
+      }
+    },
+
+    // agent 结束前
+    Stop: async ({ messages, finalAnswer }) =&gt; {
+      // 持久化对话历史
+      await db.session.create({ data: { messages, finalAnswer } });
+    },
+  },
+});</code></pre>
+        </div>
+
+        <p>对比 Vercel 的 <code>onStep</code> / <code>onFinish</code>：Vercel 仅在 step 之间和最终调；Claude SDK 在<strong>每个 tool 前后 + prompt 提交前 + agent 停止前</strong>都有钩子。<strong>更细粒度</strong>。</p>
+
+        <h3>Built-in Tools（与 Claude Code 共享）</h3>
+
+        <p>Claude Agent SDK 内置一组 tool（与 Claude Code CLI 同款）：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Tool</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Read</td><td>读文件</td></tr>
+            <tr><td>Edit</td><td>编辑文件（精确替换）</td></tr>
+            <tr><td>Write</td><td>写文件（覆盖 / 新建）</td></tr>
+            <tr><td>Bash</td><td>执行 shell 命令</td></tr>
+            <tr><td>Glob</td><td>按 pattern 找文件</td></tr>
+            <tr><td>Grep</td><td>在文件里搜内容</td></tr>
+            <tr><td>WebSearch</td><td>web 搜索</td></tr>
+            <tr><td>WebFetch</td><td>fetch URL</td></tr>
+            <tr><td>Task</td><td>调用 subagent</td></tr>
+          </tbody>
+        </table>
+
+        <p>这些 tools 是<strong>"用 LLM 操作文件系统 / shell / web"</strong>这一类需求的标准抽象。Vercel AI SDK 没有等价物（你要自己实现）。</p>
+
+        <h3>Sessions：SDK 管对话状态</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// Claude SDK session
+const agent = new ClaudeAgent({ ... });
+
+const session = await agent.startSession({ sessionId: 'user-123-thread-1' });
+
+await session.send({ prompt: 'What is the weather?' });
+await session.send({ prompt: 'Forecast for tomorrow?' });  // 自动接续上下文
+
+// session 历史 SDK 内部管理（可持久化）
+
+// 对比 Vercel: 你自己管 messages: UIMessage[]，每次请求传完整数组</code></pre>
+        </div>
+
+        <p>选择：</p>
+
+        <ul>
+          <li>Vercel 让<strong>开发者管 state</strong>（前端 useChat / 后端自己存）</li>
+          <li>Claude SDK 让<strong>SDK 管 state</strong>（默认）</li>
+        </ul>
+
+        <p>哪个更好？看场景。前端 chat（需要客户端展示）→ Vercel 让 state 在前端更顺；CLI / 后端 agent（不需要前端展示历史）→ Claude SDK session 更省事。</p>
+
+        <h3>跨范式 8 维对比</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>Vercel AI SDK v6</th>
+              <th>Claude Agent SDK 2026-05</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>主战场</td>
+              <td>React/Next.js web 应用</td>
+              <td>CLI / 后端 / 任何 agent 场景</td>
+            </tr>
+            <tr>
+              <td>UI 层</td>
+              <td>useChat / useObject / streamUI 一等公民</td>
+              <td>没有内置 UI 层</td>
+            </tr>
+            <tr>
+              <td>Agent 抽象层级</td>
+              <td>Agent / ToolLoopAgent</td>
+              <td>Agent loop + Subagents（更细粒度）</td>
+            </tr>
+            <tr>
+              <td>多 provider</td>
+              <td>完全 vendor-neutral（含 AI Gateway）</td>
+              <td>默认 Anthropic（可经 Bedrock / Vertex）</td>
+            </tr>
+            <tr>
+              <td>MCP</td>
+              <td>支持但非中心（experimental_createMCPClient）</td>
+              <td>中心地位 + in-process MCP</td>
+            </tr>
+            <tr>
+              <td>Hooks</td>
+              <td>简单（onStep / onFinish 等）</td>
+              <td>完整 hook 生命周期（4 个一等公民 + 各种细粒度）</td>
+            </tr>
+            <tr>
+              <td>状态管理</td>
+              <td>UIMessage（前端 state） + 自己管</td>
+              <td>Session（SDK 内部管）</td>
+            </tr>
+            <tr>
+              <td>Dogfooding</td>
+              <td>Vercel.com / v0 内部使用</td>
+              <td>Claude Code 自己驱动（生产级）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>共同点（2026 收敛）</h3>
+
+        <ul>
+          <li><strong>都支持 MCP</strong>（外部工具接口）—— Claude SDK 中心地位 / Vercel experimental</li>
+          <li><strong>都支持 streaming</strong>（Vercel SSE / Claude SDK 内部 stream）</li>
+          <li><strong>都支持 multi-provider</strong>（程度不同）—— Vercel 完全 neutral / Claude 经 Bedrock / Vertex</li>
+          <li><strong>都有 hooks / interception</strong>—— Vercel onStep / Claude 完整 4 个 hooks</li>
+          <li><strong>都有 Agent abstraction</strong>—— Vercel v6 起 / Claude 一直有</li>
+        </ul>
+
+        <h3>2026 选型决策树</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>项目主要场景？
+  ├─ React/Next.js web 应用 + chat / generative UI
+  │  → Vercel AI SDK ✅
+  │
+  ├─ CLI 工具 / 终端 agent
+  │  → Claude Agent SDK ✅
+  │
+  ├─ 后端复杂 agent (多 subagent / 长任务 / 严格 tool 权限)
+  │  → Claude Agent SDK ✅
+  │
+  ├─ 简单后端 agent (单 agent + 几个 tools)
+  │  ├─ TS + 已用 Vercel 生态 → Vercel AI SDK
+  │  ├─ Python 后端 → Claude Agent SDK Python
+  │  └─ 要与 Claude Code 共生态 → Claude Agent SDK
+  │
+  └─ 前后端混合
+     → Vercel 跑前端 + Claude SDK 跑后端 agent</code></pre>
+        </div>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 代码 review agent (CLI / GitHub Action)</h3>
+          <p>跑在 CI 里 → review PR + 写 comment + 跑测试。<strong>Claude Agent SDK 的本垒</strong>。subagents（codeReviewer / testRunner / securityScanner）协作；hooks 实现自定义日志 / 阻止危险命令；built-in Read / Edit / Bash 直接用。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 客服 chat (web 应用)</h3>
+          <p>客服 chat 需要前端流式 UI + tool 调用 + 用户审批。<strong>Vercel AI SDK 的本垒</strong>。useChat hook + 后端 supportAgent + Human-in-the-loop。Claude SDK 没 UI 层，做 web chat 不合适。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 数据 ETL agent (后端批处理)</h3>
+          <p>每天跑批处理：从多个数据源拉数据 → 清洗 → 转换 → 入库。需要 agent loop + 错误重试 + observability hooks。<strong>Claude Agent SDK 更顺</strong>（Python + 完整 hooks）。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 旅行助理 (web + 复杂 generative UI)</h3>
+          <p>"我下周去东京"→ 展示天气卡 / 航班 / 活动推荐 / 订餐建议。<strong>Vercel AI SDK + streamUI 的本垒</strong>。Claude SDK 没 generative UI 概念。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 E · 前后端混合：双 SDK 协作</h3>
+          <p>前端 chat（Vercel useChat）→ 用户问"帮我重构这个项目" → 后端调 Claude SDK agent（含 codeReviewer / refactorer / testRunner subagents）→ 后端流式返回进度 → 前端展示。<strong>2026 主流架构之一</strong>。详见 P5 场景 F。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 F · DevOps automation agent</h3>
+          <p>监控告警触发 → agent 跑 diagnose（看日志 / 查指标 / 跑测试）→ 决定 mitigation（restart / scale up / rollback）→ 执行（Bash / kubectl）。<strong>Claude Agent SDK + built-in Bash + hooks 阻止危险命令</strong>。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：完整 Claude Agent SDK 实战</span></h2>
+
+        <h3>代码 review agent（TypeScript）</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { ClaudeAgent, query } from '@anthropic-ai/claude-agent-sdk';
+
+const agent = new ClaudeAgent({
+  systemPrompt: `You are a code review coordinator.
+  Use subagents to delegate specialized tasks.
+  Synthesize their findings into a final review.`,
+
+  // 主 agent 能用 Task tool 调 subagent
+  allowedTools: ['Task', 'Read'],
+
+  subagents: {
+    codeReviewer: {
+      systemPrompt: 'You are a strict code reviewer. Focus on logic, edge cases, error handling.',
+      allowedTools: ['Read', 'Grep'],
+    },
+    securityScanner: {
+      systemPrompt: 'Scan for security vulnerabilities (SQL injection, XSS, secrets).',
+      allowedTools: ['Read', 'Grep', 'WebSearch'],
+    },
+    testRunner: {
+      systemPrompt: 'Run tests and report failures with actionable feedback.',
+      allowedTools: ['Bash', 'Read'],
+    },
+  },
+
+  hooks: {
+    PreToolUse: async ({ tool, input }) =&gt; {
+      // 阻止危险命令
+      if (tool.name === 'Bash' &amp;&amp; /rm -rf|sudo|chmod 777/.test(input.command)) {
+        return { decision: 'block', reason: 'Dangerous command blocked' };
+      }
+      // log
+      await db.auditLog.create({ data: { event: 'tool_use', tool: tool.name, input } });
+    },
+
+    PostToolUse: async ({ tool, output }) =&gt; {
+      // 脱敏 secret
+      if (typeof output === 'string' &amp;&amp; /SECRET|API_KEY/.test(output)) {
+        return {
+          hookSpecificOutput: {
+            updatedToolOutput: output.replace(/(SECRET|API_KEY)\s*=\s*\S+/g, '$1=***'),
+          },
+        };
+      }
+    },
+  },
+});
+
+// 调用
+for await (const message of query({
+  agent,
+  prompt: 'Review PR #42 in this repo',
+})) {
+  console.log(message);
+  // message 含: text / tool_use / tool_result / subagent results / final summary
+}</code></pre>
+        </div>
+
+        <h3>Python 等价代码</h3>
+
+        <div class="code-block">
+          <span class="code-label">python</span>
+          <pre class="code"><code class="lang-python">from anthropic_agent_sdk import ClaudeAgent, query
+
+agent = ClaudeAgent(
+    system_prompt="You are a code review coordinator...",
+    allowed_tools=["Task", "Read"],
+    subagents={
+        "code_reviewer": {
+            "system_prompt": "Strict code reviewer...",
+            "allowed_tools": ["Read", "Grep"],
+        },
+        "security_scanner": {
+            "system_prompt": "Scan for vulnerabilities...",
+            "allowed_tools": ["Read", "Grep", "WebSearch"],
+        },
+    },
+    hooks={
+        "PreToolUse": pre_tool_use_hook,
+        "PostToolUse": post_tool_use_hook,
+    },
+)
+
+async def pre_tool_use_hook(tool, input):
+    if tool.name == "Bash" and "rm -rf" in input.get("command", ""):
+        return {"decision": "block", "reason": "Dangerous"}
+
+async for message in query(agent=agent, prompt="Review PR #42"):
+    print(message)</code></pre>
+        </div>
+
+        <h3>In-process MCP server（自定义工具）</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { ClaudeAgent, createInProcessMCPServer } from '@anthropic-ai/claude-agent-sdk';
+
+// 自定义工具作为 in-process MCP server
+const customMCPServer = createInProcessMCPServer({
+  name: 'order-management',
+  tools: [
+    {
+      name: 'lookupOrder',
+      description: 'Look up an order by ID',
+      inputSchema: {
+        type: 'object',
+        properties: { orderId: { type: 'string' } },
+        required: ['orderId'],
+      },
+      handler: async ({ orderId }) =&gt; await db.order.findUnique({ where: { id: orderId } }),
+    },
+    {
+      name: 'refundOrder',
+      description: 'Process refund (REQUIRES APPROVAL)',
+      inputSchema: { /* ... */ },
+      handler: async ({ orderId, amount, reason }) =&gt; await processRefund(orderId, amount, reason),
+    },
+  ],
+});
+
+const agent = new ClaudeAgent({
+  systemPrompt: '...',
+  mcpServers: [customMCPServer],
+  // 工具自动从 MCP server 来 (lookupOrder / refundOrder)
+});</code></pre>
+        </div>
+
+        <h3>Vercel + Claude 混合架构</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 前端 (Vercel useChat)
+'use client';
+import { useChat } from 'ai/react';
+
+function Chat() {
+  const { messages, sendMessage } = useChat({ api: '/api/refactor' });
+  return (...);
+}
+
+// 后端 Route Handler (Vercel) → 调 Claude SDK
+import { ClaudeAgent, query } from '@anthropic-ai/claude-agent-sdk';
+
+const refactorAgent = new ClaudeAgent({
+  systemPrompt: 'You refactor code...',
+  subagents: { codeAnalyzer: ..., refactorer: ..., testRunner: ... },
+  hooks: { ... },
+});
+
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+  const lastMessage = messages[messages.length - 1].parts.map(p =&gt; p.text).join('');
+
+  // 把 Claude SDK 的输出流转成 v5 SSE 协议给 Vercel useChat
+  return new Response(
+    new ReadableStream({
+      async start(controller) {
+        for await (const msg of query({ agent: refactorAgent, prompt: lastMessage })) {
+          if (msg.type === 'text') {
+            const event = JSON.stringify({ type: 'text-delta', textDelta: msg.text });
+            controller.enqueue(`data: ${event}\n\n`);
+          }
+        }
+        controller.close();
+      },
+    }),
+    { headers: { 'Content-Type': 'text/event-stream' } }
+  );
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 期待 Claude Agent SDK 提供 useChat-like UI hooks</div>
+          <p>没有。这是设计选择不是缺失。<strong>修复</strong>：前端 web chat 用 Vercel；CLI / 后端 agent 用 Claude SDK；混合架构两者各管一边。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 在 web 后端硬上 Claude Agent SDK</div>
+          <p>简单 web 后端"前端 useChat → 后端 streamText"完全够用。Claude SDK 的 subagents / hooks 在简单场景是 overkill。<strong>修复</strong>：复杂 agent orchestration 才用 Claude SDK；简单后端用 Vercel streamText 即可。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · subagent context 跨 subagent 共享期待</div>
+          <p>subagents 是<strong>独立 context</strong>。codeReviewer 看到的内容 securityScanner 看不到。<strong>修复</strong>：(a) 主 agent 把 subagent A 的 summary 作为 prompt 给 subagent B；(b) 用 in-process MCP / DB 让 subagents 共享 state。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 期待 Claude SDK 能用 OpenAI / Google model</div>
+          <p>Claude SDK 默认 Anthropic。可以经 Bedrock / Vertex AI 切，但不像 Vercel 完全 vendor-neutral。<strong>修复</strong>：如果需要切多 provider → Vercel；如果接受锁定 Claude（含经 Bedrock / Vertex）→ Claude SDK。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · hooks 里做重操作阻塞 agent loop</div>
+          <p>PreToolUse / PostToolUse 同步等待 → agent 卡住。<strong>修复</strong>：hooks 只做 lightweight observability + 必要的拦截判断；重操作（写 DB / 发外部请求）fire-and-forget 或 enqueue 到 queue。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · 没用 in-process MCP 而用外部进程</div>
+          <p>2026-05 起 Claude SDK 支持 in-process MCP server，性能 + 部署都更简单。仍用外部进程 = 浪费。<strong>修复</strong>：自定义工具用 createInProcessMCPServer；外部 MCP server 仅用于"已有的第三方 server"（GitHub MCP / Slack MCP 等）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 用 Claude SDK 做"前端 SDK"</div>
+          <p>Claude SDK 没 UI hooks / 没 React 集成 / 不暴露 streaming UI。<strong>修复</strong>：理解它定位是"agent 库"不是"前端 SDK"。前端要用 useChat → 走 Vercel。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 8 · 期待 Subagent 是 LangChain agent</div>
+          <p>Claude SDK 的 Subagent 是<strong>"独立 context 的 agent"</strong>，不是 LangChain 那种"高层 orchestration"。Subagent 共用同一个 agent loop，仅是 context 隔离。<strong>修复</strong>：理解 Subagent 不是 chain / pipeline / DAG，是简单的"独立 context + 受限权限"封装。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK overview</a></li>
+          <li><a href="https://github.com/anthropics/claude-agent-sdk-python" target="_blank" rel="noopener">claude-agent-sdk-python</a></li>
+          <li><a href="https://github.com/anthropics/claude-agent-sdk-typescript" target="_blank" rel="noopener">claude-agent-sdk-typescript</a></li>
+          <li><a href="https://code.claude.com/docs/en/agent-sdk/subagents" target="_blank" rel="noopener">Subagents 文档</a></li>
+          <li><a href="https://code.claude.com/docs/en/agent-sdk/hooks" target="_blank" rel="noopener">Hooks 文档</a></li>
+          <li><a href="https://www.anthropic.com/engineering" target="_blank" rel="noopener">Anthropic engineering blog</a></li>
+          <li><a href="https://www.developersdigest.tech/blog/claude-code-agent-teams-subagents-2026" target="_blank" rel="noopener">Claude Code Agent Teams 2026 实战博文</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../04-agent/02-tool-use.html">
+            <span class="label">← 上一章</span>
+            <span class="title">Tool use 全谱</span>
+          </a>
+          <a class="next" href="02-mcp.html">
+            <span class="label">下一章 →</span>
+            <span class="title">MCP 协议在两边的位置</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

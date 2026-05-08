@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>决策树 + 陷阱清单 + v7 展望 · P7.1 · AI SDK 深度学习</title>
+    <meta name="description" content="AI SDK 主题收束章。3 层选型决策树（Vercel AI SDK vs Claude Agent SDK / Vercel 内部 API 怎么选 / v5→v6 升级时机）+ 12 个陷阱清单（每条配修复）+ v7 canary 展望（WorkflowAgent / durable execution / loop control stopWhen prepareStep）+ 2026 强观点收尾（前端 chat 选 Vercel / 复杂后端 agent 选 Claude / MCP 是事实标准 / 模型分级是最大 cost 杠杆）。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%237c3aed'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EAI%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>AI SDK 深度学习</span><span class="site-title-badge" style="background: #7c3aed; color: #fff">AI</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P7 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P7 · 决策 + v7 展望</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-decision.html" class="active">01 · 决策树 + 陷阱 + v7 展望</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">AI SDK</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P7 · 决策 + v7 展望</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 决策与陷阱</span>
+        </nav>
+        <h1>3 层选型决策树 + 12 个陷阱 + v7 展望</h1>
+        <p class="lead">
+          整个主题的收束章。从"选 Vercel AI SDK 还是 Claude Agent SDK"到"v5 → v6 升级时机"到"具体 hook / API 怎么调"一条决策链。同时把 12 个陷阱配修复合在一章，最后给 v7 canary 展望（WorkflowAgent / durable execution）+ 2026 强观点收尾。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 读过 P1-P6（本章是收束）</span>
+          <span><strong>主要来源</strong> 整合 P1-P6 + ai-sdk.dev/v7/docs（v7 canary）+ vercel.com/blog/a-new-programming-model-for-durable-execution + GitHub issue #14011（v7 跟踪）</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>3 层选型决策树</strong>：(a) <strong>第一层</strong>：Vercel AI SDK vs Claude Agent SDK（基于场景）；(b) <strong>第二层</strong>：Vercel 内部 API（generateText / streamText / useChat / useObject / streamUI / Agent）；(c) <strong>第三层</strong>：v5 → v6 升级时机 + v7 canary 等等。</li>
+          <li><strong>第一层主要规则</strong>：前端 web app + 主要 chat / generative UI → Vercel；CLI 工具 / 终端 agent → Claude SDK；后端复杂 agent orchestration（多 subagent / 长任务） → Claude SDK；前后端混合 → Vercel 跑前端 + Claude SDK 跑后端。</li>
+          <li><strong>第二层主要规则</strong>：简单单次调用 → generateText / generateObject；UI 流式 → streamText / streamObject；chat 应用 → useChat；流式结构化 UI → useObject；LLM 决定渲染什么 React 组件 → streamUI；复杂 agent + 多 tool + 复用 → Agent / ToolLoopAgent。</li>
+          <li><strong>第三层主要规则</strong>：新项目直接 v6（current latest stable）；已在 v5 升 v6 较平滑（spec 改进）；仍在 v4 必须先升 v5（协议层 + state 模型双重重做）；v7 canary 不要在生产用。</li>
+          <li><strong>12 个陷阱清单</strong>：每条配修复（v5 SSE 协议适配 / UIMessage 塞 metadata / tool 错误未处理 / streamUI 在 client / Edge timeout / schema z.any() / v4 v5 混用 / Gateway budget / 没用 prompt caching / 缺 requiresApproval / 初始 messages 缺 / 漏 convertToModelMessages）。</li>
+          <li><strong>v7 canary 展望</strong>：(a) <strong>WorkflowAgent</strong>（durable execution，agent task 可持久化、跨 process 重启、跨小时几天运行）；(b) <strong>Loop control</strong>（<code>stopWhen</code> / <code>prepareStep</code> 让 agent loop 可显式控制）。<strong>2026 不要在生产用 v7</strong>。</li>
+          <li><strong>2027 推测</strong>：MCP 在 Vercel 一等公民（不再 experimental）；durable execution 进 stable；多 agent orchestration 标准化；模型分级 cost 优化成行业最佳实践。</li>
+          <li><strong>2026 强观点收尾</strong>：(a) "前端 chat / generative UI 选 Vercel AI SDK 没争议"；(b) "复杂后端 agent + 与 Claude Code 共生态选 Claude Agent SDK"；(c) "v6 是 2026 主线，新项目直接 v6"；(d) "MCP 是工具接口的事实标准，不要再自定义"；(e) "AI Gateway 不是必须，但简化多 provider 切换"；(f) "模型分级是最大 cost 杠杆（可省 50-80%）"。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>第一层决策：Vercel AI SDK vs Claude Agent SDK</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>项目主要场景？
+  │
+  ├─ React/Next.js web 应用 + chat / generative UI
+  │  └─ Vercel AI SDK ✅
+  │
+  ├─ CLI 工具 / 终端 agent (与 Claude Code 共生态)
+  │  └─ Claude Agent SDK ✅
+  │
+  ├─ 后端复杂 agent orchestration
+  │  ├─ 需要 subagents (独立 context window) → Claude SDK ✅
+  │  ├─ 需要完整 hooks 生命周期 → Claude SDK ✅
+  │  ├─ 需要长任务 + sessions 管理 → Claude SDK ✅
+  │  └─ 需要 MCP 中心地位 → Claude SDK ✅
+  │
+  ├─ 简单后端 agent (单 agent + 几个 tools)
+  │  ├─ TS + 已用 Vercel 生态 → Vercel AI SDK
+  │  ├─ Python 后端 → Claude Agent SDK Python
+  │  └─ 要与 Claude Code 共生态 → Claude Agent SDK
+  │
+  └─ 前后端混合
+     └─ Vercel 跑前端 + Claude SDK 跑后端 agent
+        (前端 useChat 通过 API 调后端 agent)</code></pre>
+        </div>
+
+        <h3>第二层决策：Vercel 内部 API</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>需求？
+  │
+  ├─ 简单单次 LLM 调用 (no tools, 不用 UI 流式)
+  │  └─ generateText / generateObject ✅
+  │     批处理 / 后端非交互 / 路由分类 / 内部决策
+  │
+  ├─ UI 流式响应 (用户看到文字逐字出现)
+  │  └─ streamText / streamObject ✅
+  │
+  ├─ Chat 应用 (多轮对话)
+  │  └─ useChat ✅
+  │
+  ├─ 单次输入 → 单次流式输出 (不是 chat)
+  │  └─ useCompletion ✅
+  │     翻译 / 改写 / 摘要单次
+  │
+  ├─ 流式生成结构化 UI (form / 表格 / 卡片)
+  │  └─ useObject + Zod schema ✅
+  │
+  ├─ LLM 决定渲染什么 React 组件
+  │  └─ streamUI (ai/rsc) ✅
+  │     需要在 Server Action / Route Handler 调
+  │     生成卡片 / 表单 / 可视化
+  │
+  ├─ 复杂 agent + 多 tool + 多处复用
+  │  └─ Agent / ToolLoopAgent ✅ (v6+)
+  │
+  ├─ 多 tool 调用 + 返回结构化 object
+  │  └─ generateObject + tools ✅ (v6 stable)
+  │
+  ├─ Tool 调用流式 input UI (partial-call → call → result)
+  │  └─ v5+ 默认行为 (UIMessage parts type-specific)
+  │
+  └─ 敏感操作需要用户审批
+     └─ tool: { requiresApproval: true } ✅ (v6 stable)</code></pre>
+        </div>
+
+        <h3>第三层决策：版本选择</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>当前项目状态？
+  │
+  ├─ 新项目 (绿场)
+  │  └─ Vercel AI SDK v6 (current latest stable) ✅
+  │     不要新启 v4 / v5
+  │     不要在生产用 v7 canary
+  │
+  ├─ 已在 Vercel AI SDK v5
+  │  ├─ 升 v6 → 较平滑 (spec 改进，非 SDK 重做)
+  │  └─ 暂不升 → 也 OK (v5 仍 stable)
+  │
+  ├─ 仍在 Vercel AI SDK v4
+  │  ├─ 计划长期维护 → 必须先升 v5 (协议层 + state 模型双重重做)
+  │  │  ├─ 自定义后端 (FastAPI / Python) → 需要适配新 SSE 协议
+  │  │  └─ Next.js Route Handler → 升级感知小
+  │  └─ 项目接近退役 → 不升级 (v4 仍能用)
+  │
+  ├─ 仍在 LangChain JS
+  │  ├─ 项目活跃 → 评估迁移到 Vercel AI SDK / Claude SDK
+  │  └─ 项目维护期 → 不动 (LangChain JS 仍能用，但不建议新功能)
+  │
+  └─ Claude Agent SDK
+     └─ 跟 anthropic 官方 release 升级 (2026-05 主线)</code></pre>
+        </div>
+
+        <h3>v7 canary 展望</h3>
+
+        <p>v7 canary 在 2026 年陆续 release，关键创新：</p>
+
+        <h4>WorkflowAgent（durable execution）</h4>
+
+        <p>问题背景：v6 ToolLoopAgent 假设 "agent 跑在一个 process 里直到结束"。但生产现实里：</p>
+
+        <ul>
+          <li>深度研究 agent 跑几小时几天</li>
+          <li>批处理 agent 跑几千个 task</li>
+          <li>用户中途切走，agent 继续后台跑</li>
+          <li>process 重启 / 容器迁移 / 服务器宕机 → state 丢失</li>
+        </ul>
+
+        <p>v7 WorkflowAgent + Vercel durable execution programming model 解法：</p>
+
+        <ul>
+          <li><strong>状态持久化</strong>：每步执行后 state 写入 durable storage</li>
+          <li><strong>跨 process 重启</strong>：process 死了，恢复后从断点继续</li>
+          <li><strong>跨小时几天执行</strong>：长任务不依赖单一 process 生命周期</li>
+        </ul>
+
+        <h4>Loop control（stopWhen / prepareStep）</h4>
+
+        <p>v6 ToolLoopAgent 已有简单的 stopWhen / onStep。v7 进一步：</p>
+
+        <ul>
+          <li><code>stopWhen</code> 更精细：基于 tool calls / token usage / 自定义业务条件</li>
+          <li><code>prepareStep</code>：每步执行前的 prepare hook（修改 messages / 调整 tool 子集 / 注入 context）</li>
+          <li>更细粒度控制 agent loop 行为</li>
+        </ul>
+
+        <h4>2026 vs 2027 推测</h4>
+
+        <ul>
+          <li><strong>2026</strong>：v6 主线稳定使用；v7 canary 仅实验 / 评估方向；MCP 已 de facto 标准但 Vercel 集成 experimental</li>
+          <li><strong>2027（推测）</strong>：v7 stable release；durable execution 进生产；MCP 在 Vercel 一等公民；多 agent orchestration 出现行业标准模式；模型分级 + AI Gateway 成默认实践</li>
+        </ul>
+
+        <h3>2026 强观点收尾</h3>
+
+        <p>本主题的核心论断（按确定性强弱排序）：</p>
+
+        <ul>
+          <li><strong>"前端 chat / generative UI 选 Vercel AI SDK 没争议"</strong>。useChat / useObject / streamUI 没有竞争对手。Claude SDK 没 UI 层。</li>
+          <li><strong>"复杂后端 agent + 与 Claude Code 共生态选 Claude Agent SDK"</strong>。Subagents 一等公民 / 完整 hooks / sessions / built-in tools 让复杂 agent 比 Vercel 更直接。</li>
+          <li><strong>"v6 是 2026 新项目主线"</strong>。Agent abstraction + Human-in-the-loop + AI Gateway 都是 v6 起。v5 不要新启。</li>
+          <li><strong>"MCP 是 2026 工具接口事实标准"</strong>。自家工具发布为 MCP server（in-process 或 standalone），不要自定义协议。</li>
+          <li><strong>"AI Gateway 不是必须但通常划算"</strong>。多 provider + observability + cost 控制 + caching 一站。除非合规不允许。</li>
+          <li><strong>"模型分级是最大 cost 杠杆"</strong>。Haiku 跑 routing / Sonnet 跑核心 / o1 仅复杂推理 → 可省 50-80% cost。</li>
+          <li><strong>"prompt caching 是被低估的 cost 优化"</strong>。长 system prompt 项目开 caching → token 账单减少 80%。</li>
+          <li><strong>"v7 canary 不要在生产用"</strong>。WorkflowAgent / durable execution 仍 unstable。等 2027。</li>
+          <li><strong>"前后端混合架构 = Vercel 跑前端 + Claude SDK 跑后端 agent"</strong>是 2026 复杂应用的标准模式。</li>
+          <li><strong>"OTel 监控 LLM 调用是 day-0 设置"</strong>，不是"以后再加"。从开始就接 collector 看 token / latency / 错误率。</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景：决策实战</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 新 SaaS 项目（2026 首选栈）</h3>
+          <p>(1) Next.js + Vercel AI SDK v6（前端 useChat + 后端 streamText）；(2) AI Gateway（多 provider + observability + budget）；(3) Anthropic Prompt Caching（长 system prompt）；(4) 模型分级（Haiku 路由 / Sonnet 核心）；(5) 敏感操作 requiresApproval；(6) OTel 接 Honeycomb / Langfuse；(7) MCP server 接外部工具（GitHub / Slack）。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 升级老项目（v4 → v6）</h3>
+          <p>步骤：(1) 升 v5（自定义后端必须适配 SSE 协议；Next.js Route Handler 几乎无感）；(2) UIMessage / ModelMessage 二分（前端 messages 加 metadata 不污染 LLM）；(3) tool-invocations 改 type-specific parts（前端渲染按 type 分支）；(4) 升 v6（Agent abstraction 复用 + Human-in-the-loop）；(5) 接 AI Gateway（如果多 provider）。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 内部 dev tool（Claude Agent SDK）</h3>
+          <p>(1) Claude Agent SDK Python / TypeScript；(2) Subagents（codeReviewer / testRunner / securityScanner）；(3) Hooks 阻止危险命令 + 脱敏输出；(4) In-process MCP server（自家业务工具）+ 接 GitHub MCP（外部）；(5) Sessions 持久化对话；(6) OTel 监控。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 前后端混合架构（chat + 复杂 agent）</h3>
+          <p>(1) 前端 Next.js + Vercel useChat；(2) 后端 Route Handler 转给 Claude Agent SDK（Node runtime / 或单独 Python service）；(3) 后端 agent 多 subagent 协作；(4) 后端流式输出转换成 Vercel SSE 协议给前端；(5) 用户审批走 Vercel useChat 的 Human-in-the-loop（或后端 hooks 双重保险）。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 E · 小创业 MVP（最简栈）</h3>
+          <p>仅 useChat + streamText + 一个 model（Anthropic Sonnet 4.6）+ 几个 tools。<strong>不上 Agent abstraction / Gateway / OTel / Prompt Caching / 模型分级</strong>。等用户量上来再优化。"过度工程化是敌人"。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 F · 数据 ETL agent（批处理）</h3>
+          <p>每天跑 1000 个数据源 → ETL → 入库。<strong>不要在 HTTP request 跑</strong>。进 queue（Inngest / Trigger.dev / 自建 BullMQ）→ Claude Agent SDK Python worker 跑 → 失败重试 + 进度持久化。前端只看 dashboard 不直接跑 agent。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：决策落地清单</span></h2>
+
+        <h3>2026 新 Next.js + Vercel AI SDK v6 项目模板</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>my-ai-app/
+├── package.json
+│   "dependencies": {
+│     "ai": "^6.0.0",
+│     "@ai-sdk/openai": "^2.0.0",
+│     "@ai-sdk/anthropic": "^2.0.0",
+│     "@ai-sdk/gateway": "^1.0.0",
+│     "zod": "^3.x",
+│     "next": "^16",
+│     "react": "^19"
+│   }
+├── app/
+│   ├── api/chat/route.ts            (streamText + tools, runtime='edge')
+│   ├── api/research/route.ts        (researchAgent.stream, runtime='nodejs')
+│   ├── chat/page.tsx                (useChat client component)
+│   └── components/
+│       └── ApprovalPrompt.tsx       (Human-in-the-loop UI)
+├── agents/
+│   ├── support.ts                   (supportAgent definition)
+│   └── research.ts                  (researchAgent definition + ToolLoopAgent)
+├── tools/
+│   ├── lookupOrder.ts
+│   ├── sendEmail.ts                 (requiresApproval: true)
+│   └── search.ts
+├── instrumentation.ts               (OTel + Honeycomb)
+├── .env.local
+│   AI_GATEWAY_API_KEY=...           (Vercel AI Gateway)
+│   HONEYCOMB_API_KEY=...
+└── vercel.json
+    {
+      "functions": {
+        "app/api/research/route.ts": { "maxDuration": 300 }  (5 min for agent)
+      }
+    }</code></pre>
+        </div>
+
+        <h3>核心代码骨架</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// agents/support.ts
+import { Agent, tool } from 'ai';
+import { gateway } from '@ai-sdk/gateway';
+import { z } from 'zod';
+import * as supportTools from '@/tools/support';
+
+export const supportAgent = new Agent({
+  model: gateway('anthropic/claude-sonnet-4-6'),  // 通过 Gateway
+  system: COMPANY_SYSTEM_PROMPT,  // 长 prompt → 自动 prompt caching by Gateway
+  tools: {
+    lookupOrder: supportTools.lookupOrder,
+    lookupCustomer: supportTools.lookupCustomer,
+    refundOrder: supportTools.refundOrder,  // requiresApproval: true
+    sendEmail: supportTools.sendEmail,      // requiresApproval: true
+  },
+});
+
+// app/api/chat/route.ts
+import { supportAgent } from '@/agents/support';
+import { convertToModelMessages } from 'ai';
+
+export const runtime = 'edge';
+export const maxDuration = 60;
+
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+
+  const result = supportAgent.stream({
+    messages: convertToModelMessages(messages),
+    experimental_telemetry: {
+      isEnabled: true,
+      functionId: 'support-chat',
+      metadata: { sessionId: messages[0].id },
+    },
+  });
+
+  return result.toUIMessageStreamResponse();
+}
+
+// app/chat/page.tsx
+'use client';
+import { useChat } from 'ai/react';
+import { ApprovalPrompt } from '@/components/ApprovalPrompt';
+
+export default function ChatPage() {
+  const { messages, sendMessage, respondToApproval } = useChat({
+    api: '/api/chat',
+  });
+
+  return (
+    &lt;div&gt;
+      {messages.map((m) =&gt; (
+        &lt;div key={m.id}&gt;
+          &lt;strong&gt;{m.role}:&lt;/strong&gt;
+          {m.parts.map((part, i) =&gt; {
+            if (part.type === 'text') return &lt;span key={i}&gt;{part.text}&lt;/span&gt;;
+            if (part.type === 'tool-refundOrder' &amp;&amp; part.state === 'pending-approval') {
+              return &lt;ApprovalPrompt key={i} part={part} respond={respondToApproval} /&gt;;
+            }
+            if (part.type === 'tool-lookupOrder') {
+              return &lt;OrderCard key={i} {...part} /&gt;;
+            }
+            return null;
+          })}
+        &lt;/div&gt;
+      ))}
+      &lt;ChatInput onSend={sendMessage} /&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>cost 优化清单（按 ROI 排序）</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>1. 模型分级 (省 50-80% cost)
+   ├─ Haiku 4.5 跑路由 / 分类 / 简单总结
+   ├─ Sonnet 4.6 跑核心对话 / agent
+   └─ Opus 4.7 / o1 仅用于复杂推理
+
+2. Prompt Caching (省 60-80% on repeat)
+   ├─ Anthropic cacheControl: { type: 'ephemeral' }
+   └─ AI Gateway 自动启用
+
+3. 限制 maxSteps (避免 agent 失控)
+   └─ ToolLoopAgent maxSteps: 10
+
+4. 缓存常见 query (Redis / KV)
+   └─ FAQ / 静态分类 → 完全 cache 化响应
+
+5. AI Gateway budget controls
+   └─ 月度上限 + per-user rate limit
+
+6. 监控 token usage 异常
+   └─ OTel + alert: 单次调用 &gt; 50k tokens / 用户单日 &gt; $5
+
+7. 精简 system prompt
+   ├─ 移除冗余示例
+   └─ 用 prompt caching 代替"重发 examples"
+
+8. 选 model 时考虑 context window
+   └─ 不要为了 "更稳" 都用 200k context model</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>12 个陷阱清单（收束）</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · v5 自定义后端没适配 SSE 协议</div>
+          <p>FastAPI / Python / 自建后端用 v5 useChat 收不到流。<strong>修复</strong>：用官方 Python adapter 或手写 SSE 响应（详见 P2.2）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · UIMessage 塞 metadata 给 LLM</div>
+          <p>把要发给 LLM 的信息放 metadata（不会被发）。<strong>修复</strong>：明确"前端展示用 metadata；发给 LLM 用 parts"。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · Tool execute 抛错没处理</div>
+          <p>整个 chat 死。<strong>修复</strong>：在 execute 内 try/catch（return error 对象）；或让它抛（SDK 自动作为 tool result 喂回 LLM）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · streamUI 在 Client Component 调</div>
+          <p>报错。<strong>修复</strong>：streamUI 必须在 Server Action / Route Handler 调，client 通过 server action 触发。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · Edge runtime 跑长 agent</div>
+          <p>25s timeout 不够。<strong>修复</strong>：用 Node runtime（maxDuration 15min）或拆任务进 queue。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · Tool schema 用 z.any()</div>
+          <p>LLM 不知传什么 → 输出可能任何东西。<strong>修复</strong>：精确 schema + 每个字段 .describe('...')。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 混用 v4 v5 API</div>
+          <p>类型不兼容 / 协议错。<strong>修复</strong>：全升 v5+；按 v5 升级文档改。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 8 · AI Gateway 没设 budget</div>
+          <p>月底惊喜账单。<strong>修复</strong>：dashboard 设月度 budget + alert。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 9 · 长 system prompt 没用 prompt caching</div>
+          <p>token 账单膨胀 5-10x。<strong>修复</strong>：开 Anthropic / OpenAI 各自 prompt caching；或用 AI Gateway 自动启用。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 10 · 敏感 tool 没 requiresApproval</div>
+          <p>LLM silent 删除 / 发邮件 / 付款。<strong>修复</strong>：所有"修改 / 发送 / 删除 / 付款"类 tool 加 <code>requiresApproval: true</code>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 11 · useChat 初始 messages 没设</div>
+          <p>每次刷新丢历史。<strong>修复</strong>：通过 <code>initialMessages</code> 注入（从 server / localStorage / DB 读）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 12 · 漏 convertToModelMessages</div>
+          <p>v5+ 必须把 UIMessage[] 转 ModelMessage[]。<strong>修复</strong>：<code>messages: convertToModelMessages(messages)</code>。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读 + 2027 展望</span></h2>
+
+        <h3>2027 展望</h3>
+
+        <ul>
+          <li><strong>v7 stable release</strong>：WorkflowAgent + durable execution 进生产</li>
+          <li><strong>MCP 在 Vercel 一等公民</strong>（不再 experimental_*）</li>
+          <li><strong>多 agent orchestration 标准化</strong>：subagent 跨 SDK 互通模式</li>
+          <li><strong>模型分级 + AI Gateway 成默认实践</strong>：新项目 day-0 设置</li>
+          <li><strong>provider built-in tools 大幅扩张</strong>：web_search / file_search / computer_use 等</li>
+          <li><strong>OTel for LLM 标准化</strong>：Langfuse / OpenInference 等格式收敛</li>
+          <li><strong>Edge runtime 长 agent 支持改善</strong>：durable execution 让"长任务跑 edge"成可能</li>
+        </ul>
+
+        <h3>本主题以外的关联主题</h3>
+
+        <ul>
+          <li><a href="../../tanstack-query/index.html">TanStack Query / SWR 主题</a> —— streamedQuery 与 AI SDK 流式协议同源</li>
+          <li><a href="../../next/index.html">Next.js 主题</a> —— RSC + Server Actions + Edge runtime</li>
+          <li><a href="../../react/index.html">React 主题</a> —— RSC + use API + Suspense</li>
+          <li><a href="../../http/index.html">HTTP 主题</a> —— SSE / fetch streams 协议层根因</li>
+          <li><a href="../../typescript/index.html">TypeScript 主题</a> —— Zod schema + 泛型推导</li>
+          <li><a href="../../testing/index.html">测试主题</a> —— MSW 网络层 mock</li>
+          <li><a href="../../bun/index.html">Bun 主题</a> —— Bun.serve 流式部署</li>
+        </ul>
+
+        <h3>规范一手清单</h3>
+
+        <ul>
+          <li><a href="https://ai-sdk.dev/docs" target="_blank" rel="noopener">Vercel AI SDK 官方文档（v6 主线）</a></li>
+          <li><a href="https://ai-sdk.dev/v7/docs" target="_blank" rel="noopener">Vercel AI SDK v7 canary</a></li>
+          <li><a href="https://vercel.com/blog/ai-sdk-5" target="_blank" rel="noopener">AI SDK 5 设计文章</a></li>
+          <li><a href="https://vercel.com/blog/ai-sdk-6" target="_blank" rel="noopener">AI SDK 6 设计文章</a></li>
+          <li><a href="https://vercel.com/blog/a-new-programming-model-for-durable-execution" target="_blank" rel="noopener">Durable execution 设计文章</a></li>
+          <li><a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK overview</a></li>
+          <li><a href="https://github.com/anthropics/claude-agent-sdk-python" target="_blank" rel="noopener">claude-agent-sdk-python</a></li>
+          <li><a href="https://github.com/anthropics/claude-agent-sdk-typescript" target="_blank" rel="noopener">claude-agent-sdk-typescript</a></li>
+          <li><a href="https://modelcontextprotocol.io" target="_blank" rel="noopener">Model Context Protocol</a></li>
+          <li><a href="https://www.anthropic.com/engineering" target="_blank" rel="noopener">Anthropic engineering blog</a></li>
+        </ul>
+
+        <h3>工程一手参考</h3>
+
+        <ul>
+          <li><a href="https://platform.openai.com/docs/guides/function-calling" target="_blank" rel="noopener">OpenAI Function Calling docs</a></li>
+          <li><a href="https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/overview" target="_blank" rel="noopener">Anthropic Tool Use docs</a></li>
+          <li><a href="https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching" target="_blank" rel="noopener">Anthropic Prompt Caching docs</a></li>
+          <li><a href="https://vercel.com/docs/ai-gateway" target="_blank" rel="noopener">Vercel AI Gateway 文档</a></li>
+          <li><a href="https://www.everydev.ai/p/blog-typescript-agent-frameworks-in-2026-loop-runtime-sandbox" target="_blank" rel="noopener">EveryDev · TS Agent Frameworks 2026</a></li>
+          <li><a href="https://github.com/vercel/ai/issues/14011" target="_blank" rel="noopener">GitHub issue · v7 跟踪</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../06-engineering/01-engineering.html">
+            <span class="label">← 上一章</span>
+            <span class="title">工程化与生产</span>
+          </a>
+          <a class="next" href="../index.html">
+            <span class="label">主题首页 ↑</span>
+            <span class="title">AI SDK 深度学习</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

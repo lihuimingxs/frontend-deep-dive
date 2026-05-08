@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MCP 协议在两边的位置 · P5.2 · AI SDK 深度学习</title>
+    <meta name="description" content="MCP（Model Context Protocol）是 Anthropic 主导的开放标准，2026 已成事实工具接口标准。这一章把 MCP 协议核心（client / server / JSON-RPC over stdio/HTTP/WebSocket）+ 跨实现互通（Cursor / Claude Code / VS Code 等）+ 在 Claude Agent SDK（中心地位）和 Vercel AI SDK（experimental_createMCPClient）的不同位置 + in-process MCP server 工程价值讲清。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%237c3aed'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EAI%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>AI SDK 深度学习</span><span class="site-title-badge" style="background: #7c3aed; color: #fff">AI</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P5 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P5 · Claude Agent SDK + MCP</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-claude-agent.html">01 · Claude Agent SDK + 跨范式对比</a></li>
+          <li><a href="02-mcp.html" class="active">02 · MCP 协议在两边的位置</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">AI SDK</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P5 · Claude Agent SDK + MCP</a><span class="breadcrumb-sep">/</span>
+          <span>02 · MCP 协议</span>
+        </nav>
+        <h1>MCP 协议在两边的位置 + Vercel 里用 MCP 的姿势</h1>
+        <p class="lead">
+          MCP（Model Context Protocol）是 Anthropic 主导的开放标准，2026 已成事实工具接口标准。Cursor / Claude Code / VS Code / Cloudflare AI 等都已实现。这一章把 MCP 协议核心、生态现状（上千个公开 MCP server）、在 Claude Agent SDK（中心地位）和 Vercel AI SDK（experimental）的不同位置讲清。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 读过 P5.1（Claude Agent SDK）</span>
+          <span><strong>主要来源</strong> modelcontextprotocol.io（官方规范）+ Anthropic engineering blog + Cursor / VS Code MCP 实现 + Vercel AI SDK MCP 文档（experimental）</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>MCP（Model Context Protocol）</strong>：Anthropic 主导的开放标准（2024-11 公开），定义"LLM ↔ 外部工具 / 数据源"的接口协议。<strong>不是 Anthropic 专属</strong>，是开放标准（类似 LSP / Language Server Protocol 之于代码编辑器）。</li>
+          <li><strong>MCP 三个核心概念</strong>：(a) <strong>Tools</strong>（agent 能调用的函数）；(b) <strong>Resources</strong>（数据源 / 文件 / DB 等只读数据）；(c) <strong>Prompts</strong>（预定义 prompt 模板）。</li>
+          <li><strong>MCP 架构</strong>：<strong>MCP Server</strong>（暴露 tools / resources / prompts）+ <strong>MCP Client</strong>（消费）。通信走 <strong>JSON-RPC</strong> over stdio / HTTP / WebSocket。</li>
+          <li><strong>2026 生态</strong>：上千个公开 MCP server（GitHub / Slack / Linear / Notion / 各种数据库 / 浏览器自动化 / 文件系统 / etc.）。<strong>已是 LLM 应用接外部工具的事实标准</strong>。</li>
+          <li><strong>跨实现互通</strong>：同一个 GitHub MCP server 可被 Cursor / Claude Code / VS Code Continue / Cloudflare AI / Vercel AI SDK / 自建 LLM 应用消费 —— <strong>写一次，到处用</strong>。</li>
+          <li><strong>Claude Agent SDK 里的 MCP</strong>：<strong>中心地位</strong>。SDK 内置 MCP client；声明 MCP server 即可用；in-process MCP server（2026-05 起，自定义工具不需要单独进程）。</li>
+          <li><strong>Vercel AI SDK 里的 MCP</strong>：<strong>experimental_createMCPClient</strong>（仍 experimental，2026 状态）。把 MCP tools 转成 Vercel AI SDK tool 定义，喂给 streamText / Agent。<strong>不是中心地位但能用</strong>。</li>
+          <li><strong>2026 vs 2027 展望</strong>：2026 MCP 已 de facto 标准但 Vercel 集成仍 experimental；2027（推测）Vercel 把 MCP 提升到一等公民。<strong>MCP 不会消失，反而扩大</strong>。</li>
+          <li><strong>2026 强观点</strong>：自建 LLM 应用的工具接口<strong>优先选 MCP</strong>（不要再自定义 tool calling 协议）；选自家工具实现时用 <strong>in-process MCP server</strong>（轻量 + 部署简单）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>MCP 协议核心</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>┌─────────────────────────────────────────────────┐
+│  LLM Application (Claude Code / Cursor / etc.)   │
+│                                                   │
+│  ┌────────────────────────────────────────────┐ │
+│  │  MCP Client (内置)                          │ │
+│  │  - 发现 tools / resources / prompts          │ │
+│  │  - 调用 tool / 读 resource / 用 prompt        │ │
+│  └────────────────────┬─────────────────────────┘ │
+│                       │ JSON-RPC                  │
+└───────────────────────┼─────────────────────────┘
+                        │
+                        │ stdio / HTTP / WebSocket
+                        │
+┌───────────────────────▼─────────────────────────┐
+│  MCP Server (third-party / 自建)                  │
+│                                                   │
+│  暴露:                                              │
+│  - Tools: list_repos, create_pr, comment_pr, ...  │
+│  - Resources: file://docs.md, db://users/*        │
+│  - Prompts: refactor-prompt, review-prompt, ...   │
+└─────────────────────────────────────────────────┘</code></pre>
+        </div>
+
+        <h3>三个核心概念</h3>
+
+        <h4>Tools（agent 能调用的函数）</h4>
+
+        <p>类似 OpenAI Function Calling 的 tools，但<strong>定义和调用走 MCP 协议</strong>。MCP server 启动时通告"我有这些 tools"；client（LLM 应用）拿到列表后让 LLM 选用。</p>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// MCP server 通告的 tool（JSON-RPC tools/list 响应）
+{
+  "tools": [
+    {
+      "name": "create_pr",
+      "description": "Create a pull request",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "owner": { "type": "string" },
+          "repo": { "type": "string" },
+          "title": { "type": "string" },
+          "body": { "type": "string" },
+          "head": { "type": "string" },
+          "base": { "type": "string" }
+        },
+        "required": ["owner", "repo", "title", "head", "base"]
+      }
+    },
+    // ...更多 tools
+  ]
+}</code></pre>
+        </div>
+
+        <h4>Resources（数据源）</h4>
+
+        <p>Resources 是<strong>只读数据</strong>，可被 LLM 读取但不可调用。常见 resources：文件 / DB 表 / API endpoint / 文档。</p>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">{
+  "resources": [
+    {
+      "uri": "file:///workspace/README.md",
+      "name": "README",
+      "mimeType": "text/markdown"
+    },
+    {
+      "uri": "db://users/active",
+      "name": "Active users",
+      "mimeType": "application/json"
+    }
+  ]
+}</code></pre>
+        </div>
+
+        <h4>Prompts（预定义 prompt 模板）</h4>
+
+        <p>Prompts 是<strong>可被复用的 prompt 模板</strong>。MCP server 提供 "review-pr" / "refactor" / "explain-code" 等模板，client 应用直接用。</p>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">{
+  "prompts": [
+    {
+      "name": "review-pr",
+      "description": "Review a pull request",
+      "arguments": [
+        { "name": "pr_url", "type": "string", "required": true }
+      ]
+    }
+  ]
+}</code></pre>
+        </div>
+
+        <h3>JSON-RPC 通信</h3>
+
+        <p>MCP 用 <strong>JSON-RPC 2.0</strong> 作为通信协议。三种 transport：</p>
+
+        <ul>
+          <li><strong>stdio</strong>：进程间通信。MCP server 是子进程，与 client 通过 stdin/stdout 交换 JSON-RPC 消息。<strong>本地最常用</strong>。</li>
+          <li><strong>HTTP</strong>（含 SSE）：远程 MCP server。client 通过 HTTP POST 调 RPC，response 走 SSE 流式返回</li>
+          <li><strong>WebSocket</strong>：双向远程</li>
+        </ul>
+
+        <h3>2026 生态：上千个公开 MCP server</h3>
+
+        <p>2024-11 MCP 公开后生态快速扩张。2026 年公开的 MCP server 包含但不限于：</p>
+
+        <ul>
+          <li><strong>开发工具</strong>：GitHub MCP（issues / PRs / file system）/ GitLab / Bitbucket / Linear / Jira</li>
+          <li><strong>通信</strong>：Slack / Discord / Teams</li>
+          <li><strong>文档</strong>：Notion / Confluence / Obsidian</li>
+          <li><strong>数据库</strong>：PostgreSQL / MySQL / Redis / SQLite / MongoDB</li>
+          <li><strong>云服务</strong>：AWS / GCP / Cloudflare / Vercel</li>
+          <li><strong>浏览器自动化</strong>：Playwright / Puppeteer 包装</li>
+          <li><strong>文件系统</strong>：本地文件 / S3 / R2</li>
+          <li><strong>专门工具</strong>：Sentry / DataDog / Stripe / Resend</li>
+        </ul>
+
+        <h3>跨实现互通：写一次到处用</h3>
+
+        <p>关键好处：<strong>同一个 MCP server</strong> 可被多个 LLM 应用消费。例如 GitHub MCP server：</p>
+
+        <ul>
+          <li><strong>Cursor</strong>：在 Cursor 配置里加 GitHub MCP → 用户 chat 时 LLM 可调 GitHub tools</li>
+          <li><strong>Claude Code</strong>：claude-code 配置加 → 在 CLI 里用 GitHub tools</li>
+          <li><strong>VS Code Continue / Cline</strong>：装 MCP 扩展加 → 编辑器内 LLM agent 用 GitHub tools</li>
+          <li><strong>Cloudflare AI</strong>：在 Cloudflare AI Gateway 加 → workers 调 LLM 时支持 GitHub tools</li>
+          <li><strong>Vercel AI SDK</strong>：experimental_createMCPClient 加 → 自建 web 应用用 GitHub tools</li>
+        </ul>
+
+        <p>这是 MCP 的<strong>核心价值</strong>—— 跨实现互通让生态成网络效应。</p>
+
+        <h3>Claude Agent SDK 里的 MCP（中心地位）</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { ClaudeAgent } from '@anthropic-ai/claude-agent-sdk';
+
+const agent = new ClaudeAgent({
+  systemPrompt: 'You are a coding assistant.',
+
+  // External MCP servers（subprocess 跑）
+  mcpServers: [
+    {
+      command: 'github-mcp-server',  // 全局安装的 MCP server CLI
+      args: ['--token', process.env.GITHUB_TOKEN!],
+    },
+    {
+      command: 'slack-mcp-server',
+      args: ['--workspace', 'mycompany'],
+    },
+    {
+      // HTTP MCP server
+      url: 'https://mcp.example.com',
+      headers: { Authorization: `Bearer ${apiKey}` },
+    },
+  ],
+
+  // SDK 自动:
+  // 1. 启动 stdio MCP servers (子进程)
+  // 2. 通过 JSON-RPC 拿 tools / resources / prompts
+  // 3. 把 tools 注册到 agent，LLM 能用
+  // 4. tool 调用时自动转 JSON-RPC 调到 MCP server
+});</code></pre>
+        </div>
+
+        <h3>In-process MCP server（2026-05 改进）</h3>
+
+        <p>以前自定义工具要单独进程跑 MCP server。2026-05 起 Claude SDK 支持<strong>in-process MCP server</strong>：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { ClaudeAgent, createInProcessMCPServer } from '@anthropic-ai/claude-agent-sdk';
+
+const customServer = createInProcessMCPServer({
+  name: 'my-custom-tools',
+
+  tools: [
+    {
+      name: 'lookupOrder',
+      description: 'Look up order by ID',
+      inputSchema: {
+        type: 'object',
+        properties: { orderId: { type: 'string' } },
+        required: ['orderId'],
+      },
+      handler: async ({ orderId }) =&gt; await db.order.findUnique({ where: { id: orderId } }),
+    },
+  ],
+
+  resources: [
+    {
+      uri: 'config://app/feature-flags',
+      handler: async () =&gt; await db.featureFlag.findMany(),
+    },
+  ],
+
+  prompts: [
+    {
+      name: 'customer-greeting',
+      arguments: [{ name: 'name', required: true }],
+      handler: ({ name }) =&gt; `Hello ${name}, how can I help you today?`,
+    },
+  ],
+});
+
+const agent = new ClaudeAgent({
+  systemPrompt: '...',
+  mcpServers: [customServer],  // 直接传 in-process server
+});</code></pre>
+        </div>
+
+        <p>好处：</p>
+
+        <ul>
+          <li><strong>性能</strong>：进程内调用，没 IPC 开销</li>
+          <li><strong>部署</strong>：单一进程 / 容器，不用管理多个 subprocess</li>
+          <li><strong>开发体验</strong>：直接调试，不用 attach 到 subprocess</li>
+          <li><strong>仍是 MCP 协议</strong>：内部实现差异，对外接口仍是 MCP（如果以后想改成外部 server，移走代码即可）</li>
+        </ul>
+
+        <h3>Vercel AI SDK 里的 MCP（experimental）</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { experimental_createMCPClient } from 'ai';
+import { streamText } from 'ai';
+
+// 启动 MCP client，连到 MCP server
+const mcpClient = await experimental_createMCPClient({
+  transport: {
+    type: 'stdio',
+    command: 'github-mcp-server',
+    args: ['--token', process.env.GITHUB_TOKEN!],
+  },
+});
+
+// 拿 MCP server 的 tools，转成 Vercel AI SDK tool 定义
+const tools = await mcpClient.tools();
+
+// 用在 streamText / Agent 里
+const result = await streamText({
+  model: openai('gpt-4o'),
+  tools,
+  prompt: 'List my GitHub PRs',
+});
+
+// 用完关掉
+await mcpClient.close();</code></pre>
+        </div>
+
+        <p>2026 状态：</p>
+
+        <ul>
+          <li>仍是 <code>experimental_*</code> 命名（API 可能改）</li>
+          <li>支持 stdio / HTTP transports</li>
+          <li>不支持 resources / prompts（仅 tools） —— 可能在后续版本加</li>
+          <li>没有 in-process MCP server 概念（与 Claude SDK 区别）</li>
+        </ul>
+
+        <p>2027 推测：Vercel 把 MCP 提升到一等公民（不再 experimental），可能也支持 in-process 模式。</p>
+
+        <h3>选型：什么时候用 MCP vs 自定义 tool</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>场景</th>
+              <th>选择</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>第三方服务（GitHub / Slack / Linear / 等）</td>
+              <td><strong>用现成 MCP server</strong>（节省开发）</td>
+            </tr>
+            <tr>
+              <td>自家业务工具（lookupOrder / sendEmail / 等）</td>
+              <td><strong>用 in-process MCP server</strong>（Claude SDK）或直接 tool 定义（Vercel）</td>
+            </tr>
+            <tr>
+              <td>跨多个 LLM 应用复用同一组 tools</td>
+              <td><strong>必须用 MCP</strong>（standalone MCP server）</td>
+            </tr>
+            <tr>
+              <td>仅一个 LLM 应用用 + Vercel 生态</td>
+              <td>直接 tool 定义即可，不必 MCP</td>
+            </tr>
+            <tr>
+              <td>仅一个 LLM 应用用 + Claude SDK 生态</td>
+              <td>in-process MCP server（与未来扩展兼容）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · Claude Code 配 GitHub MCP</h3>
+          <p>用户在 Claude Code CLI 里 chat："列出我所有 open PR"→ Claude Code 调 GitHub MCP server 的 list_prs tool → 返回 PR 列表。<strong>用户零代码</strong>，仅需要在配置里加 GitHub MCP。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · Cursor 配 Linear / Slack MCP</h3>
+          <p>开发者在 Cursor 里："把这个 bug 创建到 Linear" → Cursor 调 Linear MCP create_issue tool。"通知 #engineering channel" → Slack MCP send_message。<strong>编辑器变成多服务 hub</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 自建 web app 接 GitHub MCP</h3>
+          <p>用 Vercel AI SDK + experimental_createMCPClient + GitHub MCP server。前端 chat 提供"GitHub 助手"，用户聊天调 GitHub tools。<strong>不需要自己实现 GitHub API 包装</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 自家业务工具发布为 MCP server 共享</h3>
+          <p>公司内部"订单查询 / 客户管理"工具 → 写成 standalone MCP server → 部署到内网 → 多个 AI 应用（客服 chat / 分析 dashboard / Slack bot）共用。<strong>"内部 MCP server library"成为 2026-2027 公司架构新模式</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 E · Cloudflare AI Gateway + MCP</h3>
+          <p>Cloudflare AI Gateway 集成 MCP（2026），Workers 调 LLM 时直接通过 Gateway 用 MCP servers。无需 Worker 内部实现 MCP client。<strong>边缘 LLM 应用接 MCP 工具的简化路径</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 F · 自建 in-process MCP server 替代散落 tool 定义</h3>
+          <p>项目里散落 20+ tool 定义在不同文件。<strong>refactor</strong>：合并成一个 in-process MCP server（按业务领域分组），agent 里只声明 mcpServers: [orderServer, userServer, billingServer]。代码组织更清晰 + 未来若想发布为 standalone MCP server 也容易。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：MCP 实战</span></h2>
+
+        <h3>Claude SDK 接现成 GitHub MCP</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { ClaudeAgent, query } from '@anthropic-ai/claude-agent-sdk';
+
+const agent = new ClaudeAgent({
+  systemPrompt: 'You are a GitHub assistant.',
+  mcpServers: [
+    {
+      command: 'github-mcp-server',
+      args: ['--token', process.env.GITHUB_TOKEN!],
+    },
+  ],
+});
+
+for await (const message of query({
+  agent,
+  prompt: 'List my open PRs in vercel/ai repo',
+})) {
+  console.log(message);
+}</code></pre>
+        </div>
+
+        <h3>Vercel AI SDK 接同一个 GitHub MCP</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { experimental_createMCPClient as createMCPClient, streamText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+const mcpClient = await createMCPClient({
+  transport: {
+    type: 'stdio',
+    command: 'github-mcp-server',
+    args: ['--token', process.env.GITHUB_TOKEN!],
+  },
+});
+
+const tools = await mcpClient.tools();
+
+const result = await streamText({
+  model: openai('gpt-4o'),
+  system: 'You are a GitHub assistant.',
+  tools,
+  prompt: 'List my open PRs in vercel/ai repo',
+});
+
+for await (const chunk of result.textStream) {
+  process.stdout.write(chunk);
+}
+
+await mcpClient.close();</code></pre>
+        </div>
+
+        <h3>自建 in-process MCP server（Claude SDK）</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { ClaudeAgent, createInProcessMCPServer } from '@anthropic-ai/claude-agent-sdk';
+
+// orderServer.ts
+export const orderServer = createInProcessMCPServer({
+  name: 'order-management',
+  tools: [
+    {
+      name: 'lookupOrder',
+      description: 'Look up an order',
+      inputSchema: { type: 'object', properties: { orderId: { type: 'string' } } },
+      handler: async ({ orderId }) =&gt; await db.order.findUnique({ where: { id: orderId } }),
+    },
+    {
+      name: 'cancelOrder',
+      description: 'Cancel an order',
+      inputSchema: { /* ... */ },
+      handler: async ({ orderId }) =&gt; await cancelOrder(orderId),
+      requiresApproval: true,  // 敏感操作
+    },
+  ],
+  resources: [
+    {
+      uri: 'orders://recent',
+      handler: async () =&gt; await db.order.findMany({ take: 100, orderBy: { createdAt: 'desc' } }),
+    },
+  ],
+});
+
+// agent.ts
+const agent = new ClaudeAgent({
+  systemPrompt: '...',
+  mcpServers: [orderServer],
+});</code></pre>
+        </div>
+
+        <h3>自建 standalone MCP server（其他 LLM 应用也能用）</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// my-mcp-server.ts (standalone Node 进程)
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+
+const server = new Server(
+  { name: 'order-management', version: '1.0.0' },
+  { capabilities: { tools: {} } }
+);
+
+server.setRequestHandler(ListToolsRequestSchema, async () =&gt; ({
+  tools: [
+    {
+      name: 'lookupOrder',
+      description: 'Look up an order',
+      inputSchema: {
+        type: 'object',
+        properties: { orderId: { type: 'string' } },
+        required: ['orderId'],
+      },
+    },
+  ],
+}));
+
+server.setRequestHandler(CallToolRequestSchema, async (req) =&gt; {
+  if (req.params.name === 'lookupOrder') {
+    const order = await db.order.findUnique({
+      where: { id: req.params.arguments.orderId as string },
+    });
+    return { content: [{ type: 'text', text: JSON.stringify(order) }] };
+  }
+  throw new Error('Unknown tool');
+});
+
+const transport = new StdioServerTransport();
+await server.connect(transport);
+
+// 现在这个 server 能被任意 MCP client 使用 (Claude Code / Cursor / VS Code / Vercel AI SDK / 等)</code></pre>
+        </div>
+
+        <h3>Cursor 配置使用自建 MCP server</h3>
+
+        <div class="code-block">
+          <span class="code-label">json</span>
+          <pre class="code"><code class="lang-json">// ~/.cursor/mcp.json
+{
+  "mcpServers": {
+    "order-management": {
+      "command": "node",
+      "args": ["/path/to/my-mcp-server.js"]
+    },
+    "github": {
+      "command": "github-mcp-server",
+      "args": ["--token", "${env:GITHUB_TOKEN}"]
+    }
+  }
+}
+
+// 现在 Cursor 里 chat 能调 lookupOrder + GitHub tools</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 自建 tool 接口而不用 MCP</div>
+          <p>2026 仍自定义"我的 LLM 调 tool 协议"，导致工具不能被 Cursor / Claude Code 等其他 LLM 应用复用。<strong>修复</strong>：自家工具发布为 MCP server。即使内部用，未来想给其他 AI 应用接也容易。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 期待 Vercel 的 MCP 支持完全等同 Claude SDK</div>
+          <p>Vercel 的 <code>experimental_createMCPClient</code> 仍 experimental + 仅支持 tools（不支持 resources / prompts）+ 没 in-process MCP server。<strong>修复</strong>：(a) Vercel 项目接成熟 MCP server（GitHub / Slack 等）OK；(b) 自建 MCP 中心地位的项目 → 选 Claude Agent SDK；(c) 等 2027 Vercel MCP 提升到一等公民。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · stdio MCP server 在 serverless 跑</div>
+          <p>stdio MCP server 是 subprocess。Vercel Edge Function / Cloudflare Workers 不允许启动 subprocess。<strong>修复</strong>：(a) 用 HTTP transport 的 MCP server（远程跑）；(b) 用 in-process MCP server（仅 Claude SDK，但仍要在能跑 subprocess 的环境）；(c) Edge / serverless 项目暂时仅用 HTTP MCP server。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 期待 MCP 解决所有 tool calling 问题</div>
+          <p>MCP 是<strong>"工具接口标准"</strong>，不是"agent framework"。它不解决 agent loop / state management / observability 等问题。<strong>修复</strong>：MCP 配合 Claude Agent SDK / Vercel AI SDK 用 —— SDK 管 agent loop，MCP 管 tool 接口。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · MCP server 接口设计太"低层"</div>
+          <p>暴露 "execute_sql_query" 这种低层 tool 给 LLM → LLM 容易写错 SQL / 暴露安全问题。<strong>修复</strong>：MCP tools 应该是<strong>业务级</strong>抽象（"lookupCustomer" / "createInvoice"），不是数据库底层 SQL / API endpoint 直通。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · 没监控 MCP server 性能</div>
+          <p>每次 tool 调用走 JSON-RPC（stdio / HTTP）。如果 MCP server 慢 → 整个 agent 慢。<strong>修复</strong>：监控 MCP tool 调用延迟（agent 的 onStep / hooks 里）；发现慢的 server 优化或换 in-process。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 相信任意 MCP server</div>
+          <p>第三方 MCP server 可能是恶意的（exfiltrate 你的数据 / 调危险 API）。<strong>修复</strong>：只用<strong>可信源</strong>的 MCP server（官方 / 大公司 / 经过 review 的开源）；不要给 MCP server 过多权限（API key 最小化 scope）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 8 · 不限制 MCP tool 调用频率</div>
+          <p>MCP server 调用第三方 API（GitHub / Slack / Linear）会消耗 rate limit。LLM 可能 silent 调几十次。<strong>修复</strong>：(a) MCP server 内部限流；(b) agent hooks（PreToolUse）限制调用频率；(c) 监控 + alert。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://modelcontextprotocol.io" target="_blank" rel="noopener">Model Context Protocol 官方</a></li>
+          <li><a href="https://modelcontextprotocol.io/docs/concepts/architecture" target="_blank" rel="noopener">MCP Architecture 文档</a></li>
+          <li><a href="https://modelcontextprotocol.io/examples" target="_blank" rel="noopener">MCP 实例 servers 列表</a></li>
+          <li><a href="https://github.com/modelcontextprotocol/servers" target="_blank" rel="noopener">官方 MCP servers 仓库</a></li>
+          <li><a href="https://platform.claude.com/docs/en/agent-sdk/mcp" target="_blank" rel="noopener">Claude Agent SDK MCP 文档</a></li>
+          <li><a href="https://ai-sdk.dev/docs/ai-sdk-core/mcp-tools" target="_blank" rel="noopener">Vercel AI SDK MCP 文档</a></li>
+          <li><a href="https://www.anthropic.com/news/model-context-protocol" target="_blank" rel="noopener">Anthropic · MCP 公告</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-claude-agent.html">
+            <span class="label">← 上一章</span>
+            <span class="title">Claude Agent SDK + 跨范式对比</span>
+          </a>
+          <a class="next" href="../06-engineering/01-engineering.html">
+            <span class="label">下一章 →</span>
+            <span class="title">工程化与生产</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

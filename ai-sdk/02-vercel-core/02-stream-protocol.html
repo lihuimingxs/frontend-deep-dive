@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stream Protocol 演化 · v4 NDJSON → v5 SSE · P2.2 · AI SDK 深度学习</title>
+    <meta name="description" content="Vercel AI SDK Stream Protocol 三代演化：v4 自家 Data Stream Protocol（NDJSON）→ v5 切到 SSE 标准 + UIMessage / ModelMessage 二分法 + tool-invocations type-specific parts → v6 维持 v5 协议小调整。讲清 v5 升级最大迁移点（自定义后端必须重写）+ 协议层根因（链回 HTTP 主题 P6.1）+ UIMessage / ModelMessage 二分的工程价值。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%237c3aed'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EAI%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>AI SDK 深度学习</span><span class="site-title-badge" style="background: #7c3aed; color: #fff">AI</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · Vercel AI SDK 心智</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-architecture.html">01 · 三层架构 + 四件套</a></li>
+          <li><a href="02-stream-protocol.html" class="active">02 · Stream Protocol 演化</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">AI SDK</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · Vercel AI SDK 心智</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Stream Protocol 演化</span>
+        </nav>
+        <h1>Stream Protocol 演化 · v4 NDJSON → v5 SSE + UIMessage / ModelMessage</h1>
+        <p class="lead">
+          v5 是 Vercel AI SDK 历史上最大的 breaking change。流式协议从自家 Data Stream Protocol（NDJSON）切到 W3C SSE 标准 + UIMessage / ModelMessage 二分法 + tool-invocations type-specific parts。这一章把三代协议演化、v5 升级最大迁移点（自定义后端必须重写）、UIMessage / ModelMessage 二分的工程价值讲清。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 读过 P2.1（三层架构 + 四件套）+ 看过 useChat 至少一次</span>
+          <span><strong>主要来源</strong> vercel.com/blog/ai-sdk-5（v5 设计文章）+ ai-sdk.dev/docs/ai-sdk-ui/stream-protocol + GitHub Issues v5 升级讨论 + HTTP 主题 P6.1（流式协议层根因）</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <ol>
+          <li>Vercel AI SDK 流式协议三代：<strong>v4 自家 Data Stream Protocol（NDJSON）→ v5 SSE 标准 → v6 维持 v5 协议小调整</strong>。</li>
+          <li><b>v4 协议</b>：自家 NDJSON-like 格式，每行 <code>&lt;type&gt;:&lt;json&gt;\n</code>。类型符 <code>0:</code> = text delta / <code>2:</code> = data / <code>3:</code> = error / <code>9:</code> = tool call / <code>a:</code> = tool result / <code>e:</code> = finish reason 等。<strong>优点</strong>：自定义灵活；<strong>缺点</strong>：非标准，与 OpenAI / Anthropic 各自的流式协议不互通，浏览器 EventSource API 不能直接用。</li>
+          <li><b>v5 协议（2025-08）</b>：切到 W3C SSE 标准（<code>data: ...\n\n</code>）。但<strong>SSE 数据 payload 仍是 Vercel 自家的 JSON 结构</strong>（含 type / id / 等字段）—— 不是 OpenAI / Anthropic 原生 streaming。优点：标准协议；中间盒兼容性好；与生态其他 SSE 工具互通。</li>
+          <li><b>v6 维持 v5 协议</b>，少量字段调整（spec 改进）。从 v5 升 v6 协议层兼容。</li>
+          <li><b>UIMessage / ModelMessage 二分法</b>（v5 起最大概念变更）：<strong>UIMessage</strong> 是前端 state source of truth（含完整消息历史 + metadata + tool 结果 + 各种 attachment part）；<strong>ModelMessage</strong> 是发给 LLM 的精简表示（OpenAI / Anthropic 各自能理解的格式）。</li>
+          <li><b>关键洞察</b>：以前一份 message 同时承担"前端展示"和"LLM context"两个角色 → metadata（toast / debug / 时间戳）也喂给 LLM 浪费 token + 污染 context。v5 把它们解耦。</li>
+          <li><b>tool-invocations type-specific parts</b>（v5 起）：v4 是 <code>{ type: 'tool-invocation', toolName: 'getWeather', ... }</code>；v5+ 是 <code>{ type: 'tool-getWeather', ... }</code>。<strong>好处</strong>：TypeScript 能精确推断每个 tool 的输入输出类型 + 渲染时按 tool name 分支更直观。</li>
+          <li><b>v5 升级最大迁移点</b>：自定义后端（FastAPI / Python / 自建）必须适配新协议。GitHub Issues 中大量"我的 FastAPI 后端用 v5 useChat 出问题"是这类。Next.js Route Handler / Vercel Edge Function 用户感知小。</li>
+          <li><b>底层 wire 走的是 HTTP 主题 P6.1 讲的</b> chunked / HTTP/2 DATA / HTTP/3 DATA frame；应用层是 SSE format（v5+）；浏览器侧用 fetch + ReadableStream（不是 EventSource API，因为需要 POST + 自定义 headers + cancel 控制）。详见 <a href="../../http/06-streaming/01-streaming.html">HTTP 主题 P6.1</a>。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>v4 自家 Data Stream Protocol（NDJSON）</h3>
+
+        <p>2024 年 Vercel AI SDK v3-v4 时代用自家协议：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code># v4 wire 长这样（NDJSON-like）：
+0:"Hello"\n
+0:" world"\n
+2:[{"customMetric": 42}]\n
+9:{"toolCallId":"call_1","toolName":"getWeather","args":{"city":"NYC"}}\n
+a:{"toolCallId":"call_1","result":{"temp":72}}\n
+e:{"finishReason":"stop","usage":{"promptTokens":10,"completionTokens":20}}\n
+
+# 类型符约定：
+0: text delta（文字片段）
+2: data（应用自定义 data part）
+3: error
+9: tool call
+a: tool result
+e: finish reason + usage
+1: 等其他</code></pre>
+        </div>
+
+        <p>这套协议在 v4 时代<strong>简单且高效</strong>：</p>
+
+        <ul>
+          <li>每行一个 JSON 块 → 易解析</li>
+          <li>NDJSON 格式 → 边收边解（与 fetch + ReadableStream 配合好）</li>
+          <li>类型符 + JSON 组合表达力够（cover text / data / tool / error / finish 等所有事件）</li>
+        </ul>
+
+        <p>但 v4 协议有几个长期问题：</p>
+
+        <ul>
+          <li><strong>非标准</strong>：浏览器原生 EventSource API 不能直接用</li>
+          <li><strong>与生态其他 SSE 工具不互通</strong>：proxy / monitoring / debugging 工具按 SSE 处理，遇到 NDJSON 不识别</li>
+          <li><strong>中间盒兼容性</strong>：某些老 corp proxy 对自定义 content-type 处理奇怪</li>
+        </ul>
+
+        <h3>v5 切到 SSE 标准</h3>
+
+        <p>2025-08 v5 把流式协议切到 W3C SSE 标准（详见 <a href="../../http/06-streaming/01-streaming.html">HTTP 主题 P6.1</a>）：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code># v5+ wire 长这样（SSE）：
+data: {"type":"text-delta","textDelta":"Hello"}\n
+\n
+data: {"type":"text-delta","textDelta":" world"}\n
+\n
+data: {"type":"tool-call","toolCallId":"call_1","toolName":"getWeather","args":{"city":"NYC"}}\n
+\n
+data: {"type":"tool-result","toolCallId":"call_1","result":{"temp":72}}\n
+\n
+data: {"type":"finish","finishReason":"stop","usage":{"promptTokens":10,"completionTokens":20}}\n
+\n
+
+# Content-Type: text/event-stream
+# 每条事件以 "data: " 开头 + \n\n 结尾
+# 数据 payload 仍是 Vercel 自家 JSON 结构（含 type 字段）</code></pre>
+        </div>
+
+        <p>关键点：</p>
+
+        <ul>
+          <li><strong>外层是标准 SSE</strong>：浏览器原生工具能识别（DevTools / proxy / debugging 工具）</li>
+          <li><strong>内层 JSON payload 仍是 Vercel 自家结构</strong>：这不是 OpenAI / Anthropic 原生 streaming 格式</li>
+          <li><strong>仍需要 SDK 解析</strong>：不能简单 <code>new EventSource(url)</code> 收完事 —— 需要 <code>useChat</code> 等 hook 解析 Vercel JSON payload</li>
+        </ul>
+
+        <p>为什么不用纯 EventSource API？</p>
+
+        <ul>
+          <li>EventSource <strong>仅 GET</strong>，但 chat 需要 POST（用户消息在 body）</li>
+          <li>EventSource 不能传 custom headers / 自定义 fetch 选项</li>
+          <li>EventSource 自动重连机制对 chat 不合适（重连后 LLM context 错乱）</li>
+          <li>cancel 控制差</li>
+        </ul>
+
+        <p>所以 SDK 用 <strong>fetch + ReadableStream + 自己解析 SSE 格式</strong>。详见 <a href="../../http/06-streaming/01-streaming.html">HTTP 主题 P6.1</a>。</p>
+
+        <h3>UIMessage / ModelMessage 二分法</h3>
+
+        <p>v5 最大的概念变更。先看以前怎么做：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// v4 时代
+const messages = [
+  { role: 'user', content: 'Hello' },
+  { role: 'assistant', content: 'Hi! How can I help?' },
+  { role: 'user', content: 'Help with order #42' },
+  { role: 'assistant', content: '...', toolInvocations: [...] },
+];
+
+// 这份 messages 既是前端 state，也直接发给 LLM</code></pre>
+        </div>
+
+        <p>问题：前端经常想在 message 上挂额外信息（debug / metadata / 时间戳 / 用户 reaction），但<strong>所有这些信息都会被发给 LLM</strong>，浪费 token + 污染 context。</p>
+
+        <p>v5 解法：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// v5+: UIMessage（前端 state）
+type UIMessage = {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  parts: Array&lt;
+    | { type: 'text'; text: string }
+    | { type: 'tool-getWeather'; toolCallId: string; state: 'partial-call' | 'call' | 'result'; input?: ...; output?: ... }
+    | { type: 'tool-sendEmail'; ... }
+    | { type: 'data-customMetric'; data: ... }    // 应用自定义 data part
+    | { type: 'source'; source: ... }              // RAG citation
+    | { type: 'step-start' | 'step-end' }          // multi-step
+    | ...
+  &gt;;
+  metadata?: {                                      // 完全不发给 LLM
+    debug?: string;
+    timestamp?: number;
+    customField?: any;
+  };
+};
+
+// v5+: ModelMessage（发给 LLM）
+type ModelMessage = {
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string | Array&lt;{ type: 'text'; text: string } | { type: 'tool-call'; ... }&gt;;
+};
+
+// 转换边界
+import { convertToModelMessages } from 'ai';
+
+const modelMessages = convertToModelMessages(uiMessages);
+// SDK 自动：
+// - 提取 parts 里的 text → ModelMessage content
+// - 提取 tool-{name} parts → tool calls + tool results
+// - 丢弃 metadata（不发给 LLM）
+// - 丢弃 data-* parts（应用自定义，不发给 LLM）
+
+const result = await streamText({ model, messages: modelMessages });</code></pre>
+        </div>
+
+        <p>这套设计的工程价值：</p>
+
+        <ul>
+          <li><strong>前端可以塞任意 metadata</strong>，不污染 LLM context</li>
+          <li><strong>LLM 只看到精简的 ModelMessage</strong>，token 用得高效</li>
+          <li><strong>数据流向清晰</strong>：UI 端是 UIMessage 完整状态；server 端调 LLM 时转 ModelMessage</li>
+          <li><strong>tool 输入输出有强类型</strong>（tool-{name} type-specific parts）</li>
+        </ul>
+
+        <h3>tool-invocations type-specific parts</h3>
+
+        <p>v4 → v5 另一个重要变化：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// v4 - 通用 tool-invocation part
+{
+  type: 'tool-invocation',
+  toolInvocation: {
+    state: 'result',
+    toolCallId: 'call_1',
+    toolName: 'getWeather',
+    args: { city: 'NYC' },          // 任意类型
+    result: { temp: 72 },            // 任意类型
+  }
+}
+
+// v5+ - type-specific part
+{
+  type: 'tool-getWeather',           // type 里编码 tool name
+  toolCallId: 'call_1',
+  state: 'result',
+  input: { city: 'NYC' },             // 类型自动推导（基于 tool 定义）
+  output: { temp: 72 },
+}</code></pre>
+        </div>
+
+        <p>好处：</p>
+
+        <ul>
+          <li><strong>TypeScript 类型推导精确</strong>：<code>part.input</code> 自动是 getWeather 的 input 类型</li>
+          <li><strong>渲染时按 tool name 分支更直观</strong>：<code>case 'tool-getWeather': return &lt;WeatherCard /&gt;</code></li>
+          <li><strong>不同 tool 的 part 不会混淆</strong></li>
+        </ul>
+
+        <h3>v5 升级最大迁移点：自定义后端</h3>
+
+        <p>Next.js Route Handler / Vercel Edge Function / Hono / Express + ai SDK 的项目升 v5 几乎无感（SDK 内部已切协议）。</p>
+
+        <p>但<strong>自定义后端</strong>（特别是非 Node 后端）需要适配新协议：</p>
+
+        <ul>
+          <li>FastAPI / Python：要写 SSE 响应（<code>text/event-stream</code> + <code>data: ...\n\n</code> 格式）+ 按 Vercel JSON 结构发 events</li>
+          <li>Go / Rust / Java 后端：同样</li>
+          <li>需要按新协议发 <code>type: 'text-delta'</code> / <code>type: 'tool-call'</code> 等事件</li>
+        </ul>
+
+        <p>GitHub Issues 中大量讨论：FastAPI 用户用 v5 useChat 一开始无法收到流，需要按新协议重写后端。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · Next.js 项目升级 v4 → v5</h3>
+          <p>Next.js Route Handler 用 <code>streamText</code> + 返回 <code>result.toUIMessageStreamResponse()</code> → SDK 自动新协议。前端 useChat 升级到 v5 → 自动使用新协议。<strong>感知极小</strong>。但要注意 messages 里如果用了 v4 的 <code>toolInvocations</code> 字段，要改成 v5 的 parts 数组。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · FastAPI / Python 后端 + 前端 useChat 升级</h3>
+          <p>这是 v5 升级最大的坑。Python 后端必须按新 SSE 协议发响应。Vercel 提供 Python adapter（<code>vercel-ai-sdk-python-rsc</code> / 类似包），但 2026 年仍在演进。<strong>建议</strong>：用 Python adapter；或自己手写 SSE 响应（按 Vercel JSON 格式）；或考虑迁移到 Node 后端。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 前端要塞 metadata 不发给 LLM</h3>
+          <p>典型需求：在 message 上挂"用户 reaction"（赞 / 踩）/ "调试信息" / "前端时间戳" 等。<strong>v5 做法</strong>：放 <code>UIMessage.metadata</code>。前端 state 完整保留，convertToModelMessages 自动丢弃。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 多 tool 的 chat UI</h3>
+          <p>v5 type-specific parts 让多 tool 渲染清晰：<code>case 'tool-getWeather': &lt;WeatherCard input={part.input} output={part.output} /&gt;</code> / <code>case 'tool-sendEmail': &lt;EmailStatus ... /&gt;</code>。每个 tool 一个组件，类型安全。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 E · 自定义 data part 推 progress / 调试信息</h3>
+          <p>后端在流式响应里推自定义 data：<code>writer.write({ type: 'data-progress', data: { step: 2, total: 5 } })</code>。前端收到 part type 是 <code>'data-progress'</code>，渲染进度条。<strong>data part 不发给 LLM</strong>。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：v5 协议实战</span></h2>
+
+        <h3>Next.js Route Handler v5 标准做法</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// app/api/chat/route.ts
+import { streamText, convertToModelMessages, type UIMessage } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+export async function POST(req: Request) {
+  const { messages }: { messages: UIMessage[] } = await req.json();
+
+  const result = streamText({
+    model: openai('gpt-4o'),
+    // 关键：UIMessage[] → ModelMessage[]
+    messages: convertToModelMessages(messages),
+    system: 'You are helpful.',
+  });
+
+  // 关键：toUIMessageStreamResponse() 自动用 v5 SSE 协议
+  return result.toUIMessageStreamResponse();
+}</code></pre>
+        </div>
+
+        <h3>FastAPI 后端适配 v5 SSE 协议（手写）</h3>
+
+        <div class="code-block">
+          <span class="code-label">python</span>
+          <pre class="code"><code class="lang-python"># Python 后端手写 v5 SSE 协议
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+import json
+import openai
+
+app = FastAPI()
+
+@app.post('/api/chat')
+async def chat(req: dict):
+    messages = req['messages']
+    # 把 UIMessage[] 转成 OpenAI 能理解的 messages
+    model_messages = [
+        {'role': m['role'], 'content': extract_text_from_parts(m['parts'])}
+        for m in messages
+    ]
+
+    async def generate():
+        stream = openai.ChatCompletion.create(
+            model='gpt-4o',
+            messages=model_messages,
+            stream=True,
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                # 按 v5 SSE 协议发：data: {JSON}\n\n
+                event = json.dumps({'type': 'text-delta', 'textDelta': delta})
+                yield f'data: {event}\n\n'
+
+        # 结束事件
+        finish = json.dumps({'type': 'finish', 'finishReason': 'stop'})
+        yield f'data: {finish}\n\n'
+
+    return StreamingResponse(generate(), media_type='text/event-stream')
+
+
+def extract_text_from_parts(parts):
+    return ''.join(p['text'] for p in parts if p['type'] == 'text')</code></pre>
+        </div>
+
+        <h3>前端处理 type-specific tool parts</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">import { useChat } from 'ai/react';
+
+function Chat() {
+  const { messages } = useChat({ api: '/api/chat' });
+
+  return (
+    &lt;div&gt;
+      {messages.map((message) =&gt; (
+        &lt;div key={message.id}&gt;
+          &lt;strong&gt;{message.role}&lt;/strong&gt;:
+          {message.parts.map((part, i) =&gt; {
+            switch (part.type) {
+              case 'text':
+                return &lt;span key={i}&gt;{part.text}&lt;/span&gt;;
+
+              case 'tool-getWeather':
+                // TypeScript 自动推导 part.input / part.output 类型
+                return (
+                  &lt;WeatherCard
+                    key={i}
+                    state={part.state}
+                    city={part.input?.city}
+                    weather={part.output}
+                  /&gt;
+                );
+
+              case 'tool-sendEmail':
+                return &lt;EmailStatus key={i} state={part.state} {...part} /&gt;;
+
+              case 'data-progress':
+                return &lt;ProgressBar key={i} step={part.data.step} total={part.data.total} /&gt;;
+
+              case 'source':
+                return &lt;Citation key={i} {...part.source} /&gt;;
+
+              default:
+                return null;
+            }
+          })}
+        &lt;/div&gt;
+      ))}
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>挂 metadata 不污染 LLM context</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 前端 useChat
+const { messages, append } = useChat({ api: '/api/chat' });
+
+// 给 message 加 metadata（不发给 LLM）
+const messageWithMetadata: UIMessage = {
+  id: '1',
+  role: 'user',
+  parts: [{ type: 'text', text: 'Hello' }],
+  metadata: {
+    debug: 'sent from button click',
+    timestamp: Date.now(),
+    userReaction: null,  // 之后用户点赞会更新这个字段
+  },
+};
+
+// 在 server side
+const modelMessages = convertToModelMessages(messages);
+// modelMessages 不含 metadata —— LLM 看不到 debug / timestamp / userReaction</code></pre>
+        </div>
+
+        <h3>用 fetch + ReadableStream 手写解析 v5 SSE wire</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">async function parseV5SSEStream(url: string, body: any) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.body) throw new Error('no body');
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+
+    // 按 SSE 格式解析: data: {JSON}\n\n
+    const events = buf.split('\n\n');
+    buf = events.pop() ?? '';  // 最后一段可能不完整
+
+    for (const event of events) {
+      if (!event.startsWith('data: ')) continue;
+      const json = event.slice(6);
+      const data = JSON.parse(json);
+      // data.type: 'text-delta' | 'tool-call' | 'tool-result' | 'finish' | ...
+      console.log(data);
+    }
+  }
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 没用 convertToModelMessages</div>
+          <p>v5+ <code>useChat</code> messages 是 UIMessage[]（含 metadata / parts 等）。直接传给 streamText 的 messages 参数会出错。<strong>修复</strong>：<code>messages: convertToModelMessages(messages)</code>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · FastAPI / Python 后端不适配 v5 SSE 协议</div>
+          <p>升级 v5 后前端 useChat 收不到流。<strong>修复</strong>：(a) 用官方 Python adapter；(b) 自己手写 SSE 响应（参考本章 04 节代码）；(c) 暂时降级到 v4（不推荐 —— 错过 v5+ 所有改进）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 仍用 v4 useChat 的 toolInvocations 字段</div>
+          <p>v5 改成 parts 数组里的 type-specific tool 部分。<strong>修复</strong>：把 <code>message.toolInvocations</code> 改成 <code>message.parts.filter(p =&gt; p.type.startsWith('tool-'))</code>；按 type-specific part 渲染。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 在 metadata 里塞要发给 LLM 的信息</div>
+          <p>metadata 字段<strong>不发给 LLM</strong>。如果你想让 LLM 看到时间戳 / 用户上下文，应该塞进 message text 或新 part type，不是 metadata。<strong>修复</strong>：明确"发给 LLM 的去 parts；前端展示用的去 metadata"。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 期待 v5 SSE 能直接用 EventSource</div>
+          <p>v5 SSE 仍需要 SDK 解析（payload 是 Vercel JSON），不是浏览器 EventSource API 能直接吃的。同时 EventSource 仅 GET，chat 需要 POST。<strong>修复</strong>：用 <code>useChat</code> hook（自动处理）；或手写 fetch + ReadableStream 解析。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · 流式响应被 nginx / proxy buffer</div>
+          <p>nginx 默认对响应做 buffering → 客户端体感不流式。<strong>修复</strong>：(a) <code>proxy_buffering off;</code>；(b) 应用响应头 <code>X-Accel-Buffering: no</code>；(c) 详见 <a href="../../http/06-streaming/01-streaming.html">HTTP 主题 P6.1</a> 完整方案。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 新项目锁定 v4</div>
+          <p>2026 年新项目应该直接 v5 / v6（current latest stable），不要新启 v4。v4 不会有新 feature；v5+ 协议更标准、UIMessage / ModelMessage 二分让代码更清晰。<strong>修复</strong>：新项目直接 v6。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 8 · v5 的 partial tool call 没处理</div>
+          <p>v5+ tool call inputs 默认流式。tool part 状态机：<code>state: 'partial-call' → 'call' → 'result'</code>。如果前端只处理 <code>'result'</code> 状态，partial-call 阶段什么都不显示。<strong>修复</strong>：partial-call 状态显示 spinner / "正在准备调用 X"，提升体验。详见 <a href="../04-agent/02-tool-use.html">P4.2</a>。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://vercel.com/blog/ai-sdk-5" target="_blank" rel="noopener">Vercel · AI SDK 5 设计文章</a> —— v5 协议层 + state 模型重做的官方解释</li>
+          <li><a href="https://ai-sdk.dev/docs/ai-sdk-ui/stream-protocol" target="_blank" rel="noopener">AI SDK Stream Protocols 文档</a></li>
+          <li><a href="https://github.com/vercel/ai/issues/7496" target="_blank" rel="noopener">GitHub Issue · FastAPI v5 适配讨论</a></li>
+          <li><a href="https://github.com/vercel/ai/discussions/7433" target="_blank" rel="noopener">GitHub Discussion · v5 useObject + data stream protocol</a></li>
+          <li><a href="../../http/06-streaming/01-streaming.html">本站 · HTTP 主题 P6.1 流式协议层根因</a></li>
+          <li><a href="https://html.spec.whatwg.org/multipage/server-sent-events.html" target="_blank" rel="noopener">HTML 标准 · Server-Sent Events</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-architecture.html">
+            <span class="label">← 上一章</span>
+            <span class="title">三层架构 + 四件套</span>
+          </a>
+          <a class="next" href="../03-ui-hooks/01-usechat.html">
+            <span class="label">下一章 →</span>
+            <span class="title">useChat / useCompletion / useObject 全谱</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

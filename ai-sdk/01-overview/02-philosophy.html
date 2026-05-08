@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>设计哲学 · "包 LLM API" → "agent abstraction" · P1.2 · AI SDK 深度学习</title>
+    <meta name="description" content="LLM 集成 SDK 的三阶段范式演化：包 LLM API（2023-2024）→ agent loop 一等公民（2025-2026）→ durable execution（2026 起）。Vercel AI SDK 与 Claude Agent SDK 的两种视角对比：UI 层 / agent 抽象 / 多 provider / MCP / hooks / 状态管理 / dogfooding 各维度的根本差异。给 P5 跨范式对比提供基础。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%237c3aed'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EAI%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>AI SDK 深度学习</span><span class="site-title-badge" style="background: #7c3aed; color: #fff">AI</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P1 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · 是谁 / 为什么</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html">01 · LLM 集成 5 年史</a></li>
+          <li><a href="02-philosophy.html" class="active">02 · 设计哲学 · agent abstraction</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">AI SDK</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · 是谁 / 为什么</a><span class="breadcrumb-sep">/</span>
+          <span>02 · 设计哲学</span>
+        </nav>
+        <h1>设计哲学：从"包 LLM API"到"agent abstraction"的范式演化</h1>
+        <p class="lead">
+          Vercel AI SDK 和 Claude Agent SDK 都做"LLM 集成 SDK"，但<strong>底层心智完全不同</strong>。Vercel 把它当"前端 / 全栈 web 应用 SDK"；Anthropic 把它当"agent 官方库"。这一章把三阶段范式演化（包 LLM API → agent abstraction → durable execution）+ 两种视角的共同点和分歧讲清，给 P5 跨范式对比提供基础。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 读过 P1.1（5 年史）</span>
+          <span><strong>主要来源</strong> vercel.com/blog/ai-sdk-{5,6,a-new-programming-model-for-durable-execution} + Anthropic engineering blog（"How we built Claude Code" / "Building agents with the Claude API"）+ MCP 设计文档</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+
+        <ol>
+          <li>LLM 集成 SDK 5 年的核心动力<strong>不是"让 SDK 更轻"</strong>，是<strong>"让用 LLM 这件事别每次都从零开始"</strong>。每一代被推出来都是因为前一代撞到了"重复代码天花板"。</li>
+          <li><b>第一阶段 · "包 LLM API"</b>（2023-2024）：抽象掉各 provider 协议差异；提供 streamText / generateText 等单次调用 API；UI 层提供 useChat 等 hooks。<strong>关键洞察</strong>：开发者要的是"我有 prompt + tools，给我个流式响应"，不是 LLM 的 raw protocol。Vercel AI SDK v3-v5 是这一代代表。LangChain JS 也在这阶段，但抽象层级更高（chains / agents / memory），被认为过度抽象。</li>
+          <li><b>第二阶段 · "agent loop 一等公民"</b>（2025-2026）：把"调 LLM → 看 tool call → 调 tool → 把结果再喂回 LLM → 直到 stop"这个循环抽象成 Agent 类。<strong>关键洞察</strong>：业务里 99% 的 agent 长得一样（system prompt + tools + loop until done），不应该让每个项目重写一遍。Vercel v6 的 Agent / ToolLoopAgent + Claude Agent SDK 都是这一代。</li>
+          <li><b>第三阶段 · "durable execution"</b>（2026 起，v7 canary）：agent 跑几小时几天怎么办？Vercel WorkflowAgent + Vercel durable execution programming model 在尝试。<strong>关键洞察</strong>：现实里很多 agent task 是"持续多天"的（深度研究、批处理、多人协作），不能让 process 死了 agent 就丢。本主题正文不锁定 v7，仅 P7 展望。</li>
+          <li><b>Vercel 视角</b>："我们是 React/Next.js 生态的 SDK"。优先解决<strong>前端 / 全栈 web app 集成 LLM</strong>的痛点；useChat / useObject / streamUI 等 UI hooks 一等公民；多 provider 抽象 + AI Gateway；与 RSC / Server Actions 深度集成。</li>
+          <li><b>Anthropic 视角</b>："我们是 agent 的官方库"。优先解决<strong>构建生产 AI agents</strong>的痛点（含 CLI 工具如 Claude Code）；agent loop / subagents / tool permissions 一等公民；与 MCP 深度耦合；hooks 让 agent 行为可观察可拦截可改写；<strong>同一个 SDK 驱动 Claude Code 自身</strong>（dogfooding）。</li>
+          <li><b>共同点（2026 起的收敛）</b>：都支持 MCP（外部工具接口标准）；都支持 streaming（Vercel SSE / Claude SDK 内部 stream）；都支持 multi-provider（程度不同）；都有 hooks / interception 机制。</li>
+          <li><b>不同点（核心分歧）</b>：UI 层（Vercel 有 / Claude 无）；状态管理（Vercel UIMessage / Claude session）；子任务分解（Claude subagents 一等公民 / Vercel 嵌套 agent 实现）；Provider（Vercel 完全 neutral / Claude 默认 Anthropic）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>三阶段范式演化</h3>
+
+        <h4>第一阶段：包 LLM API（2023-2024）</h4>
+
+        <p>2023 年 LangChain JS 兴起，2024 年 Vercel AI SDK v3-v4 接班。两者都属于这一阶段，但抽象层级不同：</p>
+
+        <ul>
+          <li><strong>LangChain JS</strong>：抽象层级高 —— chain / agent / memory / retriever / output parser 等概念。每个概念都是"对 LLM 应用模式的抽象"。<strong>问题</strong>：现实模式比抽象多 + 抽象漏洞频繁 → 简单场景写一堆 boilerplate</li>
+          <li><strong>Vercel AI SDK v3-v4</strong>：抽象层级低 —— 只有 generateText / streamText / generateObject + provider 抽象 + UI hooks。<strong>关键设计选择</strong>：不抽象"orchestration"，让用户自己写 loop。这是 LangChain "过度抽象"批评的反面</li>
+        </ul>
+
+        <p>Vercel AI SDK v3-v4 在这阶段成功的原因：<strong>抽象只到"避免重写 boilerplate"那一层，不再多</strong>。开发者保留所有控制权（自己写 message 数组 / 自己处理 tool call loop / 自己管 state）。</p>
+
+        <h4>第二阶段：agent loop 一等公民（2025-2026）</h4>
+
+        <p>到 2025 年，工程社区注意到一个现象：<strong>大量项目都在重写同一个 agent loop</strong>：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 大家都在写的 agent loop
+async function runAgent(prompt, tools) {
+  let messages = [{ role: 'user', content: prompt }];
+
+  while (true) {
+    const result = await callLLM({ messages, tools });
+
+    if (result.toolCalls.length === 0) {
+      return result.text;  // 没 tool call 了，结束
+    }
+
+    // 调每个 tool
+    const toolResults = await Promise.all(
+      result.toolCalls.map(async (tc) =&gt; {
+        const tool = tools[tc.name];
+        const output = await tool.execute(tc.input);
+        return { toolCallId: tc.id, output };
+      })
+    );
+
+    messages = [
+      ...messages,
+      { role: 'assistant', toolCalls: result.toolCalls },
+      ...toolResults.map((tr) =&gt; ({ role: 'tool', ...tr })),
+    ];
+  }
+}</code></pre>
+        </div>
+
+        <p>这段代码<strong>每个项目都写一遍</strong>。2025 年 Anthropic 公开 Claude Agent SDK，把这个 loop 抽成 SDK 内置。2026 年 Vercel AI SDK v6 Agent abstraction 也做了同一件事。</p>
+
+        <p>关键洞察：<strong>"loop until done" 是 agent 的本质特征</strong>，应该是 SDK 内置而不是用户自己写。这不是"过度抽象" —— 这是<strong>真正可复用的工程抽象</strong>。</p>
+
+        <h4>第三阶段：durable execution（2026 起）</h4>
+
+        <p>第二阶段的 agent loop 仍假设"agent 跑在一个 process 里直到结束"。但生产现实里：</p>
+
+        <ul>
+          <li>深度研究 agent 跑几小时几天</li>
+          <li>批处理 agent 跑几千个 task</li>
+          <li>用户中途切走，agent 继续后台跑</li>
+          <li>process 重启 / 容器迁移 / 服务器宕机</li>
+        </ul>
+
+        <p>这些场景需要<strong>持久化 agent state + 可恢复执行 + 跨 process 调度</strong>。这就是 durable execution。Vercel 2026 年同时发布了 durable execution programming model 和 v7 canary 的 WorkflowAgent。</p>
+
+        <p>本主题正文不锁定 v7，但<strong>方向是清晰的</strong>：未来 1-2 年 agent SDK 的核心创新会在这层。</p>
+
+        <h3>Vercel 视角：React/Next.js 生态的 SDK</h3>
+
+        <p>Vercel AI SDK 的设计哲学贯穿整个 SDK：</p>
+
+        <ul>
+          <li><strong>UI hooks 一等公民</strong>：useChat / useCompletion / useObject 不是"附加品"，是核心价值。其他 SDK 没有同等地位的 hooks</li>
+          <li><strong>多 provider neutral</strong>：完全不绑定任一 provider。AI Gateway 进一步降低切换成本</li>
+          <li><strong>与 RSC / Server Actions 深度集成</strong>：streamUI（<code>ai/rsc</code>）让 LLM 直接驱动 server-side React 渲染</li>
+          <li><strong>"轻抽象"原则</strong>：v6 加 Agent abstraction 但仍保留 streamText 等低层 API。开发者可以选抽象级别</li>
+          <li><strong>vercel.com 自己 dogfooding</strong>：v0 / Vercel 平台内部使用</li>
+        </ul>
+
+        <h3>Anthropic 视角：agent 的官方库</h3>
+
+        <p>Claude Agent SDK 的设计哲学贯穿其全部：</p>
+
+        <ul>
+          <li><strong>同一个 agent loop 驱动 Claude Code</strong>：这是工程级的 dogfooding —— Anthropic 用它建生产 CLI 产品。理论上的 SDK 设计被现实需求反复推敲</li>
+          <li><strong>Agent loop 是核心抽象</strong>：subagents（独立 context）/ MCP（外部工具接口）/ hooks（生命周期）/ sessions 全是一等公民</li>
+          <li><strong>没有 UI 层</strong>：假设用户自己做 UI 或不需要 UI（CLI 场景）。这不是缺失，是<strong>选择性专注</strong></li>
+          <li><strong>Provider 默认 Anthropic</strong>：可经 Bedrock / Vertex 切，但行为优化围绕 Claude API。这是<strong>"做深而不做广"</strong></li>
+          <li><strong>MCP 中心地位</strong>：外部工具接入完全靠 MCP，没有专属"tool"概念（tool 就是 MCP server 的一种形式）</li>
+        </ul>
+
+        <h3>共同点（2026 起的收敛）</h3>
+
+        <p>2026 年两边的 SDK 在几个维度收敛：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>2024 年</th>
+              <th>2026 年</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Tool 接口</td>
+              <td>各家自定义</td>
+              <td>都支持 MCP（标准协议）</td>
+            </tr>
+            <tr>
+              <td>流式协议</td>
+              <td>各家自定义</td>
+              <td>Vercel 走 SSE / Claude SDK 内部 stream（应用层都走类似 NDJSON-like 格式）</td>
+            </tr>
+            <tr>
+              <td>Agent 抽象</td>
+              <td>无（自己写 loop）</td>
+              <td>都有（Vercel Agent / Claude SDK Agent loop）</td>
+            </tr>
+            <tr>
+              <td>多 provider</td>
+              <td>各家不同</td>
+              <td>Vercel 完全 neutral / Claude 经 Bedrock+Vertex 也算多 provider</td>
+            </tr>
+            <tr>
+              <td>Hooks / interception</td>
+              <td>无</td>
+              <td>都有（Vercel onStep / Claude PreToolUse / PostToolUse 等完整）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>这种收敛说明：<strong>2026 年大家对"LLM 应用 SDK 长什么样"达成了一定共识</strong>。两家走不同路径，但目的地有重叠。</p>
+
+        <h3>不同点（核心分歧）</h3>
+
+        <p>但仍有几个根本分歧：</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>Vercel AI SDK v6</th>
+              <th>Claude Agent SDK</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>主战场</td>
+              <td>React/Next.js web 应用</td>
+              <td>CLI / 后端 / 任何 agent 场景</td>
+            </tr>
+            <tr>
+              <td>UI 层</td>
+              <td>useChat / useObject / streamUI 一等公民</td>
+              <td>没有内置 UI 层</td>
+            </tr>
+            <tr>
+              <td>Agent 抽象层级</td>
+              <td>Agent / ToolLoopAgent</td>
+              <td>Agent loop + Subagents（更细粒度）</td>
+            </tr>
+            <tr>
+              <td>多 provider</td>
+              <td>完全 vendor-neutral（含 AI Gateway）</td>
+              <td>默认 Anthropic（可经 Bedrock / Vertex）</td>
+            </tr>
+            <tr>
+              <td>MCP</td>
+              <td>支持但非中心（experimental_createMCPClient）</td>
+              <td>中心地位</td>
+            </tr>
+            <tr>
+              <td>Hooks</td>
+              <td>简单（onStep / onFinish 等）</td>
+              <td>完整 hook 生命周期（PreToolUse / PostToolUse / UserPromptSubmit / Stop / 等）</td>
+            </tr>
+            <tr>
+              <td>状态管理</td>
+              <td>UIMessage（前端 state）</td>
+              <td>Session（SDK 内部）</td>
+            </tr>
+            <tr>
+              <td>Dogfooding</td>
+              <td>Vercel.com / v0 内部</td>
+              <td>Claude Code 自己驱动</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景：选哪个 SDK</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 前端 chat / generative UI → Vercel AI SDK</h3>
+          <p>React/Next.js web app + chat UI + 流式响应 + 与 RSC / Server Actions 集成。Vercel AI SDK 没有竞争对手 —— Claude Agent SDK 没 UI 层；LangChain JS 已收缩。<strong>2026 这是 Vercel AI SDK 的本垒</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · CLI agent / 终端工具 → Claude Agent SDK</h3>
+          <p>建 CLI 工具（dev tools / 自动化脚本 / 终端 chat）+ 与 Claude Code 共生态。Vercel AI SDK 在 CLI 场景能用但不够 idiomatic（hooks 浪费）。<strong>这是 Claude Agent SDK 的本垒</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 后端复杂 agent orchestration → Claude Agent SDK</h3>
+          <p>多 subagent / 长任务 / 严格 tool 权限 / MCP 深度集成。例如代码 review agent 编排 frontend QA + security check + test runner 三个 subagents。<strong>Claude Agent SDK 的 subagents 一等公民地位让这种场景天然</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 简单后端 agent → 都行</h3>
+          <p>单一 agent + 几个 tools + 中等长度任务。两家都能做。决策：(a) TS + 已用 Vercel 生态 → Vercel AI SDK；(b) Python 或要与 Claude Code 共生态 → Claude Agent SDK；(c) 其他 → 看团队偏好。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 E · 前后端混合架构 → 两者一起用</h3>
+          <p>前端 useChat 跑用户 chat → 后端 Server Action / API → 后端 Claude Agent SDK 跑复杂 agent。Vercel 跑前端，Claude 跑后端 agent。两者通信走标准 HTTP / streaming。<strong>2026 起 production 架构常见模式</strong>。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：两种范式对比</span></h2>
+
+        <h3>同一个需求，两种实现：客户支持 agent</h3>
+
+        <p>需求：用户问问题 → agent 调 lookup_order tool 查订单 → 调 send_email tool 通知用户 → 返回总结。</p>
+
+        <h3>Vercel AI SDK v6 实现</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { Agent, tool } from 'ai';
+import { openai } from '@ai-sdk/openai';
+import { z } from 'zod';
+
+const supportAgent = new Agent({
+  model: openai('gpt-4o'),
+  system: 'You are a customer support agent.',
+  tools: {
+    lookupOrder: tool({
+      description: 'Look up an order by ID',
+      parameters: z.object({ orderId: z.string() }),
+      execute: async ({ orderId }) =&gt; await db.orders.findUnique({ where: { id: orderId } }),
+    }),
+    sendEmail: tool({
+      description: 'Send notification email to user',
+      parameters: z.object({ to: z.string(), subject: z.string(), body: z.string() }),
+      execute: async ({ to, subject, body }) =&gt; await mailer.send({ to, subject, body }),
+    }),
+  },
+});
+
+// 在 Server Action / Route Handler / Client 都能调
+const result = await supportAgent.generate({ prompt: 'Help me with order #42' });
+return result.text;</code></pre>
+        </div>
+
+        <h3>Claude Agent SDK 实现（TypeScript）</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { ClaudeAgent } from '@anthropic-ai/claude-agent-sdk';
+
+const agent = new ClaudeAgent({
+  systemPrompt: 'You are a customer support agent.',
+  // 自定义工具作为 in-process MCP server
+  tools: [
+    {
+      name: 'lookupOrder',
+      description: 'Look up an order by ID',
+      inputSchema: { type: 'object', properties: { orderId: { type: 'string' } } },
+      handler: async ({ orderId }) =&gt; await db.orders.findUnique({ where: { id: orderId } }),
+    },
+    {
+      name: 'sendEmail',
+      description: 'Send notification email',
+      inputSchema: { /* ... */ },
+      handler: async ({ to, subject, body }) =&gt; await mailer.send({ to, subject, body }),
+    },
+  ],
+  hooks: {
+    PreToolUse: async ({ tool, input }) =&gt; {
+      console.log(`Calling ${tool.name} with`, input);
+    },
+  },
+});
+
+const result = await agent.run({ prompt: 'Help me with order #42' });
+return result.summary;</code></pre>
+        </div>
+
+        <p>差别：</p>
+
+        <ul>
+          <li>Vercel: Zod schema / tool() helper / Agent class with system + tools</li>
+          <li>Claude: JSON schema / inline tool definitions / hooks 一等公民</li>
+          <li>都能完成同一需求，<strong>但 SDK API 风格不同</strong></li>
+        </ul>
+
+        <h3>都用 MCP（跨范式收敛）</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// Vercel 里用 MCP（experimental）
+import { experimental_createMCPClient } from 'ai';
+const mcpClient = await experimental_createMCPClient({
+  transport: { type: 'stdio', command: 'github-mcp-server' },
+});
+const tools = await mcpClient.tools();
+await streamText({ model, tools, prompt });
+
+// Claude Agent SDK 里用 MCP（中心地位）
+const agent = new ClaudeAgent({
+  mcpServers: [{ command: 'github-mcp-server' }],
+  // tools 自动从 MCP 来
+});</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 把 Vercel AI SDK 和 Claude Agent SDK 比较"哪个更好"</div>
+          <p>它们解决不同问题，<strong>不在同一维度比较</strong>。Vercel 解决"前端 / web app 集成 LLM"；Claude SDK 解决"构建生产 AI agents"。<strong>修复</strong>：基于场景选，不基于"通用排名"。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 误以为 v6 Agent abstraction 是"新框架"</div>
+          <p>Agent abstraction 是 Vercel AI SDK<strong>新增的可选抽象</strong>，不是替代 streamText / useChat。简单单次调用仍用 streamText；只有"复用 agent + 多 tool + 多步推理"时才升 Agent。<strong>修复</strong>：按需选抽象级别。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 期待 Claude Agent SDK 提供 useChat-like UI hooks</div>
+          <p>Claude Agent SDK <strong>没有</strong> UI 层。这是<strong>选择性专注</strong>，不是缺失。如果你需要前端 chat UI，请用 Vercel AI SDK；或自己手写 React hooks（Claude SDK 不会帮你）。<strong>修复</strong>：理解 Claude SDK 的定位是"agent 库"不是"前端 SDK"。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 过度抽象 / "我要建 agent framework"</div>
+          <p>2024-2025 LangChain JS 衰落给的教训：过度抽象的成本极高。如果你在思考"我要建一个 agent framework 给团队所有项目用"，<strong>先停下来</strong>问：(a) 真的有 3+ 项目共用这套抽象的需求吗？(b) Vercel Agent / Claude SDK 已经有的抽象不够用吗？大部分情况下答案是"够用"。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 在简单场景上 v6 Agent abstraction</div>
+          <p>简单一次性 LLM 调用（"翻译这段文本" / "总结这篇文章"）仍用 generateText / streamText 即可。<strong>不必所有 LLM 调用都包成 Agent</strong>。Agent 是为"多 tool + 复用 + 多步循环"设计的。<strong>修复</strong>：按需选；简单用低层，复杂用 Agent。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · 在生产用 v7 canary 的 WorkflowAgent</div>
+          <p>v7 仍 canary（pre-release），WorkflowAgent / durable execution / loop control 等概念仍在演进，API 可能 breaking changes。<strong>修复</strong>：生产用 v6 stable；v7 仅用于实验 / 评估方向；durable execution 需求暂时自己实现（Inngest / Trigger.dev 等可帮）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 期待"agent SDK 解决所有 LLM 应用问题"</div>
+          <p>2026 年 agent SDK 解决了 90% 通用模式，但仍有 10% 自定义场景需要你自己写。<strong>不要期待 SDK "全包"</strong>。比如：复杂多 agent 协作 + 长记忆 / 多模态融合 / 特定领域 prompt 工程 / RAG 优化 —— 都仍需要自定义。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://vercel.com/blog/ai-sdk-5" target="_blank" rel="noopener">Vercel · AI SDK 5 设计文章</a> —— v5 协议 + state 模型重做的思路</li>
+          <li><a href="https://vercel.com/blog/ai-sdk-6" target="_blank" rel="noopener">Vercel · AI SDK 6 设计文章</a> —— Agent abstraction 引入动机</li>
+          <li><a href="https://vercel.com/blog/a-new-programming-model-for-durable-execution" target="_blank" rel="noopener">Vercel · A new programming model for durable execution</a> —— v7 方向背景</li>
+          <li><a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK overview</a> —— Anthropic 官方设计文档</li>
+          <li><a href="https://www.anthropic.com/engineering" target="_blank" rel="noopener">Anthropic engineering blog</a> —— "How we built Claude Code" 等深度文章</li>
+          <li><a href="https://modelcontextprotocol.io" target="_blank" rel="noopener">Model Context Protocol</a> —— 跨范式收敛的关键</li>
+          <li><a href="https://github.com/vercel/ai/issues/14011" target="_blank" rel="noopener">GitHub issue · v7 跟踪</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-history.html">
+            <span class="label">← 上一章</span>
+            <span class="title">LLM 应用集成 5 年史</span>
+          </a>
+          <a class="next" href="../02-vercel-core/01-architecture.html">
+            <span class="label">下一章 →</span>
+            <span class="title">Vercel AI SDK 三层架构 + 四件套</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

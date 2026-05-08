@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Generative UI · streamUI · RSC · P3.2 · AI SDK 深度学习</title>
+    <meta name="description" content="Generative UI = LLM 决定渲染什么 React 组件 + server 直接渲染。Vercel AI SDK 的 streamUI（ai/rsc）+ RSC 集成 + 与 React 19 use API 协作。讲清 streamUI 必须在 Server Action / Route Handler 调用、与 useChat 共存策略、典型场景（weather card / outfit recommendation / form generator）+ 错误处理（Suspense + Error Boundary）。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%237c3aed'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EAI%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>AI SDK 深度学习</span><span class="site-title-badge" style="background: #7c3aed; color: #fff">AI</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P3 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P3 · UI hooks + Generative UI</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-usechat.html">01 · useChat / useCompletion / useObject</a></li>
+          <li><a href="02-stream-ui.html" class="active">02 · streamUI · Generative UI · RSC</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">AI SDK</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P3 · UI hooks + Generative UI</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Generative UI · streamUI · RSC</span>
+        </nav>
+        <h1>Generative UI: streamUI + RSC + 与 React 19 use API 协作</h1>
+        <p class="lead">
+          Generative UI 是 Vercel 提的概念：LLM 不只生成文本，<strong>生成 React 组件树</strong>。背后机制：LLM 输出"该渲染什么 UI"决策 → SDK 在 server-side 直接渲染 React 组件 → 客户端通过 RSC payload 边收边渲染。这一章讲 streamUI / createStreamableUI / createStreamableValue + 与 useChat 共存策略 + 与 React 19 use API 协作。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 读过 P3.1（useChat） + 看过 React Server Components 至少一次</span>
+          <span><strong>主要来源</strong> ai-sdk.dev/docs/ai-sdk-rsc + Vercel Generative UI 设计文章 + React 19 use API RFC + Next.js RSC 文档（链回 Next.js / React 主题）</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Generative UI 核心思路：LLM 输出"该渲染什么 UI" 决策（不是 HTML，是 component invocation 决策）→ SDK 根据 LLM 决策<strong>在 server-side 直接渲染 React 组件</strong>（RSC）→ 客户端通过 RSC payload 边收边渲染。</li>
+          <li><strong>streamUI</strong>（<code>ai/rsc</code>）：核心 API。在 Server Action / Route Handler 调用，返回 <code>{ value: ReactNode }</code>。返回值可在 RSC 中直接渲染。</li>
+          <li><strong>createStreamableUI / createStreamableValue</strong>：底层 primitives。streamUI 是基于它们的高层封装。复杂场景可以直接用 primitives。</li>
+          <li><strong>关键约束</strong>：streamUI 必须在 <strong>Server Action 或 Route Handler 调用</strong>（不能在 Client Component），它依赖 RSC server-side 渲染能力。</li>
+          <li><strong>tools 在 Generative UI 里的角色</strong>：每个 tool 不只 execute 数据，还可以 <code>generate</code>（async generator 生成 React 元素）。tool 决定渲染什么组件。</li>
+          <li><strong>与 useChat 共存</strong>：useChat 管 chat history（client state）；streamUI 渲染 inline tool result UI（server-rendered 组件嵌进 message）。两者不冲突，<strong>2026 推荐组合</strong>。</li>
+          <li><strong>与 React 19 use API 协作</strong>：streamUI 返回的 React Node 在 RSC 中直接渲染；同时也可以用 createStreamableValue 创建 promise，让 client component 用 use API 消费（流式）。</li>
+          <li><strong>2026 状态</strong>：<code>ai/rsc</code> 仍是较新且演进中的 API。Vercel 官方推荐："简单 chat 用 useChat；需要丰富 UI 渲染（卡片 / 表单 / 嵌入式可视化）用 streamUI"。</li>
+          <li>典型场景：(a) 用户问"我下周怎么穿"→ LLM 调 getWeather + 渲染 OutfitCard；(b) "帮我建订餐表单"→ LLM 生成 form schema + 渲染 Form 组件；(c) "比较这两个产品"→ LLM 渲染 ComparisonTable 组件。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Generative UI 设计意图</h3>
+
+        <p>传统 chat UI：LLM 输出文本 → 前端用 markdown 渲染。问题：</p>
+
+        <ul>
+          <li>无法渲染交互组件（按钮 / 表单 / 滑块）</li>
+          <li>无法嵌入数据可视化（图表 / 地图 / 卡片）</li>
+          <li>LLM 必须用文字描述"建议你点这里" —— 用户体验差</li>
+        </ul>
+
+        <p>Generative UI 解法：<strong>让 LLM 直接决定渲染什么 React 组件</strong>。LLM 不输出 HTML（不安全），输出"调用 ComponentX 组件 with props Y"决策。Server 端按决策渲染组件，client 流式收。</p>
+
+        <h3>streamUI 核心 API</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/actions.tsx (Server Action)
+'use server';
+import { streamUI } from 'ai/rsc';
+import { openai } from '@ai-sdk/openai';
+import { z } from 'zod';
+
+export async function chat(message: string) {
+  const result = await streamUI({
+    model: openai('gpt-4o'),
+    prompt: message,
+
+    // text: 当 LLM 输出文本时怎么渲染
+    text: ({ content }) =&gt; &lt;div&gt;{content}&lt;/div&gt;,
+
+    // tools: 每个 tool 决定渲染什么组件
+    tools: {
+      showWeather: {
+        description: 'Show current weather for a city',
+        parameters: z.object({ city: z.string() }),
+        generate: async function* ({ city }) {
+          // 1. 立即 yield Loading（用户看到加载状态）
+          yield &lt;Loading message={`Fetching weather for ${city}...`} /&gt;;
+
+          // 2. 实际调外部 API
+          const weather = await getWeather(city);
+
+          // 3. return 最终组件
+          return &lt;WeatherCard data={weather} /&gt;;
+        },
+      },
+
+      showProductCard: {
+        description: 'Show a product card',
+        parameters: z.object({ productId: z.string() }),
+        generate: async function* ({ productId }) {
+          yield &lt;ProductSkeleton /&gt;;
+          const product = await db.product.findUnique({ where: { id: productId } });
+          return &lt;ProductCard product={product} /&gt;;
+        },
+      },
+    },
+  });
+
+  return result.value;  // 返回 ReactNode 给客户端
+}</code></pre>
+        </div>
+
+        <h3>generate 是 async generator</h3>
+
+        <p>tool 的 <code>generate</code> 是 async generator（不是普通函数）。这让 tool 可以：</p>
+
+        <ul>
+          <li><strong>多次 yield 渲染中间状态</strong>（loading → progress → 最终）</li>
+          <li><strong>return 最终组件</strong></li>
+          <li><strong>异步等待</strong>（fetchData / 调外部 API）</li>
+        </ul>
+
+        <p>每次 yield 客户端立即看到新组件。这是 Generative UI 的"流式"含义。</p>
+
+        <h3>Client Component 调 Server Action 拿 ReactNode</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/page.tsx
+'use client';
+import { useState } from 'react';
+import { chat } from './actions';
+
+export default function ChatPage() {
+  const [conversation, setConversation] = useState&lt;React.ReactNode[]&gt;([]);
+  const [input, setInput] = useState('');
+
+  async function sendMessage() {
+    // 调 Server Action 拿 ReactNode
+    const ui = await chat(input);
+
+    setConversation((prev) =&gt; [
+      ...prev,
+      &lt;UserMessage key={prev.length} text={input} /&gt;,
+      ui,  // 直接塞 ReactNode 到 state
+    ]);
+    setInput('');
+  }
+
+  return (
+    &lt;div&gt;
+      {conversation.map((node, i) =&gt; &lt;div key={i}&gt;{node}&lt;/div&gt;)}
+      &lt;input value={input} onChange={(e) =&gt; setInput(e.target.value)} /&gt;
+      &lt;button onClick={sendMessage}&gt;Send&lt;/button&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <p>关键：Client Component 把 Server Action 返回的 ReactNode <strong>直接塞进 state</strong>。React 知道怎么渲染（包括等待流式 yield 的中间状态）。</p>
+
+        <h3>底层：createStreamableUI / createStreamableValue</h3>
+
+        <p>streamUI 是高层封装。底层 primitives 是：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use server';
+import { createStreamableUI, createStreamableValue } from 'ai/rsc';
+
+export async function customServerAction(input: string) {
+  // streamable UI - 创建可流式更新的 ReactNode
+  const ui = createStreamableUI(&lt;Loading /&gt;);
+
+  // streamable value - 创建可流式更新的纯数据
+  const value = createStreamableValue('');
+
+  (async () =&gt; {
+    // 异步更新 UI
+    await someWork();
+    ui.update(&lt;Step1 /&gt;);
+
+    await moreWork();
+    ui.update(&lt;Step2 /&gt;);
+
+    // 同时流式更新 value
+    for await (const chunk of streamFromLLM(input)) {
+      value.append(chunk);
+    }
+
+    ui.done(&lt;FinalUI /&gt;);
+    value.done();
+  })();
+
+  // 立即返回（不阻塞）
+  return { ui: ui.value, value: value.value };
+}
+
+// 客户端
+'use client';
+import { useState } from 'react';
+import { readStreamableValue } from 'ai/rsc';
+
+function Component() {
+  const [text, setText] = useState('');
+  const [ui, setUI] = useState&lt;React.ReactNode&gt;(null);
+
+  async function handle() {
+    const { ui: streamableUI, value: streamableValue } = await customServerAction('input');
+
+    setUI(streamableUI);
+
+    // 用 readStreamableValue 边读边更新
+    for await (const chunk of readStreamableValue(streamableValue)) {
+      setText(chunk);
+    }
+  }
+
+  return &lt;div&gt;{ui} {text}&lt;/div&gt;;
+}</code></pre>
+        </div>
+
+        <p>这套 primitives 的优势：</p>
+
+        <ul>
+          <li><strong>更细粒度控制</strong>：streamUI 是"按 LLM tool calls 决定渲染"模式；primitives 让你完全自定义流式逻辑</li>
+          <li><strong>多个独立流</strong>：可以同时跑 ui / value / progress 三个独立 streamable</li>
+          <li><strong>非 LLM 场景也能用</strong>：流式数据库查询 / 流式文件处理 / 流式计算</li>
+        </ul>
+
+        <h3>与 React 19 use API 协作</h3>
+
+        <p>React 19 引入 <code>use(promise)</code> API：消费一个 promise，pending 时 throw promise（被 Suspense 接住）。streamUI / createStreamableValue 都和 use API 配合好：</p>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// Server Component 创建 promise
+async function ServerPage() {
+  const dataPromise = streamFromLLM(...);  // 不 await
+  return &lt;ClientChild promise={dataPromise} /&gt;;
+}
+
+// Client Component 用 use 消费
+'use client';
+import { use } from 'react';
+
+function ClientChild({ promise }: { promise: Promise&lt;Data&gt; }) {
+  const data = use(promise);  // pending 时 throw, 被外层 Suspense 接住
+  return &lt;div&gt;{data.text}&lt;/div&gt;;
+}
+
+// 父组件
+&lt;Suspense fallback={&lt;Loading /&gt;}&gt;
+  &lt;ServerPage /&gt;
+&lt;/Suspense&gt;</code></pre>
+        </div>
+
+        <p>这套是<strong>RSC 时代流式数据消费的现代姿势</strong>。详见 <a href="../../react/06-modern/01-server-components.html">React 主题 P6.1</a>。streamUI 是高层抽象（专为 LLM Generative UI），use API + createStreamableValue 是底层 primitives（任意流式数据）。</p>
+
+        <h3>useChat vs streamUI 共存</h3>
+
+        <p>2026 推荐组合：useChat 管 chat history + streamUI 渲染 inline tool result UI。</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>useChat:
+  - 维护 client-side chat history (messages: UIMessage[])
+  - 管 input / submit / streaming state
+  - 持久化 (localStorage / DB)
+  - 跨组件共享 messages
+
+streamUI:
+  - LLM 决定渲染什么组件
+  - 在 Server Action 内部跑
+  - 返回 ReactNode 给 useChat 的 message part 渲染
+
+组合姿势:
+  1. 用户输入 → useChat handleSubmit
+  2. POST 到 Route Handler
+  3. Route Handler 内部调 streamUI
+  4. 返回的 UI 通过 v5 SSE 协议传到前端
+  5. useChat 把 UI 塞到 message.parts (作为 'data-ui' part 类型或类似)
+  6. 前端渲染 message.parts 时把 UI part 渲染出来</code></pre>
+        </div>
+
+        <p>注意：2026 年 useChat 和 streamUI 的官方"无缝集成"仍在演进。多数项目仍是<strong>选其一</strong>：</p>
+
+        <ul>
+          <li>纯 chat（文字 + 简单 tool result）→ useChat</li>
+          <li>丰富 UI 渲染（多种卡片 / form / 可视化）→ streamUI</li>
+          <li>极复杂场景 → 两者一起用（自己处理桥接）</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 旅行助理（混合渲染）</h3>
+          <p>用户："我下周去东京"→ LLM 调 getWeather 渲染 WeatherCard + 调 getFlights 渲染 FlightList + 调 suggestActivities 渲染 ActivityCards。<strong>streamUI 让 LLM 决定哪些卡片渲染</strong>，每个卡片是 server-rendered React 组件。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 数据分析助手</h3>
+          <p>用户："本月销售情况" → LLM 查 DB + 生成 Chart 组件 + 解释文字。Chart 是真实 React 组件（recharts / chart.js 等），server-rendered + 流式。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 表单生成器</h3>
+          <p>用户："建一个产品反馈 form" → LLM 决定字段 → 生成 Form 组件含各种 input。比 streamObject 生成 form schema + 前端渲染更直接。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 比较 / 推荐</h3>
+          <p>用户："iPhone 15 vs 16 Pro" → LLM 渲染 ComparisonTable + RecommendationCard。表格是结构化 React 组件，比 markdown table 美观且支持交互。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 E · 简单 chat → 仍用 useChat 不需要 streamUI</h3>
+          <p>纯文字 chat（客服 / 翻译 / 总结）→ useChat 完全够用。<strong>不要为了"现代"硬上 streamUI</strong>，它有额外复杂度（必须 RSC + Server Action）。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：完整 Generative UI 应用</span></h2>
+
+        <h3>完整 weather + outfit 推荐应用</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">// app/components/Loading.tsx
+export function Loading({ message }: { message: string }) {
+  return (
+    &lt;div className="loading"&gt;
+      &lt;span className="spinner"&gt;⏳&lt;/span&gt; {message}
+    &lt;/div&gt;
+  );
+}
+
+// app/components/WeatherCard.tsx
+export function WeatherCard({ data }: { data: WeatherData }) {
+  return (
+    &lt;div className="weather-card"&gt;
+      &lt;h3&gt;{data.city}&lt;/h3&gt;
+      &lt;p&gt;{data.temperature}°C, {data.condition}&lt;/p&gt;
+      &lt;p&gt;Wind: {data.wind} km/h&lt;/p&gt;
+    &lt;/div&gt;
+  );
+}
+
+// app/components/OutfitCard.tsx
+export function OutfitCard({ items, reasoning }: { items: string[]; reasoning: string }) {
+  return (
+    &lt;div className="outfit-card"&gt;
+      &lt;h3&gt;Outfit Suggestion&lt;/h3&gt;
+      &lt;ul&gt;
+        {items.map((item, i) =&gt; &lt;li key={i}&gt;{item}&lt;/li&gt;)}
+      &lt;/ul&gt;
+      &lt;p className="reasoning"&gt;{reasoning}&lt;/p&gt;
+    &lt;/div&gt;
+  );
+}
+
+// app/actions.tsx (Server Action)
+'use server';
+import { streamUI } from 'ai/rsc';
+import { openai } from '@ai-sdk/openai';
+import { z } from 'zod';
+import { Loading } from './components/Loading';
+import { WeatherCard } from './components/WeatherCard';
+import { OutfitCard } from './components/OutfitCard';
+
+export async function askAssistant(input: string) {
+  const result = await streamUI({
+    model: openai('gpt-4o'),
+    prompt: input,
+    text: ({ content }) =&gt; &lt;p className="message"&gt;{content}&lt;/p&gt;,
+    tools: {
+      getWeather: {
+        description: 'Get current weather for a city',
+        parameters: z.object({ city: z.string() }),
+        generate: async function* ({ city }) {
+          yield &lt;Loading message={`Fetching weather for ${city}...`} /&gt;;
+          const data = await fetchWeather(city);
+          return &lt;WeatherCard data={data} /&gt;;
+        },
+      },
+      suggestOutfit: {
+        description: 'Suggest outfit based on weather',
+        parameters: z.object({
+          weather: z.string(),
+          temperature: z.number(),
+        }),
+        generate: async function* ({ weather, temperature }) {
+          yield &lt;Loading message="Thinking about outfit..." /&gt;;
+          const items = await getOutfitItems(weather, temperature);
+          const reasoning = await explainChoice(weather, items);
+          return &lt;OutfitCard items={items} reasoning={reasoning} /&gt;;
+        },
+      },
+    },
+  });
+  return result.value;
+}
+
+// app/page.tsx
+'use client';
+import { useState } from 'react';
+import { askAssistant } from './actions';
+
+export default function HomePage() {
+  const [conversation, setConversation] = useState&lt;React.ReactNode[]&gt;([]);
+  const [input, setInput] = useState('');
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const userInput = input;
+    setInput('');
+
+    setConversation((prev) =&gt; [
+      ...prev,
+      &lt;p key={`u-${prev.length}`} className="user-msg"&gt;You: {userInput}&lt;/p&gt;,
+    ]);
+
+    const ui = await askAssistant(userInput);
+    setConversation((prev) =&gt; [...prev, ui]);
+  }
+
+  return (
+    &lt;div className="chat-container"&gt;
+      {conversation.map((node, i) =&gt; (
+        &lt;div key={i} className="message-row"&gt;
+          {node}
+        &lt;/div&gt;
+      ))}
+      &lt;form onSubmit={handleSubmit}&gt;
+        &lt;input
+          value={input}
+          onChange={(e) =&gt; setInput(e.target.value)}
+          placeholder="Ask about weather and outfits..."
+        /&gt;
+        &lt;button type="submit"&gt;Send&lt;/button&gt;
+      &lt;/form&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>用 createStreamableValue 实现自定义流式</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use server';
+import { createStreamableValue } from 'ai/rsc';
+import { streamText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+export async function generateText(prompt: string) {
+  const stream = createStreamableValue('');
+
+  (async () =&gt; {
+    const { textStream } = streamText({
+      model: openai('gpt-4o'),
+      prompt,
+    });
+    for await (const delta of textStream) {
+      stream.append(delta);
+    }
+    stream.done();
+  })();
+
+  return stream.value;
+}
+
+// 客户端用 readStreamableValue 消费
+'use client';
+import { readStreamableValue } from 'ai/rsc';
+
+const streamValue = await generateText('Write a poem');
+let text = '';
+for await (const chunk of readStreamableValue(streamValue)) {
+  text += chunk;
+  setText(text);
+}</code></pre>
+        </div>
+
+        <h3>错误处理：Suspense + Error Boundary</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use client';
+import { Suspense } from 'react';
+import { ErrorBoundary } from 'react-error-boundary';
+
+&lt;ErrorBoundary fallback={&lt;ErrorMessage /&gt;}&gt;
+  &lt;Suspense fallback={&lt;Loading /&gt;}&gt;
+    {streamUIResult /* ReactNode from server */}
+  &lt;/Suspense&gt;
+&lt;/ErrorBoundary&gt;</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 在 Client Component 调 streamUI</div>
+          <p>streamUI 必须在 Server Action / Route Handler 调用 —— 它依赖 RSC server-side 渲染能力。在 client 调会报错。<strong>修复</strong>：把 streamUI 调用移到 server 文件（<code>'use server'</code> 标记），client 通过 server action 触发。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · tool generate 不是 async generator</div>
+          <p>generate 必须是 async generator（用 <code>function*</code> + <code>async</code>）。如果你写普通 async function 只能 return 一次 → 失去"流式 yield 中间状态"能力。<strong>修复</strong>：<code>generate: async function* () { yield &lt;Loading /&gt;; ... return &lt;Final /&gt;; }</code>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · streamUI 返回 React Node 但 Client Component 不知怎么用</div>
+          <p>需要把 ReactNode 塞进 state（<code>setState(node)</code> 或 push 到数组）。React 自动处理渲染（包括等待流式 yield）。<strong>修复</strong>：理解 ReactNode 是"一等公民"，Server Action 返回它就像返回字符串一样自然。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · streamUI 当 useChat 用</div>
+          <p>streamUI 不维护 message history（每次调都是独立的 prompt）。如果你想要多轮对话，要么自己管 history（每次拼 prompt），要么用 useChat。<strong>修复</strong>：根据需求选 —— 多轮 chat 用 useChat；单次"输入 → 渲染卡片"用 streamUI。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 在 streamUI 的 tool generate 里拿不到外部 closure</div>
+          <p>generate 是 async generator，<strong>但仍能访问 Server Action 的 closure</strong>（user / req / db）。如果你拿不到，检查是否在正确的作用域。<strong>修复</strong>：generate 直接定义在 streamUI 调用里就能访问外部变量。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · 期待 streamUI 自动处理 chat persistence</div>
+          <p>streamUI 不知道"对话历史"概念。如果用户刷新页面，streamUI 之前生成的 UI 都丢了。<strong>修复</strong>：(a) 用 useChat 管 messages 历史 + tool 渲染走 useChat 的 part 系统；(b) 自己存 ReactNode metadata 到 DB，刷新时重新调 server action 还原。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 嵌套 client component 在 streamUI 返回值里没标记</div>
+          <p>streamUI 返回的 ReactNode 是 server-rendered。如果里面嵌入 Client Component，必须 import 时已是 <code>'use client'</code> 标记的组件。<strong>修复</strong>：交互组件（onClick 等）必须 'use client'；纯展示组件（仅 props 渲染）可以是 server component。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 8 · Suspense / Error Boundary 包裹位置错</div>
+          <p>Suspense / Error Boundary 必须在 Client Component 包 streamUI 返回的 UI（不是在 Server Action 内）。<strong>修复</strong>：在 client 渲染 streamUI 结果的位置用 Suspense + ErrorBoundary。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://ai-sdk.dev/docs/ai-sdk-rsc" target="_blank" rel="noopener">AI SDK RSC 文档</a></li>
+          <li><a href="https://ai-sdk.dev/docs/ai-sdk-rsc/streaming-react-components" target="_blank" rel="noopener">Streaming React Components 文档</a></li>
+          <li><a href="https://ai-sdk.dev/docs/ai-sdk-rsc/streaming-values" target="_blank" rel="noopener">createStreamableValue 文档</a></li>
+          <li><a href="https://vercel.com/blog/ai-sdk-3-generative-ui" target="_blank" rel="noopener">Vercel · AI SDK 3 Generative UI 设计文章</a></li>
+          <li><a href="../../react/06-modern/01-server-components.html">本站 · React 主题 P6.1 · Server Components</a></li>
+          <li><a href="../../next/03-rsc-streaming/index.html">本站 · Next.js 主题 P3 · RSC 与流式</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-usechat.html">
+            <span class="label">← 上一章</span>
+            <span class="title">useChat / useCompletion / useObject</span>
+          </a>
+          <a class="next" href="../04-agent/01-agent.html">
+            <span class="label">下一章 →</span>
+            <span class="title">Agent + ToolLoopAgent + structured output</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

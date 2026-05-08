@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LLM 应用集成 5 年史 + 同代人横评 · P1.1 · AI SDK 深度学习</title>
+    <meta name="description" content="LLM 应用集成 5 年史：从 2020 OpenAI raw API 到 2026 Vercel AI SDK v6 + Claude Agent SDK + MCP。讲清 LangChain JS 衰落 / Vercel AI SDK 接班 / Claude Agent SDK 横空出世 / 三阶段范式演化（包 LLM API → agent abstraction → durable execution）。给后面所有'为什么这样设计'提供历史坐标。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%237c3aed'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EAI%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>AI SDK 深度学习</span><span class="site-title-badge" style="background: #7c3aed; color: #fff">AI</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P1 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P1 · 是谁 / 为什么</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-history.html" class="active">01 · LLM 集成 5 年史</a></li>
+          <li><a href="02-philosophy.html">02 · 设计哲学 · agent abstraction</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">AI SDK</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P1 · 是谁 / 为什么</a><span class="breadcrumb-sep">/</span>
+          <span>01 · LLM 集成 5 年史</span>
+        </nav>
+        <h1>LLM 应用集成 5 年史 + 同代人横评</h1>
+        <p class="lead">
+          从 2020 年 OpenAI GPT-3 raw API 到 2026 年 Vercel AI SDK v6 + Claude Agent SDK + MCP，把 LLM 接进应用这条线 5 年踩过 6 类坑、出现过 3 代范式、淘汰过 2 个曾经的"主流框架"。这一章把演化串起来，让"为什么 2026 主线是 Vercel AI SDK v6 + Claude Agent SDK 双 SDK"有历史根因。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 写过 React + 用过任意 LLM API 至少一次</span>
+          <span><strong>主要来源</strong> 各项目 GitHub release notes + vercel.com/blog/ai-sdk-{5,6} 官方设计文章 + Anthropic engineering blog + LangChain JS 历史 release</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>LLM 应用集成的核心矛盾 5 年没变 —— <strong>LLM 是异步、流式、多 provider、tool calling 复杂、成本敏感</strong>的远程服务，不能用同步 fetch 心智去管。每个时代都在重新发现这件事。</li>
+          <li><b>2020-11</b> · OpenAI GPT-3 公开 API（raw HTTP，无 SDK）。开发者写 fetch + 自己解析 SSE-like 流，boilerplate 巨多。</li>
+          <li><b>2022-11</b> · ChatGPT 发布 → LLM 应用爆炸 → 大家都需要 SDK。</li>
+          <li><b>2023-01</b> · LangChain JS 第一版发布 —— 第一波 LLM orchestration 框架（chains / prompts / agents / memory / retrievers）。<strong>快速火爆</strong>但被认为"过度抽象 + bundle size 大 + breaking changes 频"。</li>
+          <li><b>2023-06</b> · OpenAI Function Calling 公开 —— 第一个标准化 tool calling 协议。LLM 第一次能"调函数"。</li>
+          <li><b>2023-09</b> · Vercel AI SDK 早期版本（v2.x）—— 定位"前端 chat 库"，比 LangChain 轻量很多。</li>
+          <li><b>2024-03</b> · Vercel AI SDK v3 —— <code>useChat</code> 进入主线 + Generative UI 实验。<strong>关键转折</strong>：把"LLM 集成"重新定位为"前端 SDK"而不是"orchestration framework"。</li>
+          <li><b>2024-04</b> · Anthropic Tool Use 公开（Claude API tool calling，与 OpenAI 协议略不同）。</li>
+          <li><b>2024-11</b> · MCP（Model Context Protocol）公开 —— Anthropic 主导的开放标准，定义"LLM ↔ 外部工具"接口。Cursor / Claude Code / VS Code 等迅速跟进。</li>
+          <li><b>2024-12</b> · Vercel AI SDK v4 —— 多 provider 抽象成熟（OpenAI / Anthropic / Google / Mistral / Bedrock 一份代码切换）。</li>
+          <li><b>2025-08</b> · Vercel AI SDK v5 —— <strong>关键大版本</strong>：流式协议从自家 Data Stream Protocol 切到 SSE 标准；<strong>UIMessage / ModelMessage 二分法</strong>；tool-invocations type-specific parts；Vue / Svelte / Angular feature parity（不再只 React 一等公民）。</li>
+          <li><b>2025</b> · Anthropic Claude Agent SDK 公开 —— Anthropic 给"构建生产 AI agents"的官方库，<strong>同一个 agent loop 驱动 Claude Code 自身</strong>（dogfooding）。</li>
+          <li><b>2026-02</b> · Vercel AI SDK v6 —— <strong>Agent abstraction</strong> + ToolLoopAgent + AI Gateway（zero markup pricing）+ Human-in-the-loop tool approval + DevTools。从 v5 升级文档少（"spec 改进，不是 SDK 重做"）。</li>
+          <li><b>2026 内</b> · Vercel AI SDK v7 canary —— WorkflowAgent + durable execution + loop control（<code>stopWhen</code> / <code>prepareStep</code>）。</li>
+          <li>2026 年同代人分工：<strong>Vercel AI SDK 占 React/Next.js 生态 LLM 集成 ~80%</strong>；Claude Agent SDK 是 CLI / 后端 agent 主力；LangChain JS 仍存在但份额收缩；Mastra / CopilotKit 等 niche 各占一小块。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>2020-2022 · raw API 时代：boilerplate 巨多</h3>
+
+        <p>OpenAI 2020 年 11 月公开 GPT-3 API。最初没有官方 SDK，开发者直接打 HTTP：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 2021 年的真实写法
+const res = await fetch('https://api.openai.com/v1/completions', {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${API_KEY}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    model: 'text-davinci-003',
+    prompt: 'Once upon a time',
+    max_tokens: 100,
+    stream: true,
+  }),
+});
+
+// 流式响应是自定义 SSE-like 格式
+const reader = res.body.getReader();
+const decoder = new TextDecoder();
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  const chunks = decoder.decode(value).split('\n\n');
+  for (const chunk of chunks) {
+    if (chunk.startsWith('data: ')) {
+      const json = chunk.slice(6);
+      if (json === '[DONE]') break;
+      const data = JSON.parse(json);
+      console.log(data.choices[0].text);
+    }
+  }
+}</code></pre>
+        </div>
+
+        <p>问题清单：流式解析手写、错误处理散落、没有取消、token 计数手写、多 provider 各自不同协议。这套样板代码在 2022-2023 年每个 LLM 应用都重写一遍。</p>
+
+        <h3>2023 · LangChain JS 时代：第一波 orchestration 框架</h3>
+
+        <p>2023 年 1 月 LangChain JS 第一版发布（Python 版稍早）。它的设计思路：把 LLM 应用看作<strong>"chain of operations"</strong>，每个 op 是一个抽象（prompt / model / parser / retriever / memory / agent）：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 2023 年 LangChain JS 风格
+import { ChatOpenAI } from 'langchain/chat_models';
+import { PromptTemplate } from 'langchain/prompts';
+import { LLMChain } from 'langchain/chains';
+
+const model = new ChatOpenAI({ temperature: 0 });
+const prompt = PromptTemplate.fromTemplate(
+  'Translate "{text}" to {language}'
+);
+const chain = new LLMChain({ llm: model, prompt });
+const result = await chain.call({ text: 'hello', language: 'French' });</code></pre>
+        </div>
+
+        <p>2023 年它是事实主流。但很快被认为有几个根本问题：</p>
+
+        <ul>
+          <li><strong>过度抽象</strong>：chain / agent / tool / memory / retriever 等概念多，简单场景写一堆 boilerplate</li>
+          <li><strong>bundle size 大</strong>：核心包几 MB，对前端项目过重</li>
+          <li><strong>Breaking changes 频繁</strong>：从 0.0.x 到 0.3.x 大量 API 变化，升级痛苦</li>
+          <li><strong>抽象漏洞多</strong>：底层 LLM provider 行为不一致，LangChain 抽象层经常"看着能用，跑起来不对"</li>
+          <li><strong>调试难</strong>：链很深时报错难定位</li>
+        </ul>
+
+        <p>2024-2025 年大量项目从 LangChain JS 转走。2026 年 LangChain JS 仍存在，但<strong>不是新项目首选</strong>。</p>
+
+        <h3>2023-2024 · OpenAI Function Calling + Anthropic Tool Use：tool calling 标准化</h3>
+
+        <p>2023 年 6 月 OpenAI 公开 Function Calling —— LLM 第一次能"决定调用某个函数"：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// OpenAI Function Calling (2023-06 引入)
+const res = await openai.chat.completions.create({
+  model: 'gpt-4',
+  messages: [{ role: 'user', content: 'What is the weather in NYC?' }],
+  tools: [{
+    type: 'function',
+    function: {
+      name: 'getWeather',
+      description: 'Get the weather for a city',
+      parameters: {
+        type: 'object',
+        properties: { city: { type: 'string' } },
+        required: ['city'],
+      },
+    },
+  }],
+});
+
+// LLM 返回 tool_calls
+const toolCall = res.choices[0].message.tool_calls?.[0];
+if (toolCall) {
+  const args = JSON.parse(toolCall.function.arguments);
+  const result = await getWeather(args.city);
+  // 把结果作为 tool message 喂回 LLM
+  await openai.chat.completions.create({
+    messages: [
+      ...,
+      { role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) },
+    ],
+  });
+}</code></pre>
+        </div>
+
+        <p>Anthropic 2024 年 4 月公开 Tool Use（Claude API），协议略不同（Anthropic 用 <code>input_schema</code> 而不是 OpenAI 的 <code>parameters</code>；流式 tool input 协议也不同）。<strong>这造成"我支持多 provider"的库必须抽象掉差异</strong>。Vercel AI SDK v3-v4 的核心价值就在这。</p>
+
+        <h3>2024 · Vercel AI SDK v3-v4：前端 chat 库 + 多 provider</h3>
+
+        <p>Vercel 2023 年 9 月发布 v2.x，2024 年 3 月 v3 把 <code>useChat</code> 推到主线：</p>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// Vercel AI SDK v3 (2024)
+import { useChat } from 'ai/react';
+
+function Chat() {
+  const { messages, input, handleInputChange, handleSubmit } = useChat({
+    api: '/api/chat',
+  });
+  return (
+    &lt;div&gt;
+      {messages.map((m) =&gt; &lt;div key={m.id}&gt;{m.role}: {m.content}&lt;/div&gt;)}
+      &lt;form onSubmit={handleSubmit}&gt;
+        &lt;input value={input} onChange={handleInputChange} /&gt;
+      &lt;/form&gt;
+    &lt;/div&gt;
+  );
+}
+
+// 后端 (/api/chat Route Handler)
+import { streamText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+export async function POST(req) {
+  const { messages } = await req.json();
+  const result = await streamText({
+    model: openai('gpt-4o'),
+    messages,
+  });
+  return result.toDataStreamResponse();
+}</code></pre>
+        </div>
+
+        <p>这套<strong>极简心智</strong>（前端 hook + 后端 streamText 配对）让 Vercel AI SDK 在 2024 年快速接管前端 LLM 集成。v4（2024 年 12 月）把多 provider 抽象做完整：同一份代码切 OpenAI / Anthropic / Google / Mistral / Bedrock。</p>
+
+        <h3>2025-08 · Vercel AI SDK v5：协议层 + state 模型双重重做</h3>
+
+        <p>v5 是 Vercel AI SDK 历史上最大的 breaking change。三个核心变化：</p>
+
+        <ul>
+          <li><strong>流式协议从自家 NDJSON 切到 SSE 标准</strong>。v4 之前用 <code>0:&lt;text&gt;\n2:&lt;data&gt;\n</code> 这种自家格式；v5 切到 W3C SSE（<code>data: ...\n\n</code>）。前端用户感知小，但<strong>自定义后端（FastAPI / Python）必须重写适配</strong>。</li>
+          <li><strong>UIMessage / ModelMessage 二分法</strong>。以前一份 message 同时承担"前端展示"和"LLM context"两个角色；v5 把它们解耦。UIMessage 是前端 source of truth（含 metadata / debug 信息），ModelMessage 是发给 LLM 的精简表示。</li>
+          <li><strong>tool-invocations 改成 type-specific parts</strong>：<code>{ type: 'tool-getWeather', ... }</code> 替代通用 <code>{ type: 'tool-invocation', toolName: 'getWeather' }</code>。TypeScript 类型推导更精确。</li>
+        </ul>
+
+        <p>另外：Vue / Svelte / Angular feature parity（v4 之前 React 一等公民，v5 起多框架对等）。</p>
+
+        <h3>2025 · Claude Agent SDK：Anthropic 的 agent 范式</h3>
+
+        <p>2025 年 Anthropic 公开 <strong>Claude Agent SDK</strong>（Python + TypeScript 双语言）。核心定位：<strong>"构建生产 AI agents"的官方库</strong>，不是"LLM API 包装"。它和 Vercel AI SDK 在两个层面不同：</p>
+
+        <ul>
+          <li><strong>没有 UI 层</strong>：不提供 useChat 等 hooks。假设你自己做 UI 或不需要 UI（CLI 场景）</li>
+          <li><strong>agent loop 是核心抽象</strong>：subagents（每个独立 context window）/ MCP（外部工具接口）/ hooks（生命周期拦截）/ sessions 全是一等公民</li>
+          <li><strong>Dogfooding</strong>：<strong>同一个 agent loop 驱动 Claude Code 自身</strong> —— 这是工程级的"用自己的 SDK 建产品"</li>
+          <li><strong>Provider 默认 Anthropic</strong>：可经 Bedrock / Vertex AI 切，但不像 Vercel 完全 vendor-neutral</li>
+        </ul>
+
+        <h3>2026-02 · Vercel AI SDK v6：Agent abstraction 时代</h3>
+
+        <p>v6（2026 年 2 月发布，0.14.x 至今主线）的关键创新：</p>
+
+        <ul>
+          <li><strong>Agent abstraction</strong>：一次定义模型 + 系统提示 + 工具 = 可复用 agent</li>
+          <li><strong>ToolLoopAgent</strong>：内置 agent loop（"调 LLM → 看 tool calls → 调 tool → 喂回"循环）</li>
+          <li><strong>AI Gateway</strong>：统一访问 100+ provider model + zero markup pricing + $5/月免费额度</li>
+          <li><strong>Human-in-the-loop tool approval</strong>：敏感工具人审；UI 渲染审批 prompt</li>
+          <li><strong>structured output with tool calling</strong>：v6 起两者可协作（之前不能同时用）</li>
+          <li><strong>DevTools</strong>：浏览器扩展看 useChat 内部 state</li>
+        </ul>
+
+        <p>v6 升级文档少（"spec 改进，不是 SDK 重做"）。从 v5 升 v6 大部分代码不需要改。</p>
+
+        <h3>2026 内 · v7 canary：durable execution</h3>
+
+        <p>v7 仍 canary（pre-release），关键创新：</p>
+
+        <ul>
+          <li><strong>WorkflowAgent</strong>：agent task 可持久化、跨 process 重启、跨小时几天运行（与 Vercel 新发布的 durable execution programming model 对齐）</li>
+          <li><strong>Loop control</strong>：<code>stopWhen</code> / <code>prepareStep</code> 让 agent loop 可显式控制</li>
+        </ul>
+
+        <p>2026 年生产环境不要用 v7（unstable），但要知道方向。详见 <a href="../07-decision/01-decision.html">P7</a>。</p>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景：2026 年同代人分工</span></h2>
+
+        <p>每个时代的 SDK / 框架在 2026 年都没完全退场，而是在自己擅长的位置占住。</p>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · React/Next.js 前端 LLM 集成（~80% 项目）：Vercel AI SDK</h3>
+          <p>2026 年前端 chat / generative UI / 流式 LLM 响应几乎全部 Vercel AI SDK。理由：useChat 等 hooks 一等公民、与 Next.js 深度集成（Server Actions / RSC streaming / Edge runtime）、多 provider 切换零成本、社区资源最丰富。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · CLI 工具 / 终端 agent：Claude Agent SDK</h3>
+          <p>Claude Code 本身就是 Claude Agent SDK 驱动的；其他 CLI agent（dev tools / 自动化脚本 / 终端 chat）跟 Claude Code 共生态最自然。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 后端复杂 agent orchestration：Claude Agent SDK</h3>
+          <p>多 subagent / 长任务 / 严格 tool 权限 / 与 MCP 深度集成的场景，Claude Agent SDK 比 Vercel 更直接。原因：subagents 一等公民、hooks 生命周期完整、MCP 中心地位、与 Anthropic 一手 model API 行为最一致。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 前后端混合：Vercel + Claude Agent SDK 各管一边</h3>
+          <p>典型架构：Vercel AI SDK 跑前端 chat（useChat / Server Action）+ 调后端 agent；后端 agent 用 Claude Agent SDK 跑复杂 orchestration。<strong>不冲突，互补</strong>。Anthropic / Vercel 双方都不强迫"全栈用我"。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 E · LangChain JS：仍有但收缩</h3>
+          <p>2024 年前 LangChain JS 已建立的项目仍在维护；新项目几乎不再选 LangChain JS。原因：Vercel AI SDK 抽象更轻、Claude Agent SDK 更专注、生态都已稳定。但 LangChain Python（不是 JS）在 RAG / agent 场景仍有更大份额。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 F · 其他 niche 框架</h3>
+          <p>Mastra（agent + workflow + RAG 全栈，TS only）/ CopilotKit（专做 copilot UI，常配 Vercel AI SDK）/ Inkeep / OpenAI Agents SDK / Inngest agent kit 各自占小生态位。<strong>2026 主线仍是 Vercel + Claude Agent SDK 两家</strong>。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：四代演化对比</span></h2>
+
+        <h3>第一代：raw API（2020-2022）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 直接 fetch + 手写流式解析（boilerplate）
+const res = await fetch('https://api.openai.com/v1/chat/completions', { ... });
+const reader = res.body.getReader();
+// 自己解析 SSE-like 格式...</code></pre>
+        </div>
+
+        <h3>第二代：LangChain JS（2023）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">import { ChatOpenAI } from 'langchain/chat_models';
+import { LLMChain } from 'langchain/chains';
+
+const model = new ChatOpenAI();
+const chain = new LLMChain({ llm: model, prompt });
+await chain.call({ ... });
+// 概念多：chain / model / prompt / parser / memory ...</code></pre>
+        </div>
+
+        <h3>第三代：Vercel AI SDK v3-v4（2024）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">// 后端
+import { streamText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+const result = await streamText({ model: openai('gpt-4o'), messages });
+return result.toDataStreamResponse();
+
+// 前端
+const { messages } = useChat({ api: '/api/chat' });</code></pre>
+        </div>
+
+        <h3>第四代：Vercel AI SDK v6 + Agent（2026）</h3>
+
+        <div class="code-block">
+          <span class="code-label">javascript</span>
+          <pre class="code"><code class="lang-js">import { Agent } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+// 一次定义，多处复用
+const supportAgent = new Agent({
+  model: openai('gpt-4o'),
+  system: 'You are a customer support agent.',
+  tools: { lookupOrder, refundOrder },
+});
+
+// 在 Server Action / Route Handler / 测试里都能调
+const result = await supportAgent.stream({ prompt: 'help me' });
+return result.toUIMessageStreamResponse();</code></pre>
+        </div>
+
+        <h3>同代人：Claude Agent SDK（2025-）</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { ClaudeAgent } from '@anthropic-ai/claude-agent-sdk';
+
+const agent = new ClaudeAgent({
+  systemPrompt: 'You are a code review assistant.',
+  // MCP servers + subagents + hooks 一等公民
+  mcpServers: [{ command: 'github-mcp-server' }],
+  subagents: { codeReviewer: { ... }, testRunner: { ... } },
+  hooks: {
+    PreToolUse: async ({ tool }) =&gt; { /* 拦截 */ },
+  },
+});
+await agent.run({ prompt: 'review PR #42' });</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 仍在用 LangChain JS 启新项目</div>
+          <p>2024-2025 已有大量项目从 LangChain JS 转走。2026 新项目几乎不再选。<strong>修复</strong>：前端用 Vercel AI SDK；复杂后端 agent 用 Claude Agent SDK；如果团队已深度 Python / RAG，Python 端可以仍 LangChain Python。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · 把 Vercel AI SDK 和 LangChain 当同一类东西比较</div>
+          <p>它们是<strong>不同抽象层级</strong>。Vercel AI SDK 是"LLM API 薄抽象 + UI hooks"；LangChain 是"orchestration framework"。在 v6 之前 Vercel 没有 Agent abstraction，在 agent / orchestration 维度二者比不了；v6 起 Vercel 有 Agent，但仍是<strong>更轻的抽象</strong>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 误以为 Claude Agent SDK 是 "Anthropic 版的 Vercel AI SDK"</div>
+          <p><strong>它们解决不同问题</strong>。Vercel AI SDK 优先解决"前端 / 全栈 web 应用集成 LLM"；Claude Agent SDK 优先解决"构建生产 AI agents 含 CLI / 后端 orchestration"。前者有 UI 层，后者没有；前者多 provider，后者锁定 Claude（可经 Bedrock / Vertex）。详见 <a href="02-philosophy.html">P1.2</a>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 仍用 v4 旧 useChat 心智</div>
+          <p>v4 useChat 没 UIMessage / ModelMessage 二分；v5+ 必须用 <code>convertToModelMessages</code> 在前后端边界转换。如果你的代码混用 v4 v5 心智 → 类型不兼容 / 协议错。<strong>修复</strong>：全升 v5+；按 v5 升级文档改。详见 <a href="../02-vercel-core/02-stream-protocol.html">P2.2</a>。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 用 v5 useChat 但后端没适配 SSE 协议</div>
+          <p>v5 把流式协议从 NDJSON 切到 SSE。如果你的后端是 FastAPI / Python / 自建（不是 Next.js Route Handler），可能没适配新协议 → useChat 收不到流。<strong>修复</strong>：参考 SDK 文档 update server endpoint；或用官方 Vercel AI SDK Python adapter。这是 v5 升级最大的迁移点。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · v7 canary 在生产用</div>
+          <p>v7 canary 仍 unstable，<strong>不要在生产用</strong>。WorkflowAgent / durable execution / loop control 等概念仍在演进，API 可能 breaking changes。<strong>修复</strong>：生产用 v6（current latest stable）；v7 canary 仅用于实验 / 评估方向。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 误以为有"AI 全能 SDK"</div>
+          <p>2026 年没有"一个 SDK 解决所有 LLM 集成场景"的库。<strong>选择会基于场景</strong>：前端 web → Vercel AI SDK；CLI / 复杂 agent → Claude Agent SDK；混合架构 → 两者一起用。期待"All in One"会失望。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://ai-sdk.dev/docs" target="_blank" rel="noopener">Vercel AI SDK 官方文档（v6 主线）</a></li>
+          <li><a href="https://ai-sdk.dev/v7/docs" target="_blank" rel="noopener">Vercel AI SDK v7 canary 文档</a></li>
+          <li><a href="https://vercel.com/blog/ai-sdk-5" target="_blank" rel="noopener">Vercel · AI SDK 5 设计文章</a> —— v5 协议层 + state 模型重做的官方解释</li>
+          <li><a href="https://vercel.com/blog/ai-sdk-6" target="_blank" rel="noopener">Vercel · AI SDK 6 设计文章</a></li>
+          <li><a href="https://github.com/vercel/ai/releases" target="_blank" rel="noopener">vercel/ai GitHub releases</a> —— 一手版本历史</li>
+          <li><a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK 官方文档</a></li>
+          <li><a href="https://github.com/anthropics/claude-agent-sdk-python" target="_blank" rel="noopener">claude-agent-sdk-python</a></li>
+          <li><a href="https://github.com/anthropics/claude-agent-sdk-typescript" target="_blank" rel="noopener">claude-agent-sdk-typescript</a></li>
+          <li><a href="https://modelcontextprotocol.io" target="_blank" rel="noopener">Model Context Protocol 官方</a></li>
+          <li><a href="https://platform.openai.com/docs/guides/function-calling" target="_blank" rel="noopener">OpenAI Function Calling docs</a></li>
+          <li><a href="https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/overview" target="_blank" rel="noopener">Anthropic Tool Use docs</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../index.html">
+            <span class="label">← 上一节</span>
+            <span class="title">主题首页</span>
+          </a>
+          <a class="next" href="02-philosophy.html">
+            <span class="label">下一章 →</span>
+            <span class="title">设计哲学 · "包 LLM API" → "agent abstraction"</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

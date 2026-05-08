@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent + ToolLoopAgent + structured output · P4.1 · AI SDK 深度学习</title>
+    <meta name="description" content="Vercel AI SDK v6 引入的 Agent abstraction：一次定义 model + system + tools，多处复用；ToolLoopAgent 内置 agent loop（maxSteps / stopWhen / onStep）；structured output with tool calling（v6 stable，之前不能同时用）。这是 v6 与 v5 最大的差异点。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%237c3aed'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EAI%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>AI SDK 深度学习</span><span class="site-title-badge" style="background: #7c3aed; color: #fff">AI</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · Agent 抽象 ⭐</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-agent.html" class="active">01 · Agent + ToolLoopAgent + structured output</a></li>
+          <li><a href="02-tool-use.html">02 · Tool use 全谱 + Human-in-the-loop</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">AI SDK</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · Agent 抽象 ⭐</a><span class="breadcrumb-sep">/</span>
+          <span>01 · Agent + ToolLoopAgent + structured output</span>
+        </nav>
+        <h1>Agent + ToolLoopAgent + structured output with tool calling</h1>
+        <p class="lead">
+          Vercel AI SDK v6 主线最重要的章节之一。Agent abstraction 把"一次定义 model + system + tools，多处复用"做成一等公民；ToolLoopAgent 内置 agent loop（自动循环调用直到 LLM 没新 tool call）；structured output with tool calling 让"调几个 tool 后返回结构化 object"在 v6 stable。这一章把这三个 v6 新增能力的设计动机、API、与 v5 streamText + tools 的关系讲清。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 读过 P2（架构 + Stream Protocol）+ 用过 streamText + tools 至少一次</span>
+          <span><strong>主要来源</strong> ai-sdk.dev/docs/agents + vercel.com/blog/ai-sdk-6 + ai-sdk.dev/v7/docs/introduction（v7 canary 对照）</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>裸 streamText + tools 的局限</strong>：你需要自己写 agent loop（"调 LLM → 看 tool calls → 调 tool → 喂回 LLM → 直到没 tool call"）；多步骤推理（搜索→总结→再搜）需要手写；多个组件复用同一组 tools 不优雅。</li>
+          <li><strong>v6 Agent abstraction</strong>：<code>new Agent({ model, system, tools })</code> 一次定义，多处复用（Server Action / Route Handler / Client useChat 都能调）。</li>
+          <li><strong>ToolLoopAgent</strong>（Agent 的子类）：<strong>内置 tool loop</strong> + <code>maxSteps</code>（防 infinite loop）+ <code>stopWhen</code>（自定义停止条件）+ <code>onStep</code>（每步回调用于 observability / debug）+ 自动 tool 调用 / 喂回。</li>
+          <li><strong>structured output with tool calling</strong>（v6 stable）：之前 generateObject 和 tool calling 不能同时用；v6 起两者协作 —— LLM 先调几个 tool 收集信息，再返回符合 schema 的 object。</li>
+          <li><strong>Agent 不是必须用</strong>：简单单次调用仍用 generateText / streamText；只有"复用 + 多 tool + 多步推理"时才升 Agent。</li>
+          <li><strong>类型安全</strong>：tools 的输入输出类型自动推导；agent.generate / agent.stream 返回的 result 包含完整类型信息。</li>
+          <li><strong>与 UI 集成</strong>：agent.stream 返回兼容 UIMessageStreamResponse 的 result，能直接给 useChat 消费。</li>
+          <li><strong>v7 canary 进一步强化</strong>：WorkflowAgent（durable execution）+ loop control（stopWhen / prepareStep 更精细）。本章正文锁定 v6 stable，v7 在 P7 展望提及。</li>
+          <li><strong>2026 实际项目分布</strong>：~40% 项目仍用 streamText + tools（简单场景）；~50% 项目升级到 v6 Agent（复用 + 多 tool）；~10% 用 ToolLoopAgent + 复杂 loop control。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>裸 streamText + tools 的工程现实</h3>
+
+        <p>v5 时代用 streamText + tools 的典型代码：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// v5: 后端 Route Handler
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+
+  const result = streamText({
+    model: openai('gpt-4o'),
+    system: 'You are a customer support agent.',
+    messages: convertToModelMessages(messages),
+    tools: {
+      lookupOrder: { description: '...', parameters: ..., execute: ... },
+      sendEmail: { description: '...', parameters: ..., execute: ... },
+    },
+    // streamText 默认 maxSteps=1（只调一次 LLM）
+    maxSteps: 5,  // 允许多步循环
+  });
+
+  return result.toUIMessageStreamResponse();
+}</code></pre>
+        </div>
+
+        <p>问题暴露：</p>
+
+        <ul>
+          <li><strong>同样的 model + system + tools 配置每个 endpoint 都要写一遍</strong>。如果 customer support agent 在 10 个 endpoint / Server Action 里用，配置散落十处</li>
+          <li><strong>maxSteps 只是简单数字</strong>，没法表达"如果 LLM 调了 sendEmail 就停"这种业务逻辑</li>
+          <li><strong>没有 onStep 钩子</strong>（v5 只有 onFinish）—— observability 不够</li>
+          <li><strong>测试时</strong>很难复用 agent 配置（每个 test 重写一遍 streamText 调用）</li>
+        </ul>
+
+        <h3>v6 Agent abstraction 解法</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// v6: 一次定义
+import { Agent } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+export const supportAgent = new Agent({
+  model: openai('gpt-4o'),
+  system: 'You are a customer support agent.',
+  tools: {
+    lookupOrder: { description: '...', parameters: ..., execute: ... },
+    sendEmail: { description: '...', parameters: ..., execute: ... },
+  },
+});
+
+// 多处复用
+// Route Handler
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+  const result = supportAgent.stream({ messages: convertToModelMessages(messages) });
+  return result.toUIMessageStreamResponse();
+}
+
+// Server Action
+'use server';
+export async function askSupport(question: string) {
+  const result = await supportAgent.generate({ prompt: question });
+  return result.text;
+}
+
+// 后台批处理
+async function processTickets(tickets: Ticket[]) {
+  return Promise.all(tickets.map(async (t) =&gt; {
+    const result = await supportAgent.generate({ prompt: t.body });
+    return { id: t.id, response: result.text };
+  }));
+}
+
+// 测试
+test('支持订单查询', async () =&gt; {
+  const result = await supportAgent.generate({ prompt: 'where is order 42?' });
+  expect(result.toolCalls.some((t) =&gt; t.toolName === 'lookupOrder')).toBe(true);
+});</code></pre>
+        </div>
+
+        <p>关键设计：</p>
+
+        <ul>
+          <li><strong>定义一次，多处复用</strong>：supportAgent 在所有调用点共享配置</li>
+          <li><strong>类型安全</strong>：tools 类型自动推导，agent.generate / agent.stream 返回完整类型</li>
+          <li><strong>同时支持 generate（非流式）+ stream（流式）</strong>：根据场景选</li>
+        </ul>
+
+        <h3>ToolLoopAgent 内置 agent loop</h3>
+
+        <p>ToolLoopAgent 是 Agent 的子类，专门处理"agent loop until done"：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { ToolLoopAgent } from 'ai';
+
+const researchAgent = new ToolLoopAgent({
+  model: openai('gpt-4o'),
+  system: 'You are a research assistant. Use tools to find information, then summarize.',
+  tools: {
+    search: { ... },
+    fetchUrl: { ... },
+    summarize: { ... },
+  },
+
+  maxSteps: 10,  // 最多调用 LLM 10 次（防 infinite loop）
+
+  // 自定义停止条件
+  stopWhen: ({ steps }) =&gt; {
+    const lastStep = steps[steps.length - 1];
+    return lastStep.toolCalls.some((t) =&gt; t.toolName === 'summarize');
+    // 一旦调了 summarize 就停（认为研究完毕）
+  },
+
+  // 每步回调（observability / debug）
+  onStep: ({ step, totalUsage }) =&gt; {
+    console.log(`Step ${step.stepNumber}: tools=${step.toolCalls.map((t) =&gt; t.toolName).join(',')}`);
+    console.log(`Total tokens so far: ${totalUsage.totalTokens}`);
+  },
+});
+
+const result = await researchAgent.generate({
+  prompt: 'Research the impact of AI on healthcare in 2024',
+});
+console.log(result.text);  // 最终总结
+console.log(result.steps);  // 完整步骤历史</code></pre>
+        </div>
+
+        <h3>agent loop 内部机制</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>ToolLoopAgent.generate({ prompt }) 内部流程：
+
+1. 初始 messages = [{ role: 'user', content: prompt }]
+2. step = 0
+3. while step &lt; maxSteps:
+     a. 调 LLM (model + system + messages + tools)
+     b. 如果 LLM 没 toolCalls (只输出 text):
+          → return { text, steps }
+     c. 否则按 stopWhen 检查:
+          if (stopWhen({ steps })) return { ... }
+     d. 并发调每个 tool.execute
+     e. 调用 onStep({ step, totalUsage })
+     f. 把 LLM response + tool results 加到 messages
+     g. step++
+4. 达到 maxSteps 强制结束 (返回最后状态)</code></pre>
+        </div>
+
+        <h3>structured output with tool calling（v6 stable）</h3>
+
+        <p>v5 之前 generateObject 和 tools 不能同时用：</p>
+
+        <ul>
+          <li>generateObject 让 LLM 输出符合 schema 的 JSON（用 OpenAI structured outputs / Anthropic tool calling 间接实现）</li>
+          <li>同时给 tools → 协议冲突</li>
+        </ul>
+
+        <p>v6 起两者协作：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { generateObject, tool } from 'ai';
+import { z } from 'zod';
+
+const result = await generateObject({
+  model: openai('gpt-4o'),
+  tools: {
+    getWeather: tool({
+      description: 'Get weather for a city',
+      parameters: z.object({ city: z.string() }),
+      execute: async ({ city }) =&gt; await fetchWeather(city),
+    }),
+    getForecast: tool({
+      description: 'Get 7-day forecast',
+      parameters: z.object({ city: z.string() }),
+      execute: async ({ city }) =&gt; await fetchForecast(city),
+    }),
+  },
+  schema: z.object({
+    city: z.string(),
+    currentTemp: z.number(),
+    nextWeekForecast: z.string(),
+    recommendation: z.string(),
+  }),
+  prompt: 'Tell me about NYC weather and what to expect next week',
+  maxSteps: 5,
+});
+
+// LLM 自动:
+// 1. 调 getWeather('NYC') → temp 72°F
+// 2. 调 getForecast('NYC') → "rainy weekend"
+// 3. 综合信息返回符合 schema 的 object
+console.log(result.object);
+// {
+//   city: 'NYC',
+//   currentTemp: 72,
+//   nextWeekForecast: 'Rainy weekend, mild weekdays',
+//   recommendation: 'Bring an umbrella for the weekend'
+// }</code></pre>
+        </div>
+
+        <p>这是 v6 的<strong>关键能力</strong>：data extraction + tool research 合并。以前要分两步（先 streamText + tools 收集信息 → 再 generateObject 提取结构化），v6 一步到位。</p>
+
+        <h3>Agent vs streamText + tools 选择</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>场景</th>
+              <th>推荐 API</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>简单单次 LLM 调用（无 tools）</td>
+              <td>generateText / streamText</td>
+            </tr>
+            <tr>
+              <td>单次调用 + 1-2 个 tool + 1-2 步</td>
+              <td>streamText + tools + maxSteps:3</td>
+            </tr>
+            <tr>
+              <td>同一 agent 在 3+ 处复用</td>
+              <td><strong>Agent</strong></td>
+            </tr>
+            <tr>
+              <td>多步推理（research / 复杂 orchestration）</td>
+              <td><strong>ToolLoopAgent</strong></td>
+            </tr>
+            <tr>
+              <td>tool 调用后返回结构化 object</td>
+              <td><strong>generateObject + tools</strong>（v6 stable）</td>
+            </tr>
+            <tr>
+              <td>需要 onStep / stopWhen 控制</td>
+              <td><strong>ToolLoopAgent</strong></td>
+            </tr>
+            <tr>
+              <td>durable execution（跨小时几天）</td>
+              <td>v7 canary WorkflowAgent（生产暂不推荐）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Agent 不是 LangChain agent</h3>
+
+        <p>有人会问：v6 Agent 是不是 LangChain agent / chains 重做？<strong>不是</strong>。区别：</p>
+
+        <ul>
+          <li><strong>抽象层级</strong>：Vercel Agent 是<strong>"配置打包"</strong>（model + system + tools 一起复用），不是 LangChain 那种"高层 orchestration"。Agent 没有 chain / memory / retriever 概念</li>
+          <li><strong>仍是低抽象</strong>：你仍能直接 streamText / generateText。Agent 只是把"重复配置"打包，没有引入 LangChain 风格的"过度抽象"</li>
+          <li><strong>与 v5 streamText 兼容</strong>：底层就是 streamText，Agent 只是它的便捷 wrapper</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 客服 agent 在多个 endpoint 复用 → Agent</h3>
+          <p>客服 agent 在 chat endpoint / 邮件处理 worker / 后台批量分类 / 测试中都要用同一组 model + system + tools。<strong>用 Agent 一次定义 + 多处复用</strong>，避免配置散落。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 研究 agent 多步推理 → ToolLoopAgent</h3>
+          <p>"研究 X 主题"→ LLM 调 search 找资料 → 调 fetchUrl 读全文 → 多次循环 → 调 summarize 总结。<strong>ToolLoopAgent + maxSteps + stopWhen("调了 summarize 就停") + onStep（监控 token 消耗）</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 邮件分类 + 提取结构化 → generateObject + tools</h3>
+          <p>客服收到邮件 → LLM 先调 lookupCustomer 拿历史 → 调 classifyIssue 用 ML 模型分类 → 综合信息返回符合 schema 的 object（含 customer / category / priority / suggested actions）。<strong>v6 generateObject + tools 一步到位</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 简单翻译 → 仍用 streamText 不需要 Agent</h3>
+          <p>纯翻译 / 摘要 / 文本改写 —— 没 tools、没多步、不复用。<strong>streamText 即可</strong>，不要为了"现代"硬上 Agent abstraction。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 E · agent 在 useChat 里跑 → Agent.stream + toUIMessageStreamResponse</h3>
+          <p>前端 chat 调 server agent。Agent 内部 maxSteps + tools 完整 loop；前端 useChat 看到完整 messages（含 tool 调用 / 结果）。<strong>2026 主流模式</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 F · 多 agent 协作 → 嵌套 agent</h3>
+          <p>主 agent 协调多个专项 agent（researchAgent / writerAgent / reviewerAgent）。每个子 agent 是独立 Agent 实例，主 agent 通过 tool 调子 agent。<strong>v6 没有 Claude Agent SDK 那种"subagent"专属概念</strong>，但能用嵌套 Agent 实现。详见 <a href="../05-claude-mcp/01-claude-agent.html">P5.1</a> 对比。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：完整 Agent 实战</span></h2>
+
+        <h3>客服 Agent 完整定义 + 多处使用</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// agents/support.ts
+import { Agent, tool } from 'ai';
+import { openai } from '@ai-sdk/openai';
+import { z } from 'zod';
+
+export const supportAgent = new Agent({
+  model: openai('gpt-4o'),
+  system: `You are a customer support agent for ACME Corp.
+  Use tools to look up information before responding.
+  Be polite, helpful, and concise.`,
+  tools: {
+    lookupOrder: tool({
+      description: 'Look up an order by ID',
+      parameters: z.object({ orderId: z.string() }),
+      execute: async ({ orderId }) =&gt; {
+        const order = await db.order.findUnique({ where: { id: orderId } });
+        return order ?? { error: 'Order not found' };
+      },
+    }),
+    lookupCustomer: tool({
+      description: 'Look up customer by email',
+      parameters: z.object({ email: z.string().email() }),
+      execute: async ({ email }) =&gt;
+        await db.customer.findUnique({ where: { email } }),
+    }),
+    sendEmail: tool({
+      description: 'Send notification email to customer',
+      parameters: z.object({
+        to: z.string().email(),
+        subject: z.string(),
+        body: z.string(),
+      }),
+      execute: async ({ to, subject, body }) =&gt;
+        await mailer.send({ to, subject, body }),
+    }),
+  },
+});
+
+// app/api/chat/route.ts (Route Handler)
+import { supportAgent } from '@/agents/support';
+import { convertToModelMessages } from 'ai';
+
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+  const result = supportAgent.stream({
+    messages: convertToModelMessages(messages),
+  });
+  return result.toUIMessageStreamResponse();
+}
+
+// app/actions.ts (Server Action)
+'use server';
+import { supportAgent } from '@/agents/support';
+
+export async function processTicket(ticketBody: string) {
+  const result = await supportAgent.generate({ prompt: ticketBody });
+  return result.text;
+}
+
+// workers/batch.ts (后台批处理)
+import { supportAgent } from '@/agents/support';
+
+async function processNewTickets() {
+  const tickets = await db.ticket.findMany({ where: { status: 'new' } });
+  for (const ticket of tickets) {
+    const result = await supportAgent.generate({ prompt: ticket.body });
+    await db.ticket.update({
+      where: { id: ticket.id },
+      data: { autoResponse: result.text, status: 'auto-responded' },
+    });
+  }
+}
+
+// __tests__/support.test.ts (测试)
+import { supportAgent } from '@/agents/support';
+
+test('查询订单调 lookupOrder tool', async () =&gt; {
+  const result = await supportAgent.generate({
+    prompt: 'Where is my order 12345?',
+  });
+  const usedLookupOrder = result.toolCalls.some(
+    (t) =&gt; t.toolName === 'lookupOrder' &amp;&amp; t.input.orderId === '12345'
+  );
+  expect(usedLookupOrder).toBe(true);
+});</code></pre>
+        </div>
+
+        <h3>研究 Agent + 多步推理</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { ToolLoopAgent, tool } from 'ai';
+import { openai } from '@ai-sdk/openai';
+import { z } from 'zod';
+
+const researchAgent = new ToolLoopAgent({
+  model: openai('gpt-4o'),
+  system: `You are a research assistant.
+  Use search to find sources, fetchUrl to read full content.
+  When you have enough info, call summarize to give the final answer.`,
+
+  tools: {
+    search: tool({
+      description: 'Search the web',
+      parameters: z.object({ query: z.string() }),
+      execute: async ({ query }) =&gt; await searchAPI(query),
+    }),
+    fetchUrl: tool({
+      description: 'Fetch full content of a URL',
+      parameters: z.object({ url: z.string().url() }),
+      execute: async ({ url }) =&gt; await fetch(url).then((r) =&gt; r.text()),
+    }),
+    summarize: tool({
+      description: 'Final summary - call when research is complete',
+      parameters: z.object({
+        summary: z.string(),
+        keyPoints: z.array(z.string()),
+        sources: z.array(z.string().url()),
+      }),
+      execute: async (args) =&gt; args,  // 直接返回 (这是"信号" tool)
+    }),
+  },
+
+  maxSteps: 15,
+
+  stopWhen: ({ steps }) =&gt; {
+    const lastStep = steps[steps.length - 1];
+    return lastStep.toolCalls.some((t) =&gt; t.toolName === 'summarize');
+  },
+
+  onStep: ({ step, totalUsage }) =&gt; {
+    console.log(`Step ${step.stepNumber}:`);
+    console.log(`  tools called: ${step.toolCalls.map((t) =&gt; t.toolName).join(', ')}`);
+    console.log(`  total tokens: ${totalUsage.totalTokens}`);
+  },
+});
+
+// 使用
+const result = await researchAgent.generate({
+  prompt: 'Research recent breakthroughs in quantum computing in 2024',
+});
+
+// 拿最终 summarize tool 的 input（包含 summary / keyPoints / sources）
+const summarizeCall = result.toolResults.find(
+  (t) =&gt; t.toolName === 'summarize'
+);
+console.log(summarizeCall?.input.summary);
+console.log(summarizeCall?.input.keyPoints);</code></pre>
+        </div>
+
+        <h3>generateObject + tools（v6 stable）</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { generateObject, tool } from 'ai';
+import { openai } from '@ai-sdk/openai';
+import { z } from 'zod';
+
+// 客服邮件分类 + 结构化输出
+const result = await generateObject({
+  model: openai('gpt-4o'),
+  tools: {
+    lookupCustomer: tool({
+      description: 'Look up customer history by email',
+      parameters: z.object({ email: z.string().email() }),
+      execute: async ({ email }) =&gt; await db.customer.findUnique({ where: { email } }),
+    }),
+    classifyIssue: tool({
+      description: 'Classify issue using ML model',
+      parameters: z.object({ text: z.string() }),
+      execute: async ({ text }) =&gt; await classifyMLModel.predict(text),
+    }),
+  },
+
+  schema: z.object({
+    customer: z.object({
+      email: z.string(),
+      name: z.string(),
+      tier: z.enum(['free', 'pro', 'enterprise']),
+    }),
+    issue: z.object({
+      category: z.enum(['bug', 'feature', 'support', 'billing']),
+      priority: z.enum(['low', 'medium', 'high', 'urgent']),
+      summary: z.string().max(200),
+    }),
+    suggestedActions: z.array(z.string()).max(3),
+    estimatedResponseTime: z.number().describe('Hours until response'),
+  }),
+
+  prompt: `Analyze this customer email and provide structured analysis:\n\n${emailBody}`,
+
+  maxSteps: 5,
+});
+
+// 完整类型推导
+console.log(result.object.customer.tier);  // 'free' | 'pro' | 'enterprise'
+console.log(result.object.issue.priority);
+console.log(result.object.suggestedActions);
+console.log(result.toolCalls);  // 实际调用的 tools</code></pre>
+        </div>
+
+        <h3>Agent 在 useChat 里使用</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// app/api/chat/route.ts
+import { supportAgent } from '@/agents/support';
+import { convertToModelMessages } from 'ai';
+
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+
+  const result = supportAgent.stream({
+    messages: convertToModelMessages(messages),
+    // 可以覆盖 agent 默认值（如调高 maxSteps）
+    maxSteps: 10,
+  });
+
+  return result.toUIMessageStreamResponse();
+}
+
+// 前端
+'use client';
+import { useChat } from 'ai/react';
+
+function Chat() {
+  const { messages, input, setInput, handleSubmit } = useChat({
+    api: '/api/chat',
+  });
+  // useChat 自动处理流式 + tool 调用 UI
+  // ...
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 简单场景过度用 Agent</div>
+          <p>翻译 / 摘要 / 单次问答没 tools → Agent 是过度抽象。<strong>修复</strong>：streamText / generateText 即可。Agent 只用于"复用 + 多 tool"。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · ToolLoopAgent 没设 maxSteps</div>
+          <p>默认 maxSteps 较低（一般 5）。复杂多步 agent 可能没完成就停。<strong>修复</strong>：评估实际需要的步数，设 maxSteps（通常 10-20）。同时<strong>必须设</strong>避免 infinite loop。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · stopWhen 写错导致永远停不下来</div>
+          <p>条件没匹配上 → agent 跑到 maxSteps 才停 → 浪费 token。<strong>修复</strong>：测试 stopWhen 条件；可以打日志（onStep 里）观察实际 tool 调用情况。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 期待 generateObject + tools 在 v5 工作</div>
+          <p>v5 不支持 generateObject + tools 协作。<strong>修复</strong>：升级 v6（current latest stable）；或在 v5 分两步（streamText + tools 收集 → 再 generateObject 提取）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · Agent 跨进程共享</div>
+          <p>Agent 实例是 module 级单例（一个文件 export 一次实例）。但<strong>每个 process 是独立的</strong>—— Vercel Edge Function 跨 invocation 不一定保留 module state。<strong>修复</strong>：Agent 配置不要依赖 process state（避免在 Agent 定义里塞动态数据）；用工厂函数 createAgent() 在每个请求里造新 Agent，如果需要 per-request 配置。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · onStep 阻塞流</div>
+          <p>onStep 里做 async 重操作（写 DB / 发外部请求）会阻塞 agent loop。<strong>修复</strong>：onStep 只做 lightweight observability（log / metrics）；重操作 fire-and-forget（不 await）或 enqueue 到 queue。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 嵌套 Agent 的 token 爆炸</div>
+          <p>主 Agent 调子 Agent 作为 tool → 子 Agent 内部又有完整 messages。如果嵌套层级深 + 每层 messages 都不精简 → token 用量爆炸。<strong>修复</strong>：子 Agent 的 system + messages 要精简（只传必要 context）；监控 onStep 里 totalUsage 异常增长。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 8 · v7 WorkflowAgent 生产用</div>
+          <p>v7 仍 canary，WorkflowAgent / durable execution 不稳定。<strong>修复</strong>：生产用 v6 stable Agent / ToolLoopAgent；durable execution 需求暂时用 Inngest / Trigger.dev / Temporal 等专业库。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://ai-sdk.dev/docs/agents" target="_blank" rel="noopener">AI SDK Agents 文档</a></li>
+          <li><a href="https://ai-sdk.dev/docs/agents/loop-control" target="_blank" rel="noopener">Loop Control 文档</a> —— stopWhen / prepareStep</li>
+          <li><a href="https://vercel.com/blog/ai-sdk-6" target="_blank" rel="noopener">Vercel · AI SDK 6 设计文章</a> —— Agent abstraction 引入动机</li>
+          <li><a href="https://vercel.com/kb/guide/how-to-build-ai-agents-with-vercel-and-the-ai-sdk" target="_blank" rel="noopener">Vercel KB · How to build AI agents</a></li>
+          <li><a href="https://ai-sdk.dev/v7/docs" target="_blank" rel="noopener">AI SDK v7 canary docs</a> —— WorkflowAgent / durable execution 方向</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../03-ui-hooks/02-stream-ui.html">
+            <span class="label">← 上一章</span>
+            <span class="title">Generative UI · streamUI · RSC</span>
+          </a>
+          <a class="next" href="02-tool-use.html">
+            <span class="label">下一章 →</span>
+            <span class="title">Tool use 全谱 + Human-in-the-loop</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

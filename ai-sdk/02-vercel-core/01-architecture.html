@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>三层架构 + 四件套 + AI Gateway · P2.1 · AI SDK 深度学习</title>
+    <meta name="description" content="Vercel AI SDK 三层架构（Core / UI / RSC）+ Core 四件套（generateText / streamText / generateObject / streamObject）+ provider 抽象（OpenAI / Anthropic / Google / Mistral / Bedrock）+ AI Gateway（zero markup pricing）。讲清三层独立可用 / 四件套各自适用场景 / provider 切换零成本 / AI Gateway 工程价值。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%237c3aed'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EAI%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>AI SDK 深度学习</span><span class="site-title-badge" style="background: #7c3aed; color: #fff">AI</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P2 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P2 · Vercel AI SDK 心智</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-architecture.html" class="active">01 · 三层架构 + 四件套</a></li>
+          <li><a href="02-stream-protocol.html">02 · Stream Protocol 演化</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">AI SDK</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P2 · Vercel AI SDK 心智</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 三层架构</span>
+        </nav>
+        <h1>三层架构（Core / UI / RSC）+ 四件套 + AI Gateway</h1>
+        <p class="lead">
+          Vercel AI SDK 不是单一包，是三层 SDK 家族：Core（与 LLM 交互）/ UI（前端 hooks）/ RSC（服务端 React 渲染）。Core 四件套（generateText / streamText / generateObject / streamObject）是与 LLM 交互的最核心 API。这一章把三层架构、四件套适用场景、provider 抽象、AI Gateway（v6 起）讲清。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 读过 P1（5 年史 + 设计哲学）</span>
+          <span><strong>主要来源</strong> ai-sdk.dev/docs/ai-sdk-core + ai-sdk.dev/docs/ai-sdk-ui + vercel.com/blog/ai-sdk-6（AI Gateway 设计文章）+ Zod 文档</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li>Vercel AI SDK 是<strong>三层架构</strong>：(a) <strong>Core</strong>（<code>ai</code> 包）—— 与 LLM 交互的核心 API + Agent abstraction；(b) <strong>UI</strong>（<code>ai/react</code> / <code>ai/vue</code> / <code>ai/svelte</code> / <code>ai/angular</code>）—— 框架专用 hooks；(c) <strong>RSC</strong>（<code>ai/rsc</code>）—— React Server Components 专用，含 streamUI 等。三层<strong>独立可用</strong>，按需选。</li>
+          <li><strong>Core 四件套</strong>：<code>generateText</code> / <code>streamText</code> / <code>generateObject</code> / <code>streamObject</code>。这是与 LLM 交互的最核心 API，覆盖"单次 vs 流式"和"文本 vs 结构化"两个维度。</li>
+          <li><strong>generateText</strong>：单次文本生成。返回 <code>{ text, usage, finishReason, toolCalls? }</code>。适合后端非流式调用、批量任务、不需要 UI 流式的场景。</li>
+          <li><strong>streamText</strong>：流式文本。返回 <code>{ textStream, fullStream, ... }</code>。适合 UI 流式响应。底层走 SSE（v5+）。</li>
+          <li><strong>generateObject</strong>：单次结构化输出（按 Zod schema）。LLM 输出符合 schema 的 JSON。适合"提取结构化数据"场景。</li>
+          <li><strong>streamObject</strong>：流式结构化输出。<code>partialObjectStream</code> 边收边给逐渐完整的 object。适合"流式生成 form / 表格 UI"。</li>
+          <li><strong>Provider 抽象</strong>：<code>@ai-sdk/openai</code> / <code>@ai-sdk/anthropic</code> / <code>@ai-sdk/google</code> / <code>@ai-sdk/mistral</code> / <code>@ai-sdk/amazon-bedrock</code> 等。同一份代码切换 model 即可换 provider。</li>
+          <li><strong>AI Gateway</strong>（v6 起）：<code>@ai-sdk/gateway</code> 包，统一访问 100+ provider model；<strong>zero markup pricing</strong>（用户只付 provider token 价格）；$5/月免费额度（Vercel 团队赠）；包含 prompt caching / observability / budget controls。极大降低多 provider 切换成本。</li>
+          <li><strong>2026 实际项目分布</strong>：~70% 项目用 Core + UI（不含 RSC）；~20% 加 RSC（streamUI）；~10% 仅用 Core（后端批处理 / agent）。AI Gateway 在新项目里普及率快速上升（v6 起接近 30%）。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>三层架构</h3>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>┌─────────────────────────────────────────────────────────────┐
+│  AI SDK UI (ai/react · ai/vue · ai/svelte · ai/angular)     │
+│  └─ useChat / useCompletion / useObject / useAssistant      │
+│  └─ 框架专用，前端 state 管理                                  │
+└──────────────────┬──────────────────────────────────────────┘
+                   │ via SSE protocol (v5+)
+┌──────────────────▼──────────────────────────────────────────┐
+│  AI SDK Core (ai)                                            │
+│  ├─ generateText / streamText / generateObject / streamObject│
+│  ├─ Agent / ToolLoopAgent (v6+)                              │
+│  ├─ tool() / experimental_createMCPClient                    │
+│  └─ provider-neutral 接口                                     │
+└──────────────────┬──────────────────────────────────────────┘
+                   │
+┌──────────────────▼──────────────────────────────────────────┐
+│  Provider Adapters                                           │
+│  @ai-sdk/openai / anthropic / google / mistral / bedrock /  │
+│  google-vertex / azure / cohere / fireworks / groq / ...    │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  AI SDK RSC (ai/rsc, 独立)                                    │
+│  └─ streamUI · createStreamableUI · createStreamableValue    │
+│  └─ React Server Components 专用                              │
+└─────────────────────────────────────────────────────────────┘</code></pre>
+        </div>
+
+        <h4>三层独立可用</h4>
+
+        <p>关键设计：三层不是必须一起用：</p>
+
+        <ul>
+          <li><strong>仅用 Core</strong>：后端批处理、agent orchestration、CLI 工具。不需要前端</li>
+          <li><strong>Core + UI</strong>：典型 chat 应用。前端 useChat + 后端 streamText 配对</li>
+          <li><strong>Core + UI + RSC</strong>：复杂 generative UI 场景（详见 P3.2）</li>
+          <li><strong>Core + RSC（不含 UI）</strong>：纯 RSC 应用，所有交互通过 Server Action</li>
+        </ul>
+
+        <p>这种设计让 Vercel AI SDK 在不同项目类型都能用 —— 不强迫"全栈用我"。</p>
+
+        <h3>Core 四件套深入</h3>
+
+        <h4>generateText：单次文本</h4>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { generateText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+const { text, usage, finishReason, toolCalls } = await generateText({
+  model: openai('gpt-4o'),
+  prompt: 'Translate "hello" to French',
+});
+
+console.log(text);
+// usage: { promptTokens, completionTokens, totalTokens }
+// finishReason: 'stop' | 'length' | 'tool-calls' | 'content-filter' | 'error'</code></pre>
+        </div>
+
+        <p>关键：<strong>不流式</strong>。等 LLM 完整生成完才返回。适合：</p>
+
+        <ul>
+          <li>后端批处理（一次跑 1000 条数据，每条调一次 LLM）</li>
+          <li>不展示给用户的内部决策（路由 / 分类 / 摘要供下游用）</li>
+          <li>测试 / 调试时简单调用</li>
+        </ul>
+
+        <h4>streamText：流式文本</h4>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { streamText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+const result = streamText({
+  model: openai('gpt-4o'),
+  prompt: 'Tell me a story',
+});
+
+// 多种消费方式：
+
+// 1. textStream（仅 text delta）
+for await (const chunk of result.textStream) {
+  process.stdout.write(chunk);
+}
+
+// 2. fullStream（含 tool calls / finish reason / errors）
+for await (const event of result.fullStream) {
+  switch (event.type) {
+    case 'text-delta': process.stdout.write(event.textDelta); break;
+    case 'tool-call': console.log('tool:', event.toolName); break;
+    case 'finish': console.log('done:', event.finishReason); break;
+  }
+}
+
+// 3. 转 Response 给 useChat（v5+ SSE 协议）
+return result.toUIMessageStreamResponse();
+
+// 4. 等所有完成后拿最终结果
+const text = await result.text;
+const finishReason = await result.finishReason;</code></pre>
+        </div>
+
+        <p>关键：<strong>边生成边返回</strong>。适合 UI 流式响应（用户看到文字逐字出现）。</p>
+
+        <h4>generateObject：单次结构化输出</h4>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { generateObject } from 'ai';
+import { openai } from '@ai-sdk/openai';
+import { z } from 'zod';
+
+const { object, usage } = await generateObject({
+  model: openai('gpt-4o'),
+  schema: z.object({
+    name: z.string(),
+    email: z.string().email(),
+    intent: z.enum(['support', 'sales', 'feedback']),
+    summary: z.string(),
+  }),
+  prompt: `Extract structured info from this email:\n${emailBody}`,
+});
+
+// object 100% 符合 schema (TypeScript 类型推导精确)
+console.log(object.name, object.intent);</code></pre>
+        </div>
+
+        <p>关键：<strong>schema 驱动</strong>。SDK 把 Zod schema 转成 LLM 能理解的格式（OpenAI structured outputs / Anthropic tool calling），保证输出严格符合。</p>
+
+        <p>2026 状态：</p>
+
+        <ul>
+          <li>OpenAI <code>response_format: { type: 'json_schema' }</code>（structured outputs）</li>
+          <li>Anthropic 通过 tool calling 间接实现</li>
+          <li>Vercel AI SDK 抽象掉差异，统一 API</li>
+        </ul>
+
+        <h4>streamObject：流式结构化</h4>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">const result = streamObject({
+  model: openai('gpt-4o'),
+  schema: z.object({
+    title: z.string(),
+    items: z.array(z.object({ name: z.string(), price: z.number() })),
+  }),
+  prompt: 'Generate an order with 3 items',
+});
+
+// 边收边拿"逐渐完整的 object"
+for await (const partial of result.partialObjectStream) {
+  // 第一次: { title: 'Or...' }
+  // 第二次: { title: 'Order #42', items: [{ name: 'App...' }] }
+  // 第三次: { title: 'Order #42', items: [{ name: 'Apple', price: 1 }, { name: 'B...' }] }
+  // ...
+  updateUI(partial);
+}
+
+const finalObject = await result.object;</code></pre>
+        </div>
+
+        <p>关键：<strong>partial 不一定符合 schema</strong>（中间状态字符串可能截断、数组可能不完整）。但<strong>最终 object 一定符合</strong>。</p>
+
+        <h3>Provider 抽象</h3>
+
+        <p>Vercel AI SDK 的核心价值之一：<strong>同一份代码切换 model</strong>：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { streamText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+import { anthropic } from '@ai-sdk/anthropic';
+import { google } from '@ai-sdk/google';
+import { mistral } from '@ai-sdk/mistral';
+import { bedrock } from '@ai-sdk/amazon-bedrock';
+
+// 同一段代码，换 model：
+await streamText({ model: openai('gpt-4o'), prompt: '...' });
+await streamText({ model: anthropic('claude-sonnet-4-6'), prompt: '...' });
+await streamText({ model: google('gemini-2.5-flash'), prompt: '...' });
+await streamText({ model: mistral('mistral-large'), prompt: '...' });
+await streamText({ model: bedrock('claude-3-haiku'), prompt: '...' });</code></pre>
+        </div>
+
+        <p>SDK 在内部抽象掉各 provider 的协议差异：</p>
+
+        <ul>
+          <li>OpenAI 的 messages 格式 vs Anthropic 的 messages 格式</li>
+          <li>OpenAI Function Calling vs Anthropic Tool Use（input_schema vs parameters / tool result 字段名 / 流式协议各不同）</li>
+          <li>provider-specific 选项（temperature / top_p / max_tokens 命名差异）</li>
+        </ul>
+
+        <p>2026 主流 provider 的 latest model 列表：OpenAI gpt-4o / gpt-5 / o1 / Anthropic Claude Sonnet 4.6 / Opus 4.7 / Haiku 4.5 / Google Gemini 2.5 / Mistral Large / Bedrock 各 model / Azure OpenAI / Cohere / Fireworks / Groq / 等等。</p>
+
+        <h3>AI Gateway（v6 起）</h3>
+
+        <p>v6 引入的<strong>统一访问层</strong>：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { gateway } from '@ai-sdk/gateway';
+import { streamText } from 'ai';
+
+// 通过 Gateway 访问任意 provider model（无需各自 API key）
+await streamText({
+  model: gateway('openai/gpt-4o'),
+  prompt: '...',
+});
+
+await streamText({
+  model: gateway('anthropic/claude-sonnet-4-6'),
+  prompt: '...',
+});</code></pre>
+        </div>
+
+        <p>Gateway 价值：</p>
+
+        <ul>
+          <li><strong>单一 API key</strong>：不用为每个 provider 单独申请</li>
+          <li><strong>Zero markup pricing</strong>：付 provider token 原价（不加价）</li>
+          <li><strong>$5/月免费额度</strong>：Vercel 团队赠送</li>
+          <li><strong>统一 observability</strong>：所有 LLM 调用走 Gateway，一站监控</li>
+          <li><strong>Budget controls</strong>：设月度上限避免账单意外</li>
+          <li><strong>Caching</strong>：Gateway 层 cache（相同输入 cache 化）</li>
+          <li><strong>Fallback</strong>：一个 provider 挂了自动切另一个</li>
+          <li><strong>Prompt caching</strong>：自动判断长 system prompt 时启用 Anthropic prompt caching 等</li>
+        </ul>
+
+        <p>2026 状态：</p>
+
+        <ul>
+          <li>不强制 —— 仍可不用 Gateway 直接打 provider</li>
+          <li>新项目 + 多 provider 切换需求大 → 用 Gateway 划算</li>
+          <li>已有大量直连各 provider 的项目 → 渐进迁移即可</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景：四件套 + 三层选型</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 简单 chat 应用 → Core + UI（不含 RSC）</h3>
+          <p>典型 ChatGPT-like UI：useChat hook（前端） + streamText（后端 Route Handler 或 Server Action）。<strong>不需要 RSC streamUI</strong>。<strong>不需要 Agent abstraction</strong>。这是 80% 项目的栈。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 后端批处理 / 数据提取 → 仅 Core</h3>
+          <p>批量处理 1000 封邮件提取结构化信息：generateObject + Zod schema。不需要 UI hooks。可以在 cron job / queue worker 里跑。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 流式生成结构化 UI → Core + UI</h3>
+          <p>用户输入需求 → LLM 流式生成订单确认 form / 比较表格。后端 streamObject + Zod schema；前端 useObject hook 边收边渲染。<strong>比 streamText + 自己 parse JSON 更可靠</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · LLM 决定渲染什么 React 组件 → Core + RSC</h3>
+          <p>"用户问'我下周怎么穿' → LLM 调 getWeather + 决定渲染 OutfitCard 组件 → server 直接渲染"。streamUI（<code>ai/rsc</code>）+ Server Action。详见 P3.2。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 E · 多 provider 切换 → AI Gateway</h3>
+          <p>项目要支持用户选 model（"用 GPT-5 还是 Claude Sonnet 还是 Gemini"）+ 监控所有 LLM 调用 + 控制成本。<strong>AI Gateway 是答案</strong>。一个 API key + 统一 dashboard + budget。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 F · 非 React 框架（Vue / Svelte / Angular）→ Core + UI（对应包）</h3>
+          <p>v5+ Vue / Svelte / Angular feature parity。同一份后端 streamText 代码 + 前端用 <code>ai/vue</code> / <code>ai/svelte</code> / <code>ai/angular</code> 各自的 useChat。这是 v5 的关键改进。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：四件套实战</span></h2>
+
+        <h3>generateText：批处理邮件分类</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { generateText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+async function classifyEmails(emails: Email[]) {
+  const results = await Promise.all(
+    emails.map(async (email) =&gt; {
+      const { text } = await generateText({
+        model: openai('gpt-4o-mini'),  // 用便宜 model 跑分类
+        prompt: `Classify this email as: support/sales/spam.\n\nEmail: ${email.body}\n\nCategory:`,
+      });
+      return { id: email.id, category: text.trim() };
+    })
+  );
+  return results;
+}</code></pre>
+        </div>
+
+        <h3>streamText：Next.js Route Handler</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// app/api/chat/route.ts
+import { streamText, convertToModelMessages } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+
+  const result = streamText({
+    model: openai('gpt-4o'),
+    messages: convertToModelMessages(messages),  // UIMessage → ModelMessage
+    system: 'You are a helpful assistant.',
+  });
+
+  return result.toUIMessageStreamResponse();
+}</code></pre>
+        </div>
+
+        <h3>generateObject：结构化数据提取</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { generateObject } from 'ai';
+import { anthropic } from '@ai-sdk/anthropic';
+import { z } from 'zod';
+
+const { object } = await generateObject({
+  model: anthropic('claude-sonnet-4-6'),
+  schema: z.object({
+    customer: z.object({
+      name: z.string(),
+      email: z.string().email(),
+      phone: z.string().optional(),
+    }),
+    intent: z.enum(['quote', 'support', 'complaint']),
+    urgency: z.enum(['low', 'medium', 'high']),
+    summary: z.string().max(200),
+    suggestedActions: z.array(z.string()).max(3),
+  }),
+  prompt: `Analyze this customer email:\n\n${emailBody}`,
+});
+
+// object 完整类型推导：
+// object.customer.name: string
+// object.intent: 'quote' | 'support' | 'complaint'
+// object.suggestedActions: string[]</code></pre>
+        </div>
+
+        <h3>streamObject：流式生成 form UI</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 后端
+import { streamObject } from 'ai';
+import { z } from 'zod';
+
+export async function POST(req: Request) {
+  const { description } = await req.json();
+  const result = streamObject({
+    model: openai('gpt-4o'),
+    schema: z.object({
+      title: z.string(),
+      fields: z.array(z.object({
+        name: z.string(),
+        type: z.enum(['text', 'number', 'email', 'select']),
+        label: z.string(),
+        required: z.boolean(),
+      })),
+    }),
+    prompt: `Generate a form for: ${description}`,
+  });
+  return result.toTextStreamResponse();
+}
+
+// 前端 (React)
+import { useObject } from 'ai/react';
+
+function FormGenerator() {
+  const { object, submit, isLoading } = useObject({
+    api: '/api/generate-form',
+    schema: formSchema,  // 同一个 Zod schema
+  });
+
+  return (
+    &lt;div&gt;
+      {/* object?.fields 边收边显示 */}
+      {object?.fields?.map((field, i) =&gt; (
+        &lt;input
+          key={i}
+          name={field.name}
+          type={field.type}
+          placeholder={field.label}
+        /&gt;
+      ))}
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>多 provider 切换：用户可选 model</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { streamText } from 'ai';
+import { gateway } from '@ai-sdk/gateway';
+
+const MODELS = {
+  'gpt-4o': 'openai/gpt-4o',
+  'claude-sonnet-4-6': 'anthropic/claude-sonnet-4-6',
+  'gemini-2.5-flash': 'google/gemini-2.5-flash',
+};
+
+export async function POST(req: Request) {
+  const { messages, modelKey } = await req.json();
+  const modelId = MODELS[modelKey] ?? MODELS['gpt-4o'];
+
+  const result = streamText({
+    model: gateway(modelId),
+    messages: convertToModelMessages(messages),
+  });
+  return result.toUIMessageStreamResponse();
+}</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 在 UI 流式场景用 generateText</div>
+          <p>用户等几秒后一次性看到全部输出 → 体验差。<strong>修复</strong>：UI 流式场景用 streamText / streamObject + useChat / useObject。generateText 仅用于后端非交互场景。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · streamText 在 Route Handler 里 await result.text</div>
+          <p>这等于把流式变成非流式（等所有完成后才返回）。<strong>修复</strong>：直接 <code>return result.toUIMessageStreamResponse()</code>，让 SDK 把 stream 转 SSE 响应。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · generateObject 用 z.any() / z.unknown()</div>
+          <p>schema 没具体定义 → LLM 不知道传什么 → 输出可能任何东西。<strong>修复</strong>：精确 schema + 每个字段加 <code>.describe('...')</code> 让 LLM 理解语义。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · streamObject 在 partial 阶段 schema 验证</div>
+          <p>partial object 在中间状态<strong>不一定</strong>符合 schema（字符串可能截断 / 数组可能不完整）。如果你 <code>schema.parse(partial)</code> 会抛错。<strong>修复</strong>：用 <code>.partial()</code> 校验或仅在最终 object 校验。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 没用 convertToModelMessages</div>
+          <p>useChat 端 messages 是 UIMessage[]（含 metadata / tool result parts 等）。直接传给 streamText 的 <code>messages</code> 参数会出错（streamText 期望 ModelMessage[]）。<strong>修复</strong>：v5+ 必须 <code>convertToModelMessages(messages)</code>。详见 P2.2。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · 想用 RSC streamUI 但放在 Client Component</div>
+          <p><code>streamUI</code> 必须在 Server Action 或 Route Handler 调用 —— 它依赖 RSC server-side 渲染能力。在 client 调会报错。<strong>修复</strong>：把 streamUI 调用移到 server 文件 + client 组件通过 server action 触发。详见 P3.2。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 多个 provider 各自 SDK 而不用 Gateway</div>
+          <p>项目同时支持 4 个 provider → 4 个 API key + 4 套限流 + 4 个监控 dashboard → 运维负担。<strong>修复</strong>：用 AI Gateway 统一。1 个 API key + 1 个 dashboard + 统一 budget + caching + fallback。<strong>除非</strong>你有 Gateway 不支持的 provider 或合规原因不能走 Gateway。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 8 · 期待四件套之间能切换</div>
+          <p>generateText / streamText / generateObject / streamObject <strong>不能简单互换</strong> —— 它们的返回类型完全不同。一个项目里这四个 API 通常都会用，对应不同场景。<strong>修复</strong>：理解四件套是<strong>互补</strong>，不是"一个能替代另一个"。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://ai-sdk.dev/docs/ai-sdk-core" target="_blank" rel="noopener">AI SDK Core 文档</a> —— 四件套 + Agent 详细 API</li>
+          <li><a href="https://ai-sdk.dev/docs/ai-sdk-core/generating-text" target="_blank" rel="noopener">generateText / streamText 详细文档</a></li>
+          <li><a href="https://ai-sdk.dev/docs/ai-sdk-core/generating-structured-data" target="_blank" rel="noopener">generateObject / streamObject 详细文档</a></li>
+          <li><a href="https://ai-sdk.dev/docs/ai-sdk-core/providers-and-models" target="_blank" rel="noopener">Providers and Models 完整列表</a></li>
+          <li><a href="https://vercel.com/docs/ai-gateway" target="_blank" rel="noopener">Vercel AI Gateway 文档</a></li>
+          <li><a href="https://zod.dev/" target="_blank" rel="noopener">Zod 文档</a> —— schema 验证库</li>
+          <li><a href="https://platform.openai.com/docs/guides/structured-outputs" target="_blank" rel="noopener">OpenAI Structured Outputs</a> —— generateObject 底层</li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../01-overview/02-philosophy.html">
+            <span class="label">← 上一章</span>
+            <span class="title">设计哲学 · agent abstraction</span>
+          </a>
+          <a class="next" href="02-stream-protocol.html">
+            <span class="label">下一章 →</span>
+            <span class="title">Stream Protocol 演化 · v4 → v5 SSE</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

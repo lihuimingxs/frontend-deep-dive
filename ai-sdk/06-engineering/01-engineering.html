@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>工程化与生产 · P6.1 · AI SDK 深度学习</title>
+    <meta name="description" content="把 AI SDK 上生产之前要解决：测试（MockLanguageModelV2 + MSW 网络层 mock + tool unit test）+ 部署（Edge runtime 25s timeout / Node / Bun / Cloudflare Workers 边界）+ 监控（v6 内置 OTel / DevTools 浏览器扩展）+ caching（Anthropic Prompt Caching / AI Gateway / 应用层 Redis）+ cost 控制 + AI Gateway 工程价值。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%237c3aed'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EAI%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>AI SDK 深度学习</span><span class="site-title-badge" style="background: #7c3aed; color: #fff">AI</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P6 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P6 · 工程化与生产</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-engineering.html" class="active">01 · 测试 + 部署 + 监控 + caching + Gateway</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">AI SDK</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P6 · 工程化与生产</a><span class="breadcrumb-sep">/</span>
+          <span>01 · 工程化</span>
+        </nav>
+        <h1>测试 + 部署 + 监控 + caching + cost 控制 + AI Gateway</h1>
+        <p class="lead">
+          把 AI SDK 上生产之前要解决：怎么测试 LLM 流式响应、Edge / Node / Bun runtime 在长 agent 任务上的限制、监控（OTel / DevTools）、caching（不每次都打 LLM）、cost 控制（token 烧钱）。这一章一章覆盖这 6 个工程话题，给生产部署提供完整 checklist。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 读过 P2-P4（架构 + Stream Protocol + Agent + Tool）</span>
+          <span><strong>主要来源</strong> ai-sdk.dev/docs/troubleshooting + Vercel Edge runtime 文档 + Anthropic Prompt Caching docs + Vercel AI Gateway 文档 + OpenTelemetry SDK 文档 + 测试主题 P6 MSW</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>测试三件套</strong>：(a) <code>MockLanguageModelV2</code>（v5+ 内置）让 streamText 在测试里返回固定响应；(b) MSW 网络层 mock（链回 测试主题 P6）；(c) tool execute 函数直接 unit test（不需要跑 LLM）。<strong>不要 mock useChat / streamText 的内部</strong>，mock 边界（network 层）。</li>
+          <li><strong>Edge runtime 边界</strong>：Vercel Edge Function / Cloudflare Workers 默认 25-30s timeout（可调到 5 分钟）。某些 Node API 不支持（fs / child_process / native modules）。<strong>长 agent 任务（5+ 分钟）不要 Edge，用 Node runtime 或后台 worker</strong>。</li>
+          <li><strong>Bun runtime</strong>（链回 Bun 主题）：完整 Web Streams 支持；<code>Bun.serve</code> 流式响应；ai SDK v5+ 完全兼容。生产<strong>越来越多</strong>用 Bun（性能 + DX）。</li>
+          <li><strong>Cloudflare Workers</strong>：Streams 完整；CPU time limits（典型 30s，付费 5 分钟）；适合 edge 流式响应 + 接 MCP HTTP servers。</li>
+          <li><strong>OTel observability</strong>（v6 内置）：默认导出 spans for streamText / generateText / tool execution / agent step。<strong>开箱接 Datadog / New Relic / Honeycomb / Langfuse</strong>。</li>
+          <li><strong>DevTools</strong>（v6 浏览器扩展）：可视化看 useChat 内部 state / message parts / tool calls / agent steps。类似 React DevTools 但专门给 AI SDK。</li>
+          <li><strong>Caching 三层</strong>：(a) <strong>Anthropic Prompt Caching</strong>（长 system prompt cache，重复请求只付 cache 价 25-90% 折扣）；(b) <strong>Vercel AI Gateway caching</strong>（v6 引入，统一 cache 层）；(c) <strong>应用层 cache</strong>（Redis / KV，相同输入完全 cache 化整个响应）。</li>
+          <li><strong>Cost 控制</strong>：监控 <code>usage</code>（token 数）+ AI Gateway budget controls + 模型分级（Haiku 跑 routing / Sonnet 跑核心 / o1 仅复杂推理）+ prompt caching。<strong>不监控 token 消耗 = 月底惊喜账单</strong>。</li>
+          <li><strong>AI Gateway</strong>（v6 起）：单一 API key + zero markup pricing + 统一 observability + budget + caching + fallback + prompt caching auto-enable。<strong>多 provider 切换需求大的项目几乎没理由不用</strong>。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>测试：边界 mock，不内部 mock</h3>
+
+        <p>AI SDK 测试的核心原则：<strong>mock 边界（network 层 / model 层），不 mock SDK 内部</strong>。</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// ❌ 错误：mock useChat 的内部
+vi.mock('ai/react', () =&gt; ({
+  useChat: () =&gt; ({ messages: [...], sendMessage: vi.fn() }),
+}));
+// 问题：mock 的内部和真实 SDK 行为可能 drift
+// 升级 SDK 后测试假绿
+
+// ✅ 正确：mock model 层 (MockLanguageModelV2)
+import { MockLanguageModelV2 } from 'ai/test';
+import { streamText } from 'ai';
+
+const mockModel = new MockLanguageModelV2({
+  doStream: async () =&gt; ({
+    stream: simulateReadableStream({
+      chunks: [
+        { type: 'text-delta', textDelta: 'Hello' },
+        { type: 'text-delta', textDelta: ' world' },
+        { type: 'finish', finishReason: 'stop', usage: { ... } },
+      ],
+    }),
+  }),
+});
+
+const result = streamText({ model: mockModel, prompt: 'test' });
+// 走完整 SDK 路径，但不打实际 LLM</code></pre>
+        </div>
+
+        <h3>tool execute 单元测试</h3>
+
+        <p>Tool execute 函数本质是普通函数，<strong>直接 unit test</strong>，不需要跑 LLM：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// tools/lookupOrder.ts
+import { tool } from 'ai';
+import { z } from 'zod';
+
+export const lookupOrder = tool({
+  description: 'Look up an order',
+  parameters: z.object({ orderId: z.string() }),
+  execute: async ({ orderId }) =&gt; await db.order.findUnique({ where: { id: orderId } }),
+});
+
+// __tests__/lookupOrder.test.ts
+import { lookupOrder } from '@/tools/lookupOrder';
+
+test('lookupOrder 找到订单', async () =&gt; {
+  const result = await lookupOrder.execute({ orderId: 'ORD-1' });
+  expect(result.id).toBe('ORD-1');
+});
+
+test('订单不存在返回 null', async () =&gt; {
+  const result = await lookupOrder.execute({ orderId: 'NONEXISTENT' });
+  expect(result).toBeNull();
+});</code></pre>
+        </div>
+
+        <h3>Agent 集成测试</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { supportAgent } from '@/agents/support';
+import { MockLanguageModelV2 } from 'ai/test';
+
+test('客户问订单状态会调 lookupOrder', async () =&gt; {
+  // 替换真实 model 为 mock
+  const mockModel = new MockLanguageModelV2({
+    doStream: async () =&gt; ({
+      stream: simulateReadableStream({
+        chunks: [
+          {
+            type: 'tool-call',
+            toolCallId: 'call_1',
+            toolName: 'lookupOrder',
+            input: { orderId: 'ORD-42' },
+          },
+          // 模拟 tool 调用后 LLM 总结
+          { type: 'text-delta', textDelta: 'Your order is shipped.' },
+          { type: 'finish', finishReason: 'stop' },
+        ],
+      }),
+    }),
+  });
+
+  // Agent 类支持 model override (在 generate 调用时)
+  const result = await supportAgent.generate({
+    model: mockModel,
+    prompt: 'Where is order ORD-42?',
+  });
+
+  expect(result.toolCalls).toContainEqual(
+    expect.objectContaining({ toolName: 'lookupOrder' })
+  );
+});</code></pre>
+        </div>
+
+        <h3>Runtime 边界对照</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Runtime</th>
+              <th>Stream 支持</th>
+              <th>Timeout</th>
+              <th>Subprocess（MCP stdio）</th>
+              <th>2026 适用</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Vercel Edge</td>
+              <td>✅</td>
+              <td>25-300s</td>
+              <td>❌</td>
+              <td>简单 chat / generative UI</td>
+            </tr>
+            <tr>
+              <td>Vercel Node Function</td>
+              <td>✅</td>
+              <td>15min（Pro）</td>
+              <td>✅</td>
+              <td>复杂 agent + MCP subprocess</td>
+            </tr>
+            <tr>
+              <td>Cloudflare Workers</td>
+              <td>✅</td>
+              <td>30s-5min</td>
+              <td>❌</td>
+              <td>边缘流式 + HTTP MCP</td>
+            </tr>
+            <tr>
+              <td>Bun.serve</td>
+              <td>✅</td>
+              <td>无限</td>
+              <td>✅</td>
+              <td>自建 server / 高性能 chat</td>
+            </tr>
+            <tr>
+              <td>Node Express / Hono</td>
+              <td>✅</td>
+              <td>无限</td>
+              <td>✅</td>
+              <td>传统 backend</td>
+            </tr>
+            <tr>
+              <td>Cron / Worker queue</td>
+              <td>—</td>
+              <td>无限</td>
+              <td>✅</td>
+              <td>批处理 / 长 agent task</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>OTel Observability</h3>
+
+        <p>v6 起 AI SDK 内置 OpenTelemetry instrumentation：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 启用 OTel
+import { streamText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+await streamText({
+  model: openai('gpt-4o'),
+  prompt: 'Hello',
+  experimental_telemetry: {
+    isEnabled: true,
+    functionId: 'chat-handler',          // 标识这次调用
+    metadata: { userId: 'user-123' },     // 附加 metadata
+  },
+});
+
+// SDK 自动导出 spans:
+// - ai.streamText (主 span)
+// - ai.streamText.doStream (调 model)
+// - ai.toolCall (每个 tool 调用)
+// - ai.streamText.doStream.text-delta (流式事件)
+
+// 接 OTel collector → Datadog / Honeycomb / Langfuse / 自建</code></pre>
+        </div>
+
+        <h3>Prompt Caching（Anthropic）</h3>
+
+        <p>系统 prompt 长（含大量 context / few-shot 例子 / 工具描述）时，每次请求重发整个 prompt 浪费 token。Anthropic Prompt Caching 让长 prompt 在 server 端 cache，重复请求只付 25% 价格（cache write 25% 高，cache read 90% 低）：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { anthropic } from '@ai-sdk/anthropic';
+
+const result = await streamText({
+  model: anthropic('claude-sonnet-4-6'),
+  system: longSystemPrompt,  // 几千 token 的 system prompt
+  messages: [...],
+
+  // 启用 prompt caching
+  providerOptions: {
+    anthropic: {
+      cacheControl: { type: 'ephemeral' },  // cache 5 分钟
+    },
+  },
+});
+
+// 重复请求时只付 cache read 价（10% 价格）</code></pre>
+        </div>
+
+        <p>2026 状态：</p>
+
+        <ul>
+          <li>Anthropic 全 model 支持 prompt caching</li>
+          <li>OpenAI 也有类似功能（automatic prompt caching for context &gt; 1k tokens）</li>
+          <li>Google Gemini context caching API</li>
+          <li>AI Gateway 自动启用 prompt caching（不用应用层显式配置）</li>
+        </ul>
+
+        <h3>AI Gateway 工程价值</h3>
+
+        <p>AI Gateway（v6 起）是 Vercel 提供的统一 LLM 访问层：</p>
+
+        <ul>
+          <li><strong>单一 API key</strong>：不用为每个 provider 单独申请</li>
+          <li><strong>Zero markup pricing</strong>：付 provider token 原价（不加价）</li>
+          <li><strong>$5/月免费额度</strong>：Vercel 团队赠送</li>
+          <li><strong>统一 observability</strong>：所有 LLM 调用走 Gateway，一站监控</li>
+          <li><strong>Budget controls</strong>：设月度上限避免账单意外</li>
+          <li><strong>Caching</strong>：Gateway 层 cache（相同输入 cache 化）</li>
+          <li><strong>Fallback</strong>：一个 provider 挂了自动切另一个</li>
+          <li><strong>Auto prompt caching</strong>：长 prompt 自动启用 provider 各自的 prompt caching</li>
+        </ul>
+
+        <p>不用 Gateway 的情况：</p>
+
+        <ul>
+          <li>合规要求 LLM 调用必须直连 provider（不经第三方）</li>
+          <li>需要 provider-specific feature 而 Gateway 不暴露</li>
+          <li>已有完整 observability / billing 基础设施，Gateway 只是冗余</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 短 chat → Edge runtime</h3>
+          <p>用户提问 → LLM 流式回答（&lt; 30s 完成）。Vercel Edge Function 默认 25s timeout 通常够用。<strong>低延迟（edge POP）+ 自动 scale</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 复杂 research agent → Node Function</h3>
+          <p>研究 agent 跑几分钟（多步 search / 总结）→ Edge 25s timeout 不够。<strong>Vercel Node Function（Pro 15min）或自建 Express / Hono</strong>。配 OTel 监控 step 进度。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 批处理 agent → Cron / Worker queue</h3>
+          <p>每天处理 1000 个 ticket → 不是用户实时等的请求 → 进 queue（Inngest / Trigger.dev / 自建 BullMQ）→ worker 慢慢处理 + 失败重试 + 进度持久化。<strong>不要在 HTTP request 跑长任务</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 多 provider 项目 → AI Gateway</h3>
+          <p>用户可选 GPT / Claude / Gemini → 不用各自 SDK + 各自 API key。Gateway 一份代码 + 一个 dashboard + budget 控制 + auto fallback。<strong>2026 多 provider 项目几乎默认 Gateway</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 E · 长 system prompt → Prompt caching</h3>
+          <p>客服 agent 的 system prompt 含完整产品 context + tool 描述 + 历史 few-shot 例子（5-20k token）。每次请求重发整个 prompt → token 账单贵 5x。<strong>开 prompt caching → cache read 价格 10%，账单减少 80%+</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 F · 调试用 DevTools 浏览器扩展</h3>
+          <p>useChat 行为奇怪（tool 不触发 / state 不对 / 流式卡）→ 装 AI SDK DevTools 看 internal state + message parts + tool calls timeline。比 console.log 高效十倍。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：生产 checklist 实战</span></h2>
+
+        <h3>测试：MockLanguageModelV2 完整例子</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { describe, test, expect } from 'vitest';
+import { MockLanguageModelV2, simulateReadableStream } from 'ai/test';
+import { streamText } from 'ai';
+
+describe('chat handler', () =&gt; {
+  test('简单文本响应', async () =&gt; {
+    const mockModel = new MockLanguageModelV2({
+      doStream: async () =&gt; ({
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'text-delta', textDelta: 'Hello, ' },
+            { type: 'text-delta', textDelta: 'world!' },
+            { type: 'finish', finishReason: 'stop', usage: { promptTokens: 10, completionTokens: 5 } },
+          ],
+        }),
+      }),
+    });
+
+    const result = streamText({ model: mockModel, prompt: 'test' });
+    let text = '';
+    for await (const chunk of result.textStream) {
+      text += chunk;
+    }
+    expect(text).toBe('Hello, world!');
+  });
+
+  test('tool 调用流程', async () =&gt; {
+    const mockModel = new MockLanguageModelV2({
+      doStream: async ({ inputFormat }) =&gt; {
+        // 第一次调返回 tool call
+        // (生产代码可基于 messages 长度判断是第几次调用)
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'tool-call', toolCallId: 'call_1', toolName: 'getWeather', input: { city: 'NYC' } },
+              { type: 'finish', finishReason: 'tool-calls' },
+            ],
+          }),
+        };
+      },
+    });
+
+    const result = streamText({
+      model: mockModel,
+      tools: {
+        getWeather: tool({
+          description: '...',
+          parameters: z.object({ city: z.string() }),
+          execute: async ({ city }) =&gt; ({ city, temp: 72 }),
+        }),
+      },
+      prompt: 'NYC weather',
+      maxSteps: 1,
+    });
+
+    const toolCalls = await result.toolCalls;
+    expect(toolCalls[0].toolName).toBe('getWeather');
+  });
+});</code></pre>
+        </div>
+
+        <h3>Edge runtime + 优雅 timeout</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// app/api/chat/route.ts
+export const runtime = 'edge';
+export const maxDuration = 60;  // 1 分钟（pro 计划可设更长）
+
+import { streamText, convertToModelMessages } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+
+  // 创建 abort controller 处理 timeout
+  const abortController = new AbortController();
+  setTimeout(() =&gt; abortController.abort(), 55_000);  // 比 maxDuration 早 5s
+
+  const result = streamText({
+    model: openai('gpt-4o'),
+    messages: convertToModelMessages(messages),
+    abortSignal: abortController.signal,
+    onError: ({ error }) =&gt; {
+      if (error.name === 'AbortError') {
+        console.log('Stream aborted due to timeout');
+      }
+    },
+  });
+
+  return result.toUIMessageStreamResponse();
+}</code></pre>
+        </div>
+
+        <h3>OTel + Honeycomb 完整接入</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// instrumentation.ts (Next.js 自动加载)
+import { NodeSDK } from '@opentelemetry/sdk-node';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { Resource } from '@opentelemetry/resources';
+
+const sdk = new NodeSDK({
+  resource: new Resource({
+    'service.name': 'my-ai-app',
+  }),
+  traceExporter: new OTLPTraceExporter({
+    url: 'https://api.honeycomb.io/v1/traces',
+    headers: { 'x-honeycomb-team': process.env.HONEYCOMB_API_KEY! },
+  }),
+});
+
+sdk.start();
+
+// app/api/chat/route.ts
+export async function POST(req: Request) {
+  const { messages, userId } = await req.json();
+
+  const result = streamText({
+    model: openai('gpt-4o'),
+    messages: convertToModelMessages(messages),
+    experimental_telemetry: {
+      isEnabled: true,
+      functionId: 'chat-handler',
+      metadata: { userId, sessionId: messages[0].id },
+    },
+  });
+
+  return result.toUIMessageStreamResponse();
+}
+
+// 在 Honeycomb 看 trace:
+// - ai.streamText 总耗时
+// - ai.toolCall 每个 tool 耗时
+// - 按 userId / sessionId 切片分析</code></pre>
+        </div>
+
+        <h3>Anthropic Prompt Caching</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { streamText } from 'ai';
+import { anthropic } from '@ai-sdk/anthropic';
+
+// 长 system prompt（5k+ token）
+const longSystemPrompt = `
+You are a customer support agent for ACME Corp.
+
+Company info: ${COMPANY_INFO_5000_TOKENS}
+Product catalog: ${PRODUCT_CATALOG_3000_TOKENS}
+Common issues and resolutions: ${COMMON_ISSUES_4000_TOKENS}
+
+Tone: professional, helpful, concise.
+`;
+
+const result = streamText({
+  model: anthropic('claude-sonnet-4-6'),
+  system: longSystemPrompt,
+  messages: convertToModelMessages(userMessages),
+
+  providerOptions: {
+    anthropic: {
+      cacheControl: { type: 'ephemeral' },  // 5 分钟 cache TTL
+    },
+  },
+});
+
+// 第一次请求: 全量 token 价 + cache write fee（25% 加价）
+// 后续 5 分钟内重复请求: cache read 价（10% 价格）
+// 如果 system prompt 是 12k token，长期下来 token 账单减少 80%+</code></pre>
+        </div>
+
+        <h3>AI Gateway 完整接入</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { streamText } from 'ai';
+import { gateway } from '@ai-sdk/gateway';
+
+const result = streamText({
+  // 通过 Gateway 访问任意 model
+  model: gateway('openai/gpt-4o'),
+  messages: convertToModelMessages(messages),
+
+  // Gateway 自动:
+  // - 启用 prompt caching (各 provider)
+  // - 上报 telemetry 到 Vercel dashboard
+  // - 应用 budget controls
+  // - 如果 OpenAI 失败，fallback 到 Anthropic (按 dashboard 配置)
+});
+
+// 单一 GATEWAY_API_KEY env var
+// dashboard 看所有调用 + token 消耗 + 错误率
+// 设月度上限 $X，超就停或 alert</code></pre>
+        </div>
+
+        <h3>cost 控制：模型分级</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// 模型分级 cost 控制
+async function smartChat(prompt: string) {
+  // 1. 先用便宜 model 分类（路由）
+  const { object: routing } = await generateObject({
+    model: gateway('anthropic/claude-haiku-4-5'),  // 便宜
+    schema: z.object({
+      complexity: z.enum(['simple', 'medium', 'complex']),
+      requiresReasoning: z.boolean(),
+    }),
+    prompt: `Classify this query: ${prompt}`,
+  });
+
+  // 2. 根据分类选 model
+  let model;
+  if (routing.complexity === 'simple') {
+    model = gateway('anthropic/claude-haiku-4-5');  // $0.80/M tokens
+  } else if (routing.requiresReasoning) {
+    model = gateway('openai/o1');  // $15/M tokens 但是推理强
+  } else {
+    model = gateway('anthropic/claude-sonnet-4-6');  // 中档 $3/M
+  }
+
+  return streamText({ model, prompt });
+}
+
+// cost 实测优化:
+// - 60% 用户查询是 simple → Haiku ($0.80/M)
+// - 30% 是 medium → Sonnet ($3/M)
+// - 10% 复杂推理 → o1 ($15/M)
+// vs 全部 GPT-4o ($5/M):
+// 平均 cost 降低 ~50%</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · 在 Edge runtime 跑长 agent</div>
+          <p>Edge 25s 默认 timeout，长 agent 任务（research agent / 多步骤推理）跑不完。<strong>修复</strong>：(a) 用 Node Function（Pro 15min）；(b) 拆任务进 queue；(c) 调 maxDuration 但仍有上限。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · mock useChat 内部</div>
+          <p>测试 drift + SDK 升级测试假绿。<strong>修复</strong>：mock 边界（MockLanguageModelV2 替 model 层）。tool execute 直接 unit test。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · 没用 prompt caching 长 system prompt</div>
+          <p>每次请求重发 5-20k token 的 system prompt → token 账单膨胀 5-10x。<strong>修复</strong>：开 prompt caching（Anthropic / OpenAI / Google 都支持）；或用 AI Gateway 自动启用。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 没监控 token usage</div>
+          <p>"我用 Vercel AI SDK 一切顺利" 直到月底 $50000 账单。<strong>修复</strong>：(a) 每次响应记录 <code>usage.totalTokens</code>；(b) 用 AI Gateway dashboard 看实时 spend；(c) 设 budget alert（超 X $/天 通知）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 都用最贵 model 跑所有任务</div>
+          <p>客服路由 / 内容分类 / 简单总结 都用 GPT-4 / Claude Opus → 浪费。<strong>修复</strong>：模型分级（Haiku 跑 routing / Sonnet 跑核心 / Opus / o1 仅复杂推理）。可以省 50-80% cost。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · OTel 配置但不接 collector</div>
+          <p>v6 内置 OTel 但你没接 collector → spans 写到本地 stdout 没人看。<strong>修复</strong>：接 Datadog / Honeycomb / Langfuse / Vercel Observability 任一个。OTel 就是为了"接了能用"。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 在 Cloudflare Workers 跑 stdio MCP</div>
+          <p>Workers 不允许 subprocess。<strong>修复</strong>：HTTP MCP server（远程跑）；或换 Node runtime。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 8 · AI Gateway $5 免费额度后没 budget</div>
+          <p>月底惊喜账单。<strong>修复</strong>：dashboard 设月度 budget 上限；超就 hard stop（拒绝新请求）+ 通知 ops。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://ai-sdk.dev/docs/ai-sdk-core/testing" target="_blank" rel="noopener">AI SDK Testing 文档</a></li>
+          <li><a href="https://ai-sdk.dev/docs/ai-sdk-core/telemetry" target="_blank" rel="noopener">AI SDK Telemetry 文档</a></li>
+          <li><a href="https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching" target="_blank" rel="noopener">Anthropic Prompt Caching 文档</a></li>
+          <li><a href="https://platform.openai.com/docs/guides/prompt-caching" target="_blank" rel="noopener">OpenAI Prompt Caching 文档</a></li>
+          <li><a href="https://vercel.com/docs/ai-gateway" target="_blank" rel="noopener">Vercel AI Gateway 文档</a></li>
+          <li><a href="https://vercel.com/docs/functions/runtimes/edge" target="_blank" rel="noopener">Vercel Edge Runtime 文档</a></li>
+          <li><a href="https://opentelemetry.io/docs/" target="_blank" rel="noopener">OpenTelemetry 文档</a></li>
+          <li><a href="https://langfuse.com/" target="_blank" rel="noopener">Langfuse</a> —— LLM-specific observability</li>
+          <li><a href="../../testing/06-msw/index.html">本站 · 测试主题 P6 MSW</a></li>
+          <li><a href="../../bun/index.html">本站 · Bun 主题</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="../05-claude-mcp/02-mcp.html">
+            <span class="label">← 上一章</span>
+            <span class="title">MCP 协议在两边的位置</span>
+          </a>
+          <a class="next" href="../07-decision/01-decision.html">
+            <span class="label">下一章 →</span>
+            <span class="title">决策树 + 陷阱清单 + v7 展望</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>

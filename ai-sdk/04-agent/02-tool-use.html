@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tool use 全谱 + Human-in-the-loop · P4.2 · AI SDK 深度学习</title>
+    <meta name="description" content="Vercel AI SDK Tool use 全谱：tool 定义（description + Zod parameters + execute）+ 流式 input（v5+ 默认，partial-call → call → result 状态机）+ Human-in-the-loop tool approval（v6 stable，requiresApproval + UI 渲染审批 prompt）+ 多 provider 协议差异（OpenAI Function Calling vs Anthropic Tool Use vs Google）+ 错误处理。" />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%237c3aed'/%3E%3Ctext x='16' y='23' font-family='-apple-system,system-ui,sans-serif' font-size='13' font-weight='bold' text-anchor='middle' fill='%23ffffff'%3EAI%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="site-title" href="../index.html"><span>AI SDK 深度学习</span><span class="site-title-badge" style="background: #7c3aed; color: #fff">AI</span></a>
+        <div class="site-header-spacer"></div>
+        <nav class="site-nav" aria-label="主导航">
+          <a href="../../index.html">← 深度学习</a>
+          <a href="../index.html">主题首页</a>
+          <a href="index.html">P4 目录</a>
+        </nav>
+        <button class="theme-toggle" type="button" aria-label="切换主题"><span class="icon-light">☀</span><span class="icon-dark">☾</span></button>
+      </div>
+    </header>
+    <div id="main" class="chapter-layout">
+      <aside class="sidebar" aria-label="章节导航">
+        <h3>P4 · Agent 抽象 ⭐</h3>
+        <ul>
+          <li><a href="index.html">阶段概览</a></li>
+          <li><a href="01-agent.html">01 · Agent + ToolLoopAgent + structured output</a></li>
+          <li><a href="02-tool-use.html" class="active">02 · Tool use 全谱 + Human-in-the-loop</a></li>
+        </ul>
+        <h3>本章导航</h3>
+        <ul>
+          <li><a href="#quick">01 速览</a></li>
+          <li><a href="#internals">02 底层逻辑</a></li>
+          <li><a href="#scenarios">03 应用场景</a></li>
+          <li><a href="#code">04 典型代码</a></li>
+          <li><a href="#pitfalls">05 常见陷阱</a></li>
+          <li><a href="#references">06 延伸阅读</a></li>
+        </ul>
+      </aside>
+      <article class="chapter">
+        <nav class="breadcrumb" aria-label="面包屑">
+          <a href="../../index.html">深度学习</a><span class="breadcrumb-sep">/</span>
+          <a href="../index.html">AI SDK</a><span class="breadcrumb-sep">/</span>
+          <a href="index.html">P4 · Agent 抽象 ⭐</a><span class="breadcrumb-sep">/</span>
+          <span>02 · Tool use 全谱</span>
+        </nav>
+        <h1>Tool use 全谱：定义 / 流式 input / Human-in-the-loop / 错误处理</h1>
+        <p class="lead">
+          Tool use 是 LLM 应用最关键的能力。这一章把 Vercel AI SDK 的 tool 定义、v5+ 流式 input（partial-call → call → result 状态机）、v6 stable 的 Human-in-the-loop 审批（敏感操作人审）、多 provider 协议差异（OpenAI / Anthropic / Google）、错误处理（execute 抛错喂回 LLM / retry 策略）讲清。
+        </p>
+        <div class="chapter-meta">
+          <span><strong>阅读时长</strong> ~22 分钟</span>
+          <span><strong>前置</strong> 读过 P4.1（Agent + ToolLoopAgent）</span>
+          <span><strong>主要来源</strong> ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling + Vercel AI SDK 6 Human-in-the-loop 文档 + OpenAI Function Calling docs + Anthropic Tool Use docs + Zod 文档</span>
+        </div>
+
+        <h2 id="quick"><span class="h-num">01</span> <span>速览</span></h2>
+        <ol>
+          <li><strong>Tool 三件套</strong>：<code>description</code>（LLM 看的 docstring）+ <code>parameters</code>（Zod schema）+ <code>execute</code>（实际执行的异步函数）。也可以用 <code>tool()</code> 工厂函数包装。</li>
+          <li><strong>流式 input</strong>（v5+ 默认）：LLM 边生成 tool input 边发送（不等整个 input 生成完）。前端通过 part state 看到 <code>state: 'partial-call'</code>（部分输入）→ <code>'call'</code>（输入完整）→ <code>'result'</code>（已执行）。</li>
+          <li><strong>UI 边收边显示</strong>：partial-call 时显示 spinner / "正在准备调用 X"；call 阶段显示 "正在调用 X with args"；result 阶段显示结果卡片。</li>
+          <li><strong>Human-in-the-loop tool approval</strong>（v6 stable）：给 tool 加 <code>requiresApproval</code>。useChat 收到 pending approval 的 tool call 时不立即执行；UI 渲染审批 prompt（"是否允许调用 X？"）；用户批准后通过 SDK API 继续。</li>
+          <li><strong>错误处理</strong>：tool execute 抛错 → SDK 捕获 → 把错误信息作为 tool result 喂回 LLM → LLM 决定 retry / 用其他 tool / 告诉用户。可配置 onError 回调 + 自定义 toModelOutput。</li>
+          <li><strong>多 provider 协议差异</strong>：OpenAI Function Calling（JSON schema 驱动 + parameters 字段）/ Anthropic Tool Use（input_schema 字段 + 流式协议略不同）/ Google（Gemini function calling）。Vercel AI SDK 抽象掉差异 —— 一份 tool 定义所有 provider 都能用。</li>
+          <li><strong>tool 类别</strong>：(a) <strong>Execute tools</strong>（典型）—— execute 函数被调用；(b) <strong>Provider tools</strong>（特定 provider 内置）—— 比如 OpenAI <code>web_search</code> / <code>file_search</code> / Anthropic <code>computer_use</code>，由 provider 直接执行；(c) <strong>UI tools</strong>（streamUI 风格）—— execute 返回 React 组件（详见 P3.2）。</li>
+          <li><strong>2026 实际项目分布</strong>：~80% 项目用 execute tools（业务自定义）；~10% 用 provider tools（搜索 / 文件等）；~10% 混合。Human-in-the-loop 在涉及"删除"/"发送"/"付款"的项目里 ~30% 启用率。</li>
+        </ol>
+
+        <h2 id="internals"><span class="h-num">02</span> <span>底层逻辑</span></h2>
+
+        <h3>Tool 定义全谱</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { tool } from 'ai';
+import { z } from 'zod';
+
+// 基础 tool 定义
+const getWeather = tool({
+  description: 'Get the current weather for a city',  // LLM 决定何时调用基于这段描述
+  parameters: z.object({
+    city: z.string().describe('The city name, e.g. "San Francisco"'),
+    unit: z.enum(['celsius', 'fahrenheit']).optional().default('celsius'),
+  }),
+  execute: async ({ city, unit }) =&gt; {
+    const data = await fetchWeatherAPI(city);
+    return {
+      temperature: unit === 'celsius' ? data.tempC : data.tempF,
+      condition: data.condition,
+      unit,
+    };
+  },
+});
+
+// 用法
+await streamText({
+  model: openai('gpt-4o'),
+  tools: { getWeather },  // tool 名 = key
+  prompt: 'What is the weather in Tokyo?',
+});</code></pre>
+        </div>
+
+        <p>关键设计：</p>
+
+        <ul>
+          <li><strong>description 决定 LLM 何时调用</strong>：精确描述 tool 用途；包含示例输入更好</li>
+          <li><strong>parameters 用 Zod schema</strong>：SDK 自动转成 LLM 能理解的 JSON schema</li>
+          <li><strong>每个 schema 字段加 .describe('...')</strong>：让 LLM 理解每个字段的语义和格式期望</li>
+          <li><strong>execute 是异步函数</strong>：返回值直接作为 tool result 喂回 LLM</li>
+        </ul>
+
+        <h3>流式 input 状态机（v5+ 默认）</h3>
+
+        <p>v5 起 tool input 默认流式生成。前端能看到三种状态：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>LLM 决定调用 getWeather(city: 'San Francisco', unit: 'celsius')
+
+时间线：
+  t=0    LLM 开始生成 tool call (输入未完整)
+        ↓
+        前端收到 part: {
+          type: 'tool-getWeather',
+          toolCallId: 'call_1',
+          state: 'partial-call',
+          input: { city: 'Sa' }  // 部分输入
+        }
+        ↓
+  t=1   LLM 继续生成
+        ↓
+        前端收到 part: {
+          type: 'tool-getWeather',
+          state: 'partial-call',
+          input: { city: 'San Fran' }
+        }
+        ↓
+  t=2   LLM 完成 tool call 输入
+        ↓
+        前端收到 part: {
+          type: 'tool-getWeather',
+          state: 'call',
+          input: { city: 'San Francisco', unit: 'celsius' }
+        }
+        ↓
+  t=3   SDK 自动调用 execute
+        ↓
+  t=4   execute 返回结果
+        ↓
+        前端收到 part: {
+          type: 'tool-getWeather',
+          state: 'result',
+          input: { city: 'San Francisco', unit: 'celsius' },
+          output: { temperature: 18, condition: 'Cloudy' }
+        }</code></pre>
+        </div>
+
+        <p>UI 渲染策略：</p>
+
+        <ul>
+          <li><strong>partial-call</strong>：显示 spinner + "正在准备调用 getWeather"（不显示 input，因为不完整）</li>
+          <li><strong>call</strong>：显示 "正在调用 getWeather with args: {input}"</li>
+          <li><strong>result</strong>：显示 WeatherCard with output</li>
+          <li><strong>error</strong>：显示错误 message</li>
+        </ul>
+
+        <h3>Human-in-the-loop tool approval（v6 stable）</h3>
+
+        <p>给敏感 tool 加 <code>requiresApproval</code>：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">const deleteFile = tool({
+  description: 'Delete a file',
+  parameters: z.object({ path: z.string() }),
+  requiresApproval: true,  // 关键
+  execute: async ({ path }) =&gt; {
+    await fs.unlink(path);
+    return { deleted: true };
+  },
+});
+
+const sendEmail = tool({
+  description: 'Send email to user',
+  parameters: z.object({ to: z.string(), subject: z.string(), body: z.string() }),
+  requiresApproval: ({ to }) =&gt; !to.endsWith('@example.com'),  // 函数式：仅外部邮件需审批
+  execute: async ({ to, subject, body }) =&gt; await mailer.send({ to, subject, body }),
+});</code></pre>
+        </div>
+
+        <p>工作流程：</p>
+
+        <ol>
+          <li>LLM 决定调 deleteFile → SDK 看到 requiresApproval=true → <strong>不立即执行 execute</strong></li>
+          <li>SDK 把 tool call 标记为 <code>state: 'pending-approval'</code>（v6 新状态）+ 流到前端</li>
+          <li>前端 useChat 看到 pending approval → 渲染审批 prompt（"是否允许删除文件 /tmp/foo？"）</li>
+          <li>用户点 "批准" → 调 SDK API <code>respondToApproval(toolCallId, { approved: true })</code></li>
+          <li>SDK 执行 execute → 流式返回 result</li>
+          <li>用户点 "拒绝" → SDK 把"拒绝"作为 tool result 喂回 LLM → LLM 决定下一步</li>
+        </ol>
+
+        <h3>错误处理</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">const fetchUser = tool({
+  description: 'Fetch user by ID',
+  parameters: z.object({ id: z.string() }),
+  execute: async ({ id }) =&gt; {
+    const user = await db.user.findUnique({ where: { id } });
+    if (!user) {
+      // 抛错 - SDK 会捕获并喂回 LLM
+      throw new Error(`User ${id} not found`);
+    }
+    return user;
+  },
+});
+
+// 默认行为：error 会被 SDK 捕获，作为 tool result 喂回 LLM
+// LLM 看到 result: { error: 'User xxx not found' } 会决定下一步
+// (告诉用户找不到 / 调其他 tool / etc.)
+
+// 自定义 error 序列化
+const fetchUser = tool({
+  // ...
+  execute: async ({ id }) =&gt; { ... },
+  toModelOutput: ({ result, error }) =&gt; {
+    if (error) {
+      return { error: error.message };
+    }
+    // 也可以转换成功结果（比如精简 / 脱敏）
+    return { id: result.id, name: result.name };  // 不发 email / phone 给 LLM
+  },
+});</code></pre>
+        </div>
+
+        <p>onError 回调（agent 级别）：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">await streamText({
+  model: openai('gpt-4o'),
+  tools: { fetchUser, fetchOrder },
+  onError: ({ error }) =&gt; {
+    // tool execute 失败时调
+    console.error('Tool error:', error);
+    metrics.increment('tool.error');
+  },
+  // ...
+});</code></pre>
+        </div>
+
+        <h3>多 provider 协议差异</h3>
+
+        <p>不同 LLM provider 的 tool calling 协议略不同。SDK 抽象掉差异：</p>
+
+        <div class="code-block">
+          <span class="code-label">text</span>
+          <pre class="code"><code>OpenAI Function Calling 原生协议:
+{
+  "tools": [{
+    "type": "function",
+    "function": {
+      "name": "getWeather",
+      "description": "...",
+      "parameters": { "type": "object", "properties": {...} }  // ← parameters 字段
+    }
+  }]
+}
+
+Anthropic Tool Use 原生协议:
+{
+  "tools": [{
+    "name": "getWeather",
+    "description": "...",
+    "input_schema": { "type": "object", "properties": {...} }  // ← input_schema 字段
+  }]
+}
+
+Google Gemini Function Calling 原生协议:
+{
+  "tools": [{
+    "functionDeclarations": [{
+      "name": "getWeather",
+      "description": "...",
+      "parameters": {...}
+    }]
+  }]
+}
+
+Vercel AI SDK 统一抽象:
+tools: { getWeather: tool({ description, parameters: z.object({...}), execute }) }
+- SDK 在内部转成各 provider 的协议</code></pre>
+        </div>
+
+        <p>流式协议差异：</p>
+
+        <ul>
+          <li>OpenAI：tool call 流式发 delta（incremental JSON）</li>
+          <li>Anthropic：tool call 流式发 input_json_delta（partial JSON 片段）</li>
+          <li>SDK 统一暴露给前端的是 <code>state: 'partial-call'</code> 状态 + 累积的 input object</li>
+        </ul>
+
+        <h3>Provider tools（内置）</h3>
+
+        <p>某些 provider 提供内置 tool，由 provider 直接执行（不需要你写 execute）：</p>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// OpenAI built-in tools
+import { openai } from '@ai-sdk/openai';
+
+await streamText({
+  model: openai.responses('gpt-4o'),  // 注意是 .responses
+  tools: {
+    web_search_preview: openai.tools.webSearchPreview({}),
+    file_search: openai.tools.fileSearch({ vectorStoreIds: ['vs_xxx'] }),
+  },
+  prompt: 'Find latest news about AI safety',
+});
+
+// Anthropic built-in tools
+import { anthropic } from '@ai-sdk/anthropic';
+
+await streamText({
+  model: anthropic('claude-sonnet-4-6'),
+  tools: {
+    computer_use: anthropic.tools.computerUse({
+      displayWidthPx: 1920,
+      displayHeightPx: 1080,
+    }),
+  },
+  prompt: 'Open Chrome and search for cats',
+});</code></pre>
+        </div>
+
+        <p>2026 主流 provider built-in tools：</p>
+
+        <ul>
+          <li>OpenAI：web_search / file_search / code_interpreter</li>
+          <li>Anthropic：computer_use（屏幕截图 + 鼠标键盘）/ text_editor / bash</li>
+          <li>Google：grounding_with_google_search</li>
+        </ul>
+
+        <h2 id="scenarios"><span class="h-num">03</span> <span>应用场景</span></h2>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 A · 客服 chat 调内部 API</h3>
+          <p>客户问"我的订单状态" → LLM 调 lookupOrder tool → 返回订单数据 → LLM 生成回复。<strong>execute tool 最常见场景</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 B · 流式 input UX 优化</h3>
+          <p>tool 输入 schema 大（多个字段）时，partial-call 状态让用户看到"正在准备调用"。<strong>避免"按 send 之后好几秒才有反馈"的差体验</strong>。前端按 part state 渲染对应 UI。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 C · 敏感操作 → Human-in-the-loop</h3>
+          <p>"删除文件 / 发邮件 / 付款 / 取消订单" 等操作必须用户确认。<strong>requiresApproval 让 LLM 不能 silent 执行敏感操作</strong>。生产 agent 强烈推荐对所有"修改 / 发送 / 删除"操作启用。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 D · 网络搜索 → OpenAI web_search built-in</h3>
+          <p>不要自己实现 search tool（搜索引擎 API + 抓取 + 解析），用 OpenAI 内置 <code>web_search_preview</code>。OpenAI 后端自动搜 + 综合结果给 LLM。<strong>2026 起 provider built-in tools 越来越多，能用就用</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 E · 屏幕自动化 → Anthropic computer_use</h3>
+          <p>需要 LLM 操作浏览器 / 桌面（自动化测试 / 数据提取 / GUI agent）→ Anthropic computer_use built-in tool。LLM 接受截图 + 输出鼠标键盘动作。<strong>这是 Anthropic 独家 + 2026 主流 GUI agent 路径</strong>。</p>
+        </div>
+
+        <div class="scenario">
+          <h3 class="scenario-title">场景 F · 多 provider 切换</h3>
+          <p>项目支持用户选 model（GPT / Claude / Gemini）。<strong>同一份 tool 定义</strong>跨 provider 工作 —— SDK 抽象掉协议差异。但要注意 provider built-in tools 是<strong>provider-specific</strong>，不能跨 provider 用。</p>
+        </div>
+
+        <h2 id="code"><span class="h-num">04</span> <span>典型代码：完整 Tool 实战</span></h2>
+
+        <h3>多 tool 客服 agent + 流式 input UI</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">// agents/support.ts
+import { Agent, tool } from 'ai';
+import { openai } from '@ai-sdk/openai';
+import { z } from 'zod';
+
+export const supportAgent = new Agent({
+  model: openai('gpt-4o'),
+  system: 'You are a customer support agent.',
+  tools: {
+    lookupOrder: tool({
+      description: 'Look up order details by ID',
+      parameters: z.object({
+        orderId: z.string().describe('The order ID, e.g. "ORD-12345"'),
+      }),
+      execute: async ({ orderId }) =&gt; {
+        const order = await db.order.findUnique({ where: { id: orderId } });
+        return order ?? { error: 'Order not found' };
+      },
+    }),
+    lookupCustomer: tool({
+      description: 'Look up customer by email',
+      parameters: z.object({ email: z.string().email() }),
+      execute: async ({ email }) =&gt;
+        await db.customer.findUnique({ where: { email } }),
+    }),
+    createRefund: tool({
+      description: 'Process a refund (REQUIRES APPROVAL)',
+      parameters: z.object({
+        orderId: z.string(),
+        amount: z.number(),
+        reason: z.string(),
+      }),
+      requiresApproval: true,  // 关键
+      execute: async ({ orderId, amount, reason }) =&gt; {
+        return await processRefund(orderId, amount, reason);
+      },
+    }),
+  },
+});
+
+// app/api/chat/route.ts
+import { supportAgent } from '@/agents/support';
+import { convertToModelMessages } from 'ai';
+
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+  const result = supportAgent.stream({
+    messages: convertToModelMessages(messages),
+  });
+  return result.toUIMessageStreamResponse();
+}</code></pre>
+        </div>
+
+        <h3>前端：流式 input 状态 + 审批 UI</h3>
+
+        <div class="code-block">
+          <span class="code-label">tsx</span>
+          <pre class="code"><code class="lang-tsx">'use client';
+import { useChat } from 'ai/react';
+
+function SupportChat() {
+  const { messages, sendMessage, respondToApproval } = useChat({
+    api: '/api/chat',
+  });
+
+  return (
+    &lt;div&gt;
+      {messages.map((m) =&gt; (
+        &lt;div key={m.id}&gt;
+          &lt;strong&gt;{m.role}:&lt;/strong&gt;
+          {m.parts.map((part, i) =&gt; {
+            // Text part
+            if (part.type === 'text') {
+              return &lt;span key={i}&gt;{part.text}&lt;/span&gt;;
+            }
+
+            // Tool calls (流式 input 状态机)
+            if (part.type === 'tool-lookupOrder') {
+              switch (part.state) {
+                case 'partial-call':
+                  return &lt;Spinner key={i} text="Preparing to look up order..." /&gt;;
+                case 'call':
+                  return &lt;Spinner key={i} text={`Looking up order ${part.input.orderId}...`} /&gt;;
+                case 'result':
+                  return part.output.error
+                    ? &lt;ErrorCard key={i} message={part.output.error} /&gt;
+                    : &lt;OrderCard key={i} order={part.output} /&gt;;
+                case 'error':
+                  return &lt;ErrorCard key={i} message={part.errorText} /&gt;;
+              }
+            }
+
+            // Refund tool with approval
+            if (part.type === 'tool-createRefund') {
+              if (part.state === 'pending-approval') {
+                return (
+                  &lt;ApprovalPrompt
+                    key={i}
+                    title="Approve Refund?"
+                    details={`Refund ${part.input.amount} for order ${part.input.orderId}`}
+                    reason={part.input.reason}
+                    onApprove={() =&gt; respondToApproval(part.toolCallId, { approved: true })}
+                    onReject={() =&gt; respondToApproval(part.toolCallId, {
+                      approved: false,
+                      message: 'User declined the refund',
+                    })}
+                  /&gt;
+                );
+              }
+              if (part.state === 'result') {
+                return &lt;RefundConfirmation key={i} {...part.output} /&gt;;
+              }
+            }
+
+            return null;
+          })}
+        &lt;/div&gt;
+      ))}
+    &lt;/div&gt;
+  );
+}</code></pre>
+        </div>
+
+        <h3>错误处理 + retry 策略</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">const fetchExternalAPI = tool({
+  description: 'Fetch data from external API',
+  parameters: z.object({ url: z.string().url() }),
+  execute: async ({ url }) =&gt; {
+    let lastError: Error | null = null;
+
+    // 自己实现 retry（execute 内部）
+    for (let attempt = 0; attempt &lt; 3; attempt++) {
+      try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.json();
+      } catch (err) {
+        lastError = err;
+        await new Promise((r) =&gt; setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
+
+    // 都失败了，throw 让 SDK 喂回 LLM
+    throw lastError;
+  },
+  toModelOutput: ({ result, error }) =&gt; {
+    if (error) {
+      // 简化错误信息给 LLM
+      return { error: 'Service unavailable, please try again later' };
+    }
+    return result;
+  },
+});</code></pre>
+        </div>
+
+        <h3>OpenAI built-in web_search</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { streamText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+const result = streamText({
+  model: openai.responses('gpt-4o'),
+  tools: {
+    web_search: openai.tools.webSearchPreview({
+      // 可选配置
+      maxResults: 5,
+    }),
+  },
+  prompt: 'Find recent news about AI regulation in 2026',
+});
+
+// LLM 自己调 web_search（OpenAI 后端执行），返回的是结合搜索结果的回答
+// 你不需要写 execute</code></pre>
+        </div>
+
+        <h3>Anthropic computer_use 屏幕自动化</h3>
+
+        <div class="code-block">
+          <span class="code-label">typescript</span>
+          <pre class="code"><code class="lang-ts">import { streamText } from 'ai';
+import { anthropic } from '@ai-sdk/anthropic';
+
+const result = streamText({
+  model: anthropic('claude-sonnet-4-6'),
+  tools: {
+    computer: anthropic.tools.computerUse({
+      displayWidthPx: 1920,
+      displayHeightPx: 1080,
+      executeAction: async (action) =&gt; {
+        // 你的 desktop 自动化实现 (Playwright / OS 级 hook)
+        switch (action.type) {
+          case 'screenshot':
+            return await takeScreenshot();
+          case 'mouse_move':
+            await moveMouse(action.coordinate);
+            return { ok: true };
+          case 'left_click':
+            await leftClick(action.coordinate);
+            return { ok: true };
+          case 'type':
+            await typeText(action.text);
+            return { ok: true };
+          // ...
+        }
+      },
+    }),
+  },
+  prompt: 'Open Chrome and search for "Vercel AI SDK"',
+});</code></pre>
+        </div>
+
+        <h2 id="pitfalls"><span class="h-num">05</span> <span>常见陷阱</span></h2>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 1 · tool description 太简陋</div>
+          <p>"<code>description: 'Get weather'</code>" → LLM 不知道何时该调（"Get weather of where? for what?"）。<strong>修复</strong>：精确描述用途 + 输入示例 + 何时该调用。"<code>Get current weather for a specific city. Use when user asks about temperature, conditions, or weather forecasts.</code>"</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 2 · parameters 用 z.any() / z.unknown()</div>
+          <p>schema 不具体 → LLM 不知传什么 → 输出可能任何东西。<strong>修复</strong>：精确 schema + 每个字段加 <code>.describe('...')</code> 让 LLM 理解语义。详见 P2.1。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 3 · tool execute 抛错没处理</div>
+          <p>整个 chat 死。<strong>修复</strong>：要么在 execute 内部 try/catch（return error 对象），要么让它抛出（SDK 自动捕获作为 tool result 喂回 LLM）。<strong>不要</strong>用 <code>process.exit</code> 这种破坏性错误处理。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 4 · 流式 input 期间用 input 完整渲染</div>
+          <p>partial-call 状态的 input 是<strong>不完整的 JSON</strong>（可能 <code>{ city: 'Sa' }</code>）。直接渲染 <code>{part.input.city}</code> 会显示半截字符串。<strong>修复</strong>：partial-call 状态显示 spinner / "正在准备"，不显示 input；call / result 才显示完整 input。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 5 · 敏感 tool 没标 requiresApproval</div>
+          <p>LLM 可能 silent 执行删除 / 发邮件 / 付款。<strong>这是生产 agent 最大风险</strong>。<strong>修复</strong>：所有"修改 / 发送 / 删除 / 付款"类 tool 必须 <code>requiresApproval: true</code>（或函数式判断更精细）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 6 · approval UI 没设 timeout</div>
+          <p>用户离开页面没批准 → tool call 永远 pending。<strong>修复</strong>：(a) UI 层显示 timeout 倒计时；(b) server 端记录 pending 时间，超 X 分钟自动 reject + 通知用户；(c) 重要 agent task 进 queue（不依赖 UI 实时）。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 7 · 期待跨 provider 用 built-in tools</div>
+          <p>OpenAI 的 web_search / Anthropic 的 computer_use / Google 的 grounding 都是 provider-specific。<strong>修复</strong>：built-in tools 只在该 provider model 上工作；切换 provider 时要把 built-in 换成自己实现的 execute tool。</p>
+        </div>
+
+        <div class="pitfall">
+          <div class="pitfall-title">陷阱 8 · execute 暴露敏感数据给 LLM</div>
+          <p>execute 返回 user 对象含 password hash / phone / SSN → 都喂给 LLM context。<strong>修复</strong>：用 toModelOutput 精简 / 脱敏返回值。把"完整数据"留给 server 端逻辑，把"LLM 需要的最少信息"喂给 LLM。</p>
+        </div>
+
+        <h2 id="references"><span class="h-num">06</span> <span>延伸阅读</span></h2>
+
+        <ul>
+          <li><a href="https://ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling" target="_blank" rel="noopener">AI SDK Tools and Tool Calling 文档</a></li>
+          <li><a href="https://ai-sdk.dev/docs/ai-sdk-ui/human-in-the-loop" target="_blank" rel="noopener">Human-in-the-Loop 文档</a></li>
+          <li><a href="https://platform.openai.com/docs/guides/function-calling" target="_blank" rel="noopener">OpenAI Function Calling docs</a></li>
+          <li><a href="https://platform.openai.com/docs/guides/tools" target="_blank" rel="noopener">OpenAI Built-in Tools (web_search / file_search / code_interpreter)</a></li>
+          <li><a href="https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/overview" target="_blank" rel="noopener">Anthropic Tool Use docs</a></li>
+          <li><a href="https://docs.anthropic.com/en/docs/agents-and-tools/computer-use" target="_blank" rel="noopener">Anthropic Computer Use docs</a></li>
+          <li><a href="https://zod.dev/" target="_blank" rel="noopener">Zod 文档</a></li>
+        </ul>
+
+        <nav class="chapter-nav" aria-label="章节翻页">
+          <a class="prev" href="01-agent.html">
+            <span class="label">← 上一章</span>
+            <span class="title">Agent + ToolLoopAgent + structured output</span>
+          </a>
+          <a class="next" href="../05-claude-mcp/01-claude-agent.html">
+            <span class="label">下一章 →</span>
+            <span class="title">Claude Agent SDK + 跨范式对比</span>
+          </a>
+        </nav>
+      </article>
+    </div>
+    <script src="../../assets/app.js"></script>
+  </body>
+</html>
